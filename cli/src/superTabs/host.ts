@@ -1533,7 +1533,7 @@ export class SuperTabHost {
     this.active.add(id)
     // A person's message closes the question it answers, only the one of this machine's own signed-in account, and only a
     // question opened after it was written (core/input.ts `beforeTeamWrite`).
-    const answers = fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind))
+    const answers = fromPerson && object(message.source).kind !== 'agent-only'
       && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
     const writtenAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
     // Their own words in their agent's own chat are their input, which the short-turn guard never holds (core/input.ts readTeamHold).
@@ -1544,7 +1544,7 @@ export class SuperTabHost {
 
   /** Whether [message] is its person's own words in [target]'s own 1:1 chat (backend agentChats.ts: kind `agent-chat`), which
    *  reach the agent exactly as typed, and are answered by the host when the turn ends (agentReplies.ts). Only a person's message
-   *  with no source of its own: a system row, a native turn already typed in the terminal and an agent-only notice are not their
+   *  with no source of its own: a system row and an agent-only notice are not their
    *  words, and an agent's message is not theirs. The chat is the id the roster row keeps
    *  (`chatId`), which costs no read. Until the server has given it (within 30 s of the agent joining), one read of the Swarm says,
    *  which a delivery that is not plain then uses for its context lines, so it reads no more than it did. A read that fails or is
@@ -1788,9 +1788,6 @@ export class SuperTabHost {
     const said = (otherAccount ? OTHER_ACCOUNT : '') + `@${shownName(message.author, 'someone')}, to you:\n${body}`
     // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.
     if (source.kind === 'agent-only') return String(message.text)
-    const native = source.kind === 'native'
-      ? `This is an observed native ${String(source.phase)} in ${shownName(message.author, 'an agent')}’s terminal, opened by ${shownName(source.operator, 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
-      : ''
     // A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless
     // that is the poster (#2963, #3038). So --to is for an agent that must act or answer; the coordinator is named only when it
     // is needed, and the reader's status (work.status) is how it hears the work. A reply to an agent that asked something is
@@ -1803,7 +1800,7 @@ export class SuperTabHost {
     const threadAnswer = this.threadAnswers.has(entry.deliveryId)
     const threaded = (identifier(message.thread) && message.thread !== message.id) || threadAnswer
     const answer = `Answer: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}`
-    return context + native + reply + said + `\n\n${answer}`
+    return context + reply + said + `\n\n${answer}`
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */

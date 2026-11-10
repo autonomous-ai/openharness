@@ -809,11 +809,9 @@ describe('Super Tab native delivery handoff', () => {
     const named = setup({ author: { kind: 'person', id: 'p1', name: 'sam', displayName: 'Sam Lee' }, text: 'Ship it?' })
     await named.open().tick()
     expect(vi.mocked(named.core.turns.deliver).mock.calls[0]![1]).toContain('@Sam Lee, to you:\nShip it?')
-    const older = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Ship it?',
-      source: { kind: 'native', phase: 'input', operator: { kind: 'person', id: 'p2', name: 'kim@example.com' } } })
+    const older = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Ship it?' })
     await older.open().tick()
     const prompt = vi.mocked(older.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain('opened by kim.')
     expect(prompt).toContain('@sam, to you:\nShip it?')
     expect(prompt).not.toContain('@example.com')
   })
@@ -4043,16 +4041,13 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
         + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' --agent \'agent\' post \'lead\' \'your message\' UNIQUE_OPERATION_ID --answers \'message\'')
       expect(reads(t).length).toBeGreaterThan(0)
     })
-    it('keeps an agent\'s message in its chat, a system row and a native or agent-only notice as they were', async () => {
+    it('keeps an agent\'s message in its chat, a system row and an agent-only notice as they were', async () => {
       const agent = await wrapped({ author: { kind: 'agent', id: 'other', name: 'Builder' } })
       expect(agent.text).toContain('@Builder, to you:\nok, ship it')
       expect(agent.text).toContain(' --to \'other\'')
       const system = await wrapped({ author: KEN, source: { kind: 'system' } })
       expect(system.text).toContain('@Ken, to you:\nok, ship it')
       expect(system.text).toContain('Answer: ')
-      const native = await wrapped({ author: KEN, source: { kind: 'native', phase: 'prompt' } })
-      expect(native.text).toContain('This is an observed native prompt in Ken')
-      expect(native.text).toContain('@Ken, to you:\nok, ship it')
       const notice = await wrapped({ author: KEN, source: { kind: 'agent-only' } })
       expect(notice.text).toBe('ok, ship it')
     })
@@ -4067,7 +4062,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     it('owes none of them a reply', async () => {
       const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }
       for (const [fields, from] of [[{}, 'lead'], [{ author: { kind: 'agent', id: 'other', name: 'Builder' } }, 'chat'], [{ source: { kind: 'system' } }, 'chat'],
-        [{ source: { kind: 'native', phase: 'prompt' } }, 'chat'], [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
+        [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
         const t = setup({ conversationId: from, author: KEN, text: 'ok, ship it', ...fields })
         t.row.agent.chatId = 'chat'
         t.from(from)

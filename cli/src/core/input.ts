@@ -28,7 +28,6 @@ import type { ScreenReading } from '../engines/facets/screen.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import type { TerminalControl } from './terminals/control.js'
 import { launchBound } from './engines/sessionBinding.js'
-import { inputContextIn } from '../lib/nativeTurnObservations.js'
 import { teamHold } from '../engines/kit/screen.js'
 import type { ShortTurnGuard } from './turns/shortTurnGuard.js'
 
@@ -58,7 +57,7 @@ export interface InputDeps {
   emit: (sessionId: string, events: LiveEvent[]) => void
   /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
    *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
-  promptTyped?: (session: RegisteredSession, capture: string | null, screen: ScreenReading, inputContext?: string) => void
+  promptTyped?: (session: RegisteredSession, capture: string | null, screen: ScreenReading) => void
   /** The person sent text to an agent from a window or the phone (a `message` frame, by agent or session id): one
    *  another agent started is theirs from then on (services/agentCleanup.ts). */
   typed?: (id: string) => void
@@ -100,7 +99,7 @@ export interface InputDeps {
  * it so.
  */
 export function messageWriter({ readScreen, resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped' | 'readScreen'>) {
-  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null, inputContext?: string): Promise<TerminalActionResult> => {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
@@ -114,8 +113,7 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     if (!screen) return terminalActionNotStarted(hold?.(session, null, capture) ?? 'screen_unreadable')
     const reason = hold?.(session, screen, capture) ?? screen.messageHold
     if (reason) return terminalActionNotStarted(reason)
-    if (inputContext) promptTyped?.(session, capture, screen, inputContext)
-    else promptTyped?.(session, capture, screen)
+    promptTyped?.(session, capture, screen)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
         if (pasteComesAsKeys(session.engine)) {
@@ -253,7 +251,7 @@ export function sessionInputDeps(
     },
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
-    inject: (id, text, inputContext) => deviceInput().legacyWrite(id, () => writeMessage(id, text, undefined, inputContext)),
+    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text)),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
@@ -352,7 +350,7 @@ export function createInput(deps: InputDeps) {
     }
     return true
   }
-  const submitAgent = (id: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -367,11 +365,9 @@ export function createInput(deps: InputDeps) {
     }
     if (log) console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     const target = record?.agentId ?? sessionId
-    if (receipt) input.submit(target, adapted, deliveryId, inputContext, receipt)
-    else if (inputContext) input.submit(target, adapted, deliveryId, inputContext)
-    else input.submit(target, adapted, deliveryId)
+    input.submit(target, adapted, deliveryId, receipt)
   }
-  const messageRequest = createMessageRequest((id, content, context, receipt) => submitAgent(id, content, undefined, context, receipt), deps.typed)
+  const messageRequest = createMessageRequest((id, content, receipt) => submitAgent(id, content, undefined, receipt), deps.typed)
   /** What holds a typed delivery from [id]'s pane now, read as its write reads it (`beforeTeamWrite`, `injectTeam`) but for its
    *  maker's lease, with nothing typed, pressed or locked: a question a person's message would close is said as it is, since only
    *  the write may press Escape. */
@@ -393,7 +389,7 @@ export function createInput(deps: InputDeps) {
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
-export function createMessageRequest(submit: (id: string, content: string, inputContext?: string, receipt?: MessageReceipt) => void, typed?: (id: string) => void) {
+export function createMessageRequest(submit: (id: string, content: string, receipt?: MessageReceipt) => void, typed?: (id: string) => void) {
   // [receipt]: what became of it, for the request's measurement (lib/sessionInput.ts `MessageReceipt`).
   return (payload: Record<string, unknown>, receipt?: MessageReceipt): void => {
     const content = payload.content as string | undefined
@@ -404,10 +400,7 @@ export function createMessageRequest(submit: (id: string, content: string, input
     typed?.(target)
     // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
     // in the clear.
-    const context = inputContextIn(payload.inputContext)
-    if (receipt) submit(target, content, context ?? undefined, receipt)
-    else if (context) submit(target, content, context)
-    else submit(target, content)
+    submit(target, content, receipt)
   }
 }
 
