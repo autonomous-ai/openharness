@@ -223,9 +223,8 @@ void main() {
   group('the project chat, which opens inside its project page with the '
       "project's header", () {
     testWidgets("Swarm Home C: the project's ⋮ has Notifications for its "
-        'chat; Muted is kept, and access lost closes the sheet', (
-      tester,
-    ) async {
+        'chat, with no Muted; a choice is kept, and access lost closes the '
+        'sheet', (tester) async {
       addTearDown(tester.view.reset);
       tester.view
         ..physicalSize = const Size(1170, 2532)
@@ -257,23 +256,51 @@ void main() {
       await tester.tap(notifications);
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Mentions only');
-      await tester.tap(find.text('Muted'));
+      // Swarm v4 has no way to unmute a project's channel (lead, 2026-11-10).
+      expect(find.text('Muted'), findsNothing);
+      await tester.tap(find.text('All new messages'));
       await tester.pumpAndSettle();
       expect(sent(fake, path: leadNotifications), [
-        {'notify': 'muted'},
+        {'notify': 'all'},
       ]);
 
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-project-menu-notifications'));
       await tester.pumpAndSettle();
-      expect(ticked(tester), 'Muted');
+      expect(ticked(tester), 'All new messages');
 
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
       unawaited(host.session!.inbox.reader(tab)!.refresh());
       await tester.pumpAndSettle();
+      expect(find.text('All new messages'), findsNothing);
+    });
+
+    testWidgets("Swarm Home C: a project's chat muted before reads as "
+        'Mentions only, and stays as kept', (tester) async {
+      addTearDown(tester.view.reset);
+      tester.view
+        ..physicalSize = const Size(1170, 2532)
+        ..devicePixelRatio = 3;
+      final fake = backend(settings: {leadChat: 'muted'});
+      await pump(
+        tester,
+        fake,
+        home: const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeC,
+        ),
+      );
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-notifications'));
+      await tester.pumpAndSettle();
+      expect(ticked(tester), 'Mentions only');
       expect(find.text('Muted'), findsNothing);
+      expect(sent(fake, path: leadNotifications), isEmpty);
     });
 
     testWidgets("Swarm Home C: the project's ⋮ finds in its chat (#2826)", (
