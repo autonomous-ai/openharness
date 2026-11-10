@@ -3033,6 +3033,12 @@ int main(int argc, char **argv) {
     // A touch brakes a moving page. It must never also open the old rendered target.
     tap(3260,233,233); assert(s.view==TABS && tab_switches==1 && !starts);
     surface_tick(3650); scene_take();
+    // A tap on the highlighted tab selects exactly that tab; on Focus a tap on a name is the check too, so the picker closes.
+    {
+        int chosen=ht_tab_carousel_index(&tab_carousel);
+        char chosen_id[ID_MAX]; COPY(chosen_id,s.tabs[chosen].id);
+        tap(3900,233,233); assert(s.view!=TABS && tab_switches==1 && !strcmp(tab_target,chosen_id) && !starts);
+    }
     // Host echoes and replacement panes must not break a live drag. Newer
     // pages supersede earlier requests; only the latest roster can finish it.
     workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
@@ -3060,6 +3066,11 @@ int main(int argc, char **argv) {
     ui_swarms_replace(s.tabs,s.tab_count,"tab-0"); surface_tick(3900); scene_take();
     assert(ht_tab_carousel_index(&tab_carousel)==0 && tab_switches==2);
     tap(4100,233,420); assert(s.view==HOME && tab_switches==2 && !starts);
+    // Tapping a visible neighbour's strip selects that exact tab; on Focus that tap is the check too, so the picker closes.
+    workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
+    tap(4000,50,233); assert(s.view!=TABS && tab_switches==1 && !strcmp(tab_target,"tab-0") && !starts);
+    workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
+    tap(4000,413,233); assert(s.view!=TABS && tab_switches==1 && !strcmp(tab_target,"tab-2") && !starts);
     // Vertical motion is inert; reversing a horizontal drag switches back live.
     workspace_setup(); dispatch((action_t){.kind=A_TABS}); scene_take();
     habitat_touch(true,233,300,4000); habitat_touch(true,233,120,4100);

@@ -146,6 +146,15 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -DDEVICE_LAYOUT_BENCH=1 -fsanitize="${S
    -o "$out/test_damage_delta" "$here/test_damage_delta.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_damage_delta"
 
+# Real Focus faces (several recaps, moods, engines, pet frames): ht_damage()'s rectangles alone rebuild the next frame.
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -I "$here/../main" -o "$out/test_damage_focus" "$here/test_damage_focus.c" "$here/../main/pet_store.c" "$here/../main/elapsed.c" \
+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/character_motion.c" \
+   "$here/../main/ui/habitat/character_layout.c" \
+   "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
+   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
+"$out/test_damage_focus"
+
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -DDEVICE_LAYOUT_BENCH=1 -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_damage_bands" "$here/test_damage_bands.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_damage_bands"
