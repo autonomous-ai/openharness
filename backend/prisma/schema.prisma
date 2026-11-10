@@ -1145,30 +1145,6 @@ model SuperTabMessage {
   @@index([tabId, conversationId, thread, sequence])
 }
 
-/// A tag of a person, waiting until they replied there or marked it done, of Swarm v1-v3. Swarm v4 keeps no tag list (anh Dee,
-/// 2026-11-10): nothing writes or reads a row since. Removed 30 days after createdAt by a TTL index (superTabs/mentions.ts), so
-/// the last is gone by 2026-12-10; the model and its index go then.
-model SuperTabMention {
-  id             String    @id @map("_id")
-  tabId          String
-  personId       String
-  projectId      String
-  conversationId String
-  messageId      String
-  authorAgentId  String
-  createdAt      DateTime
-  resolvedAt     DateTime?
-  /// reply | done | worker
-  resolvedBy     String?
-  /// A tag the Lead made about a task with no worker: not listed before this time (superTabs/mentions.ts). Unset on every other tag.
-  holdUntil      DateTime?
-
-  @@index([tabId, personId, createdAt])
-  @@index([tabId, conversationId, personId])
-  /// A tag goes 30 days on (superTabs/mentions.ts ensureMentionExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([createdAt], map: "mention_expiry")
-}
-
 /// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
 /// reaction twice keeps one row; message pages count them.
 model SuperTabReaction {
@@ -1185,50 +1161,6 @@ model SuperTabReaction {
   @@index([tabId, messageId])
 }
 
-/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
-/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
-/// derived from all three, so one row per person and conversation; it only ever moves forward.
-/// A person's Activity row of Swarm v1-v3: a reply to their message or a reaction to it, for them alone. Swarm v4 has no Activity
-/// (anh Dee, 2026-11-10): nothing writes or reads a row since. The worker's hourly sweep deletes each 30 days after it was written
-/// (superTabs/retiredRows.ts), and a Swarm's purge its rows; the last is gone by 2026-12-10, and the model goes then.
-model SuperTabActivity {
-  id             String    @id @map("_id")
-  tabId          String
-  /// Whom the row is for: the author of the message replied or reacted to.
-  personId       String
-  /// reply | reaction
-  kind           String
-  conversationId String
-  /// The reply, or the message reacted to.
-  messageId      String
-  /// The reply's thread root, or the reacted message's thread.
-  threadId       String?
-  /// person | agent
-  actorKind      String
-  actorId        String
-  emoji          String?
-  createdAt      DateTime
-  /// When the person saw it, on any device; unset while unread.
-  readAt         DateTime?
-  /// A reply's message sequence in its chat, so reading its thread or chat past it marks the row read (activity.ts); unset on a
-  /// reaction and on a row written before it was kept, which only opening Activity reads.
-  sequence       Int?
-  /// A reply also shown in the chat's main stream: the chat mark reads it, as well as its thread's.
-  alsoInChat     Boolean?
-  /// The one reply row of a thread that rings its person's phone (activity.ts writeReplyActivity, Tony's rule of 2026-11-09):
-  /// the first person's reply in a thread the person started. Unset on every other row.
-  rings          Boolean?
-
-  /// A person's rows, newest first: the list and the digest.
-  @@index([tabId, personId, createdAt])
-  /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
-  @@index([tabId, personId, conversationId, threadId])
-  /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
-  /// index above it examined every row of 30 days to find the unread (task #3146).
-  @@index([tabId, personId, readAt, createdAt])
-  /// The sweep's rows past their expiry (retiredRows.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
-  @@index([createdAt])
-}
 /// A person's notification setting for one chat (superTabs/chatSettings.ts): all | mentions | muted. Their own, never shown to others.
 model SuperTabChatSetting {
   id             String   @id @map("_id")
@@ -1244,6 +1176,10 @@ model SuperTabChatSetting {
   /// The sweep's default rows untouched for a week (chatSettings.ts sweepChatSettings).
   @@index([updatedAt])
 }
+
+/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
+/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
+/// derived from all three, so one row per person and conversation; it only ever moves forward.
 model SuperTabReadMark {
   id             String   @id @map("_id")
   tabId          String
@@ -1259,25 +1195,6 @@ model SuperTabReadMark {
   /// A mark untouched for 180 days goes: by this index's expiry (superTabs/readMarks.ts ensureReadMarkExpiry), or where the
   /// database refuses it, by the worker's sweep (startReadMarkSweep). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
-}
-
-/// A person's reminder of one message, of Swarm v1-v3. Swarm v4 has no reminders (anh Dee, 2026-11-10): nothing writes or reads
-/// a row since. The worker's hourly sweep deletes each 30 days after it was due (superTabs/retiredRows.ts), and a Swarm's purge
-/// its rows; the last is gone by 2027-01-09, and the model goes then.
-model SuperTabReminder {
-  /// stableId(tabId, personId, messageId).
-  id             String   @id @map("_id")
-  tabId          String
-  personId       String
-  conversationId String
-  messageId      String
-  dueAt          DateTime
-  createdAt      DateTime
-
-  /// A person's reminders: the due list, the next one after now, the digest and the cap's count (parts/indexed.ts NAMED_INDEX).
-  @@index([tabId, personId, dueAt])
-  /// The sweep's reminders due more than 30 days ago (retiredRows.ts sweepReminders); no TTL option, which the app user cannot set.
-  @@index([dueAt])
 }
 
 /// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
@@ -1352,61 +1269,6 @@ model SuperTabSweepCursor {
   id        String   @id @map("_id")
   after     String
   updatedAt DateTime
-}
-
-/// A question to one person, with options and a recommendation, of Swarm v1-v3. Swarm v4 has no decisions (anh Dee, 2026-11-10):
-/// nothing writes or reads a row since. Swarm purge removes a deleted Swarm's rows; the one-time decisions drop that follows the
-/// backend release without them removes the rest, and this model with it.
-model SuperTabDecision {
-  id             String    @id @map("_id")
-  tabId          String
-  /// The ask that put several questions to one person together.
-  batchId        String
-  projectId      String
-  conversationId String
-  /// The task whose needs_human asked it, or null for the Lead's decision.ask.
-  assignmentId   String?
-  personId       String
-  askerAgentId   String
-  question       String
-  options        String[]
-  recommended    Int
-  /// Optional recommendation deadline; absent on legacy questions, which keep their 24-hour fallback.
-  defaultAt      DateTime?
-  /// The server applied the recommendation at defaultAt; never a person’s choice or a legacy overdue answer.
-  defaulted      Boolean?
-  /// A rule says the person must agree (task #3826): no default applies. At defaultAt the PM is told once and defaultAt is
-  /// cleared, and the 24-hour sweep never takes it, so it waits for the person. Absent on every other decision.
-  mustAgree      Boolean?
-  unblocks       String
-  createdAt      DateTime
-  answeredAt     DateTime?
-  choice         Int?
-  note           String?
-  /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
-  delegated      Boolean?
-  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (the sweep Swarm v4 removed).
-  overdue        Boolean?
-  /// "routing-reflection" for a proposal of the nightly routing reflection (gone with Swarm v4): never a Buddy's to read,
-  /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
-  kind           String?
-  /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived
-  /// (Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
-  /// with the answered ones after the ledger's weeks. Absent on every other decision.
-  withdrawn      Boolean?
-  /// With kind "buddy-send" (task #4525): the words its owner's Send posts as them, and the proposal's goal, scope, priority
-  /// and project, at most a message and a proposal's fields. Absent on every other decision.
-  send           Json?
-
-  @@index([tabId, personId, createdAt])
-  @@index([tabId, askerAgentId, createdAt])
-  @@index([tabId, projectId, createdAt])
-  /// The decisions waiting in a conversation whose work ended (read until Swarm v4 removed decisions).
-  @@index([tabId, conversationId])
-  /// Read by the hourly overdue sweep Swarm v4 removed (the waiting decisions of the last 8 days); nothing reads it now.
-  @@index([answeredAt, createdAt], map: "decision_waiting_created")
-  /// Explicit deadlines use their own range so long-lived questions are not missed by the legacy creation window.
-  @@index([answeredAt, defaultAt], map: "decision_waiting_default")
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.

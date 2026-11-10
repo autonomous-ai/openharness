@@ -42,14 +42,15 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
     DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: string[]): void }; close(): void }
   }
   const home = join(root, 'home', '.hermes')
-  const store = (dir: string, rows: Array<[string, string]>) => {
+  /** Rows of [id, source], or of [id, source, created_source] for a Hermes 0.23 store that has the column. */
+  const store = (dir: string, rows: Array<[string, string] | [string, string, string | null]>, created = rows.some(row => row.length === 3)) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'state.db')
     rmSync(file, { force: true })
     const db = new DatabaseSync(file)
-    db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)')
-    const insert = db.prepare('INSERT INTO sessions VALUES (?, ?)')
-    for (const row of rows) insert.run(...row)
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT${created ? ', created_source TEXT' : ''})`)
+    const insert = db.prepare(`INSERT INTO sessions VALUES (?, ?${created ? ', ?' : ''})`)
+    for (const row of rows) insert.run(...(created ? [row[0], row[1], row[2] ?? null] : row) as string[])
     db.close()
   }
   const processIdentity = { pid: 4242, startMarker: 'Thu Oct 8 12:00:00 2026', executable: 'hermes' }
@@ -84,6 +85,50 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
 }
+
+const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+
+it('rejects a Hermes 0.23 sub-agent or another surface\'s local session as a delegated one, never letting it take the pane', async () => {
+  // Before local- ids were source-checked, a hook naming one was admitted unread, so a local sub-agent took its parent's pane.
+  const f = await fixture()
+  f.store(f.home, [[local(1), 'subagent', null], [local(2), 'local', 'acp'], [local(3), 'local', 'kanban']])
+  for (const n of [1, 2, 3]) {
+    const before = f.logs.filter(line => line.includes('ignored · hermes_subagent')).length
+    await f.hook(local(n))
+    await vi.waitFor(() => expect(f.logs.filter(line => line.includes('ignored · hermes_subagent')).length).toBe(before + 1), { timeout: 4_000 })
+  }
+  expect(f.current().sessionId).toBe('')
+  expect(f.registered).not.toHaveBeenCalled()
+})
+
+it('holds a local session until Hermes stamps its creator, then binds the CLI\'s', async () => {
+  const f = await fixture()
+  const own = local(4)
+  f.store(f.home, [[own, 'local', 'unknown']])
+  await f.hook(own)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Waiting for the Hermes session creator to be recorded'))).toBe(true))
+  expect(f.current().sessionId).toBe('')
+  f.store(f.home, [[own, 'local', 'cli']])
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(own), { timeout: 4_000 })
+  expect(f.registered).toHaveBeenCalledOnce()
+})
+
+it.each(['cli', 'tui'])('binds a local session its %s created, in a store that also holds an older session', async surface => {
+  const f = await fixture()
+  f.store(f.home, [['20261009_115900_eeeeee', 'cli', null], [local(5), 'local', surface]])
+  await f.hook(local(5))
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(local(5)))
+  await f.hook('20261009_115900_eeeeee')
+  await vi.waitFor(() => expect(f.current().sessionId).toBe('20261009_115900_eeeeee'))
+})
+
+it('reads a store without created_source as before: a local row is no pane\'s own', async () => {
+  const f = await fixture()
+  f.store(f.home, [[local(6), 'local']])
+  await f.hook(local(6))
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · hermes_subagent'))).toBe(true), { timeout: 4_000 })
+  expect(f.current().sessionId).toBe('')
+})
 
 it('holds when the known home changes during source inspection instead of publishing the old proof', async () => {
   const f = await fixture()

@@ -326,7 +326,8 @@ not read GitHub shows above the rows as one caption line in
 `AppPalette.textSecondary` after `triangleAlert`: `Mac Studio · GitHub signed
 out`. Only its person sees it, and the numbers stay. While the first read is on
 its way, three skeleton rows hold the place; a failed read keeps the board shown
-with the reason and Retry; an empty board shows nothing. Top Teams and the page
+with the reason and Retry, and writes its name (`OFFLINE`, never the server's
+words) to the app log; an empty board shows nothing. Top Teams and the page
 show one board, read when the Swarm shows and every five minutes while it does.
 
 A place is its numeral; a celebration mark sits beside it and never replaces
@@ -630,12 +631,12 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   words and `--to` address) stands on its own row, however soon after the
   agent's last, and its name reads as one phrase in the name's 13 muted ink,
   `Pip to Juno`, `Faye to Pip, Juno`: the agents the Swarm has, each once, never
-  its author; the name and who it is to share a line, each giving way to the
-  other. A post that names nobody (`free: Pip`) keeps the name alone. Under a
-  post that names an agent that was offline when it was posted and still is
-  (`downSince`), one quiet line (`SuperTabPostNote`, in 12 metadata grey, as
-  `Response interrupted` is): `Juno is offline` (`Pip and Juno are offline`,
-  `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
+  its author; the name and who it is to share one line, each giving way to the
+  other with an ellipsis. A post that names nobody (`free: Pip`) keeps the name
+  alone. Under a post that names an agent that was offline
+  when it was posted and still is (`downSince`), one quiet line
+  (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
+  `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
   it was named has seen the post, and one that is up now has come back to it:
   neither is named. A task's chat reads the same.
 - **Channel feed** (`super_tabs/channel_feed.dart`, `github_row.dart`; anh Dee, 2026-11-09). What a project's
@@ -647,7 +648,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   comment's first words, signed `Pip, 07:05: ...`, a `READ-OK` or `HOLD` among
   them; a pull request's or task's title), and Read for the rest with Open in
   GitHub. A tap on a card that is on a task opens it beside the channel
-  (`SwarmIssuePanel`); closing it goes back to the channel. A comment is shown
+  (`SwarmIssuePanel`); closing it, Tasks or Chat goes back to the channel, and
+  Tasks opens on its list again. A repository unlinked from the project takes
+  its cards with it, and nothing of it is read until it is linked again. A comment is shown
   when an agent of the project signed it with its name and the repository's own
   people wrote it; a pull request when it is opened and when it is merged, by
   the agent whose branch (`pip/12`) or label (`builder:pip`) it has; a task when
@@ -843,6 +846,15 @@ frame, padding and control states. Content scrolls before actions disappear.
 overflows, including before the first scroll gesture. Text leaves 12 points of
 clearance for the thumb. Short content has no visible scroll furniture; nested
 editors keep their own input and scrolling behavior.
+
+**Old Team Account** (`widgets/old_team_account.dart`) — the one task dialog
+the app opens by itself: once a launch, as the workspace opens on a computer
+whose old Harness Team account is still there. One line, "An old Harness Team
+account is still on this computer. Remove it.", and one action, Remove, which
+opens the system's administrator prompt. Nothing else closes it until the
+removal has run; then the footer shows "Removed." or the CLI's own reason in
+the danger color, with Close and Retry. Cancelled or failed, the next launch
+asks again. `test/old_team_account_test.dart` clicks through it.
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,

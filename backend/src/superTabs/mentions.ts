@@ -1,23 +1,11 @@
 /** A person, or any agent of the project but a Buddy, tags people in a message: the message keeps whom it tags (`mentions`), as
- *  its readers see them. Swarm v4 (anh Dee, 2026-11-10) keeps no tag list: an agent reaches its person in their 1:1 chat. The
- *  rows the list kept (SuperTabMention) are written no more and expire by their TTL index. */
-import type { PrismaClient } from '@prisma/client'
-import { ensureIndex } from '../lib/db/indexes.js'
+ *  its readers see them. Swarm v4 (anh Dee, 2026-11-10) keeps no tag list: an agent reaches its person in their 1:1 chat. */
 import { fail, isLeads, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, inChannelOf, isAgentChat, projectAgent, projectsOf } from './projects.js'
 import { isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
 
 export const MAX_MENTIONS = 5
-/** A stored tag row expires this long after it was made, by its TTL index. The index, and the model with it, go once the last row
- *  written before Swarm v4 has expired, on or after 2026-12-10. */
-const MENTION_EXPIRY_MS = 30 * 24 * 60 * 60_000
-
-/** Run by the singleton worker at startup, like the terminal answer expiry. */
-export async function ensureMentionExpiry(db: PrismaClient): Promise<void> {
-  await ensureIndex(db, 'SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: MENTION_EXPIRY_MS / 1000 })
-}
-
 /** `@name` or `@name@domain`, as people tag in chat. Never right after a letter, digit, `@` or `/` (an address, a path, a
  *  link), and a name never ends in a dot: `@dee.` closes a sentence. Desktop (message_text.dart) and the phone
  *  (swarm_message_row.dart) use this same pattern; tagFixture.json is the table all three pass. */

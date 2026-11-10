@@ -58,9 +58,11 @@ function relayIn(path: string): string[] {
 }
 
 describe('no owner subscription relay (#4137)', () => {
+  // Parses every source file of the CLI with the TypeScript compiler: over 5 s on a loaded CI shard (PR #3849's
+  // cli-tests (3), 2026-11-10) and 16 s on a loaded Mac, while the answer itself never changed.
   it('wires no relay into a launch, names none of its providers, and writes nothing into an engine home for it', () => {
     expect(sources().flatMap(relayIn)).toEqual([])
-  })
+  }, 60_000)
 
   it('the Team account\'s launches are built with no relay: the composition root hands the core none', () => {
     const main = readFileSync(join(CLI, 'src', 'core', 'main.ts'), 'utf8')
