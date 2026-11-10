@@ -28,6 +28,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
   return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads), buddyOwnerOf: () => 'peer' }
 })
 import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
+import { promptHash } from '../lib/promptIdentity.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -93,7 +94,8 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   /** The agent's turn ends, as the core tells it. */
-  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, ...turn }) }
+  // A live turn that ended, by the prompt it was asked, which is the message the host types unless a test says another.
+  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: promptHash('ok, ship it'), turnId: 1, ...turn }) }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
   return { core, call, open, event, end, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
     /** What the server's daemon socket tells this machine (backend lib/adapterWs.ts). */
@@ -5835,8 +5837,9 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     })
     return posts
   }
+  /** The core has [assistantText] for the turn that was asked [userMessage]. */
   const answered = (t: ReturnType<typeof setup>, userMessage = 'ok, ship it', assistantText = 'Shipped.') =>
-    vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage, assistantText })
+    vi.mocked(t.core.turns.answerOf).mockImplementation(async end => end.prompt === promptHash(userMessage) ? assistantText : null)
   /** What the host started at a turn's end is promises with nothing to wait for in these specs: one turn of the event loop finishes it. */
   const flush = () => new Promise(resolve => setImmediate(resolve))
 
@@ -6012,7 +6015,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await vi.waitFor(() => expect(posts).toHaveLength(1))
       expect(posts[0]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'reply-delivery', asAgentId: 'agent',
         command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'message', recipientIds: [] } })
-      expect(t.core.transcripts.lastTurn).toHaveBeenCalledWith('session')
+      expect(t.core.turns.answerOf).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session', prompt: promptHash('ok, ship it'), turnId: 1 }))
       t.end(); t.end()
       await flush()
       expect(posts).toHaveLength(1)
@@ -6106,19 +6109,26 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await flush()
       expect(posts).toEqual([])
     })
-    it('is not posted for a turn that was asked something else, or ended with no answer; it stays owed for its own', async () => {
+    it('is not posted for a turn that was asked something else, which is not even read; it stays owed for its own', async () => {
       const t = inChat(), posts = posting(t)
       await t.open().tick()
-      answered(t, 'Something typed in the terminal.', 'Done.')
-      t.end()
-      vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue(null)
-      t.end()
+      answered(t)
+      t.end({ prompt: promptHash('Something typed in the terminal.') })
       await flush()
+      expect(t.core.turns.answerOf).not.toHaveBeenCalled()
       expect(posts).toEqual([])
       expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
-      answered(t)
       t.end()
       await vi.waitFor(() => expect(posts).toHaveLength(1))
+    })
+    it('is not posted for a turn that ended with no answer, and is not owed any more, saying so', async () => {
+      const t = inChat(), posts = posting(t)
+      await t.open().tick()
+      vi.mocked(t.core.turns.answerOf).mockResolvedValue(null)
+      t.end()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('No reply posted for delivery delivery of agent agent: its turn ended without an answer.'))
+      expect(posts).toEqual([])
+      expect(t.saved().replies).toBeUndefined()
     })
     it('is not owed for a delivery the core refused for good, and is for one it may have typed', async () => {
       const refused = inChat()
@@ -6162,7 +6172,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       const host = t.open()
       await host.tick()
       t.end({ agentId: 'another-harness' })
-      expect(t.core.transcripts.lastTurn).not.toHaveBeenCalled()
+      expect(t.core.turns.answerOf).not.toHaveBeenCalled()
       host.stop()
       expect(t.core.turns.onEnd).toHaveBeenCalledTimes(1)
     })

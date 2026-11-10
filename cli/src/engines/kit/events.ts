@@ -11,7 +11,7 @@ export type SessionEvent =
   | { type: 'user_message'; payload: { content: string; images?: Array<{ media_type: string; data: string }> } }
   | { type: 'thinking_delta'; payload: { content: string; thinkingId?: string } }
   | { type: 'thinking_title'; payload: { thinkingId?: string; title: string } }
-  | { type: 'text_delta'; payload: { content: string } }
+  | { type: 'text_delta'; payload: { content: string; /** What the agent says on the way (Codex's commentary): no part of the turn's answer. */ commentary?: true } }
   | { type: 'tool_start'; payload: { id: string; tool: string; input: unknown; parentToolUseId?: string } }
   | { type: 'tool_end'; payload: { id: string; tool: string; output: string; /** Last 600 raw chars, before `output` is cut to its head. */ outputTail?: string; isError: boolean; summary: string; parentToolUseId?: string; subagent?: SubagentSummary; durationSeconds?: number } }
   | { type: 'context_compact'; payload: { message: string; trigger?: string } }

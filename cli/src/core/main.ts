@@ -830,10 +830,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The experiments' turns (the orchestrator's first), and Agent Messages' typed messages (core/api.ts).
     deliverers: new Set(TURN_DELIVERERS),
   })
-  // Each live turn's end, for the services in this process and the Swarm's in its own (core/turns/ends.ts), said by the event funnel.
+  // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
+  // (core/turns/ends.ts), all said by the event funnel as the turn goes.
   const turnEnds = createTurnEnds({
     hearers: new Set(TURN_END_HEARERS),
     tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'turn_end', event } }) },
+    lastTurn: sessionId => readLastTurn(sessionId),
   })
   const ports = emptyPorts()
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
@@ -1057,6 +1059,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       asks: async (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
       ...deliveries.turns,
       onEnd: turnEnds.onEnd,
+      answerOf: turnEnds.answerOf,
     },
     questions: {
       // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the
@@ -1657,6 +1660,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
+      turnEnds.connected(service)
       engineReaders.connected(service)
       liveTransport.connected(service)
       runtimeTransport.connected(service)
@@ -2751,6 +2755,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     turnStartedAt,
     agentIdFor,
     clients: backend,
+    ends: turnEnds,
   })
   backend.onCancel = id => { void cancelAgent(id) }
   backend.cancelProvider = createCancelRequest((id) => { void cancelAgent(id) })
