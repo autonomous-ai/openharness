@@ -85,7 +85,7 @@ async function swarm() {
     return String((await execute({ type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId)
   }
   /** The worker's attempt on [routeDecisionId], done, with its session's totals at [start] and [end], as work.assign and its
-   *  Done stored it before Swarm v4 (both answer as retired, 2026-11-10). */
+   *  Done stored it before Swarm v4 (both gone, 2026-11-10). */
   const finished = async (routeDecisionId: string, start: TokensByModel, end: TokensByModel) => {
     const { id: assignmentId } = await storeAssignment(db, tab, group, worker, now)
     await storeStatus(db, tab, group, 'done', 'Shipped.')

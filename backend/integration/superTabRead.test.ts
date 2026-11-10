@@ -25,7 +25,6 @@ import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
-import { RETIRED_NOTE } from '../src/superTabs/retired.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -129,10 +128,8 @@ describe('first load (design 4.3)', () => {
     const { status, body } = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'derivedEtag', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
-      'machines', 'members', 'personalTasks', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
-    // The Tasks feed Swarm v4 retired: empty and reset, so a Desktop drops the rows it saved (retired.ts).
-    expect(body.data.personalTasks).toEqual({ approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null })
-    expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED, steps: true,
+      'machines', 'members', 'progress', 'serverTime', 'starts', 'tabId'].sort())
+    expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED,
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])
@@ -334,7 +331,7 @@ describe('what a reader can tell of a task\'s merge (task #2558)', () => {
   // Backlog sorts on these: shippedAt says only that the task reached Done; a pull request card's mergedAt says it merged.
   it('a Done task with an open pull request reads as shipped with no merge', async () => {
     const pullRequest = 'https://github.com/example/app/pull/7'
-    // Done with its pull request open, as its worker's Done left it before Swarm v4 (work.status answers as retired, 2026-11-10).
+    // Done with its pull request open, as its worker's Done left it before Swarm v4 (work.status is gone, 2026-11-10).
     const s = await scene((f, ids) => f.edit(state => {
       const task = state.conversations.find(c => c.id === ids.web)!
       storedStatus(state, ids.web, 'done', `Ready: ${pullRequest}`)
@@ -391,14 +388,6 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
     expect(Object.fromEntries(newest)).toEqual({ [a.tabId]: MIGRATED, [b.tabId]: MIGRATED + 5_000 })
     expect((await db.$transaction(tx => parts.lastChangedAt(tx, []))).size).toBe(0)
   })
-
-  it.each(['/api/super-tabs', '/api/super-tabs/TAB', '/api/super-tabs/hosts/host', '/api/super-tabs/hosts/host/pools', '/api/super-tabs/hosts/host/assignments'])(
-    'answers %s with 426 Update required', async url => {
-      const s = await scene()
-      const { status, body } = await get(url.replace('TAB', s.tabId))
-      expect(status).toBe(426)
-      expect(body.error).toEqual({ code: 'UPDATE_REQUIRED', message: 'Update Harness to keep using this Swarm.' })
-    })
 })
 
 describe('host form (design 4.10)', () => {
@@ -704,30 +693,6 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
       .toEqual([[s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
-  })
-})
-
-// Swarm v4 has no decisions (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat. An older agent's ask is taken
-// and ignored, and a person's read derives nothing of decisions and reads no decision row.
-describe('no decisions in Swarm v4', () => {
-  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser, asAgentId?: string) => {
-    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
-      payload: { operationId: randomUUID(), command, ...(asAgentId ? { asAgentId } : {}) } })
-    return { status: response.statusCode, body: response.json() as { data: { result: Record<string, unknown> } } }
-  }
-
-  it('ignores an older agent\'s ask and derives no count, digest or prompt waits', async () => {
-    const s = await scene()
-    clock = Date.now()
-    const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
-      questions: [{ question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] }, owner, s.lead)
-    expect({ status: asked.status, result: asked.body.data.result }).toEqual({ status: 200, result: { ignored: true, note: RETIRED_NOTE } })
-    const first = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
-    const changes = await get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.body.data.cursor}`, peer)
-    for (const read of [first, changes]) {
-      expect(read.status).toBe(200)
-      for (const field of ['decisionsWaiting', 'decisionsDigest', 'promptsWaiting']) expect(read.body.data.derived).not.toHaveProperty(field)
-    }
   })
 })
 

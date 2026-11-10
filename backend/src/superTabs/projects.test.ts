@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { opensStep, storedStep } from './steps.test-support.js'
+import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
 import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
@@ -16,7 +16,7 @@ function setup() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
   let next = 0, messages: MessageDraft[] = []
-  const run = (command: Command, actor = owner, context: Partial<CommandContext> = {}) => {
+  const run = (command: Command | StepCommand, actor = owner, context: Partial<CommandContext> = {}) => {
     if (opensStep(command)) return storedStep(state, command, actor).result
     const effect = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
       contribution: { machineOwnerId: 'host', contributorId: actor.kind === 'person' ? actor.userId : 'owner' }, ...context })

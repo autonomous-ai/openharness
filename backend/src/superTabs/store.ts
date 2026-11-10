@@ -3,9 +3,6 @@ import { chatlessAgents, giveAgentsChats } from './agentChats.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { isRetiredCommand, opensRetiredStep, REFUSED_TO_PEOPLE, RETIRED_STEP, retiredAnswer } from './retired.js'
-import { metrics } from '../lib/metrics.js'
-import type { ReactionTarget } from './reactions.js'
 import { chatNotices } from '../push/notices.js'
 import { writeReadMark } from './readMarks.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -103,7 +100,6 @@ import { autoJoin, localAutoJoinMemory, type AutoJoinMemory, type AutoJoinOutcom
 import { emailDomain } from '../lib/publicEmailDomains.js'
 
 type Transaction = Prisma.TransactionClient
-type ReactCommand = Extract<Command, { type: 'message.react' }>
 type MessageChangeCommand = Extract<Command, { type: 'message.edit' | 'message.delete' }>
 /** How far back a delete looks for the rows its group's counters step back to (messageEdits.ts deleteMessage). */
 const COUNTERS_LOOKBACK = 100
@@ -1098,18 +1094,6 @@ export class SuperTabStore {
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     client?: DeclaredClient) {
-    // A command v4 no longer has is ignored before anything is read, written or checked: the answer is one constant, as
-    // `updateRequired`'s is, and names nothing of the Swarm (retired.ts). It is counted by type and kind of client, which says
-    // when the last older client has stopped sending it.
-    // A person's reaction is gone too (reactions.ts), though an agent's still acknowledges: ignored the same way. So is a step an
-    // older agent opens (retired.ts opensRetiredStep), counted under a type of its own.
-    const type = opensRetiredStep(input.command) ? RETIRED_STEP : input.command?.type
-    if (isRetiredCommand(type) || type === RETIRED_STEP || (type === 'message.react' && !asAgentId)) {
-      metrics.retiredCommand(type, client?.kind ?? 'other')
-      const refused = isRetiredCommand(type) && !asAgentId ? REFUSED_TO_PEOPLE[type] : undefined
-      if (refused) fail(refused.code, refused.message, refused.status)
-      return retiredAnswer()
-    }
     try {
       const done = await timeCommand(this.now, () => this.executeOnce(user, tabId, input, asAgentId, hostMachineId),
         (phases, totalMs) => slowCommand(tabId, input.command?.type, totalMs, phases, !!asAgentId))
@@ -1348,8 +1332,6 @@ export class SuperTabStore {
         ({ attachments: context.attachments, voiceWords: context.voiceWords } = await this.sendable(tx, tabId, actor, command))
         claimed = context.attachments.map(a => a.id)
       }
-      // Only an agent's reaction does anything, and nothing of it is kept (reactions.ts): the message must be one it may see.
-      if (command.type === 'message.react' && actor.kind === 'agent') context.reaction = await this.reactionTarget(tx, tabId, actor, command, original)
       if (command.type === 'message.edit' || command.type === 'message.delete') context.messageChange = await this.messageChangeTarget(tx, tabId, actor, command, original)
       // A start records the version of the machine it is dispatched to.
       if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
@@ -1573,8 +1555,6 @@ export class SuperTabStore {
         // A notice gathered for the digest and answered before it (read in its chat): the digest does not name it again.
         await this.settleAnswered(tx, tabId, (command.replyTo ?? command.answers)!, actor.agentId, context.now)
       }
-      // An agent's reaction settles its delivery of the message as an answer does (task #3391).
-      if (effects.settles) await this.settleAnswered(tx, tabId, effects.settles.messageId, effects.settles.agentId, context.now)
       if (command.type === 'project.report' && actor.kind === 'agent') {
         // Judged on the progress after this report summarized what it names.
         const progress = projectsOf(effects.state).find(p => p.id === command.projectId)?.progress
@@ -1976,25 +1956,15 @@ export class SuperTabStore {
   }
 
 
-  /** Closes an agent's own open deliveries of a message as answered: by its reply, its answer right below it, or its reaction. */
+  /** Closes an agent's own open deliveries of a message as answered: by its reply, or its answer right below it. */
   private async settleAnswered(tx: Transaction, tabId: string, messageId: string, agentId: string, now: number) {
     await this.endDeliveries(tx, tabId, { where: { messageId, agentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId, agentId,
       status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
       data: { status: 'answered', answeredAt: new Date(now), holdReason: null, holdSince: null } }))
   }
 
-  /** The message a reaction names, when it is in that conversation and this actor may see it. An agent-only notice is its
-   *  recipient's alone. */
-  private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand, state: SuperTabState): Promise<ReactionTarget | undefined> {
-    const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
-      select: { id: true, source: true, recipientIds: true, thread: true, author: true } })
-    if (!message || (agentOnly(message.source, message.recipientIds) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
-    if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
-    return { messageId: message.id }
-  }
-
-  /** The message `message.edit` or `message.delete` names (messageEdits.ts), found as a reaction's is (reactionTarget): in that
-   *  conversation and readable by this actor, else absent, which refuses it as unavailable. A delete also reads whether
+  /** The message `message.edit` or `message.delete` names (messageEdits.ts): in that conversation and readable by this actor
+   *  (an agent-only notice is its recipient's alone), else absent, which refuses it as unavailable. A delete also reads whether
    *  anything replies in its thread, and the counters' rows before it. */
   private async messageChangeTarget(tx: Transaction, tabId: string, actor: Actor, command: MessageChangeCommand,
     state: SuperTabState): Promise<MessageChangeTarget | undefined> {
@@ -2018,8 +1988,7 @@ export class SuperTabStore {
     return target
   }
 
-  /** What a delete removes beside its row (messageEdits.ts): its reactions and their Activity, the Activity of the reply it was,
-   *  deliveries no agent has taken yet, and its files, which the hourly sweep removes from the bucket (lib/attachmentSweep.ts).
+  /** What a delete removes beside its row (messageEdits.ts): deliveries no agent has taken yet, and its files, which the hourly sweep removes from the bucket (lib/attachmentSweep.ts).
    *  A root with replies stays as DELETED_TEXT with nothing else of what it said; a reply's thread summary is written again. */
   private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, now: number) {
     const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true } })
@@ -2029,9 +1998,6 @@ export class SuperTabStore {
     if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [
       { q: { _id: { $in: files }, tabId, usedBy: row.id }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true },
     ] })
-    // Reactions were last written 2026-11-09 (reactions.ts): this line goes once the last such row is gone, 30 days on, from
-    // 2026-12-09. Its Activity and tag rows, written until Swarm v4 (2026-11-10), hold no words and expire by themselves.
-    await tx.superTabReaction.deleteMany({ where: { tabId, messageId: row.id } })
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
@@ -2536,8 +2502,7 @@ export class SuperTabStore {
       }
     }
     const byMessage = deliveriesByMessage(deliveries)
-    // `reactions` is always empty (2026-11-09): nothing shows one, and an app from before reads the field (reactions.ts).
-    return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: [],
+    return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [],
       deliveries: (byMessage.get(m.id) ?? []).sort(receiptOrder(m)) })), next, threads,
       // A poll for new messages learns here that an edit or a delete changed a message it already shows (messageEdits.ts).
       reactionSeq: group.reactionSeq ?? 0 }
@@ -3716,8 +3681,7 @@ export class SuperTabStore {
 
   /**
    * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts). Since Swarm v4 (anh Dee, 2026-11-09) they
-   * run only v4's jobs: every agent gets its 1:1 chat, the stops v3 asked for are withdrawn once, and the PM's "owes an answer"
-   * note v3 kept for its host's restart is cleared. Each run is one write, so a second run, or one racing it, finds nothing new.
+   * run only v4's jobs: every agent gets its 1:1 chat, and the stops v3 asked for are withdrawn once. Each run is one write, so a second run, or one racing it, finds nothing new.
    * They write no messages.
    */
   async runTimeChecks(tabId: string): Promise<number> {
@@ -3732,9 +3696,6 @@ export class SuperTabStore {
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
-      // A PM's "owes an answer" note told its host to restart it while it hung (v3). Nothing writes it now, so a stale one would
-      // restart a PM forever: it goes, once.
-      for (const project of projectsOf(state)) delete project.owed
       // The stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
       const stopping = v3Stopping(state)
       // A host closing one holds its close lease: that stop stands. Once per Swarm, one read by id each.
