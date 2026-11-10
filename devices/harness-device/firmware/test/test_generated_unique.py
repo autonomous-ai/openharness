@@ -24,6 +24,7 @@ def unique_arrays(path):
 
 unique_arrays(habitat / 'pets.c')
 unique_arrays(habitat / 'focus_marks.c')
+unique_arrays(habitat / 'focus_faces.c')
 
 # Claude, Codex and Muse always show their built-in pet (focus.c pet_for), so their 56 px marks are never drawn.
 marks = (habitat / 'focus_marks.c').read_text()
@@ -38,4 +39,58 @@ for i, c in enumerate(table):
 assert len(entries) == 14, len(entries)
 for index in (0, 1, 11):
     assert entries[index] == '{0,0,NULL,NULL}', (index, entries[index])
+# --- focus_faces.c: shared tables change no face's rendering; the wordmark's kerning is cut to its own letters ---
+import os
+import subprocess
+
+BEFORE_SHA = '9d32ed1e8'   # focus_faces.c before the Inter faces shared their tables
+before_file = Path(os.environ.get('FOCUS_FACES_BEFORE', '/tmp/dialres-build/focus_faces.before.c'))
+if before_file.exists():
+    before_text = before_file.read_text()
+else:
+    before_text = subprocess.run(['git', 'show', f'{BEFORE_SHA}:devices/harness-device/firmware/main/ui/habitat/focus_faces.c'],
+                                 check=True, capture_output=True, text=True, cwd=fw).stdout
+FACE = re.compile(r'^const ht_pfont_t (ht_lv_\w+) = \{\{(.*?),(\w+)\},(\w+),(\w+),(\d+),(\d+),(\w+),(\w+),(\w+),(\d+),(\w+)\};$')
+
+
+def faces(text):
+    """face -> dict of its resolved tables (name-independent) and scalar fields."""
+    arrays = {name: [int(v) for v in re.findall(r'-?\d+', body)]
+              for name, body in re.findall(r'^static const \S+ (\w+)\[\] = \{(.*?)\};$', text, re.M | re.S)}
+    out = {}
+    for line in text.splitlines():
+        m = FACE.match(line)
+        if m:
+            (name, head, px, glyphs, codes, count, ascent, kl, kr, kv, rcnt, fallback) = m.groups()
+            out[name] = dict(head=head, px=arrays[px], glyphs=arrays[glyphs], codes=arrays[codes], count=int(count),
+                             ascent=int(ascent), kl=arrays[kl], kr=arrays[kr], kv=arrays[kv], rcnt=int(rcnt),
+                             fallback=fallback)
+    return out
+
+
+def pkern(face, a, b):   # terminal.c pkern for two glyph indices of one face
+    l, r = face['kl'][a], face['kr'][b]
+    return face['kv'][(l - 1) * face['rcnt'] + (r - 1)] if l and r else 0
+
+
+old, new = faces(before_text), faces((habitat / 'focus_faces.c').read_text())
+assert set(old) == set(new) and len(old) == 8, sorted(new)
+for name in old:
+    o, n = old[name], new[name]
+    for field in ('head', 'px', 'glyphs', 'codes', 'count', 'ascent', 'fallback'):
+        assert o[field] == n[field], (name, field)
+    if name != 'ht_lv_inter_bold_48':   # the Inter faces' kerning tables are unchanged, only shared
+        for field in ('kl', 'kr', 'kv', 'rcnt'):
+            assert o[field] == n[field], (name, field)
+
+# The wordmark: tables sized for its own seven glyphs, and every ordered pair kerns by the same amount as before.
+word_old, word_new = old['ht_lv_inter_bold_48'], new['ht_lv_inter_bold_48']
+assert word_new['codes'] == [32, 72, 97, 101, 110, 114, 115]
+glyphs = len(word_new['codes'])
+assert word_new['rcnt'] <= glyphs and max(word_new['kr']) == word_new['rcnt'], word_new['rcnt']
+assert max(word_new['kl']) <= glyphs and len(word_new['kv']) == max(word_new['kl']) * word_new['rcnt'], len(word_new['kv'])
+assert any(pkern(word_old, a, b) for a in range(glyphs) for b in range(glyphs))   # the check is not vacuous
+for a in range(glyphs):
+    for b in range(glyphs):
+        assert pkern(word_old, a, b) == pkern(word_new, a, b), (a, b)
 print('generated arrays are unique')
