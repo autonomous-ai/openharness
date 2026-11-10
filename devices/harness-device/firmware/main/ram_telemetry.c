@@ -110,7 +110,7 @@ void ram_telemetry_checkpoint(const char *tag)
 
     ESP_LOGI(TAG,
              "RAM tag=%s int_free=%u int_min=%u int_largest=%u psram_free=%u psram_largest=%u "
-             "json_fb=%u/%lluB psram_fail=%u/%lluB task=%s stack_free_min=%uB",
+             "json_fb=%u/%uB psram_fail=%u/%uB task=%s stack_free_min=%uB",
              tag ? tag : "unknown",
              (unsigned)heap_caps_get_free_size(APP_INTERNAL_CAPS),
              (unsigned)heap_caps_get_minimum_free_size(APP_INTERNAL_CAPS),
@@ -118,9 +118,9 @@ void ram_telemetry_checkpoint(const char *tag)
              (unsigned)heap_caps_get_free_size(APP_PSRAM_CAPS),
              (unsigned)heap_caps_get_largest_free_block(APP_PSRAM_CAPS),
              (unsigned)json_fallbacks,
-             (unsigned long long)json_fallback_bytes,
+             (unsigned)json_fallback_bytes,
              (unsigned)psram_failures,
-             (unsigned long long)psram_failure_bytes,
+             (unsigned)psram_failure_bytes,
              pcTaskGetName(NULL),
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }

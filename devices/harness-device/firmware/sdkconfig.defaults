@@ -31,6 +31,10 @@ CONFIG_FREERTOS_HZ=1000
 # measured 8KiB stack left only 1,444B (17.6%); 10KiB restores the 25% margin.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
 
+# --- printf ---
+# Newlib nano printf saves ~31 KB of flash code; it cannot print %ll*, %j, %z, %t, %L or %a (test_nano_formats.py), but still prints floats.
+CONFIG_LIBC_NEWLIB_NANO_FORMAT=y
+
 # --- Log level ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
