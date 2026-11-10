@@ -1,4 +1,3 @@
-import { appPullRequestMerges } from '../superTabs/ruleMoves.js'
 import { declaredHttpClient } from '../superTabs/refusalLog.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z, ZodError } from 'zod'
@@ -19,7 +18,6 @@ import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
 import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
-import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdReason.js'
@@ -105,8 +103,6 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
   .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
 const decisionParams = tabParams.extend({ decisionId: id })
-const roleParams = tabParams.extend({ projectId: id, roleId: id })
-const revisionParams = tabParams.extend({ projectId: id, revision: z.coerce.number().int().positive().safe() })
 const terminalParams = tabParams.extend({ requestId: id })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
@@ -131,7 +127,8 @@ function githubPage(title: string, text: string): string {
     + `<body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p></body></html>`
 }
 const deliveryParams = tabParams.extend({ agentId: id })
-/** A PM's host says whether its turn is open with its delivery list read (store.ts deliveries, #3545); an older host sends nothing. */
+/** `turn`: whether a PM's turn is open, which today's CLI still sends with its delivery list read and nothing reads since the PM's
+ *  inbox went (Swarm v4). Taken until a CLI without it is released. */
 const deliveryListQuery = z.object({ turn: z.enum(['idle', 'busy']).optional() }).strict()
 const deliveryActionParams = deliveryParams.extend({ deliveryId: id })
 const deliveryAction = z.discriminatedUnion('type', [
@@ -139,7 +136,6 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ack'), claimId: id, receipt: z.string().min(1).max(2000), uncertain: z.boolean() }).strict(),
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
-const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySaveSchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
 const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
@@ -231,8 +227,6 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
       workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
-      // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
-      ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
@@ -503,9 +497,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
-  app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
-  app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
-    (req, reply) => respond(reply, () => store.saveAccountPolicy(req.user!, req.body.revision, req.body.policy)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/routing-policy',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.tabPolicy(req.user!, req.params.tabId, req.query.asAgentId)))
@@ -685,19 +676,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecisions(req.user!, req.params.tabId, req.query.asAgentId)))
-  app.get<{ Params: z.infer<typeof roleParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/roles/:roleId',
-    { preHandler: [validateParams(roleParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.roleText(req.user!, req.params.tabId, req.params.projectId, req.params.roleId, req.query.asAgentId)))
-  // A project's instructions, its kept revisions and one of them (superTabs/instructions.ts): read when the revision moves.
-  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions',
-    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.instructions(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
-  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions/revisions',
-    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.instructionRevisions(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
-  app.get<{ Params: z.infer<typeof revisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision',
-    { preHandler: [validateParams(revisionParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => store.instructionRevision(req.user!, req.params.tabId, req.params.projectId, req.params.revision, req.query.asAgentId)))
   // A project's rules record and its kept revisions (superTabs/policy.ts): shown to people, in no prompt.
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/rules',
     { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
@@ -711,7 +689,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof deliveryParams>; Querystring: z.infer<typeof deliveryListQuery> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries',
     { preHandler: [validateParams(deliveryParams), validateQuery(deliveryListQuery)] },
-    (req, reply) => respond(reply, noting(req, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId, req.query.turn), open => !open.length)))
+    (req, reply) => respond(reply, noting(req, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId), open => !open.length)))
   app.post<{ Params: z.infer<typeof deliveryActionParams>; Body: z.infer<typeof deliveryAction> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
     { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(deliveryActionParams), validateBody(deliveryAction)] },
     (req, reply) => respond(reply, () => store.delivery(req.user!, req.params.tabId, req.params.agentId, req.params.deliveryId, req.body)))

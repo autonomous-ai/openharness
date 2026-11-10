@@ -291,23 +291,6 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     expect(messages(settled, f.app.conversationId)).toEqual([])
   })
 
-  // Project instructions: the coordinator is called what its project calls it (instructions.ts coordinatorNameOf).
-  it('names the coordinator as its project calls it', () => {
-    const f = swarm()
-    f.run({ type: 'project.coordinatorName', projectId: f.app.projectId, name: 'Coordinator' })
-    const startId = f.lead('owner-mac').result.startId as string
-    expect(f.state.starts!.find(s => s.id === startId)!.request.name).toBe('Coordinator')
-    expect(refusal(() => f.lead('owner-mac'))).toMatchObject({ code: 'LEAD_STARTING', message: 'This project\'s Coordinator is already starting.' })
-    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: { ...config, effort: 'xhigh' } }, owner, hosted(f, 'owner-mac'))
-    expect(messages(joined, f.app.conversationId)).toEqual(['Coordinator started on Owner Mac.'])
-    const agentId = joined.result.agentId as string
-    expect(f.state.agents.find(a => a.id === agentId)!.name).toBe('Coordinator')
-    expect(refusal(() => f.lead('owner-mac'))).toMatchObject({ code: 'LEAD_EXISTS', message: 'This project already has its Coordinator.' })
-    const protectedLead = refusal(() => f.run({ type: 'agent.remove', agentId }))
-    expect(protectedLead).toMatchObject({ code: 'LEAD_PROTECTED' })
-    expect(protectedLead!.message).toContain('is the Coordinator of project App.')
-  })
-
   it('failed on the machine the person chose, says why and waits for them', () => {
     const f = swarm()
     const startId = f.lead('owner-mac').result.startId as string

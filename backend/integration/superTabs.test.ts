@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -20,7 +20,7 @@ import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { logger } from '../src/utils/logger.js'
 import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
-import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
+import type { Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
@@ -99,8 +99,8 @@ const message = (text: string): Command => ({ type: 'message.send', conversation
 async function storedState(tab: string): Promise<SuperTabState> {
   return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
 }
-/** What an older client saved of a project before project instructions, as it stored it: its skill mode and custom role set in
- *  the state, the role texts beside it (project.skills and project.roles.* keep nothing now). */
+/** What an older client saved of a project, as it stored it: its skill mode and custom role set in the state, the role texts
+ *  beside it. */
 async function seedProject(tab: string, projectId: string, patch: Record<string, unknown>,
   texts: Array<{ id: string; name: string; kind: 'lead' | 'builder' | 'reviewer'; text: string }> = []) {
   const state = await storedState(tab)
@@ -1355,44 +1355,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(store.read({ ...owner, autonomousEnv: 'stag' }, tab)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  // An older CLI's rule lands in the project's instructions as a save, naming the person whose message the Lead quotes
-  // (project instructions, phase 4).
-  it('writes the Lead\'s rule into the instructions, naming the person it quotes, and never a row the system wrote', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const said = (await run(tab, message('Never use Haiku.'))).result.messageId as string
-    const other = (await run(tab, message('Use Haiku for docs.'), peer)).result.messageId as string
-    const rule = (messageId: string, text = 'Never use Haiku.'): Command => ({ type: 'rule.set', rule: { kind: 'forbidModel', model: 'haiku' }, text,
-      askedIn: { conversationId: 'lead', messageId } })
-    await expect(run(tab, rule('missing'), host, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
-    expect((await run(tab, rule(said), host, lead)).result).toMatchObject({ projectId: 'lead', revision: 2 })
-    expect((await run(tab, rule(other, 'Haiku writes docs.'), host, lead)).result).toMatchObject({ revision: 3 })
-    const revisions = await db.superTabInstructionsRevision.findMany({ where: { tabId: tab, projectId: 'lead' }, orderBy: { revision: 'asc' } })
-    expect(revisions.map(r => [r.revision, r.askedBy, r.summary])).toEqual([[1, owner.sub, expect.any(String)],
-      [2, owner.sub, 'Routing: Never use Haiku.'], [3, peer.sub, 'Routing: Haiku writes docs.']])
-    expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
-    // A save posts no row in the chat (#3132): the revisions above are where it is read.
-    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.includes('changed the instructions'))).toEqual([])
-  })
-  it('lets a project\'s Lead write a rule from the owner\'s message into that project\'s instructions, and answers a removal', async () => {
-    // Backend v1.3.14 refused it: a Swarm of projects has no 'lead' chat.
-    const tab = (await store.create(owner, randomUUID(), 'Projects')).id
-    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
-    await run(tab, { type: 'project.delete', projectId: 'lead' })
-    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Lead', configuration: config, lead: true })).result.agentId as string
-    const said = (await run(tab, { ...message('Only use this Mac.'), conversationId: chat } as Command)).result.messageId as string
-    const askedIn = { conversationId: chat, messageId: said }
-    expect((await run(tab, { type: 'rule.set', rule: { kind: 'machines', machineIds: ['test-host'] }, text: 'Only this Mac.', askedIn }, host, lead)).result)
-      .toMatchObject({ projectId, revision: 2 })
-    expect((await store.instructions(owner, tab, projectId)).text).toContain('- Only this Mac.')
-    expect((await run(tab, { type: 'rule.remove', ruleId: 'old', askedIn }, host, lead)).result).toMatchObject({ ignored: true })
-    expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
-    const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
-    // Only the row naming who added the Lead (#2207): the save posts none (#3132).
-    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/)])
-    expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
-  })
   it('keeps a new Swarm\'s folder from tab.project on its first project, so the repository can be shared and the host uses it', async () => {
     // Review of #1598: a new Swarm stores its first project, which tab.project left without the folder.
     const tab = (await store.create(owner, randomUUID(), 'Folder')).id
@@ -1416,88 +1378,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     // The machine's own person starts it (Swarm v3, task #4120).
     await run(tab, { type: 'agent.start', request }, host)
     expect((await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
-  })
-  it('answers an older client\'s skill change and keeps it nowhere, while the host reads the mode stored before', async () => {
-    const tab = (await store.create(owner, randomUUID(), 'Skills')).id
-    await invite(tab)
-    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' }, peer)).result as { projectId: string; conversationId: string }
-    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Lead', configuration: config, lead: true }, peer)).result.agentId as string
-    const legacyLead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Old', configuration: config, lead: true })).result.agentId as string
-    const modes = async () => Object.fromEntries((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent?.id, r.skillMode]))
-    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
-    const say = async (text: string, user = peer) => (await run(tab, { ...message(text), conversationId: chat } as Command, user)).result.messageId as string
-    const skills = (messageId: string): Command => ({ type: 'project.skills', projectId, mode: 'orchestration', askedIn: { conversationId: chat, messageId } })
-    expect((await run(tab, skills(await say('Use Harness orchestration.')), host, lead)).result).toMatchObject({ ignored: true })
-    expect((await run(tab, { type: 'project.skills', projectId, mode: 'orchestration' }, peer)).result).toMatchObject({ ignored: true })
-    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
-    expect((await store.messages(owner, tab, chat, {})).messages.filter(m => m.text.startsWith('Skills:'))).toEqual([])
-    // A mode an older client stored before still reaches the host.
-    await seedProject(tab, projectId, { skillSet: 'orchestration', skillMode: 'orchestration' })
-    expect(await modes()).toEqual({ [lead]: 'orchestration', [legacyLead]: 'default' })
-    await seedProject(tab, projectId, { skillSet: 'default', skillMode: 'default' })
-    // A project stored before skill modes keeps Harness orchestration.
-    const state = await storedState(tab)
-    delete state.projects!.find(p => p.id === 'lead')!.skillMode
-    await saveState(tab, state)
-    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'orchestration' })
-  })
-  it('keeps custom role texts out of the tab and the host rows, and serves a text only to the project owner, its Lead and its agents\' hosts', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Worker', configuration: config, lead: false })).result.agentId as string
-    const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
-    const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
-      { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }, { id: 'review', name: 'Reviewer', kind: 'reviewer' as const, text: 'REVIEW-TEXT' }]
-    // The set an older client stored before project instructions.
-    await seedProject(tab, 'lead', {}, roles)
-    const rows = async () => (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab)
-    const rowOf = async (id: string) => (await rows()).find(r => r.agent.id === id)!
-    expect(await rowOf(worker)).not.toHaveProperty('role')
-    await seedProject(tab, 'lead', { skillSet: 'custom', skillMode: 'default' })
-    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT'), projectId: 'lead' } })
-    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT'), projectId: 'lead' } })
-    const stored = JSON.stringify(await storedState(tab))
-    for (const text of [JSON.stringify(await rows()), stored, JSON.stringify((await store.read(owner, tab)).state)]) expect(text).not.toMatch(/LEAD-TEXT|DEV-TEXT/)
-
-    const text = (user: AuthUser, roleId: string, asAgentId?: string) => app.inject({ method: 'GET',
-      url: `/api/super-tabs/${tab}/projects/lead/roles/${roleId}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
-    for (const [user, as] of [[owner], [host], [host, lead]] as Array<[AuthUser, string?]>) {
-      const answer = await text(user, 'dev', as)
-      expect(answer.statusCode, answer.body).toBe(200)
-      expect(answer.json().data).toEqual({ version: version('DEV-TEXT'), text: 'DEV-TEXT' })
-    }
-    for (const [user, as] of [[peer], [host, worker]] as Array<[AuthUser, string?]>) expect((await text(user, 'dev', as)).statusCode).toBe(404)
-    expect((await text(owner, 'aaaaaaaaaaaa')).statusCode).toBe(404)
-    // A host reads a text only while it could host the agent now: its machine active and the contributor's share grant live.
-    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
-    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
-    }
-    await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: new Date() } })
-    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
-      await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: null } })
-    }
-    expect((await text(host, 'dev')).statusCode).toBe(200)
-
-    // An older client's role saves are answered and kept nowhere (project instructions, phase 4): the stored texts stay.
-    for (const command of [{ type: 'project.role.set', projectId: 'lead', role: { ...roles[1]!, text: 'DEV-TEXT v2' } },
-      { type: 'project.role.remove', projectId: 'lead', roleId: 'review' }, { type: 'project.roles.reset', projectId: 'lead', roles: roles.slice(0, 2) }] as Command[]) {
-      expect((await run(tab, command)).result).toMatchObject({ ignored: true })
-    }
-    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT'), projectId: 'lead' })
-    expect((await text(owner, 'dev')).json().data).toEqual({ version: version('DEV-TEXT'), text: 'DEV-TEXT' })
-    expect(await db.superTabRoleText.count({ where: { tabId: tab } })).toBe(3)
-
-    // A deleted project takes its stored texts with it.
-    const other = (await run(tab, { type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).result.projectId as string
-    await seedProject(tab, other, {}, roles)
-    expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(3)
-    await run(tab, { type: 'project.delete', projectId: other })
-    expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(0)
   })
   it('writes a message to several recipients in two insert commands, preserving each delivery', async () => {
     const { tab, lead } = await fixture()
@@ -1946,52 +1826,36 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
   })
 
-  it('keeps neither an account policy nor a tab override an older Desktop saves, and serves the default', async () => {
-    const saved = await store.saveAccountPolicy(owner, 0, { ...DEFAULT_ROUTING_POLICY, quotaReserve: 30 })
-    expect(saved).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true, ignored: true })
-    // Saved twice on the same revision: both are answered, neither kept.
-    await store.saveAccountPolicy(owner, 0, DEFAULT_ROUTING_POLICY)
-    expect(await db.routingPolicy.count({ where: { userId: owner.sub } })).toBe(0)
-    expect(await store.accountPolicy(owner)).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
+  it('serves the default policy to every member and its agents', async () => {
     const { tab, lead } = await fixture()
-    expect((await run(tab, { type: 'tab.routingPolicy', policy: { notes: 'Prefer remote-1.' } })).result).toMatchObject({ ignored: true })
-    expect((await storedState(tab)).routingPolicy).toBeUndefined()
     await invite(tab, 'viewer')
     for (const [user, asAgent] of [[owner, undefined], [peer, undefined], [host, lead]] as const) {
       expect((await store.tabPolicy(user, tab, asAgent)).policy).toEqual(DEFAULT_ROUTING_POLICY)
     }
     const response = await app.inject({ url: `/api/super-tabs/${tab}/routing-policy`, headers: { authorization: `Bearer ${peer.sub}` } })
     expect(response.statusCode).toBe(200)
-    expect((await app.inject({ url: '/api/super-tabs/routing-policy', headers: { authorization: `Bearer ${owner.sub}` } })).statusCode).toBe(200)
   })
 
   // The model catalog (project instructions, phase 4, decision 14): served in the tab's routing-policy read beside the default
-  // policy, which older CLIs read as before. A policy row or tab override saved before stays in place, unread.
+  // policy. A policy row saved before stays in place, unread.
   it('serves the catalog, priors and prices with the default policy, whatever the owner saved', async () => {
     const { tab, lead } = await fixture()
     const id = stableId('routing-policy', owner.sub, owner.autonomousEnv)
     await db.routingPolicy.create({ data: { id, userId: owner.sub, autonomousEnv: owner.autonomousEnv, revision: 4,
       policy: { ...DEFAULT_ROUTING_POLICY, quotaReserve: 40, notes: 'Saved before instructions.' } } })
     onTestFinished(async () => { await db.routingPolicy.deleteMany({ where: { id } }) })
-    const state = await storedState(tab)
-    await saveState(tab, { ...state, routingPolicy: { notes: 'Prefer remote-1.' } })
-    expect((await storedState(tab)).routingPolicy).toEqual({ notes: 'Prefer remote-1.' })
 
     const read = await app.inject({ url: `/api/super-tabs/${tab}/routing-policy`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.statusCode, read.body).toBe(200)
     const data = read.json().data
-    // An older Desktop shows the read's warnings atop its routing dialog, and reads no save's `note`: they say where routing went.
-    expect(data).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [IGNORED_NOTE], overridden: [], override: null, account: DEFAULT_ROUTING_POLICY })
+    expect(data).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [], overridden: [], override: null, account: DEFAULT_ROUTING_POLICY })
     // Six rows since task #2972: Codex has Sol and Astra by name, and no `default default` row.
     expect(data.catalog.models).toHaveLength(6)
     expect(data.catalog.models.filter((m: { model: string; effort: string }) => m.model === 'default' || m.effort === 'default')).toEqual([])
     expect(data.catalog.grid).toEqual({ strength: 1, models: [{ model: 'kimi k3', strength: 2 }, { model: 'deepseek v4.1', strength: 2 }] })
     expect(data.catalog.prices.map((p: { model: string }) => p.model)).toContain('claude-opus-5-5')
     expect(data.catalog.priors.models.length).toBeGreaterThan(0)
-    // An agent's read has none: the CLI's route prints the read's warnings with every route.
     expect(await store.tabPolicy(host, tab, lead)).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [] })
-    const account = await app.inject({ url: '/api/super-tabs/routing-policy', headers: { authorization: `Bearer ${owner.sub}` } })
-    expect(account.json().data).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
     expect(await db.routingPolicy.count({ where: { id } })).toBe(1)
   })
 
@@ -3103,8 +2967,8 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     const notice = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!
     expect(notice.text).toBe('Builder never started and will not start now.')
     // The notice is written in the owner's name, but the system wrote it: a Lead cannot quote it as the owner asking.
-    await expect(run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: notice.id } },
-      owner, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
+    await expect(run(tab, { type: 'rules.set', projectId: 'lead', baseRevision: 0, rules: SEED_RULES, summary: 'Idle first.',
+      askedIn: { conversationId: 'lead', messageId: notice.id } }, owner, lead)).rejects.toMatchObject({ code: 'RULES_ASKED_IN_REQUIRED' })
     const added = joined.machines!.find(m => m.machineId === machineId)!
     expect(added).toMatchObject({ contributorId: owner.sub, maxAgents: 3, scope: 'swarm', cwd: '/swarm' })
     expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
@@ -3589,8 +3453,8 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
     // The Lead that made the overlap knows it; the other project's Lead hears it in its own project chat, written as itself.
     expect(alerts).toEqual([expect.objectContaining({ conversationId: docsChat, recipientIds: [docsLead],
       author: expect.objectContaining({ id: docsLead }), text: expect.stringContaining('"Agents filter" (Pilot') })])
-    // Nobody waits on it within minutes: it goes in that Lead's next digest (noticeDigest.ts).
-    expect(await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: docsLead, messageId: alerts[0]!.id, status: 'gathered' } })).toHaveLength(1)
+    // It reaches that Lead's host as any message does.
+    expect(await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: docsLead, messageId: alerts[0]!.id, status: 'queued' } })).toHaveLength(1)
     // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the project chat do not.
     expect((await store.messages(host, tab, docsChat, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
     expect((await store.messages(owner, tab, docsChat, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)
@@ -4546,38 +4410,32 @@ describe('a closed tab\'s Personal project', () => {
     expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
   })
 
-  // Security review 2 (Phonecheck2): a project whose instructions or rules the person saved is kept, also when the save lands
-  // while the tab closes.
-  const instructions = { type: 'instructions.save', baseRevision: 1, text: '# Mine\n\nKeep this.', summary: 'My own' }
+  // Security review 2 (Phonecheck2): a project whose rules the person saved is kept, also when the save lands while the tab closes.
   const rulesSave = { type: 'rules.set', baseRevision: 0, rules: { ...SEED_RULES, mergeTrain: { enabled: true, everyMinutes: 10 } }, summary: 'My own rules' }
   const kept = async (tab: string, projectId: string) => {
     expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
-    expect(await db.superTabInstructionsRevision.count({ where: { tabId: tab, projectId } })).toBeGreaterThan(0)
+    expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
   }
-  for (const [what, save] of [['instructions', instructions], ['rules', rulesSave]] as const) {
-    it(`archives it, keeping what was written, when its ${what} were saved before the close`, async () => {
-      const { tab, projectId, tabOperation } = await personal()
-      await run(tab, { ...save, projectId } as Command, person)
-      const closed = await store.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
-      expect(closed.result).toMatchObject({ outcome: 'archived' })
-      await kept(tab, projectId)
-      if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
-    })
-    it(`archives it, keeping what was written, when its ${what} are saved while it is being closed`, async () => {
-      const { tab, projectId, tabOperation } = await personal()
-      let saved = false
-      const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
-        if (saved) return
-        saved = true
-        await run(tab, { ...save, projectId } as Command, person)
-      }))
-      const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
-      expect(saved).toBe(true)
-      expect(closed.result).toMatchObject({ outcome: 'archived' })
-      await kept(tab, projectId)
-      if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
-    })
-  }
+  it('archives it, keeping what was written, when its rules were saved before the close', async () => {
+    const { tab, projectId, tabOperation } = await personal()
+    await run(tab, { ...rulesSave, projectId } as Command, person)
+    const closed = await store.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    await kept(tab, projectId)
+  })
+  it('archives it, keeping what was written, when its rules are saved while it is being closed', async () => {
+    const { tab, projectId, tabOperation } = await personal()
+    let saved = false
+    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (saved) return
+      saved = true
+      await run(tab, { ...rulesSave, projectId } as Command, person)
+    }))
+    const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(saved).toBe(true)
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    await kept(tab, projectId)
+  })
 
   // Security review 2, second pass (Phonecheck2): another person's first rules save shares a guard with the close, and with a
   // project delete, through the project's Lead chat, so the two never both commit on the same project.
