@@ -87,11 +87,14 @@ class SwarmAgentStates extends ChangeNotifier {
   /// The state of [agent] as its row says it, or null for none.
   String? of(SuperTabAgent agent) {
     if (offlineOf(agent) case final offline?) return offline;
-    final tasks = _taken[_repositories[agent.id]];
-    final number = tasks?[(agent.displayName ?? agent.name).toLowerCase()];
-    if (number != null) return 'on #$number';
+    if (taskOf(agent) case final number?) return 'on #$number';
     return _free[agent.id] == true ? 'free' : null;
   }
+
+  /// The task [agent] has taken on its project's board, by number, whether it is online or not; null for none.
+  int? taskOf(SuperTabAgent agent) =>
+      _taken[_repositories[agent.id]]?[(agent.displayName ?? agent.name)
+          .toLowerCase()];
 
   void _changed() {
     if (_disposed) return;

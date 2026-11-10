@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/swarm_v4_channel.dart';
 import 'support/swarm_v4_data.dart';
 
 /// A person's first minutes in Swarm v4, in one go and by clicking, as they do it: the left pane, an agent's own chat
@@ -18,46 +17,43 @@ void main() {
     WidgetTester tester, {
     Size size = const Size(2000, 900),
   }) async {
-    await tester.binding.setSurfaceSize(size);
-    addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarmV4Server();
     (server.state['people'] as List).add({
       'id': 'dee',
       'email': 'dee@example.com',
       'role': 'collaborator',
     });
-    server.leaderboard = {
-      'projectId': 'lead',
-      'week': 0,
+    server.shipping = {
+      'week': 1793577600000,
       'people': [
-        {'personId': 'dee', 'points': 120, 'rank': 1},
-        {'personId': 'owner', 'points': 12, 'rank': 2},
+        {
+          'personId': 'dee',
+          'displayName': 'dee',
+          'agentsShipping': 3,
+          'level': 3,
+          'points': 4.2,
+          'rank': 1,
+        },
+        {
+          'personId': 'owner',
+          'displayName': 'owner',
+          'agentsShipping': 1,
+          'level': 1,
+          'points': 1.4,
+          'rank': 2,
+        },
       ],
+      'failures': <dynamic>[],
     };
     final terminals = <String>[];
-    final c = server.controller(
-      account: 'owner',
-      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+    final c = await openSwarmV4(
+      tester,
+      server,
+      saved: 'lead',
+      size: size,
+      github: swarmV4GitHub(),
+      onOpenGroupTerminals: (view) => terminals.add(view.selectedId),
     );
-    addTearDown(c.dispose);
-    await tester.runAsync(c.refresh);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            onOpenGroupTerminals: () => terminals.add(c.selectedId),
-            machineName: (_) => 'Mac Studio',
-            github: swarmV4GitHub(),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
     return (server, c, terminals);
   }
 
@@ -149,27 +145,15 @@ void main() {
     final empty = ConversationServer()
       ..state['projects'] = <dynamic>[]
       ..state['conversations'] = <dynamic>[];
-    final c = empty.controller(account: 'owner');
-    addTearDown(c.dispose);
-    await tester.runAsync(c.refresh);
     var started = 0;
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            onNewAgent: () => started++,
-            onNewProject: () => started++,
-            machineName: (_) => 'Mac Studio',
-          ),
-        ),
-      ),
+    // At the test window's own size, 800 wide, near where the left pane becomes a drawer.
+    await openSwarmV4(
+      tester,
+      empty,
+      size: const Size(800, 600),
+      onNewAgent: () => started++,
+      onNewProject: () => started++,
     );
-    await tester.pumpAndSettle();
     expect(
       find.text('Start a project, or bring an agent to work with you.'),
       findsOneWidget,
@@ -179,24 +163,9 @@ void main() {
 
     // A server that cannot be read: the view stays up and nothing throws.
     final down = swarmV4Server()..failReads = true;
-    final offline = down.controller(account: 'owner');
-    addTearDown(offline.dispose);
-    await tester.runAsync(offline.refresh);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: SuperTabView(
-            controller: offline,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            machineName: (_) => 'Mac Studio',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    // A Swarm of its own, as the workspace opens each: not the empty one's view given another controller.
+    await tester.pumpWidget(const SizedBox());
+    final offline = await openSwarmV4(tester, down, size: const Size(800, 600));
     expect(tester.takeException(), isNull);
     expect(offline.error, isNotNull);
     expect(find.text(offline.error!), findsWidgets);

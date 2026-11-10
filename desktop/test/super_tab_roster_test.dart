@@ -2107,12 +2107,7 @@ void main() {
       final server = f.server;
       server.state['people'] = [
         {'id': 'owner', 'email': 'ken@example.com', 'role': 'owner'},
-        {
-          'id': 'dee',
-          'email': 'dee@example.com',
-          'role': 'collaborator',
-          'status': {'text': 'Coffee break', 'emoji': '☕', 'until': null},
-        },
+        {'id': 'dee', 'email': 'dee@example.com', 'role': 'collaborator'},
         {'id': 'tony', 'email': 'tony@example.com', 'role': 'collaborator'},
       ];
       Map<String, dynamic> score(

@@ -15,6 +15,7 @@
  */
 import { join } from 'node:path'
 import type { CoreApi, CorePorts } from '../core/api.js'
+import { env } from '../config/env.js'
 import { catalogEntry } from '../dsh/catalog.js'
 import { installedDsh } from '../dsh/installed.js'
 import { dshVerdictPath, dshViewerName } from '../dsh/manifest.js'
@@ -101,12 +102,16 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
     },
     log: (line) => console.log(line),
     ledger: viewerLedger,
+    // A verdict's preview is the agent's own page; this daemon's API is never one.
+    reservedPorts: () => [env.PORT],
   })
   const dshVerdicts = new DshVerdictWatcher({
     onChange: (agentId, verdict) => {
       dshFrameFor(agentId).verdict = verdict
       // The verdict's artifact is what the viewer should show, when it names one.
       dshViewers.setVerdictArtifact(agentId, verdict?.artifact ?? null)
+      // A page the agent serves itself (its dev server) is shown in place of the package's, once it listens.
+      dshViewers.setVerdictPreview(agentId, verdict?.preview ?? null)
       syncCompanion(agentId)
     },
     log: (line) => console.log(line),

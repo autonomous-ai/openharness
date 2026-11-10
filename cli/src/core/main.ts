@@ -2158,6 +2158,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }, method, target, body)
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
+    hookViaSharedProcess: engineHooks.hookViaSharedProcess,
     hookAdmissionBlocked: id => launchCancelled(id),
     onAdmissionHeld: engineHooks.onAdmissionHeld,
     onAdmissionStop: attach.holdAdmissionStop,

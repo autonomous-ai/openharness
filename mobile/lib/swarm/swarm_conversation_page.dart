@@ -19,7 +19,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_code_block.dart';
@@ -53,9 +52,9 @@ import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_paste.dart';
-import 'swarm_profile_sheet.dart';
+import 'swarm_person_sheet.dart';
 import 'swarm_project_page.dart';
-import 'swarm_reactions.dart';
+import 'swarm_message_actions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
@@ -160,7 +159,6 @@ class SwarmConversationPage extends StatefulWidget {
     this.threadId,
     this.threadFocus,
     this.mention,
-    this.homeC = false,
     this.tabRoot = false,
     this.swarmSwitch,
   });
@@ -193,10 +191,6 @@ class SwarmConversationPage extends StatefulWidget {
   /// holds it, for its own header's menu; null makes the chat its own while
   /// it is their Buddy chat.
   final SwarmBuddyActions? buddy;
-
-  /// Swarm Home C's project chat (Tony, 2026-10-30): it gates only the
-  /// add-reaction chip after a message's reactions.
-  final bool homeC;
 
   /// At the root of a tab, as the Buddy tab holds the person's Buddy chat: no
   /// back in its header, and its Buddy's dot before its name.
@@ -1093,7 +1087,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       key: ValueKey('swarm-thread-message-${m.id}'),
       message: m,
       name: _nameOf(c, m),
-      look: _lookOf(c, m),
+      picture: c.reader.snapshot?.authorPicture(m),
       role: m.fromAgent && !pm ? view.roles[m.authorId] : null,
       pm: m.fromAgent && view.leads.contains(m.authorId),
       mentions: view.mentions,
@@ -1120,18 +1114,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 personId: m.authorId,
               ),
             ),
-      reactions: SwarmReactionBar(
-        messageId: m.id,
-        reactions: c.reactionsOf(m),
-        readerId: c.reader.accountId,
-        nameOf: (kind, id) => _reactorName(c, kind, id),
-        onReact: view.canPost ? (emoji) => unawaited(t.react(m, emoji)) : null,
-      ),
       links: switch (_session) {
         final session? => _linkPreviews(session, c, m, inThread: true),
         null => null,
       },
-      onLongPress: () => unawaited(_pickThreadReaction(c, t, m.id)),
+      onLongPress: () => unawaited(_threadActions(c, t, m.id)),
     );
   }
 
@@ -1145,9 +1132,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       child: _Pending(
         key: const ValueKey('swarm-thread-pending'),
         name: mine == null ? 'You' : _nameOf(c, mine),
-        look:
-            c.reader.snapshot?.personLook(c.reader.accountId) ??
-            (picture: null, status: null),
+        picture: c.reader.snapshot?.person(c.reader.accountId)?.avatar,
         text: post.text,
         files: post.files,
         voice: post.voice,
@@ -1830,26 +1815,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return '$name ($badge) → you';
   }
 
-  SwarmLook _lookOf(SwarmConversation c, SuperTabMessage m) =>
-      c.reader.snapshot?.authorLook(m) ?? (picture: null, status: null);
-
-  static SwarmLook _agentLook(SuperTabAgent? agent) =>
-      (picture: agent?.avatar, status: null);
-
-  /// Who gave a reaction, by name and never by email: "You", an agent's
-  /// name, another person's shown name.
-  String _reactorName(SwarmConversation c, String kind, String id) {
-    if (kind == 'person' && id == c.reader.accountId) return 'You';
-    final snapshot = c.reader.snapshot;
-    if (kind == 'agent') return snapshot?.agentName(id) ?? 'Agent';
-    final person = snapshot?.people.where((p) => p.id == id).firstOrNull;
-    return person?.shownName ??
-        (person == null ? 'Someone' : superTabPersonName(person.email));
-  }
-
-  /// The reaction picker over thread [t]'s message [id], as [_pickReaction]
+  /// The long-press sheet over thread [t]'s message [id], as [_actions]
   /// does in the chat.
-  Future<void> _pickThreadReaction(
+  Future<void> _threadActions(
     SwarmConversation c,
     SwarmThread t,
     String id,
@@ -1858,11 +1826,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final message = shown();
     if (message == null) return;
     final mine = c.mayChange(message);
-    final emoji = await showSwarmReactionPicker(
+    await showSwarmMessageActions(
       context,
-      reactions: c.reactionsOf(message),
-      readerId: c.reader.accountId,
-      react: c.canPost,
       link: _linkTo(c, id),
       onEdit: mine && !_isVoice(message)
           ? () => unawaited(_edit(shown, (m, text) => t.editMessage(m, text)))
@@ -1871,8 +1836,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           ? () => unawaited(_delete(shown, t.deleteMessage))
           : null,
     );
-    if (emoji == null || !mounted) return;
-    if (shown() case final now?) await t.react(now, emoji);
   }
 
   /// Whether [message] is a voice message: its text is its words, never
@@ -1920,34 +1883,22 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  /// The reaction picker over message [id]: the pick reacts to the message
-  /// as it is by then. The long-press sheet also copies the message's link;
-  /// the Add reaction chip's ([link] false) offers reactions alone.
-  Future<void> _pickReaction(
-    SwarmConversation c,
-    String id, {
-    bool link = true,
-  }) async {
+  /// The long-press sheet over message [id]: Copy link to message, and Edit
+  /// and Delete on the person's own, each on the message as it is by then.
+  Future<void> _actions(SwarmConversation c, String id) async {
     SuperTabMessage? shown() => c.messages.where((m) => m.id == id).firstOrNull;
     final message = shown();
     if (message == null) return;
-    // Edit and Delete are the long-press sheet's, on the person's own.
-    final mine = link && c.mayChange(message);
-    final emoji = await showSwarmReactionPicker(
+    await showSwarmMessageActions(
       context,
-      reactions: c.reactionsOf(message),
-      readerId: c.reader.accountId,
-      react: c.canPost,
-      link: link ? _linkTo(c, id) : null,
-      onEdit: mine && !_isVoice(message)
+      link: _linkTo(c, id),
+      onEdit: c.mayChange(message) && !_isVoice(message)
           ? () => unawaited(_edit(shown, c.editMessage))
           : null,
-      onDelete: link && c.mayDelete(message)
+      onDelete: c.mayDelete(message)
           ? () => unawaited(_delete(shown, c.deleteMessage))
           : null,
     );
-    if (emoji == null || !mounted) return;
-    if (shown() case final now?) await c.react(now, emoji);
   }
 
   /// Message [id]'s link, the one Desktop copies.
@@ -2191,7 +2142,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               ? const <SwarmThreadFace>[]
               : swarmThreadFaces(snapshot, line);
           final name = _nameOf(c, m);
-          final look = _lookOf(c, m);
+          final picture = snapshot?.authorPicture(m);
           final pm = swarmIsPmLine(c.reader, m);
           // "River (PM) → you" says the role already.
           final role = m.fromAgent && !pm ? view.roles[m.authorId] : null;
@@ -2206,7 +2157,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final lit = _lit == m.id, followed = _target == m.id;
           final match = _find?.matching.contains(m.id) ?? false;
           final acting = _acting == m.id;
-          final reactions = c.reactionsOf(m);
           final receipt =
               m.id == latestOwn?.id &&
               // Sent to nobody: where no Lead runs, the line says so.
@@ -2236,7 +2186,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               ),
               card,
               name,
-              swarmLookKey(look),
+              swarmPictureKey(picture),
               role,
               coordinator,
               grouped,
@@ -2254,20 +2204,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               c.reader.accountId,
               [for (final e in tagged.entries) '${e.key}:${e.value}'].join(' '),
               [for (final e in labels.entries) '${e.key}:${e.value}'].join(' '),
-              reactions,
               answerIn,
               view.project,
               line,
               [
                 for (final who in faces)
-                  '${who.id}:${who.name}:${who.pm}:${swarmLookKey(who.look)}',
+                  '${who.id}:${who.name}:${who.pm}:${swarmPictureKey(who.picture)}',
               ].join(','),
             ),
             () => SwarmMessageRow(
               key: followed ? _targetKey : null,
               message: m,
               name: name,
-              look: look,
+              picture: picture,
               role: role,
               askTag: line?.askTag,
               pm: coordinator,
@@ -2339,19 +2288,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         personId: m.authorId,
                       ),
                     ),
-              reactions: SwarmReactionBar(
-                messageId: m.id,
-                reactions: reactions,
-                readerId: c.reader.accountId,
-                nameOf: (kind, id) => _reactorName(c, kind, id),
-                onReact: view.canPost
-                    ? (emoji) => unawaited(c.react(m, emoji))
-                    : null,
-                onAdd: widget.homeC && view.canPost
-                    ? () => unawaited(_pickReaction(c, m.id, link: false))
-                    : null,
-              ),
-              onLongPress: () => unawaited(_pickReaction(c, m.id)),
+              onLongPress: () => unawaited(_actions(c, m.id)),
               receipt: receipt
                   ? SwarmMessageReceipt(
                       key: ValueKey('swarm-message-receipt-${m.id}'),
@@ -2380,7 +2317,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               asker?.id,
               role,
               coordinator,
-              swarmLookKey(_agentLook(asker)),
+              swarmPictureKey(asker?.avatar),
             ),
             () => _Ask(
               session: session,
@@ -2429,9 +2366,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           return _Pending(
             key: ValueKey('$_pendingKey-${post.operationId}'),
             name: mine == null ? 'You' : _nameOf(c, mine),
-            look:
-                c.reader.snapshot?.personLook(c.reader.accountId) ??
-                (picture: null, status: null),
+            picture: c.reader.snapshot?.person(c.reader.accountId)?.avatar,
             text: post.text,
             files: post.files,
             voice: post.voice,
@@ -3456,7 +3391,7 @@ class _Pending extends StatelessWidget {
     required this.quote,
     required this.onSendAgain,
     required this.onDelete,
-    required this.look,
+    this.picture,
   });
 
   final String name, text;
@@ -3470,7 +3405,7 @@ class _Pending extends StatelessWidget {
   final SuperTabVoice? voice;
 
   /// The person's own face.
-  final SwarmLook look;
+  final SuperTabAvatarPicture? picture;
   final SwarmMentions mentions;
   final SwarmPostState state;
   final Widget? quote;
@@ -3488,8 +3423,7 @@ class _Pending extends StatelessWidget {
           name: name,
           id: '',
           agent: false,
-          picture: look.picture,
-          status: look.status,
+          picture: picture,
         ),
         header: SwarmMessageHeader(name: name, agent: false),
         body: [

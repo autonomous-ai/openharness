@@ -75,11 +75,7 @@ class AccountSection extends StatelessWidget {
             if (!local && profile != null)
               TextButton(
                 key: const Key('settings-account-edit'),
-                onPressed: () => showAccountProfileSheet(
-                  context,
-                  notifier,
-                  swarm: accountProfileSwarm(notifier),
-                ),
+                onPressed: () => showAccountProfileSheet(context, notifier),
                 child: const Text('Edit'),
               ),
             OutlinedButton(

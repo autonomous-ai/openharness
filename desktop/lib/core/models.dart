@@ -492,6 +492,10 @@ class Agent {
   /// title. Null from a daemon that does not say; only a true one is sent to
   /// the Swarm (task #2920).
   final bool? nameChosen;
+
+  /// What a message to it waits for now (the daemon's `waitingFor`): `engine` while its engine starts, else null. The daemon
+  /// sends the agent's frame again when it changes, so a client that reconnects reads it as it is.
+  final String? waitingFor;
   final String? closePlanState;
   final String? closePlanDetail;
 
@@ -607,6 +611,7 @@ class Agent {
     this.createdAt,
     this.closeSupported = false,
     this.nameChosen,
+    this.waitingFor,
     this.closePlanState,
     this.closePlanDetail,
     this.lastOpenedAt,
@@ -783,6 +788,7 @@ class Agent {
           : null,
       closeSupported: j['closeSupported'] == true,
       nameChosen: j['nameChosen'] is bool ? j['nameChosen'] as bool : null,
+      waitingFor: j['waitingFor'] is String ? j['waitingFor'] as String : null,
       closePlanState:
           j['closePlan'] is Map &&
               const {'waiting', 'failed'}.contains(j['closePlan']['state'])
@@ -869,6 +875,7 @@ class Agent {
     createdAt: createdAt,
     closeSupported: closeSupported,
     nameChosen: nameChosen,
+    waitingFor: waitingFor,
     closePlanState: clearClosePlan ? null : closePlanState,
     closePlanDetail: clearClosePlan ? null : closePlanDetail,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
@@ -1036,6 +1043,7 @@ class AgentVerdict {
     this.errors = 0,
     this.warnings = 0,
     this.artifact,
+    this.preview,
     this.phases = const [],
     this.updatedAt,
   });
@@ -1050,6 +1058,10 @@ class AgentVerdict {
 
   /// Workspace-relative path of the primary thing to look at, when the harness named one.
   final String? artifact;
+
+  /// The page the agent serves itself on its machine (`http://127.0.0.1:5173/`), which the viewer shows
+  /// once it answers: the address its pages have there.
+  final String? preview;
 
   /// Where the work is, in order — at most twelve; empty when the harness
   /// names no phases, and then the header draws no strip.
@@ -1083,6 +1095,7 @@ class AgentVerdict {
       errors: _safeCount(raw['errors']),
       warnings: _safeCount(raw['warnings']),
       artifact: _safeText(raw['artifact'], 1024),
+      preview: _safeText(raw['preview'], 2048),
       phases: _phases(raw['phases']),
       updatedAt: updated is String ? DateTime.tryParse(updated) : null,
     );
@@ -1113,6 +1126,7 @@ class AgentVerdict {
       other.errors == errors &&
       other.warnings == warnings &&
       other.artifact == artifact &&
+      other.preview == preview &&
       listEquals(other.phases, phases) &&
       other.updatedAt == updatedAt;
 
@@ -1123,6 +1137,7 @@ class AgentVerdict {
     errors,
     warnings,
     artifact,
+    preview,
     Object.hashAll(phases),
     updatedAt,
   );

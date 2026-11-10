@@ -323,14 +323,9 @@ class SwarmConversation extends ChangeNotifier
   bool _untold = false;
   Future<void>? _reading, _readingOlder, _locating, _rereading;
 
-  /// The reaction counter ([SuperTabConversation.reactionSeq]) the page
-  /// shown was read with: null until a read of that page said it.
+  /// The edit counter ([SuperTabConversation.reactionSeq]) the page shown
+  /// was read with: null until a read of that page said it.
   int? _reactionSeq;
-
-  /// The person's reactions on their way, by message and emoji, each adding
-  /// (true) or taking back: counted in [reactionsOf] until the backend has
-  /// them.
-  final _reacting = <(String, SuperTabReactionEmoji), bool>{};
 
   /// The messages a read found deleted since they were shown: a thread's
   /// own rows of them go too ([gone]).
@@ -633,7 +628,7 @@ class SwarmConversation extends ChangeNotifier
     if (!_read || group.lastMessageSequence > tail) {
       unawaited(load());
     } else if (_reactionSeq case final seq? when group.reactionSeq > seq) {
-      // A reaction changed on a message already shown, here or on another
+      // A message already shown was edited or deleted, here or on another
       // device.
       unawaited(_reread());
     }
@@ -707,7 +702,6 @@ class SwarmConversation extends ChangeNotifier
     _mentions.clear();
     _outbox.clear();
     _replyingTo = null;
-    _reacting.clear();
     _resolving = null;
     _resolveIds.clear();
     error = null;
@@ -766,7 +760,7 @@ class SwarmConversation extends ChangeNotifier
     return has();
   }
 
-  /// Reads the page shown again for its reaction counts; joins a read of it
+  /// Reads the page shown again for its edits and deletes; joins a read of it
   /// under way.
   Future<void> _reread() {
     if (_disposed) return Future.value();
@@ -799,7 +793,7 @@ class SwarmConversation extends ChangeNotifier
     bool tell = true,
   }) async {
     final epoch = _epoch, asked = ++_readsAsked;
-    var reacted = false;
+    var edited = false;
     try {
       final tail = latest ? null : messages.lastOrNull?.sequence;
       final before = _before;
@@ -896,13 +890,13 @@ class SwarmConversation extends ChangeNotifier
         _before = before;
       }
       // The counter the page shown was read with; a read of what came after
-      // it that says a reaction changed since reads that page again.
+      // it that says a message changed since reads that page again.
       if ((answer['reactionSeq'] as num?)?.toInt() case final seq?
           when !older) {
         if (again || tail == null) {
           _reactionSeq = seq;
         } else {
-          reacted = seq > (_reactionSeq ?? -1);
+          edited = seq > (_reactionSeq ?? -1);
         }
       }
       _read = true;
@@ -910,7 +904,7 @@ class SwarmConversation extends ChangeNotifier
       error = null;
       if (!older) _markRead();
       if (!changed) {
-        if (reacted) await _reread();
+        if (edited) await _reread();
         return;
       }
     } on SuperTabFailure catch (failure) {
@@ -926,7 +920,7 @@ class SwarmConversation extends ChangeNotifier
     } else {
       _untold = true;
     }
-    if (reacted) await _reread();
+    if (edited) await _reread();
   }
 
   /// Posts the draft and its [files], to the agents mentioned in it and as a
@@ -1121,86 +1115,6 @@ class SwarmConversation extends ChangeNotifier
   void _filesChanged() {
     _uploads.keepTo(files.files);
     _composer.changed();
-  }
-
-  /// [message]'s counts as the person sees them: their own reaction on its
-  /// way already counted, or already taken back.
-  List<SuperTabReactionCount> reactionsOf(SuperTabMessage message) {
-    var counts = message.reactions;
-    for (final MapEntry(key: (messageId, emoji), value: on)
-        in _reacting.entries) {
-      if (messageId == message.id) counts = _toggled(counts, emoji, on);
-    }
-    return counts;
-  }
-
-  /// [counts] with the person's [emoji] added ([on]) or taken back.
-  List<SuperTabReactionCount> _toggled(
-    List<SuperTabReactionCount> counts,
-    SuperTabReactionEmoji emoji,
-    bool on,
-  ) {
-    final me = (kind: 'person', id: reader.accountId);
-    final was = counts.where((r) => r.emoji == emoji).firstOrNull?.by;
-    final by = [...?was?.where((who) => who != me), if (on) me];
-    return List.unmodifiable(
-      [
-        for (final r in counts)
-          if (r.emoji != emoji) r,
-        if (by.isNotEmpty) SuperTabReactionCount(emoji, by),
-      ]..sort((a, b) => a.emoji.index.compareTo(b.emoji.index)),
-    );
-  }
-
-  /// Adds the person's [emoji] to [message], or takes it back when it is
-  /// already theirs (the desktop's `react`): counted at once, sent, then the
-  /// page shown is read again so the counts are the backend's. A refusal
-  /// takes it back and says why in [error]. True once the backend took it.
-  Future<bool> react(
-    SuperTabMessage message,
-    SuperTabReactionEmoji emoji,
-  ) async {
-    final key = (message.id, emoji);
-    if (_disposed || !canPost || _reacting.containsKey(key)) return false;
-    final on = !reactionsOf(message)
-        .any((r) => r.emoji == emoji && r.includes('person', reader.accountId));
-    _reacting[key] = on;
-    error = null;
-    notifyListeners();
-    String? refused;
-    try {
-      await reader.request(
-        'POST',
-        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
-        body: {
-          'operationId': superTabOperationId(),
-          'command': {
-            'type': 'message.react',
-            'conversationId': id,
-            'messageId': message.id,
-            'emoji': emoji.key,
-            'on': on,
-            // As the desktop's: the server refuses it in an older Buddy chat.
-            if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
-          },
-        },
-      );
-    } on SuperTabFailure catch (failure) {
-      refused = failure.message;
-    } catch (_) {
-      refused = 'Your reaction did not go through. Try again.';
-    }
-    if (refused == null && !_disposed) {
-      // A read of the page begun before the backend had it would not show
-      // it: the read that counts it starts after.
-      if (_rereading case final reading?) await reading;
-      await _reread();
-    }
-    if (_disposed) return refused == null;
-    _reacting.remove(key);
-    if (refused != null) error = refused;
-    notifyListeners();
-    return refused == null;
   }
 
   /// The person may edit [message]: their own plain post (no
@@ -1481,7 +1395,6 @@ class SwarmConversation extends ChangeNotifier
       a.editedAt == b.editedAt &&
       a.deletedAt == b.deletedAt &&
       a.attachments.length == b.attachments.length &&
-      _sameReactions(a.reactions, b.reactions) &&
       _sameDeliveries(a, b);
 
   /// What the delivery line draws from: each failed claim's count changes
@@ -1501,18 +1414,6 @@ class SwarmConversation extends ChangeNotifier
     return true;
   }
 
-  static bool _sameReactions(
-    List<SuperTabReactionCount> a,
-    List<SuperTabReactionCount> b,
-  ) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].emoji != b[i].emoji || !listEquals(a[i].by, b[i].by)) {
-        return false;
-      }
-    }
-    return true;
-  }
 
   /// How often the person's newest message is read again while its delivery
   /// is queued, and for how long once it is on screen (Lead, 10-30): a phone
