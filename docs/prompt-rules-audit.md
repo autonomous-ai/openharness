@@ -127,14 +127,14 @@ grew with each incident; `cli/src/lib/swarmSkills.spec.ts` now fails at 200. Wha
 |---|---|
 | Add `status:taken` and comment "taken by <name>" | code: `harness super-tab take` (`cli/src/superTabs/githubClaim.ts`) |
 | "Juno, 14:05: READ-OK <sha>" / "HOLD <sha>", an unsigned READ-OK never counts | code: `harness super-tab read ok\|hold` (`githubVerdict.ts`), and the merger counts the recorded agent (`githubMerge.ts`) |
-| The builder label on the pull request | not needed: the merger reads the branch's first part (`githubMerge.ts` `authorOf`) |
 | Keep your branch current, fix what Harness says blocks it | said by Harness on the pull request when it applies (`githubMerge.ts` `tellOnce`) |
 | What Harness brings, and where to answer | said with each thing it brings (`githubMentions.ts`) |
 | The channel's manners (what to say, "free", unsigned) | the project's own AGENTS.md where it wants them; `@Name` waking someone stays |
 | The "Works on:" line | asked for when it is needed (`githubMentions.ts`) |
 
-Two lines stay as prompt because code reads what they ask for and cannot yet know it another way: a post on GitHub opens with
-the agent's name (`githubMentions.ts` `signedBy`), and the branch opens with it (`authorOf`). The safety lines stay (standard 13).
+Three things stay as prompt because code reads what they ask for and cannot yet know it another way: a post on GitHub opens
+with the agent's name (`githubMentions.ts` `signedBy`), the branch opens with it (`githubMerge.ts` `authorOf`), and the pull
+request carries the agent's builder label (`githubMentions.ts` finds what is an agent's by it). The safety lines stay (standard 13).
 
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts

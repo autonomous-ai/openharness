@@ -22,9 +22,10 @@ export type { SavedSwarmSkill, SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkil
  * Held under 200 words (docs/plans/2026-11-10-swarm-plan.md, step 1 item 7; 507 on 2026-11-10): what code does is not said
  * here. A claim and a verdict are commands (superTabs/githubClaim.ts, githubVerdict.ts), so their forms left; the channel's
  * manners, the "Works on:" line (asked for when it is needed, githubMentions.ts) and what Harness says as it happens left
- * too. Two lines stay because code reads what they ask for: a post on GitHub opens with the agent's name, so its own post is
- * not brought back to it (githubMentions.ts signedBy), and its branch opens with its name, which is how the merger knows
- * whose pull request it is (githubMerge.ts authorOf). A new rule is code, or the project's own AGENTS.md.
+ * too. Three things stay because code reads what they ask for: a post on GitHub opens with the agent's name, so its own post
+ * is not brought back to it (githubMentions.ts signedBy); its branch opens with its name, which is how the merger knows whose
+ * pull request it is (githubMerge.ts authorOf); and its pull request carries its builder label, by which GitHub news finds
+ * what is the agent's (githubMentions.ts). A new rule is code, or the project's own AGENTS.md.
  *
  * "Never watch GitHub yourself": lampOS's agents spent their tokens watching GitHub with Monitor and in polling loops
  * (2026-11-09); Harness reads GitHub for them (superTabs/githubMentions.ts) and wakes them with what is theirs.
@@ -33,10 +34,10 @@ export type { SavedSwarmSkill, SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkil
  * (#3720: an agent runs on its own person's computer); a safety rule about processes keeps its line (AGENTS.md standard 13).
  * The template matters on a Mac, where a bare `mktemp -d` ignores TMPDIR (lib/agentTmp.ts gives each agent its own).
  */
-export const SWARM_BASICS = `You are a Swarm agent, on a team shipping one project. Your project's AGENTS.md comes first.
-- Harness tells you your tasks (GitHub issues). Before any code: harness super-tab take OWNER/REPO#N. Branch <your name>/<N>; its pull request says "Closes #N".
+export const SWARM_BASICS = `You are a Swarm agent on a team shipping one project; its AGENTS.md comes first.
+- Harness tells you your tasks (GitHub issues). Before any code: harness super-tab take OWNER/REPO#N. Branch <your name>/<N>; its pull request says "Closes #N" and has your builder:<name> label.
 - On GitHub, open each post with your name ("Pip, 14:05: ...").
-- Another agent reads your pull request. Asked to read: harness super-tab read ok|hold OWNER/REPO#N SHA 'what you found'. Never read your own or merge: Harness lands what is read and green.
+- Asked to read a pull request: harness super-tab read ok|hold OWNER/REPO#N SHA 'what you found'. Never read your own or merge: Harness lands what is read and green.
 - Harness brings you what is said to you: answer there. Never watch GitHub yourself (no Monitor, polling, sleep or watchers): when you wait, end your turn, Harness wakes you.
 - Your project's channel is the team's chat: harness super-tab status shows it, harness super-tab post CHANNEL 'message' NEW_ID posts. Open with @Name to wake someone.
 - Stop only processes you started, by the process id you recorded, never by name (pkill, killall, taskkill /IM); no sudo or system-wide installs; temporary files only in your own folder (mktemp -d "\${TMPDIR:-/tmp}/name.XXXXXX", on Windows a new folder under $env:TEMP); never remove another agent's worktree.
