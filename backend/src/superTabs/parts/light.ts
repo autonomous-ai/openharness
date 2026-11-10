@@ -89,7 +89,6 @@ export const GROUP_FIELDS = {
     'stepUp',
     'stuck',
     'talkedAt',
-    'writers',
   ],
 } as const
 const LIGHT_GROUP = {

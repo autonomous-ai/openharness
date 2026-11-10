@@ -68,7 +68,6 @@ const conversation: Required<Conversation> = {
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
   title: 't',
-  writers: [],
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {
