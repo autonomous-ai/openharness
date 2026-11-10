@@ -53,6 +53,9 @@ class SwarmChannelFeed extends ChangeNotifier {
   final _etags = <SwarmFeed, String>{};
   final _pages = {for (final feed in SwarmFeed.values) feed: 0};
   final _full = {for (final feed in SwarmFeed.values) feed: false};
+
+  /// How many times each list was read again from its first page alone: an older page asked for before then is not joined.
+  final _restarts = {for (final feed in SwarmFeed.values) feed: 0};
   Timer? _timer;
   Future<void>? _reading;
   var _active = false;
@@ -76,6 +79,10 @@ class SwarmChannelFeed extends ChangeNotifier {
 
   /// What the channel's rows of this feed are in: apart from the channel's own, whose rows number theirs.
   String get _conversationId => 'github:$channelId';
+
+  /// Whether [message] is one of this feed's rows among the channel's, not one of the channel's own.
+  bool owns(SuperTabMessage message) =>
+      message.conversationId == _conversationId;
 
   /// Reads while the channel is open and the app in front; stops otherwise, and reads at once on coming back unless it read
   /// lately.
@@ -113,7 +120,7 @@ class SwarmChannelFeed extends ChangeNotifier {
   Duration _delay() {
     final limit = retryAt?.difference(clock.now());
     final delay = limit != null && !limit.isNegative
-        ? (limit > _limitMax ? _limitMax : limit)
+        ? limit
         : _failures == 0
         ? every
         : Duration(
@@ -144,10 +151,14 @@ class SwarmChannelFeed extends ChangeNotifier {
           ),
     ]);
     if (_disposed) return;
+    // A rate limit is waited out [_limitMax] at the most, so the time the person is told is the time it reads again.
+    final until = failed?.retryAt;
+    final latest = clock.now().add(_limitMax);
+    final again = until != null && until.isAfter(latest) ? latest : until;
     // What no list changed, and no failure changed, redraws nothing.
-    changed |= error != failed?.message || retryAt != failed?.retryAt;
+    changed |= error != failed?.message || retryAt != again;
     error = failed?.message;
-    retryAt = failed?.retryAt;
+    retryAt = again;
     _failures = failed == null ? 0 : _failures + 1;
     loaded = true;
     if (!changed) return;
@@ -185,18 +196,36 @@ class SwarmChannelFeed extends ChangeNotifier {
     if (_pages[feed] == 0 || whole || (held.isNotEmpty && !overlaps)) {
       _pages[feed] = 1;
       _full[feed] = !whole;
+      _restarts[feed] = _restarts[feed]! + 1;
       held.clear();
     } else {
+      // A row newer than the page's last that it does not hold was deleted; one in the same second may be on the next page.
       final oldest = fresh.last.sortTime;
       held.removeWhere(
-        (row) => ids.contains(row.id) || !row.sortTime.isBefore(oldest),
+        (row) => ids.contains(row.id) || row.sortTime.isAfter(oldest),
       );
     }
     held
       ..addAll(fresh)
-      ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
+      ..sort(_newestFirst);
+    // What is held stays the pages read: rows pushed past them by new ones are on the next page now, read when asked for.
+    final kept = _pages[feed]! * SwarmFeed.perPage;
+    if (held.length > kept) {
+      held.removeRange(kept, held.length);
+      _full[feed] = true;
+    }
     return true;
   }
+
+  /// Newest first, as GitHub lists them; rows of one second by their number, so a page's edge falls where GitHub's does.
+  static int _newestFirst(SwarmFeedRow a, SwarmFeedRow b) {
+    final byTime = b.sortTime.compareTo(a.sortTime);
+    return byTime != 0 ? byTime : _number(b.id).compareTo(_number(a.id));
+  }
+
+  /// The number GitHub gave a row (`comment:1234`), which grows with time.
+  static int _number(String id) =>
+      int.tryParse(id.substring(id.lastIndexOf(':') + 1)) ?? 0;
 
   /// The newest of what the lists hold: it moves when GitHub has something new to show.
   DateTime? get newest {
@@ -237,13 +266,16 @@ class SwarmChannelFeed extends ChangeNotifier {
   }
 
   Future<void> _readOlder(SwarmFeed feed) async {
+    final restarts = _restarts[feed];
     final page = await github.rest(repository, feed.path(_pages[feed]! + 1));
+    // The newest page was read again alone meanwhile: this one lies past a stretch not read, so it is not joined.
+    if (_restarts[feed] != restarts) return;
     final older = feed.read(page.body ?? '');
     final held = _rows[feed]!;
     final ids = {for (final row in held) row.id};
     held
       ..addAll(older.where((row) => !ids.contains(row.id)))
-      ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
+      ..sort(_newestFirst);
     _pages[feed] = _pages[feed]! + 1;
     _full[feed] = older.length >= SwarmFeed.perPage;
   }
@@ -322,7 +354,7 @@ class SwarmChannelFeed extends ChangeNotifier {
   }
 
   /// The agent [event] is by, or null when it is by none of [agents]: a comment signed with its name, a pull request or a task
-  /// by its builder label or its branch (`pip/14`).
+  /// by its builder label or its branch (`pip/14`), matched without case, as the board matches a label to its agent.
   static SuperTabAgent? _by(SwarmFeedEvent event, List<SuperTabAgent> agents) {
     for (final agent in agents) {
       final by = event.kind == SwarmFeedKind.comment
@@ -330,7 +362,10 @@ class SwarmChannelFeed extends ChangeNotifier {
               agent.name,
               ?agent.displayName,
             }.any((name) => signedBy(event.text, name))
-          : event.by == _slug(agent.name);
+          : {
+              agent.name.toLowerCase(),
+              ?agent.displayName?.toLowerCase(),
+            }.contains(event.by);
       if (by) return agent;
     }
     return null;
@@ -340,10 +375,6 @@ class SwarmChannelFeed extends ChangeNotifier {
   /// superTabs/githubMentions.ts `signedBy`).
   static bool signedBy(String body, String name) =>
       RegExp('^\\W*${RegExp.escape(name)}[*_]*\\s*[,:]').hasMatch(body);
-
-  /// An agent's builder label without its prefix: `pip` for Pip, `first-builder` for First builder.
-  static String _slug(String name) =>
-      name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '-');
 
   /// A card as a message of the kind a person's agent is relayed GitHub's words in (backend githubRelay.ts), by the agent, so
   /// the card that draws those draws this.

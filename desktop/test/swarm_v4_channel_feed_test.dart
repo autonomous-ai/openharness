@@ -370,6 +370,105 @@ void main() {
     },
   );
 
+  /// [n] comments signed by Pip, a minute apart from 07:00, numbered from 1.
+  FakeGitHubFeeds signed(int n) {
+    final github = FakeGitHubFeeds();
+    for (var i = 1; i <= n; i++) {
+      github.comment(
+        12,
+        'Pip, 00:00: number $i',
+        at: DateTime.utc(
+          2026,
+          11,
+          9,
+          7,
+        ).add(Duration(minutes: i)).toIso8601String(),
+      );
+    }
+    return github;
+  }
+
+  /// Where each card on screen is, by its first line.
+  Map<String, double> placed(WidgetTester tester) => {
+    for (final element in find.textContaining('Pip, 00:00: number ').evaluate())
+      (element.widget as Text).data!: tester
+          .getTopLeft(find.byWidget(element.widget))
+          .dy,
+  };
+
+  testWidgets(
+    'a post that arrives while the reader is up the list moves none of the cards',
+    (tester) async {
+      final server = swarmV4Channel();
+      final c = await openSwarmV4(tester, server, github: signed(40).github);
+      await tester.dragFrom(const Offset(900, 450), const Offset(0, 300));
+      await tester.pumpAndSettle();
+      final before = placed(tester);
+      expect(before, isNotEmpty);
+      say(server, 'Pip', 'free: Pip', at: at('08:00'));
+      await tester.runAsync(c.refresh);
+      await tester.pumpAndSettle();
+      expect(c.messages('channel').map((m) => m.text), contains('free: Pip'));
+      final after = placed(tester);
+      for (final MapEntry(key: card, value: top) in before.entries) {
+        expect(after[card], top, reason: card);
+      }
+    },
+  );
+
+  testWidgets(
+    'a channel read at its end for long keeps a bounded number of its own rows, as one without cards does',
+    (tester) async {
+      final server = swarmV4Channel();
+      final c = await openSwarmV4(tester, server, github: lampos().github);
+      for (var round = 0; round < 8; round++) {
+        for (var i = 0; i < 100; i++) {
+          say(server, 'Pip', 'free: Pip $round.$i', at: at('08:00'));
+        }
+        await tester.runAsync(c.refresh);
+        await tester.pumpAndSettle();
+      }
+      expect(c.messages('channel').last.text, 'free: Pip 7.99');
+      expect(c.messages('channel').length, lessThanOrEqualTo(500));
+    },
+  );
+
+  testWidgets(
+    'where the cards stop among the channel\'s own older posts, Show earlier reads the next page',
+    (tester) async {
+      final server = swarmV4Channel();
+      // More of them than the list reads ahead of, so the row is on screen with nothing read for it.
+      for (var i = 0; i < 60; i++) {
+        say(
+          server,
+          'Faye',
+          'An older plan $i',
+          at: at('04:${i.toString().padLeft(2, '0')}'),
+        );
+      }
+      final github = signed(120);
+      await openSwarmV4(tester, server, github: github.github);
+      for (
+        var i = 0;
+        i < 40 && key('swarm-feed-earlier').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.dragFrom(const Offset(900, 300), const Offset(0, 400));
+        await tester.pumpAndSettle();
+      }
+      expect(key('swarm-feed-earlier'), findsOneWidget);
+      expect(github.reads('issues/comments', page: 2), 0);
+      await tester.tap(
+        find.descendant(
+          of: key('swarm-feed-earlier'),
+          matching: find.text('Show earlier'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(github.reads('issues/comments', page: 2), 1);
+    },
+  );
+
   group('when GitHub cannot be read the channel says so, in one line', () {
     Future<String> open(WidgetTester tester, FakeGitHubFeeds github) async {
       await openSwarmV4(tester, withPosts(), github: github.github);
@@ -698,12 +797,18 @@ void main() {
         expect(feed.hasMore, isTrue);
         await tester.runAsync(feed.more);
         expect(cards(feed), hasLength(100));
-        // Ten new ones overlap what is held, so the older page stays.
+        // Ten new ones overlap what is held, so the older page stays; what is held stays two pages, the ten oldest going back
+        // to the third, where they are now on GitHub.
         for (var i = 121; i <= 130; i++) {
           github.comment(12, 'Pip, 00:00: number $i', at: minutes(i));
         }
         await tester.runAsync(feed.read);
-        expect(cards(feed), hasLength(110));
+        expect(cards(feed), hasLength(100));
+        expect(cards(feed).first.text, contains('number 31'));
+        expect(feed.hasMore, isTrue);
+        await tester.runAsync(feed.more);
+        expect(cards(feed), hasLength(130));
+        expect(cards(feed).first.text, contains('number 1\n'));
         // A hundred new ones in a pause: a page of fifty that starts after everything held is read alone, and what lay before
         // it is read again when asked for, never shown as if nothing lay between.
         for (var i = 131; i <= 230; i++) {
@@ -713,6 +818,88 @@ void main() {
         expect(cards(feed), hasLength(50));
         expect(feed.hasMore, isTrue);
         expect(cards(feed).first.text, contains('number 181'));
+      },
+    );
+
+    testWidgets(
+      'a row written in the same second as the last of a newest page is kept',
+      (tester) async {
+        final github = FakeGitHubFeeds();
+        for (var i = 1; i <= 150; i++) {
+          // 101 and 102 in one second, as GitHub often has two events.
+          github.comment(
+            12,
+            'Pip, 00:00: number $i',
+            at: minutes(i == 101 ? 102 : i),
+          );
+        }
+        final feed = feedOf(github);
+        addTearDown(feed.dispose);
+        await tester.runAsync(feed.read);
+        await tester.runAsync(feed.more);
+        expect(cards(feed), hasLength(100));
+        // One more: the newest page now ends at 102, and 101, in its second, is on the next.
+        github.comment(12, 'Pip, 00:00: number 151', at: minutes(151));
+        await tester.runAsync(feed.read);
+        final texts = [for (final card in cards(feed)) card.text];
+        expect(texts.where((t) => t.contains('number 101\n')), hasLength(1));
+        await tester.runAsync(feed.more);
+        await tester.runAsync(feed.more);
+        expect(cards(feed), hasLength(151));
+      },
+    );
+
+    testWidgets(
+      'an older page that comes back after the newest was read again alone is dropped, so no stretch is skipped',
+      (tester) async {
+        final github = FakeGitHubFeeds();
+        for (var i = 1; i <= 200; i++) {
+          github.comment(12, 'Pip, 00:00: number $i', at: minutes(i));
+        }
+        final feed = feedOf(github);
+        addTearDown(feed.dispose);
+        await tester.runAsync(feed.read);
+        await tester.runAsync(feed.more);
+        expect(cards(feed), hasLength(100));
+        // The third page is asked for and is slow; meanwhile a hundred new ones arrive and the newest page stands alone.
+        await tester.runAsync(() async {
+          // Made here, outside the test's fake time, so that completing it wakes the read.
+          github.holdOlder = Completer<void>();
+          final third = feed.more();
+          for (var i = 201; i <= 300; i++) {
+            github.comment(12, 'Pip, 00:00: number $i', at: minutes(i));
+          }
+          await feed.read();
+          github.holdOlder!.complete();
+          await third;
+        });
+        // What the third page held then (100 to 51 of the new list's 300) is not joined to the newest 50 (300 to 251).
+        expect(cards(feed), hasLength(50));
+        expect(cards(feed).first.text, contains('number 251'));
+        github.holdOlder = null;
+        await tester.runAsync(feed.more);
+        expect(cards(feed), hasLength(100));
+        expect(cards(feed).first.text, contains('number 201'));
+      },
+    );
+
+    testWidgets(
+      'a rate limit says the time it reads again, which is at most 15 minutes away',
+      (tester) async {
+        final github = lampos()
+          ..failure = FakeGitHubFailure.limited
+          ..resetAt =
+              DateTime.now()
+                  .add(const Duration(minutes: 50))
+                  .millisecondsSinceEpoch ~/
+              1000;
+        final feed = feedOf(github);
+        addTearDown(feed.dispose);
+        await tester.runAsync(feed.read);
+        expect(
+          feed.retryAt!.difference(DateTime.now()),
+          lessThanOrEqualTo(const Duration(minutes: 15)),
+        );
       },
     );
 

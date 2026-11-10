@@ -577,8 +577,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   channel is open and the app in front: a round a minute that reads the comments,
   and every third the pull requests and the labels too, a failing round after 1,
   2, 4 minutes and so on up to 10. Older cards are read, 50 at a time
-  and four pages at most, as the list is scrolled up, with the earlier row (a
-  small spinner, `Show earlier` after a read that failed) where they stop. What
+  and four pages at most, as the list is scrolled up, with the earlier row where
+  they stop (`Show earlier`, which reads them where it stands among the
+  channel's own older posts; a small spinner while it reads). What
   stops it is one line in 12 metadata grey over the rows, with a retry icon
   (`SwarmFeedState`): `Install the GitHub CLI (gh) to see what your agents do on
   GitHub.`, `Sign in to GitHub: run gh auth login.`, `GitHub is limiting

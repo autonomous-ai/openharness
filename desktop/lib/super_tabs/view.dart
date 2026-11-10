@@ -3867,8 +3867,12 @@ class _SuperTabViewState extends State<SuperTabView>
   /// What each project channel's agents do on GitHub, read for the channel while it is open (Swarm v4), by channel.
   final _feeds = <String, SwarmChannelFeed>{};
 
-  /// Where each channel's list divides when the feed's cards are among its rows: the time of the first row drawn.
-  final _feedAnchor = <String, DateTime>{};
+  /// Where each channel's list divides when the feed's cards are among its rows: its first row drawn, own or a card, until a
+  /// reader at the end moves it down ([_moveSplitToView]).
+  final _feedAnchor = <String, SuperTabMessage>{};
+
+  /// Each such channel's rows as last drawn, the cards among them.
+  final _feedRows = <String, List<SuperTabMessage>>{};
 
   /// The newest GitHub activity each channel's list last followed to the end.
   final _feedSeen = <String, DateTime?>{};
@@ -3961,24 +3965,27 @@ class _SuperTabViewState extends State<SuperTabView>
       ..scheduleFrame();
   }
 
-  /// Where [rows], the channel's own rows with its feed's cards among them, divide: the row [_splitAt] chose among the channel's
-  /// own, else the first row drawn. Older rows go above it and newer below, so neither moves the rows already there.
+  /// Where [rows], the channel's own rows with its feed's cards among them, divide: the row it divided at when it was first
+  /// drawn, own ([_splitAt]'s) or a card, whatever arrives after. Older rows go above it and newer below, so neither moves the
+  /// rows already there; a channel of cards alone keeps its divide when its first post arrives.
   int _feedSplitAt(
     String id,
     List<SuperTabMessage> rows,
     List<SuperTabMessage> own,
     int ownAt,
   ) {
-    if (ownAt < own.length) {
-      return rows.indexWhere((m) => m.id == own[ownAt].id);
-    }
+    _feedRows[id] = rows;
     if (rows.isEmpty) return 0;
-    final anchor = _feedAnchor[id] ??=
-        rows.first.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final at = rows.indexWhere(
-      (m) => !(m.createdAt ?? anchor).isBefore(anchor),
-    );
-    return at < 0 ? rows.length : at;
+    final anchor = _feedAnchor[id] ??= ownAt < own.length
+        ? own[ownAt]
+        : rows.first;
+    final at = rows.indexWhere((m) => m.id == anchor.id);
+    if (at >= 0) return at;
+    // Gone (a card whose agent left): where it stood by its time.
+    final time = anchor.createdAt;
+    if (time == null) return 0;
+    final after = rows.indexWhere((m) => !(m.createdAt ?? time).isBefore(time));
+    return after < 0 ? rows.length : after;
   }
 
   /// Opens the task a card in the channel is on, beside the channel; closing it goes back to the channel.
@@ -5146,8 +5153,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// rows above the view can regroup.
   void _moveSplitToView(String id, SuperTabChatScroll scroll) {
     final split = _split[id];
-    // A channel with its feed's cards among its rows keeps the divide it has: the rows it measures from are not its own.
-    if (split == null || _feeds.containsKey(id)) return;
+    if (_feeds.containsKey(id)) {
+      _moveFeedSplitToView(id, scroll);
+      return;
+    }
+    if (split == null) return;
     final messages = _ownShown(id);
     final at = messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
     final top = _rowAtTop();
@@ -5167,6 +5177,37 @@ class _SuperTabViewState extends State<SuperTabView>
     scroll.moveContent(-offset);
     _split[id] = first;
     c.keepFrom(id, first);
+  }
+
+  /// [_moveSplitToView] for a channel with its feed's cards among its rows: the divide moves down to the row at the top of the
+  /// view, own or a card, and the controller may cut the channel's own rows above the first of its own there.
+  void _moveFeedSplitToView(String id, SuperTabChatScroll scroll) {
+    final rows = _feedRows[id];
+    final anchor = _feedAnchor[id];
+    final top = _rowAtTop();
+    if (rows == null || anchor == null || top == null) return;
+    final at = rows.indexWhere((m) => m.id == anchor.id);
+    if (at < 0 || rows.length - at <= _rowsBelowSplit) return;
+    final joined = _joined(_ownShown(id), _split[id]);
+    var index = rows.indexWhere((m) => m.id == top);
+    while (index > at && joined.contains(rows[index].id)) {
+      index--;
+    }
+    if (index <= at) return;
+    final first = rows[index];
+    final offset = _offsetInList(_built[first.id]);
+    if (offset == null) return;
+    scroll.moveContent(-offset);
+    _feedAnchor[id] = first;
+    final feed = _feeds[id];
+    final own = rows
+        .skip(index)
+        .where((m) => feed?.owns(m) != true)
+        .firstOrNull;
+    if (own != null) {
+      _split[id] = own;
+      c.keepFrom(id, own);
+    }
   }
 
   /// The built row at the top edge of the view: the one it cuts through,

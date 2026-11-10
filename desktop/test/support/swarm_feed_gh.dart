@@ -27,6 +27,9 @@ class FakeGitHubFeeds {
   /// While set, every call waits for it: a slow GitHub.
   Completer<void>? hold;
 
+  /// While set, every call for a page after the first waits for it: an older page still on its way.
+  Completer<void>? holdOlder;
+
   /// When a limited call may ask again, as GitHub's `X-RateLimit-Reset` says it, in epoch seconds.
   int resetAt = 0;
 
@@ -138,6 +141,10 @@ class FakeGitHubFeeds {
   Future<ProcessResult> _run(List<String> arguments) async {
     calls.add(arguments);
     await hold?.future;
+    if (arguments.last.contains('&page=') &&
+        !arguments.last.endsWith('&page=1')) {
+      await holdOlder?.future;
+    }
     switch (failure) {
       case FakeGitHubFailure.missing:
         throw const ProcessException('gh', [], 'No such file or directory');

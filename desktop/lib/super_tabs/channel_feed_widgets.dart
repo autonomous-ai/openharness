@@ -112,8 +112,8 @@ class SwarmFeedState extends StatelessWidget {
 }
 
 /// The row among a channel's where the lists of GitHub have not been read further back ([SwarmChannelFeed.horizon]). The channel
-/// reads the next page as the top comes near, as it reads its own older pages, so this shows that it does, as the earlier-messages
-/// row does; after a read that failed it is a button, so a failure is not asked again by itself.
+/// reads the next page as the top comes near, as it reads its own older pages; where the row stands among the channel's own older
+/// posts, above which no card is drawn, it is Show earlier, which reads it. While a page is read it is a small spinner.
 class SwarmFeedEarlier extends StatelessWidget {
   const SwarmFeedEarlier({super.key, required this.feed});
 
@@ -125,22 +125,18 @@ class SwarmFeedEarlier extends StatelessWidget {
     builder: (context, _) => SizedBox(
       key: const ValueKey('swarm-feed-earlier'),
       height: 40,
-      child: feed.moreFailed
-          ? Center(
-              child: TextButton(
-                onPressed: () => unawaited(feed.more()),
-                child: const Text('Show earlier'),
-              ),
-            )
-          : feed.loadingMore
-          ? const Center(
-              child: SizedBox.square(
+      child: Center(
+        child: feed.loadingMore
+            ? const SizedBox.square(
                 key: ValueKey('swarm-feed-earlier-loading'),
                 dimension: 16,
                 child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : TextButton(
+                onPressed: () => unawaited(feed.more()),
+                child: const Text('Show earlier'),
               ),
-            )
-          : null,
+      ),
     ),
   );
 }

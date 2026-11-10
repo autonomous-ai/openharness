@@ -192,11 +192,11 @@ enum SwarmFeed {
     final number = issue is Map ? issue['number'] : null;
     final title = issue is Map ? issue['title'] : null;
     final url = issue is Map ? issue['html_url'] : null;
+    // The agent a `builder:<name>` label is for, read as the board and the merger read it.
+    final by = name is String ? SwarmPull.authorOf([name], '') : null;
     final task =
         json['event'] == 'labeled' &&
-        name is String &&
-        name.startsWith('builder:') &&
-        name.length > 8 &&
+        by != null &&
         number is int &&
         title is String &&
         url is String &&
@@ -212,7 +212,7 @@ enum SwarmFeed {
           pull: false,
           url: url,
           text: title,
-          by: name.substring(8).toLowerCase(),
+          by: by,
         ),
     ]);
   }
