@@ -9,6 +9,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/skeleton.dart';
 import '../logging/app_log.dart';
+import '../state/app_state.dart' show AppNotifier;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
@@ -16,6 +17,7 @@ import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'personal_projects.dart' show PersonalProjects;
 import 'pull_chip.dart';
 import 'swarm_type.dart';
 
@@ -32,6 +34,7 @@ class SwarmTaskBoard extends StatefulWidget {
     required this.github,
     required this.onOpen,
     required this.onClose,
+    this.app,
     this.openNumber,
     this.refreshEvery = const Duration(minutes: 1),
     this.now = DateTime.now,
@@ -47,6 +50,9 @@ class SwarmTaskBoard extends StatefulWidget {
   final void Function(String repository, SwarmIssue issue) onOpen;
   final VoidCallback onClose;
 
+  /// The person's app: a Personal project's repository is known only on their own Desktop ([repositoryOf]).
+  final AppNotifier? app;
+
   /// The issue open beside the channel: its card shows selected.
   final int? openNumber;
 
@@ -58,14 +64,23 @@ class SwarmTaskBoard extends StatefulWidget {
   /// app opens in (1280 wide: a pane of 490, 147 a column), so On it, the column people look for, is never out of sight.
   static const columnMinWidth = 140.0;
 
-  /// The project's repository as `owner/name`, or null when it has none on GitHub.
+  /// The project's repository as `owner/name`, or null when it has none on GitHub: its record's, else, in the person's
+  /// Personal Swarm, the repo its panes work in, read on [app]'s Desktop (personal_projects.dart).
   static String? repositoryOf(
     SuperTabController controller,
-    String conversationId,
-  ) {
+    String conversationId, {
+    AppNotifier? app,
+  }) {
     final project = controller.snapshot?.projectFor(conversationId);
-    final url = project?.repository?['repositoryUrl'];
-    return SwarmGitHub.repositoryOf(url is String ? url : null);
+    if (project == null) return null;
+    final url = project.repository?['repositoryUrl'];
+    return SwarmGitHub.repositoryOf(
+      url is String
+          ? url
+          : app == null
+          ? null
+          : PersonalProjects.of(app).repositoryOf(controller, project.id),
+    );
   }
 
   /// The three columns of [issues], each newest activity first: To do, Assigned, On it.
@@ -110,9 +125,22 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
   /// The repository being read now: a refresh that comes while its read is still going waits for the next.
   String? _reading;
 
+  /// A Personal project's repository becomes known on this Desktop after the board may have opened: read it then.
+  void _personalMoved() {
+    final repository = SwarmTaskBoard.repositoryOf(
+      widget.controller,
+      widget.conversationId,
+      app: widget.app,
+    );
+    if (repository != _repository) _read();
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.app case final app?) {
+      PersonalProjects.of(app).addListener(_personalMoved);
+    }
     _read();
     if (widget.refreshEvery case final every?) {
       _refresh = Timer.periodic(every, (_) => _read());
@@ -132,6 +160,9 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
 
   @override
   void dispose() {
+    if (widget.app case final app?) {
+      PersonalProjects.of(app).removeListener(_personalMoved);
+    }
     _refresh?.cancel();
     super.dispose();
   }
@@ -140,6 +171,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     final repository = SwarmTaskBoard.repositoryOf(
       widget.controller,
       widget.conversationId,
+      app: widget.app,
     );
     if (repository != _repository) setState(() => _repository = repository);
     if (repository == null || _reading == repository) return;
