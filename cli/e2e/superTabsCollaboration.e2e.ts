@@ -4,12 +4,11 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { b64e, newIdentity } from '../src/lib/e2ee/core.js'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
+import { CLI_ROOT, fakeEngineShim, until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon, writeE2ee } from './harness/fleet.js'
 import { overOldRoutes } from './harness/swarmReads.js'
@@ -41,8 +40,7 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   const [starter, member] = specs, [a, b] = daemons
   // The member's Codex draws its composer unshaded, as in a pane no window shows: the lead's instruction reaches it in
   // paragraphs all the same (engines/codex/composer.ts).
-  const engine = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
-  writeFileSync(join(b.root, 'bin', 'codex'), `#!${process.execPath}\nimport(${JSON.stringify(engine)}).then((m) => m.run('codex', ${JSON.stringify({ ...b.engineConfig, unshadedComposer: true })}))\n`, { mode: 0o755 })
+  writeFileSync(join(b.root, 'bin', 'codex'), fakeEngineShim('codex', { ...b.engineConfig, unshadedComposer: true }), { mode: 0o755 })
   onTestFailed(() => daemons.forEach((daemon, i) => console.log(`Fixture machine ${i}:\n${daemon.log().split('\n').slice(-90).join('\n')}`)))
   const agents: Array<Record<string, any>> = [], messages: Array<Record<string, any>> = []
   const pending = new Map<string, Record<string, any>>()
