@@ -355,8 +355,13 @@ export const commandSchema = z.discriminatedUnion('type', [
     answer: z.literal(true).optional(),
     // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
     // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
-    notice: z.literal('skills').optional() }).strict(),
-  z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
+    notice: z.literal('skills').optional(),
+    // Desktop sends it while its last read said the Swarm had one Buddy per person, until it restarts (controller.dart
+    // `oneBuddy`): taken and ignored. Goes once a Desktop release stops sending it and 30 days have passed.
+    oneBuddy: z.literal(true).optional() }).strict(),
+  z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean(),
+    // As message.send's.
+    oneBuddy: z.literal(true).optional() }).strict(),
   // The author's own post only (messageEdits.ts); the store finds the row (store.ts messageChangeTarget).
   z.object({ type: z.literal('message.edit'), conversationId: id, messageId: id, text: z.string().trim().max(32_000) }).strict(),
   z.object({ type: z.literal('message.delete'), conversationId: id, messageId: id }).strict(),
