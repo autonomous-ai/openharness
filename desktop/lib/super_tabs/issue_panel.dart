@@ -154,7 +154,10 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     }
     // Its pull request after its thread; a read of it that fails keeps the last one shown.
     try {
-      final pulls = await widget.github.pulls(repository);
+      final pulls = await widget.github.pulls(
+        repository,
+        team: SwarmPull.teamOf(widget.controller.snapshot, repository),
+      );
       if (mounted &&
           repository == widget.repository &&
           number == widget.number) {

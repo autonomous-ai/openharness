@@ -297,7 +297,13 @@ class SwarmGitHub {
   /// [repository]'s open pull requests, by the task each is for ([SwarmPull.tasks]); a task with two has the one with the
   /// newest activity. One GraphQL read of the newest [pullsMax], each with its head's checks, whether it conflicts, and its
   /// newest comments, where its readers' verdicts are.
-  Future<Map<int, SwarmPull>> pulls(String repository) async {
+  ///
+  /// [team] names the agents of its project ([SwarmPull.teamOf]): from the login that opened a pull request, only their signed
+  /// READ-OK counts.
+  Future<Map<int, SwarmPull>> pulls(
+    String repository, {
+    Set<String>? team,
+  }) async {
     final (owner, name) = _split(repository);
     final answer = await _call([
       'api',
@@ -318,7 +324,11 @@ class SwarmGitHub {
         : null;
     final byTask = <int, SwarmPull>{};
     for (final row in _nodes(map['pullRequests'])) {
-      final pull = SwarmPull.read(row, defaultBranch: defaultBranch);
+      final pull = SwarmPull.read(
+        row,
+        defaultBranch: defaultBranch,
+        team: team,
+      );
       if (pull == null) continue;
       for (final task in pull.tasks) {
         byTask.putIfAbsent(task, () => pull);
@@ -515,7 +525,7 @@ class SwarmGitHub {
       r'query($owner:String!,$name:String!,$first:Int!){'
       r'repository(owner:$owner,name:$name){defaultBranchRef{name} '
       r'pullRequests(states:OPEN,first:$first,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{'
-      'number title url isDraft headRefName headRefOid baseRefName body mergeable '
+      'number title url isDraft headRefName headRefOid baseRefName body mergeable author{login} '
       'labels(first:20){nodes{name}} closingIssuesReferences(first:5){nodes{number}} '
       'commits(last:1){nodes{commit{statusCheckRollup{state}}}} '
       'comments(last:30){nodes{body createdAt authorAssociation author{login}}}}}}}';
