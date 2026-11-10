@@ -3234,8 +3234,6 @@ describe('a task lost to a usage limit', () => {
       input: vi.fn(async () => ({ ok: true as const })), screen: vi.fn(async () => ({ ok: true as const, text: '❯ ', hold: null })) } })
     Object.assign(t.row, { resume: { conversationId: 'group', assignmentId: 'work', lostAt: 3, at: new Date(0).toISOString() } })
     await t.open().tick()
-    // The work a tick starts off the poll runs on promises; a few turns of the event loop let all of it run.
-    for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve))
     expect(vi.mocked(t.call).mock.calls.filter(([, , body]) => JSON.stringify(body ?? null).includes('work.resume'))).toEqual([])
     expect(t.core.superTabs!.input).not.toHaveBeenCalled()
   })

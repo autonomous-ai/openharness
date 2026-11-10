@@ -152,4 +152,4 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
 }
 /** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead and its engine
  *  shows its usage limit. */
-export const USED_UP_WINDOW = 'The subscription has a used-up usage window: work there waits until it resets.'
+export const USED_UP_WINDOW = 'The subscription has a used-up usage window.'

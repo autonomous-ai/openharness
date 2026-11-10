@@ -606,7 +606,6 @@ export class SuperTabHost {
   private updateSaid = false
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
-  /** Gives a task lost to a usage limit back to its session once the limit has reset. */
   /** Restarts a frozen crew session and continues a reopened one (crew.ts); the keep-alive below reopens it. */
   private readonly crew: CrewKeeper
 
