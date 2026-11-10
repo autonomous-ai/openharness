@@ -34,6 +34,14 @@ export const OLD_PAYLOADS = {
   'member.start': { conversationId: 'task-1' },
   'member.helper': { conversationId: 'task-1' },
   'conversation.unlink': { conversationId: 'task-1', pullRequestUrl: 'https://github.com/acme/app/pull/12', reason: 'Wrong task' },
+  'project.process': { projectId: 'lead', process: 'simple' },
+  'project.boardMode': { projectId: 'lead', on: true },
+  'project.canChat': { projectId: 'lead', personId: 'u2', granted: true },
+  'project.decider': { projectId: 'lead', personId: 'u2' },
+  'member.approvalMode': { mode: 'review' },
+  'task.suggest': { conversationId: 'task-1', agentId: 'agent-2' },
+  'task.approve': { conversationId: 'task-1', suggestedAgentId: 'agent-2' },
+  'task.reject': { conversationId: 'task-1', reason: 'Not now' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */
