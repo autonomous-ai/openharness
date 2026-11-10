@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
@@ -164,7 +163,8 @@ class SuperTabMessageRow extends StatefulWidget {
   /// no faces, as a one-on-one iMessage draws it.
   final bool oneOnOne;
 
-  /// The teammates a post is to ([superTabPostTo]): its name reads "Pip to Juno", so the channel reads as the team talking.
+  /// The teammates a post is to ([superTabPostTo]), by the name their tags read: each its words do not tag opens its bubble
+  /// (`@Juno`), as a group chat addresses a post.
   final List<String> to;
   final VoidCallback? onReply, onOpenAgent;
 
@@ -524,20 +524,13 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
 
   /// The sender's name: opens the agent when it is one.
   Widget _name(TextStyle style, bool finger) {
-    // Beside who a post is to ("Pip to Juno"), one line that gives way with an ellipsis; alone, the whole name.
-    final phrase = widget.to.isNotEmpty;
     final name = fingerTarget(
       enabled: finger,
       Align(
         alignment: Alignment.centerLeft,
         widthFactor: 1,
         heightFactor: 1,
-        child: Text(
-          widget.author,
-          maxLines: phrase ? 1 : null,
-          overflow: phrase ? TextOverflow.ellipsis : null,
-          style: style,
-        ),
+        child: Text(widget.author, style: style),
       ),
     );
     return InkWell(onTap: widget.onOpenAgent, child: name);
@@ -748,39 +741,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                               crossAxisAlignment:
                                                   WrapCrossAlignment.center,
                                               children: [
-                                                if (widget.to.isEmpty)
-                                                  _name(nameStyle, finger)
-                                                else
-                                                  // "Pip to Juno" is one phrase: the name and who it is to stay on a line,
-                                                  // each giving way to the other.
-                                                  Row(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Flexible(
-                                                        child: _name(
-                                                          nameStyle,
-                                                          finger,
-                                                        ),
-                                                      ),
-                                                      const SizedBox(
-                                                        width: SwarmLayout
-                                                            .namePhraseGap,
-                                                      ),
-                                                      Flexible(
-                                                        child: Text(
-                                                          'to ${widget.to.join(', ')}',
-                                                          key: ValueKey(
-                                                            'super-message-to-${message.id}',
-                                                          ),
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          style: nameStyle,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
+                                                _name(nameStyle, finger),
                                                 if (widget.thread?.askTag
                                                     case final tag?)
                                                   Text(
@@ -920,6 +881,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                             widget.onOpenGroup,
                                                         mentions:
                                                             widget.mentions,
+                                                        addressed: widget.to,
                                                         agents:
                                                             widget.agentNames,
                                                         addresses: widget
