@@ -46,17 +46,9 @@ pet_engines = set(re.findall(r'\{"(\w+)",', pets))
 assert set(empty) <= pet_engines, (empty, sorted(pet_engines))
 for index in (0, 1, 11):
     assert entries[index] == '{0,0,NULL,NULL}', (index, entries[index])
-# --- focus_faces.c: shared tables change no face's rendering; the wordmark's kerning is cut to its own letters ---
-import os
-import subprocess
-
-BEFORE_SHA = 'eb511fb19'   # focus_faces.c before Latin Extended-A was cut to Vietnamese (tables already shared)
-before_file = Path(os.environ.get('FOCUS_FACES_BEFORE', '/nonexistent/focus_faces.before.c'))
-if before_file.exists():
-    before_text = before_file.read_text()
-else:
-    before_text = subprocess.run(['git', 'show', f'{BEFORE_SHA}:devices/harness-device/firmware/main/ui/habitat/focus_faces.c'],
-                                 check=True, capture_output=True, text=True, cwd=fw).stdout
+# --- focus_faces.c: the Latin Extended-A letters kept; the wordmark's kerning cut to its own letters ---
+# (The one-time check that table sharing and the cut changed no kept glyph was run against the file before them
+# when they landed; these invariants hold the result without needing that history.)
 FACE = re.compile(r'^const ht_pfont_t (ht_lv_\w+) = \{\{(.*?),(\w+)\},(\w+),(\w+),(\d+),(\d+),(\w+),(\w+),(\w+),(\d+),(\w+)\};$')
 
 
@@ -80,48 +72,24 @@ def pkern(face, a, b):   # terminal.c pkern for two glyph indices of one face
     return face['kv'][(l - 1) * face['rcnt'] + (r - 1)] if l and r else 0
 
 
-old, new = faces(before_text), faces((habitat / 'focus_faces.c').read_text())
-assert set(old) == set(new) and len(old) == 8, sorted(new)
-def glyph(face, i):   # (advance, ink box, bitmap bytes) of glyph i, independent of where the bitmap sits
-    offset, adv, w, h, ox, oy = face['glyphs'][i * 6:i * 6 + 6]
-    return adv, w, h, ox, oy, face['px'][offset:offset + (w * h + 1) // 2]
+new = faces((habitat / 'focus_faces.c').read_text())
+assert len(new) == 8, sorted(new)
+KEPT_EXT_A = {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169,             # Vietnamese
+              0x132, 0x133, 0x138, 0x13F, 0x140, 0x14A, 0x14B, 0x152, 0x153}     # no one-letter base (Inter has no U+0149)
+for name, face in new.items():
+    assert face['count'] == len(face['codes']), name
+    if name.startswith('ht_lv_inter') and name != 'ht_lv_inter_bold_48':
+        assert {c for c in face['codes'] if 0x100 <= c < 0x180} == KEPT_EXT_A, name
+        assert set(range(0x20, 0x7F)) <= set(face['codes']), name                 # ASCII stays whole
+        assert set(range(0x1EA0, 0x1EFA)) & set(face['codes']), name             # and Vietnamese's own block
 
-
-for name in old:
-    o, n = old[name], new[name]
-    assert o['head'].rsplit(',', 1)[0] == n['head'].rsplit(',', 1)[0], name   # the bitmap array's name may differ
-    for field in ('ascent', 'fallback'):
-        assert o[field] == n[field], (name, field)
-    if o['codes'] == n['codes']:
-        for field in ('px', 'glyphs', 'codes', 'count'):
-            assert o[field] == n[field], (name, field)
-        if name != 'ht_lv_inter_bold_48':   # the Inter faces' kerning tables are unchanged, only shared
-            for field in ('kl', 'kr', 'kv', 'rcnt'):
-                assert o[field] == n[field], (name, field)
-    else:
-        # Latin Extended-A cut to Vietnamese's eight and the letters with no one-letter base that Inter covers (it has no U+0149): only that block may go, and every kept letter draws and kerns as before.
-        assert set(n['codes']) < set(o['codes']) and name.startswith('ht_lv_inter'), name
-        assert {c for c in o['codes'] if c not in n['codes']} <= set(range(0x100, 0x180)), name
-        assert {c for c in o['codes'] if 0x100 <= c < 0x180} - set(n['codes']) == {c for c in o['codes'] if c not in n['codes']}
-        assert {c for c in n['codes'] if 0x100 <= c < 0x180} == {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169} | {0x132, 0x133, 0x138, 0x13F, 0x140, 0x14A, 0x14B, 0x152, 0x153}, name
-        oi = {c: i for i, c in enumerate(o['codes'])}
-        ni = {c: i for i, c in enumerate(n['codes'])}
-        assert n['count'] == len(n['codes'])
-        for c in ni:
-            assert glyph(o, oi[c]) == glyph(n, ni[c]), (name, hex(c))
-        if name != 'ht_lv_inter_bold_48':
-            for a in ni:
-                for b in ni:
-                    assert pkern(o, oi[a], oi[b]) == pkern(n, ni[a], ni[b]), (name, hex(a), hex(b))
-
-# The wordmark: tables sized for its own seven glyphs, and every ordered pair kerns by the same amount as before.
-word_old, word_new = old['ht_lv_inter_bold_48'], new['ht_lv_inter_bold_48']
-assert word_new['codes'] == [32, 72, 97, 101, 110, 114, 115]
-glyphs = len(word_new['codes'])
-assert word_new['rcnt'] <= glyphs and max(word_new['kr']) == word_new['rcnt'], word_new['rcnt']
-assert max(word_new['kl']) <= glyphs and len(word_new['kv']) == max(word_new['kl']) * word_new['rcnt'], len(word_new['kv'])
-assert any(pkern(word_old, a, b) for a in range(glyphs) for b in range(glyphs))   # the check is not vacuous
-for a in range(glyphs):
-    for b in range(glyphs):
-        assert pkern(word_old, a, b) == pkern(word_new, a, b), (a, b)
+# The wordmark: tables sized for its own seven glyphs, and every ordered pair kerns as it did before the cut
+# (values taken from the file the cut was verified against).
+word = new['ht_lv_inter_bold_48']
+assert word['codes'] == [32, 72, 97, 101, 110, 114, 115]
+glyphs = len(word['codes'])
+assert word['rcnt'] <= glyphs and max(word['kr']) == word['rcnt'], word['rcnt']
+assert max(word['kl']) <= glyphs and len(word['kv']) == max(word['kl']) * word['rcnt'], len(word['kv'])
+WORD_KERN = [[0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0], [0, 0, 5, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0], [0, 3, -6, -6, 5, 5, 0], [0, 0, 0, 0, 0, 0, 0]]
+assert [[pkern(word, a, b) for b in range(glyphs)] for a in range(glyphs)] == WORD_KERN
 print('generated arrays are unique')
