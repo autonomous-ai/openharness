@@ -116,12 +116,6 @@ async function ownAgent(tab: string) {
 async function storedState(tab: string): Promise<SuperTabState> {
   return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
 }
-/** What an older client saved of a project, as it stored it: its skill mode in the state. */
-async function seedProject(tab: string, projectId: string, patch: Record<string, unknown>) {
-  const state = await storedState(tab)
-  Object.assign(state.projects!.find(p => p.id === projectId)!, patch)
-  await saveState(tab, state)
-}
 /** Replaces a Swarm's parts with `state`, as an older release or the migration would have left them. Versions keep rising. */
 async function saveState(tab: string, state: SuperTabState) {
   await swarmTransaction(db, async tx => {
@@ -672,32 +666,6 @@ describe('since when a worker is down', () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
-  it('tells a contributed machine its start\'s project skills, which its host cannot read from the Swarm', async () => {
-    // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
-    // Prod logs 2026-10-28: the host asked for a Swarm status read it may not make (a 400 at every start), then launched
-    // every agent on Harness orchestration, whatever its project ran.
-    const tab = (await store.create(owner, randomUUID(), 'Skills pool')).id
-    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
-    await db.machine.create({ data: { machineId: 'skills-host', userId: host.sub, apiKey: 'fixture-skills-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    await run(tab, { type: 'machine.contribute', machineId: 'skills-host', name: 'Skills laptop', cwd: '/project', engines: ['claude'], maxAgents: 4 }, host)
-    const generation = (await poolRows(store, host, 'skills-host'))[0]!.machine.generation
-    await store.observeMachine(host, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
-      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
-    // Started in a task: the project chat holds only its coordinator among agents (#2207).
-    const task = String((await run(tab, { type: 'conversation.create', title: 'Skills work', brief: '', checks: [] })).result.conversationId)
-    const start = async () => String((await asHost(tab, { type: 'agent.start', request: { conversationId: task, machineId: 'skills-host', engine: 'claude',
-      name: 'Builder', cwd: '/project', worktree: true,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
-    const skillMode = async (startId: string) => (await store.start(host, tab, startId, undefined, 'skills-host')).skillMode
-
-    expect(await skillMode(await start())).toBe('default')
-    // What an older client stored before project instructions: the host still reads it.
-    await seedProject(tab, 'lead', { skillMode: 'orchestration' })
-    expect(await skillMode(await start())).toBe('orchestration')
-  })
-
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id

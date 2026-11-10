@@ -2,7 +2,6 @@ import { activeWork, agent, author, conversation, fail, isLeads, leadsRemoved, n
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
-export type SkillMode = 'default' | 'orchestration'
 /** What a Product Manager starts on when its start names no model: an engine, and on it a model and effort. */
 export interface RoleDefaults { engine: 'claude' | 'codex'; model?: string; effort?: string }
 /** The coordinator's first start runs Claude Opus 5.5 at xhigh when its person names no model (Scholes's roadmap, piece 1,
@@ -44,8 +43,6 @@ export interface SwarmProject {
   /** Report watermark per conversation, moved by reports before Swarm v4; kept in its own part (store by parts). */
   progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
-  /** Absent on projects from before skill modes, which keep the texts their agents already run. */
-  skillMode?: SkillMode
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
@@ -92,7 +89,6 @@ export type GitHubSeen = typeof GITHUB_SEEN[number]
 export interface ProjectStatus { text: string; at: string; by: string }
 export const PROJECT_STATUS_MAX = 2_000
 
-export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
 
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {

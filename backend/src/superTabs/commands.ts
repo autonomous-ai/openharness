@@ -199,8 +199,6 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The answer to the message in `answers` (task #3403): placed in that message's thread when it is a reply in one, else right
     // below it. Only with `answers`. Since Swarm v4 (2026-11-10) a second answer to one message is not refused.
     answer: z.literal(true).optional(),
-    // An agent's own skills notice (skills replaced), as today's CLI marks it. Only with `agentOnly`, which keeps it to the agent itself.
-    notice: z.literal('skills').optional(),
     // Desktop sends it while its last read said the Swarm had one Buddy per person, until it restarts (controller.dart
     // `oneBuddy`): taken and ignored. Goes once a Desktop release stops sending it and 30 days have passed.
     oneBuddy: z.literal(true).optional() }).strict(),
@@ -761,7 +759,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
     const leadConversationId = `project-${operationId}`
     const project: SwarmProject = { id: operationId, name, ownerId, ownerGeneration: person(state, ownerId).generation, leadConversationId,
-      visibility, members: [], updateMinutes: 5, skillMode: 'default', process }
+      visibility, members: [], updateMinutes: 5, process }
     projects.push(project)
     state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
       agentIds: [], archived: false, brief, checks: [], assignment: null, lastMessageSequence: 0 })
@@ -2081,9 +2079,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.agentOnly && (actor.kind !== 'agent' || recipients.length !== 1 || recipients[0] !== actor.agentId || mentions.length)) {
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
-      if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
       if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT

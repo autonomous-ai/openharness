@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { opensStored, storedCreate, type StoredCreate } from './steps.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
-import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { storedAssignment } from './storedWork.test-support.js'
 
@@ -311,22 +311,6 @@ describe('projects inside an invite-only swarm', () => {
     expect(projectsOf(f.state).some(project => project.id === p.projectId)).toBe(false)
     expect(f.state.conversations.some(c => c.id === work)).toBe(false)
   })
-})
-
-describe('project skill modes', () => {
-  it('reads a project with no stored mode as Harness orchestration, and new projects and Swarms as Default', () => {
-    const legacy = createSuperTab('old', 'Old', { id: 'owner', email: 'owner@example.com' }, 'test')
-    delete legacy.projects
-    expect(skillModeOf(projectsOf(legacy)[0]!)).toBe('orchestration')
-    expect(skillModeOf({ ...projectsOf(legacy)[0]!, skillMode: undefined })).toBe('orchestration')
-    for (const visibility of [undefined, 'private', 'public'] as const) {
-      const swarm = createSuperTab('new', 'New', { id: 'owner', email: 'owner@example.com' }, 'test', visibility)
-      expect(projectsOf(swarm).map(p => p.skillMode)).toEqual(['default'])
-    }
-    const f = setup(), p = f.project()
-    expect(projectOf(f.state, p.projectId).skillMode).toBe('default')
-  })
-
 })
 
 describe('who may watch an agent\'s terminal (final review, Critical 1)', () => {

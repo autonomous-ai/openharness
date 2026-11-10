@@ -317,28 +317,10 @@ describe('Super Tab collaboration policy', () => {
       expect([sent, answer].some(m => m.recipients.includes(lead))).toBe(false)
     })
 
-    // The PM's digest gathers its own skills notices (docs/plans/2026-11-02-pm-digest-more-kinds-design.md).
-    it('marks an agent\'s own skills notice', () => {
-      const f = fixture()
-      f.add('lead', 'owner', 'lead', true)
-      const build = f.group(), engineer = f.add('engineer', 'owner', build)
-      const sent = f.run(commandSchema.parse({ type: 'message.send', conversationId: build, text: 'The project\'s instructions changed.', replyTo: null,
-        recipientIds: [engineer], agentOnly: true, notice: 'skills' }), as(engineer)).messages[0]!
-      expect(sent.source).toEqual({ kind: 'agent-only', notice: 'skills' })
-      expect(sent.recipients).toEqual([engineer])
-    })
-
-    it('refuses the skills mark anywhere but an agent\'s own agent-only notice', () => {
-      const f = fixture()
-      const lead = f.add('lead', 'owner', 'lead', true)
-      const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.add('other', 'owner', build)
-      const mark = (actor: Actor, recipientIds: string[], agentOnly?: true, conversationId = build) => () => f.run(commandSchema.parse({ type: 'message.send', conversationId,
-        text: 'Hidden.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}), notice: 'skills' }), actor)
-      expect(mark(as(engineer), [engineer])).toThrow('A skills notice is an agent-only notice to the agent itself.')
-      expect(mark({ kind: 'person', userId: 'owner', email: 'owner@example.com' }, [lead], true, f.pmChat(lead))).toThrow('An agent sends an agent-only notice to itself alone.')
-      expect(mark(as(engineer), [other], true)).toThrow('An agent sends an agent-only notice to itself alone.')
-      expect(() => commandSchema.parse({ type: 'message.send', conversationId: build, text: 'x', replyTo: null, recipientIds: [engineer],
-        agentOnly: true, notice: 'other' })).toThrow()
+    // The CLI installs no Swarm skills any more (#3912), so no agent marks a skills notice.
+    it('refuses the skills mark', () => {
+      expect(commandSchema.safeParse({ type: 'message.send', conversationId: 'lead', text: 'Skills replaced.', replyTo: null, recipientIds: ['a'],
+        agentOnly: true, notice: 'skills' }).success).toBe(false)
     })
 
     it('keeps recipients and posts inside the project and out of the Leads conversation', () => {

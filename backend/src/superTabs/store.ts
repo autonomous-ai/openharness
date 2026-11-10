@@ -41,7 +41,7 @@ import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { wordsOf, watchersLost, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, admitPerson, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { wordsOf, watchersLost, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, admitPerson, projectsOf, agentProjectId, readConversation, readProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
@@ -993,12 +993,8 @@ export class SuperTabStore {
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
-      // The skills its agent launches with. A contributed machine's host cannot read the Swarm to learn them (cli
-      // superTabs/start.ts): until 2026-10-28 it launched every agent on Harness orchestration, whatever its project ran.
-      const project = startProject(state, start.request)
-      const read = { ...start, skillMode: project ? skillModeOf(project) : 'default' as const }
       // The Lead reads that its machine is still preparing it, and waits instead of starting another (liveness.ts).
-      return startPreparing(state, start, this.now()) ? { ...read, preparing: true as const } : read
+      return startPreparing(state, start, this.now()) ? { ...start, preparing: true as const } : start
     })
   }
 

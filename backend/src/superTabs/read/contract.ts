@@ -256,7 +256,6 @@ export interface HostAgentRow {
   resume: null
   agent: Agent
   joinSwarm: boolean
-  skillMode: 'default' | 'orchestration'
   lead: boolean
   /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
   owed: { messageId: string; since: number; restartAfterMs: number } | null
