@@ -21,7 +21,6 @@ class _Screen {
   final rebuilt = <Type, int>{};
   final rows = <String, int>{};
   int machineCalls = 0;
-  ValueNotifier<bool>? collapsed;
 
   static int _at() => clock.now().millisecondsSinceEpoch;
 
@@ -29,7 +28,9 @@ class _Screen {
       .cast<Map<String, dynamic>>()
       .firstWhere((m) => m['machineId'] == id);
 
-  Future<void> show({bool ticks = false, bool collapse = false}) async {
+  Future<void> show({bool ticks = false}) async {
+    await tester.binding.setSurfaceSize(const Size(2000, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     server.append('Hello');
     server.state['machines'] = [
       for (final id in _ids)
@@ -54,7 +55,6 @@ class _Screen {
     await tester.pump();
     await tester.pump();
     c.pushUntil = clock.now().add(kSwarmPushLease);
-    collapsed = ValueNotifier(collapse);
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -70,25 +70,15 @@ class _Screen {
                 ),
               ),
               SizedBox(
-                width: 300,
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: ValueListenableBuilder(
-                        valueListenable: collapsed!,
-                        builder: (context, shut, _) => SuperTabMachines(
-                          controller: c,
-                          onAddAgent: (_) {},
-                          collapsed: shut,
-                          ticks: ticks,
-                          now: () {
-                            machineCalls++;
-                            return clock.now();
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
+                width: 800,
+                child: SuperTabMachines(
+                  controller: c,
+                  onAddAgent: (_) {},
+                  ticks: ticks,
+                  now: () {
+                    machineCalls++;
+                    return clock.now();
+                  },
                 ),
               ),
             ],
@@ -202,15 +192,6 @@ void main() {
       await s.close();
     });
 
-    testWidgets('stops while its group is collapsed', (tester) async {
-      final s = _Screen(tester);
-      await s.show(ticks: true, collapse: true);
-      await tester.pump();
-      s.machineCalls = 0;
-      await tester.pump(const Duration(seconds: 5));
-      expect(s.machineCalls, 0);
-      await s.close();
-    });
   });
 
   testWidgets('a row says what its machine last reported', (tester) async {

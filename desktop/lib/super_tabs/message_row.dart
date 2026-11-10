@@ -217,8 +217,16 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Above and below a grouped line, and below a sender's last line.
   static const rowPad = 6.0;
 
-  /// A bubble takes at most this share of the row (anh Dee's mockup, 11-07).
-  static const bubbleShare = .75;
+  /// Another's bubble, and a card, takes at most this share of the row: an agent's words read nearly the column's width, as
+  /// Codex's answers do (anh Dee, 2026-11-10: "the center chat area is too small").
+  static const bubbleShare = .92;
+
+  /// Your own bubble takes at most this share, on the right (anh Dee's mockup, 11-07), as Codex keeps yours narrower.
+  static const ownBubbleShare = .75;
+
+  /// The share of the row [own]'s bubble takes at most.
+  static double shareOf({required bool own}) =>
+      own ? ownBubbleShare : bubbleShare;
 
   /// The room between one sender's joined bubbles.
   static const joinedGap = 2.0;
@@ -592,11 +600,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     // would push it down.
     final phone = workspaceIsCompact(context);
     final finger = phone && named;
-    final nameStyle = DesktopChrome.text(
-      size: SwarmType.nameSize,
-      height: SwarmType.bodyLine / SwarmType.nameSize,
-      color: DesktopChrome.muted,
-    );
+    final nameStyle = SwarmType.nameLine(context, color: DesktopChrome.muted);
     final slack = finger ? 12.0 : 0.0;
     // One sender's bubbles sit close; a new sender starts a group gap down.
     final above = widget.grouped
@@ -705,8 +709,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     maxWidth:
                                         room.maxWidth *
                                             (1 -
-                                                SuperTabMessageRow
-                                                    .bubbleShare) -
+                                                SuperTabMessageRow.shareOf(
+                                                  own: own,
+                                                )) -
                                         8,
                                   ),
                                   child: Padding(
@@ -723,7 +728,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   constraints: BoxConstraints(
                                     maxWidth:
                                         room.maxWidth *
-                                        SuperTabMessageRow.bubbleShare,
+                                        SuperTabMessageRow.shareOf(own: own),
                                   ),
                                   child: SwarmBubbleSide(
                                     own: own,

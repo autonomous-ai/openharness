@@ -470,8 +470,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
                 issue.title,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
-                style: SwarmType.body(context)
-                    .copyWith(fontWeight: FontWeight.w600),
+                style: SwarmType.boardTitle(context),
               ),
               if (issue.labels.isNotEmpty) ...[
                 const SizedBox(height: 8),
