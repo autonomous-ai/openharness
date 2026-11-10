@@ -173,7 +173,7 @@ describe('service links', () => {
     const want = vi.fn()
     const links = make({ owned: { 'engine-claude': ['screen_read'] }, onDemand: new Set(['engine-claude']), want, startWaitMs: 60_000 })
     const up = vi.fn()
-    void links.whenUp('engine-claude', 60_000).then(up)
+    void links.whenStarting('engine-claude')!.then(up)
     for (let second = 0; second < 30; second++) {
       const read = vi.fn()
       void links.call('engine-claude', 'screen_read', {}, 1_000).then(read)
@@ -189,26 +189,39 @@ describe('service links', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(up).toHaveBeenCalledWith(true)
     expect(engine.sent).toEqual([{ type: 'screen_read', payload: { capture: 'x', requestId: 'route-31' }, asker: { local: true, owner: true } }])
-    // Up: at once.
-    expect(await links.whenUp('engine-claude', 1)).toBe(true)
+    // Up: nothing to wait for.
+    expect(links.whenStarting('engine-claude')).toBeNull()
   })
 
   it('says one on demand is not up when it does not connect in the wait, and when it could not start at all', async () => {
     const links = make({ owned: { 'engine-claude': ['screen_read'], search: ['session_search'] }, onDemand: new Set(['engine-claude']), want: vi.fn(), startWaitMs: 60_000 })
     const up = vi.fn()
-    void links.whenUp('engine-claude', 45_000).then(up)
-    await vi.advanceTimersByTimeAsync(45_000)
+    void links.whenStarting('engine-claude')!.then(up)
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(up).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
     expect(up).toHaveBeenCalledWith(false)
-    // Past its start wait it counts as not starting: asked again, it says so at once.
-    void links.call('engine-claude', 'screen_read', {}, 30_000)
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(await links.whenUp('engine-claude', 60_000)).toBe(false)
+    // Past its start wait it counts as not starting: nothing more is waited for, and a request is refused at once.
+    expect(links.whenStarting('engine-claude')).toBeNull()
+    const refused = vi.fn()
+    void links.call('engine-claude', 'screen_read', {}, 30_000).then(refused)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'engine-claude', retryable: true })
     // One not on demand is never waited for.
-    expect(await links.whenUp('search', 60_000)).toBe(false)
+    expect(links.whenStarting('search')).toBeNull()
+    // A reader may take longer to start than the others (its own start wait).
+    const readers = make({ owned: { 'engine-codex': ['screen_read'] }, onDemand: new Set(['engine-codex']), want: vi.fn(), startWaits: { 'engine-codex': 45_000 } })
+    const codex = vi.fn()
+    void readers.whenStarting('engine-codex')!.then(codex)
+    await vi.advanceTimersByTimeAsync(ON_DEMAND_START_MS)
+    expect(codex).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(45_000 - ON_DEMAND_START_MS)
+    expect(codex).toHaveBeenCalledWith(false)
   })
 
   it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {
     const want = vi.fn()
+    // Its start wait as long as the request's own: a shorter request no longer counts it as unable to start (see above).
     const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want,
       startWaitMs: 5_000 })
     const late = vi.fn()

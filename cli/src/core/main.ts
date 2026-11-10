@@ -136,7 +136,7 @@ import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
 import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
-import { createInput, ENGINE_START_WAIT_MS } from './input.js'
+import { createInput } from './input.js'
 import { createQuestionResponse, createQuestions } from './questions.js'
 import { createCloudAgents, type CloudAgents } from './agents/cloud.js'
 import { createCloudLink } from './cloudLink.js'
@@ -145,7 +145,7 @@ import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createEngineReaders } from './engines/readers.js'
 import { createLiveTransport } from './engines/liveTransport.js'
 import { createLiveWatcher } from './engines/liveWatcher.js'
-import { readerEngine, READER_SERVICES } from '../engines/worker/protocol.js'
+import { readerEngine, READER_SERVICES, type ReaderEngine } from '../engines/worker/protocol.js'
 import { createRecaps } from './turns/recaps.js'
 import { summaryReader } from './turns/summaries.js'
 import { stopDeadline } from './stopDeadline.js'
@@ -194,7 +194,7 @@ import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_REQUESTS, S
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { SUPER_TAB_REQUESTS, SUPER_TAB_FALLBACKS } from './api.js'
 import { startStalls } from './stall.js'
-import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
+import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
 import { createViewerStreams } from './viewerStreams.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
@@ -1410,8 +1410,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     typed: (id) => ports.agentCleanup?.typed(id),
     moveGate,
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
-    engineStarting: (engine) => !isolatedScreen(engine) || !readerEngine(engine) || !serviceLinksRef || serviceLinksRef.connected(READER_SERVICES[engine])
-      ? null : serviceLinksRef.whenUp(READER_SERVICES[engine], ENGINE_START_WAIT_MS),
+    engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
   const input = inputs.input
   const deviceInput = inputs.deviceInput
@@ -1621,6 +1620,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`).
     waitsThroughRestart: new Set(['store']),
+    // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
+    startWaits: Object.fromEntries(Object.values(READER_SERVICES).map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)

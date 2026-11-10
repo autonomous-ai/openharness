@@ -478,8 +478,9 @@ describe('SessionInputController', () => {
     // Claude Code's and Codex's readers run in a process of their own, started on demand: Claude Code's took 26 s on a Mac at load
     // 40 (2026-11-10). A message sent within a second of the agent's start waited the lease's 15 s for a screen nobody could read,
     // and was lost with an error. Now it waits for the reader, bounded, says so once, and is typed once.
-    it.each([[undefined, 'a person\'s message'], ['team:service:superTabs:A', 'a delivery']] as const)(
-      'waits for its engine\'s reader to start, says so once, and types it once it is up (%s, %s)', async (deliveryId, _what) => {
+    // The person hears of the wait; a team delivery is automatic, and its mailbox hears how it ends.
+    it.each([[undefined, 'a person\'s message', 1], ['team:service:superTabs:A', 'a delivery', 0]] as const)(
+      'waits for its engine\'s reader to start, says so, and types it once it is up (%s, %s)', async (deliveryId, _what, said) => {
         let up = false
         let started: (ok: boolean) => void = () => {}
         const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
@@ -490,7 +491,7 @@ describe('SessionInputController', () => {
           validateRuntime: async () => true, inject, injectTeam: inject, beforeTeamWrite: async () => null, sendKey: async () => true, onError, onSubmitted,
           onWaiting, engineStarting, now: time.now, sleep: time.sleep })
         controller.submit('s1', 'sent within a second of its start', deliveryId)
-        await vi.waitFor(() => expect(onWaiting).toHaveBeenCalledWith('s1', 'engine_starting'))
+        await vi.waitFor(() => expect(engineStarting).toHaveBeenCalled())
         expect(inject).not.toHaveBeenCalled()
         // 26 s later, as measured: the reader is up.
         time.at += 26_000
@@ -499,9 +500,32 @@ describe('SessionInputController', () => {
         await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
         if (!deliveryId) await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'sent within a second of its start'))
         expect(onError).not.toHaveBeenCalled()
-        expect(onWaiting).toHaveBeenCalledTimes(1)
+        expect(onWaiting.mock.calls).toEqual(said ? [['s1', 'engine_starting']] : [])
         controller.forget('s1')
       })
+
+    it('types nothing when the agent was closed, or its process ended, while its reader started', async () => {
+      for (const ending of ['closed', 'ended'] as const) {
+        let started: (ok: boolean) => void = () => {}
+        let alive = true
+        const onError = vi.fn()
+        const inject = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+          validateRuntime: async () => alive, inject, sendKey: async () => true, onError, onWaiting: vi.fn(),
+          engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
+        controller.submit('s1', 'sent as it started')
+        await vi.waitFor(() => expect(inject).not.toHaveBeenCalled())
+        await new Promise(resolve => setTimeout(resolve, 0))
+        if (ending === 'closed') controller.forget('s1')
+        else alive = false
+        started(true)
+        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(inject, ending).not.toHaveBeenCalled()
+        if (ending === 'ended') expect(onError).toHaveBeenCalledWith('s1', 'This agent process is no longer running.')
+        controller.forget('s1')
+      }
+    })
 
     it('says nothing of a wait when its engine\'s reader is up', async () => {
       const onWaiting = vi.fn(), onSubmitted = vi.fn()

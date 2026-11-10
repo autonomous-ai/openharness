@@ -237,6 +237,20 @@ export class SessionInputController {
     return launchBound(session, this.controlSession(session.agentId))
   }
 
+  /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once to the person (a team delivery is
+   *  automatic: its mailbox hears how it ends); one that does not come in time is logged by name. Whether it waited: the agent may
+   *  have gone meanwhile, which its caller checks again. */
+  private async engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<boolean> {
+    const starting = this.deps.engineStarting?.(session)
+    if (!starting) return false
+    console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
+    if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
+    const since = (this.deps.now ?? Date.now)()
+    const up = await starting
+    console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
+    return true
+  }
+
   /**
    * A paste the pane's control lease refused before a byte was written: the agent is there, but its
    * process is not yet the one the registry holds — a resume or restart moments ago, before the new
@@ -245,18 +259,6 @@ export class SessionInputController {
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
    */
-  /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once; one that does not come in time is
-   *  logged by name, and the write goes on to the lease's wait and its refusal as before. */
-  private async engineReady(sessionId: string, session: RegisteredSession): Promise<void> {
-    const starting = this.deps.engineStarting?.(session)
-    if (!starting) return
-    console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
-    this.deps.onWaiting?.(sessionId, 'engine_starting')
-    const since = (this.deps.now ?? Date.now)()
-    const up = await starting
-    console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
-  }
-
   private async injectWhenLeased(
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
@@ -673,7 +675,16 @@ export class SessionInputController {
       // would corrupt it into a run-on prompt anyway, which is worse and harder to notice.
       await this.deps.sendKey(session.agentId, 'C-u')
     }
-    await this.engineReady(sessionId, session)
+    if (await this.engineReady(sessionId, session, false)) {
+      // Seconds may have passed: the agent may have been closed, or its process ended.
+      if (this.states.get(sessionId) !== state || this.deps.getSession(sessionId) === undefined) return
+      if (!(await this.deps.validateRuntime(session))) {
+        console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+        receipt?.('runtime_gone')
+        this.deps.onError(sessionId, 'This agent process is no longer running.')
+        return
+      }
+    }
     const delivery = await this.injectWhenLeased(() => this.write(session.agentId, content, inputContext),
       () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
@@ -746,7 +757,15 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       // Before the team's own check of the pane, which a reader not yet up cannot read either.
-      await this.engineReady(sessionId, session)
+      if (await this.engineReady(sessionId, session, deliveryId.startsWith('team:'))) {
+        if (state.cancelled || this.states.get(sessionId) !== state) return
+        if (!(await this.deps.validateRuntime(session))) {
+          console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+          this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
+          if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
+          return
+        }
+      }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (deliveryId.startsWith('team:')) {
         const held = this.deps.beforeTeamWrite ? await this.deps.beforeTeamWrite(session, deliveryId) : 'team_waiting_unavailable'

@@ -73,8 +73,10 @@ export interface ServiceLinksOptions {
    *  kill, the master's restart for an update), as a first start is waited for: asked for again, within the same
    *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's (core/main.ts). */
   waitsThroughRestart?: ReadonlySet<string>
-  /** How long a request waits for its service on demand to connect (`ON_DEMAND_START_MS`). */
+  /** How long a service on demand may take to connect from when it is first asked for (`ON_DEMAND_START_MS`), and, by service,
+   *  the ones that may take longer (`startWaits`: Claude Code's and Codex's readers, `READER_START_MS`). */
   startWaitMs?: number
+  startWaits?: Readonly<Record<string, number>>
   /** Ask the master for a process on demand (harnessd/coreLink.ts `want`). */
   want?(service: string): void
   log?: (line: string) => void
@@ -106,12 +108,17 @@ interface Waiting {
 /** The most notifications held for one service while it is down. */
 export const HELD_MAX = 1_000
 
-/** How long a service on demand may take to start and connect, from when it is first asked for. Claude Code's reader, from an
- *  agent's create to connected, measured on this Mac: 6.9, 7.2 and 7.8 s at load 40 to 48 (its process 2.4 to 3.2 s of that), and
- *  26 s once at load 40 (R, 2026-11-10), past the 20 s this was, which lost a person's first message. One that has not connected
- *  in this long is not starting (it ends as it starts, and its master parks it). Models' requests wait up to fifteen minutes for
- *  their answers (grid's set-up, a download), which a request for a models that cannot start must not wait on its connection. */
-export const ON_DEMAND_START_MS = 45_000
+/** How long a request waits for its service on demand to start and connect, at most. A process starts in a
+ *  second or two even on a loaded machine; one that has not connected in this long is not starting (it ends as
+ *  it starts, and its master parks it). Models' requests wait up to fifteen minutes for their answers (grid's
+ *  set-up, a download), which a request for a models that cannot start must not wait on its connection. */
+export const ON_DEMAND_START_MS = 20_000
+
+/** How long Claude Code's and Codex's readers may take to start, from when they are first asked for: a person's first message to
+ *  a new agent waits for its reader that long (core/input.ts). Claude Code's, from an agent's create to connected, measured on this
+ *  Mac: 6.9, 7.2 and 7.8 s at load 40 to 48 (its process 2.4 to 3.2 s of that), and 26 s once at load 40 (R, 2026-11-10), past
+ *  the 20 s of the others, which lost that message. */
+export const READER_START_MS = 45_000
 
 /** The most requests held at once for one service to come back after it went (`waitsThroughRestart`); past it,
  *  a request is answered SERVICE_UNAVAILABLE at once, as before. A window asks the Store a few things at a time
@@ -125,6 +132,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const now = options.now ?? (() => performance.now())
   const timeoutMs = options.timeoutMs ?? 30_000
   const startWaitMs = options.startWaitMs ?? ON_DEMAND_START_MS
+  const startWaitOf = (service: string): number => options.startWaits?.[service] ?? startWaitMs
   const log = options.log ?? ((line: string) => console.warn(line))
   const newId = options.newId ?? randomUUID
   const setTimer = options.setTimer ?? ((run, ms) => setTimeout(run, ms))
@@ -151,10 +159,11 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     unstarted.add(service)
     for (const [id, entry] of waiting) if (entry.service === service && entry.frame) settle(id, entry, unavailable(service))
     for (const up of upWaiters.get(service) ?? []) up(false)
+    upWaiters.delete(service)
   }
   /** Asks the master for [service] on demand; its start wait begins with the first ask. */
   const askFor = (service: string): void => {
-    if (!starts.has(service)) starts.set(service, setTimer(() => startOver(service), startWaitMs))
+    if (!starts.has(service)) starts.set(service, setTimer(() => startOver(service), startWaitOf(service)))
     options.want?.(service)
   }
   const waiting = new Map<string, Waiting>()
@@ -307,18 +316,16 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       return true
     },
 
-    /** Whether [service] is connected, waiting up to [waitMs] for one on demand that is starting (asked for if it is not): true once it
-     *  connects, false when it does not in time, could not start, or is not one on demand. Never rejects. */
-    whenUp(service: string, waitMs: number): Promise<boolean> {
-      if (links.has(service)) return Promise.resolve(true)
-      if (!options.onDemand?.has(service) || unstarted.has(service) || seen.has(service)) return Promise.resolve(false)
+    /** A service on demand starting for the first time (asked for now if it was not): whether it connects within its start wait.
+     *  Null when there is nothing to wait for: it is connected, it is not one on demand, it could not start, or it connected
+     *  before and is down (refused at once, as its requests are). Never rejects. */
+    whenStarting(service: string): Promise<boolean> | null {
+      if (links.has(service) || !options.onDemand?.has(service) || unstarted.has(service) || seen.has(service)) return null
       askFor(service)
       return new Promise((resolve) => {
         const waiters = upWaiters.get(service) ?? new Set<(up: boolean) => void>()
         upWaiters.set(service, waiters)
-        const done = (up: boolean): void => { clearTimer(timer); waiters.delete(done); resolve(up) }
-        const timer = setTimer(() => done(false), waitMs)
-        waiters.add(done)
+        waiters.add(resolve)
       })
     },
 
