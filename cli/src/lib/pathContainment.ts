@@ -43,8 +43,8 @@ export async function withinRoots(target: string, roots: readonly string[]): Pro
 
 /**
  * Where agents drop the files they make. macOS gives each user a private `/var/folders/…` as
- * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots. Beside a Team account the
- * owner's agents have a private folder of their own (./agentTmp.ts), and the daemon's `tmpdir()` is not it.
+ * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots. A Swarm agent has a
+ * private folder of its own (./agentTmp.ts), and the daemon's `tmpdir()` is not it.
  */
 export function tempRoots(): string[] {
   const agents = agentTmpRoot()

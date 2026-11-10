@@ -42,26 +42,3 @@ describe('Devices host ownership', () => {
     await socket.stop()
   })
 })
-
-// An old Harness Team account's daemon shares its Mac with the owner's daemon and runs only to stop itself
-// (superTabs/inCore/teamRetire.ts): the owner's daemon serves the Wi-Fi device, never it (core/main.ts devicesOff).
-describe('the Wi-Fi device switched off', () => {
-  it('hands it none of the relay\'s sessions or requests, and sends it nothing', async () => {
-    const socket: BackendSocket = relaySocket('fixture')
-    try {
-      const gw = gatewayOf(socket)
-      const wifi = { session: vi.fn(), dropped: vi.fn(), request: vi.fn(), revoked: vi.fn() }
-      socket.disableWifi()
-      socket.useWifi(wifi as never)
-      const device = vi.spyOn(gw, 'device').mockImplementation(() => true)
-      // As the gateway hands them on: a device session, its sealed request opened, its revocation.
-      socket.fromGateway.client('dial-1', { role: 'device', label: 'Wi-Fi device', identity: 'dial', direct: true, accountOwner: true })
-      await socket.fromGateway.device?.('dial-1', { type: 'e2e', payload: {} }, { type: 'wifi_view', payload: { requestId: 'v1' } })
-      socket.fromGateway.deviceRevoked?.('dial')
-      await socket.fromGateway.disconnected('dial-1')
-      socket.deviceFrame('dial-1', 'wifi_view_result', { agents: [{ agentId: 'worker' }] })
-      expect([wifi.session, wifi.request, wifi.revoked, wifi.dropped].map(f => f.mock.calls.length)).toEqual([0, 0, 0, 0])
-      expect(device).not.toHaveBeenCalled()
-    } finally { await socket.stop() }
-  })
-})
