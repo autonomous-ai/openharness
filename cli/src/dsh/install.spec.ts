@@ -10,10 +10,16 @@ import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, 
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
-// Each test here clones and checks out real git repositories: 3 to 17 s alone on a Mac at load 9, and past 30 s beside the
-// other suites at load 12 (Q3, 2026-11-10). The unit run's 5 s default timed three of them out on any busy machine. This is
-// their own deadline, measured, not a retry.
-vi.setConfig({ testTimeout: 60_000 })
+// A setup or a doctor runs in the login shell (dsh/shell.ts): the person's own, with their rc files, took seconds a spawn here.
+// A plain sh stands in for it, as update.spec does.
+let shellDir = ''
+beforeEach(() => {
+  shellDir = mkdtempSync(join(tmpdir(), 'dsh-install-shell-'))
+  const shell = join(shellDir, 'test-shell')
+  writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
+  vi.stubEnv('SHELL', shell)
+})
+afterEach(() => { vi.unstubAllEnvs(); rmSync(shellDir, { recursive: true, force: true }) })
 
 function gitRepo(dir: string, files: Record<string, string>): string {
   mkdirSync(dir, { recursive: true })
