@@ -1840,6 +1840,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
+  backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
@@ -1973,7 +1974,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
-    openclawPaneRead: (sessionId, reading) => normalizers.openclawReaders.get(sessionId)?.paneRead(reading),
+    openclawPaneRead: (sessionId, reading, capture) => {
+      normalizers.openclawReaders.get(sessionId)?.paneRead(reading)
+      const session = registry.bySession(sessionId)
+      // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
+      if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
+    },
+    openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
     openclawStateDir: (pid) => openclawStateDir(pid),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))
@@ -2735,9 +2742,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // opencode and its fork kilo belong here for the same stated reason and were simply missing: neither
   // writes its model anywhere but the composer footer, so between reconciles their chips said nothing
   // at all rather than going stale.
-  // openclaw too: its footer is where its model and thinking level are drawn (engines/openclaw/runtimeProfile.ts), and a
-  // `/model` changes them without a row the profile reader reads.
-  const PANE_POLLED_ENGINES = new Set(['devin', 'cursor', 'grok', 'agy', 'opencode', 'kilo', 'openclaw'])
+  // Not openclaw: its bind pass reads its pane already, and hands that capture to the profile (core/agents/bind.ts).
+  const PANE_POLLED_ENGINES = new Set(['devin', 'cursor', 'grok', 'agy', 'opencode', 'kilo'])
   const PANE_POLL_MS = 15_000
   setInterval(() => {
     for (const session of registry.list()) {

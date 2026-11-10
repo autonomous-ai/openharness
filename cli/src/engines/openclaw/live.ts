@@ -12,6 +12,9 @@
  *   reads `connected | idle` through a run it did not start until that run's first delta (another TUI, the Control UI,
  *   a channel message, cron), and its watchdog sets idle 30 s after a reconnect.
  * - The window's header (seq 0, `{type:'session', cwd}`) is handed on for the workspace label.
+ * - A pane that read idle, with no turn open and its store unchanged since, has nothing new to show but a Gateway that
+ *   dropped: the bind pass reads it every QUIET_PANE_MS instead of every pass (`paneDue`). The pane's captures were
+ *   most of what one bound idle pane cost the daemon.
  */
 import type { LiveEvent } from '../../lib/normalize.js'
 import { OpenclawNormalizer } from './normalizer.js'
@@ -31,6 +34,8 @@ const STALE_READS = 2
 /** Bind passes (5 s apart, core/agents/bind.ts) that read the pane idle with no row between, before a turn left open
  * after a Gateway drop is closed. */
 const READY_PASSES = 2
+/** How often a quiet pane is read all the same: a Gateway that stops while nothing runs changes the screen alone. */
+const QUIET_PANE_MS = 30_000
 
 /** What a bind pass read off the pane (contract.ts `readOpenclawScreen`). */
 interface OpenclawPaneReading {
@@ -63,6 +68,8 @@ export class OpenclawLive {
   private readyPasses = 0
   /** The pane showed the Gateway connection drop since the open turn started. */
   private gatewayLost = false
+  /** The last bind pass that read the pane: when, how many store changes the reader had seen, and whether it was quiet. */
+  private paneSeen: { at: number; changes: number; quiet: boolean } | null = null
 
   constructor(private readonly deps: OpenclawLiveDeps) {
     this.reader = new OpenclawReader({
@@ -85,6 +92,7 @@ export class OpenclawLive {
       onStatus: (status) => this.status(status),
       onFatal: (reason) => deps.onFatal(reason),
       onRecovered: () => deps.onRecovered?.(),
+      busy: () => this.normalizer.turnOpen,
     })
   }
 
@@ -102,10 +110,18 @@ export class OpenclawLive {
 
   /** A bind pass's reading of the pane: the backstop for a run the status still calls `running` after a Gateway drop. */
   paneRead(reading: OpenclawPaneReading): void {
+    this.paneSeen = { at: Date.now(), changes: this.reader.changes, quiet: reading.ready && !reading.gatewayLost }
     if (!this.normalizer.turnOpen) { this.readyPasses = 0; return }
     if (reading.gatewayLost) this.gatewayLost = true
     if (!reading.ready) { this.readyPasses = 0; return }
     if (++this.readyPasses >= READY_PASSES && this.gatewayLost) this.close('aborted')
+  }
+
+  /** Whether the next bind pass reads the pane (core/agents/bind.ts): it may show something the last one did not. */
+  paneDue(): boolean {
+    const seen = this.paneSeen
+    return !seen || !seen.quiet || this.normalizer.turnOpen || seen.changes !== this.reader.changes
+      || Date.now() - seen.at >= QUIET_PANE_MS
   }
 
   private status(status: string | null): void {

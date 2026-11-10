@@ -68,7 +68,8 @@ class ProfileReader {
     if (!footer) return false
     const { state } = context
     state.model = footer.model
-    state.effort = footer.effort
+    // A model with no thinking level shows none, and a profile names one: `auto`, as OpenCode's reader says it.
+    state.effort = footer.effort ?? 'auto'
     state.observedAt = Date.now()
     if (footer.tokens) this.tokenCounts.set(context.session.sessionId, footer.tokens)
     else this.tokenCounts.delete(context.session.sessionId)

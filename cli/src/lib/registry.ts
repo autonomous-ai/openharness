@@ -3230,7 +3230,9 @@ export const registry = new Registry()
 
 function defaultProjectDisplayName(s: RegisteredSession): string {
   const folder = s.cwd ? s.cwd.split('/').filter(Boolean).pop() || s.cwd : s.projectDir
-  return `${folder} · ${(s.sessionId || s.agentId).slice(0, 4)}`
+  // Every OpenClaw key starts `agent:<agentId>:`: it is told apart by its own part (`main`, `tui-22b7208d`).
+  const key = s.engine === 'openclaw' ? OPENCLAW_KEY.exec(s.sessionId)?.[2] : undefined
+  return `${folder} · ${key ? key.slice(0, 12) : (s.sessionId || s.agentId).slice(0, 4)}`
 }
 
 /**

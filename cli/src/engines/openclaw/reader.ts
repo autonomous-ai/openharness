@@ -4,7 +4,8 @@
  * OpenClaw keeps every conversation in its agent database (`openclaw-agent.sqlite`, schema 27), written by the
  * Gateway. A key (`agent:<id>:<key>`) points at its current window (`session_nodes.current_session_id`), and a
  * window's rows are `transcript_events`, keyed `(session_id, seq)`, each as JSON text or zstd-compressed JSON. This
- * reader polls every second, as `OpencodeReader` does, on the cached read-only `node:sqlite` handle. There is no
+ * reader polls every second, as `OpencodeReader` does, on the cached read-only `node:sqlite` handle. A poll that finds
+ * the store's files as the last read left them reads nothing, so a bound idle pane costs a stat a second. There is no
  * `sqlite3` CLI fallback: the CLI's `-json` output mangles the compressed blobs.
  *
  * What the recorded fixtures (`__fixtures__/`, OpenClaw 2026.11.2) taught it:
@@ -22,6 +23,7 @@
  * written, and a cursor over it would step past a row that becomes active later. It owns no turn state: that is
  * the normalizer's (normalizer.ts), which it hands what was there at attach, and the key's status.
  */
+import { statSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 import { sid } from '../../lib/log.js'
 import { builtinSqlite, readBuiltin } from '../../lib/sqliteBuiltin.js'
@@ -43,6 +45,8 @@ class OpenclawReadError extends Error {
 }
 
 const POLL_MS = 1_000
+/** A store whose files did not change is read this often all the same: a write a file's stamp could miss is late, never lost. */
+const QUIET_READ_MS = 10_000
 /** Rows per read: a long backlog drains over a few polls instead of in one blocking read. */
 const PAGE = 500
 /** The binding is synchronous and blocks the event loop while it waits on a lock: kept short, as in sqliteRead. */
@@ -79,6 +83,20 @@ const COLUMNS_SQL = 'SELECT name FROM pragma_table_info(?)'
 const SCHEMA_SQL = "SELECT schema_version AS version, app_version AS app FROM schema_meta WHERE role = 'agent'"
 /** SQLite's own schema cookie: it changes with any change to the store's tables, an OpenClaw upgrade's migration too. */
 const COOKIE_SQL = 'SELECT schema_version AS cookie FROM pragma_schema_version'
+
+/**
+ * The store's files as they stand: any commit changes the WAL's size or mtime, a checkpoint the database's, a rebuild
+ * its inode. Null when they cannot be read, and then the poll reads (and says why it fails).
+ */
+function storeStamp(db: string): string | null {
+  try {
+    const main = statSync(db)
+    const wal = statSync(`${db}-wal`, { throwIfNoEntry: false })
+    return `${main.ino}:${main.size}:${main.mtimeMs}|${wal ? `${wal.size}:${wal.mtimeMs}` : ''}`
+  } catch {
+    return null
+  }
+}
 
 const zstd = zlib as typeof zlib & { zstdDecompressSync?: (data: Uint8Array, options?: { maxOutputLength?: number }) => Buffer }
 
@@ -286,6 +304,11 @@ export interface OpenclawReaderDeps {
    */
   onFatal?(reason: 'unsupported' | 'missing'): void
   onRecovered?(): void
+  /**
+   * While this says so, every poll reads, changed files or not: an open turn is closed by the key's status, which takes
+   * a second read to trust (live.ts).
+   */
+  busy?(): boolean
   pollMs?: number
 }
 
@@ -304,6 +327,12 @@ export class OpenclawReader {
   /** Event ids already emitted (or seen at attach): a row a rewind copied into a new window is not emitted again. */
   private readonly emitted = new Set<string>()
   private said: 'absent' | 'failing' | null = null
+  /** The store's stamp when the last read left nothing to read again, and when that read was. */
+  private settled: string | null = null
+  private readAt = 0
+  private stamp: string | null = null
+  /** How many times a poll found the store's files changed: live.ts asks whether the pane can show anything new. */
+  changes = 0
 
   constructor(private readonly deps: OpenclawReaderDeps) {}
 
@@ -348,11 +377,18 @@ export class OpenclawReader {
 
   private async tick(): Promise<void> {
     if (this.polling) return
+    const stamp = storeStamp(this.deps.db)
+    if (stamp !== this.stamp) { this.stamp = stamp; this.changes++ }
+    if (stamp !== null && stamp === this.settled && !this.deps.busy?.() && Date.now() - this.readAt < QUIET_READ_MS) return
     this.polling = true
+    this.settled = null
+    this.readAt = Date.now()
+    // A read that failed, or stopped at a full page, reads again on the next poll.
+    let settled = false
     try {
       let recovered = false
       if (this.unsupported !== null) {
-        if (schemaCookie(this.deps.db) === this.unsupported) return
+        if (schemaCookie(this.deps.db) === this.unsupported) { settled = true; return }
         checked.delete(this.deps.db)
         this.unsupported = null
         recovered = true
@@ -362,6 +398,7 @@ export class OpenclawReader {
         console.error(`[openclaw] ${sid(this.deps.key)} store readable again`)
         this.deps.onRecovered?.()
       }
+      settled = true
       if (!node) {
         if (!this.hydrated) this.born = true
         return
@@ -387,12 +424,15 @@ export class OpenclawReader {
       } else {
         page = this.readLive()
       }
+      settled = !page.full
       if (page.events.length) this.deps.onEvents(page.events)
       // A backlog still being read may hold the row that ends the run: the status speaks once it is read.
       if (!page.full) this.deps.onStatus?.(node.status)
     } catch (error) {
+      settled = false
       this.failed(error)
     } finally {
+      if (settled) this.settled = stamp
       this.polling = false
     }
   }

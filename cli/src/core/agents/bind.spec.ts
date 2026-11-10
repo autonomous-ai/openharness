@@ -84,6 +84,7 @@ function setup(over: Partial<BindDeps> = {}) {
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
     openclawPaneRead: vi.fn(),
+    openclawPaneDue: vi.fn(() => true),
     openclawStateDir: vi.fn(async () => null),
     ...over,
   }
@@ -1035,12 +1036,32 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     await run.binding.bindObservedAgent(tui())
     shown = screen('screen-no-gateway-reconnected').replace(/session plain/g, 'session abort')
     await run.binding.bindObservedAgent(tui())
-    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls).toEqual([
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([session, reading]) => [session, reading])).toEqual([
       ['agent:main:abort', { ready: false, gatewayLost: false }],
       ['agent:main:abort', { ready: true, gatewayLost: false }],
       ['agent:main:abort', { ready: false, gatewayLost: true }],
       ['agent:main:abort', { ready: true, gatewayLost: true }],
     ])
+  })
+
+  // The bind pass's captures, and the footer poll's beside them, were most of what one bound idle pane cost (E2E 2026-11-10).
+  it('reads a bound pane only when its stream says it may show something new, and hands that one capture to the model chip', async () => {
+    const shown = screen('screen-plain')
+    const run = setup({ capturePane: vi.fn(async () => shown), openclawPaneDue: vi.fn(() => false) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.openclawPaneDue).toHaveBeenCalledWith('agent:main:plain')
+    expect(run.deps.capturePane).not.toHaveBeenCalled()
+    expect(run.deps.openclawPaneRead).not.toHaveBeenCalled()
+    vi.mocked(run.deps.openclawPaneDue).mockReturnValue(true)
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.capturePane).toHaveBeenCalledOnce()
+    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false }, shown)
+    // A pane not bound yet is read on every pass: its footer is how it is bound.
+    vi.mocked(run.deps.openclawPaneDue).mockReturnValue(false)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
   })
 
   it('finds the state folder from the TUI\'s open database (fake /proc and lsof)', async () => {

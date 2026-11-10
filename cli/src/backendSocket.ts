@@ -352,6 +352,8 @@ export class BackendSocket {
   } | null = null
   tokenUsageProvider: ((session: RegisteredSession) => AgentTokenUsage | null) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
+  /** The engine's own workspace, when its tools do not run in the pane's folder (OpenClaw's). */
+  workspaceProvider: ((session: RegisteredSession) => string | null) | null = null
   /** Backend-resolved machine id, persisted by the SSO login preflight. */
   readonly machineId: string
 
@@ -1466,6 +1468,7 @@ export class BackendSocket {
     return agentFrame(s, {
       tokenUsage: this.tokenUsageProvider?.(s) ?? null,
       selectedModel: this.runtimeProfileProvider?.(s) ?? null,
+      workspace: this.workspaceProvider?.(s) ?? null,
       terminalAvailable: registry.terminalAvailable(s.agentId),
       dsh: this.dshFrameProvider?.(s) ?? null,
       activity: () => this.activityFrameProvider?.(s) ?? null,

@@ -76,15 +76,18 @@ export interface BindDeps {
   owners?: Pick<ConversationOwners, 'settle'>
   /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
   capturePane: (agentId: string) => Promise<string | null>
-  /** Tells an OpenClaw session's live stream what its pane read on this pass (engines/openclaw/live.ts). */
-  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean }) => void
+  /** Tells an OpenClaw session's live stream what its pane read on this pass (engines/openclaw/live.ts), and hands the
+   *  capture on to the model chip: the footer draws the model, and this is the pane's one capture. */
+  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean }, capture: string) => void
+  /** Whether a bound OpenClaw session's pane may show anything its last read did not (live.ts `paneDue`). */
+  openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
   openclawStateDir: (pid: number) => Promise<string | null>
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawStateDir,
+  input, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -298,13 +301,14 @@ export function createBinding({
       // pass: `/new` moves a running pane to a new key, and the new key becomes the agent's session. A key that existed
       // before the process (`main`, a resume) is the pane's all the same, so nothing is compared with the process's
       // start. A key another agent holds stays that agent's: two panes on `main` share one conversation, and the first
-      // keeps it.
+      // keeps it. A bound pane is read when its stream says it may show something new: an idle one is not read every pass.
+      if (agent.sessionId && !openclawPaneDue(agent.sessionId)) return
       const captured = await read(() => capturePane(agent.agentId))
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`.
-      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost })
+      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost }, captured.value)
       const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
       if (held) {

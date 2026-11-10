@@ -8,8 +8,8 @@ import { join } from 'node:path'
 import * as zlib from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sid } from '../../lib/log.js'
-import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
-import { OpenclawReader, readOpenclawHistory, readOpenclawSince, type OpenclawEvent } from './reader.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, type DatabaseConstructor, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
+import { OpenclawReader, readOpenclawHistory, readOpenclawSince, type OpenclawEvent, type OpenclawReaderDeps } from './reader.js'
 
 vi.mock('node:zlib', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:zlib') & { zstdDecompressSync: (data: Uint8Array) => Buffer }>()
@@ -28,6 +28,8 @@ afterEach(() => {
   for (const db of open.splice(0)) db.close()
   rmSync(dir, { recursive: true, force: true })
   vi.restoreAllMocks()
+  vi.useRealTimers()
+  overrideBuiltinSqlite(undefined)
   decompress.mockClear()
 })
 
@@ -60,14 +62,14 @@ const userTexts = (events: OpenclawEvent[]): unknown[] => events
   .filter((event) => (event.record.message as { role?: string } | undefined)?.role === 'user')
   .map((event) => (event.record.message as { content: unknown }).content)
 
-function reader(path: string, key: string) {
+function reader(path: string, key: string, over: Partial<OpenclawReaderDeps> = {}) {
   const events: OpenclawEvent[] = []
   const deps = {
     db: path, key, pollMs: 10,
     onEvents: vi.fn((batch: OpenclawEvent[]) => { events.push(...batch) }),
     onHydrated: vi.fn(), onStatus: vi.fn(), onFatal: vi.fn(), onRecovered: vi.fn(),
   }
-  return { reader: new OpenclawReader(deps), deps, events }
+  return { reader: new OpenclawReader({ ...deps, ...over }), deps, events }
 }
 
 /** The rows of `key` past `seq` in its current window, as a count by cursor reads them. */
@@ -283,10 +285,10 @@ describe('OpenclawReader', () => {
     expect(mid.deps.onEvents).not.toHaveBeenCalled()
   })
 
-  it('reports the run status on every read that caught up', async () => {
+  it('reports the run status on every read that caught up, and reads on every poll while a turn is open', async () => {
     const { path, db } = store('abort')
     db.exec("UPDATE session_nodes SET status = 'running' WHERE session_key = 'agent:main:abort'")
-    const { reader: tail, deps } = reader(path, 'agent:main:abort')
+    const { reader: tail, deps } = reader(path, 'agent:main:abort', { busy: () => true })
     await tail.start()
     expect(deps.onStatus).toHaveBeenLastCalledWith('running')
     db.exec("UPDATE session_nodes SET status = 'killed' WHERE session_key = 'agent:main:abort'")
@@ -294,6 +296,47 @@ describe('OpenclawReader', () => {
     // The same status again on the next read: a run killed within one poll never shows `running`.
     const killed = deps.onStatus.mock.calls.filter(([status]) => status === 'killed').length
     await vi.waitFor(() => expect(deps.onStatus.mock.calls.filter(([status]) => status === 'killed').length).toBeGreaterThan(killed))
+    tail.stop()
+  })
+
+  // One bound idle pane cost the daemon's core +0.6% of a core (E2E 2026-11-10), two queries a second of it here.
+  it('a quiet store costs no query: a poll reads only once its files changed, and now and then all the same', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('plain')
+    const put = holdBack(db, windowOf(db, 'agent:main:plain'), 3)
+    let queries = 0
+    const Real = builtinSqlite()!
+    class Counted extends (Real as unknown as new (path: string | URL, options: { readOnly: boolean }) => DatabaseLike) {
+      override prepare(sql: string) { queries++; return super.prepare(sql) }
+    }
+    overrideBuiltinSqlite(Counted as unknown as DatabaseConstructor)
+    const { reader: tail, deps, events } = reader(path, 'agent:main:plain')
+    await tail.start()
+    expect(deps.onHydrated).toHaveBeenCalledOnce()
+    const hydrated = queries
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(queries, '500 polls of a store nobody wrote').toBe(hydrated)
+    put()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(seqs(events)).toEqual([6])
+    const quiet = queries
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(queries, 'a read every 10 s whatever the files say').toBeGreaterThan(quiet)
+    expect(queries - quiet).toBeLessThanOrEqual(4)
+    tail.stop()
+  })
+
+  it('a row written into a quiet store reaches the stream within a poll, a second', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('plain')
+    const put = holdBack(db, windowOf(db, 'agent:main:plain'), 3)
+    const { reader: tail, events } = reader(path, 'agent:main:plain', { pollMs: undefined })
+    await tail.start()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(events).toEqual([])
+    put()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(seqs(events)).toEqual([6])
     tail.stop()
   })
 })

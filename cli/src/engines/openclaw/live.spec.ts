@@ -174,4 +174,40 @@ describe('OpenclawLive', () => {
     tail.stream.stop()
     expect(ended(tail.events)).toHaveLength(1)
   })
+
+  // The bind pass's captures were most of the +0.6% of a core one bound idle pane cost the daemon (E2E 2026-11-10).
+  it('a quiet pane is read again once its store changes, a turn opens, the screen was not idle, or half a minute passed', async () => {
+    vi.useFakeTimers()
+    try {
+      const { path, db } = store('plain')
+      const { stream } = live(path, 'agent:main:plain')
+      await stream.start()
+      expect(stream.paneDue(), 'a pane never read').toBe(true)
+      stream.paneRead({ ready: true, gatewayLost: false })
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(stream.paneDue()).toBe(false)
+      // A Gateway that dropped or a run going shows on the screen alone: read on every pass until it reads idle again.
+      stream.paneRead({ ready: false, gatewayLost: true })
+      expect(stream.paneDue()).toBe(true)
+      stream.paneRead({ ready: true, gatewayLost: true })
+      expect(stream.paneDue()).toBe(true)
+      stream.paneRead({ ready: true, gatewayLost: false })
+      expect(stream.paneDue()).toBe(false)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(stream.paneDue(), 'half a minute').toBe(true)
+      stream.paneRead({ ready: true, gatewayLost: false })
+      db.exec("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = 'agent:main:plain'")
+      await vi.advanceTimersByTimeAsync(10)
+      expect(stream.paneDue(), 'the store changed').toBe(true)
+      stream.paneRead({ ready: true, gatewayLost: false })
+      userRow(db, windowOf(db, 'agent:main:plain'), 100, 'next')
+      await vi.advanceTimersByTimeAsync(10)
+      expect(stream.turnOpen).toBe(true)
+      stream.paneRead({ ready: true, gatewayLost: false })
+      expect(stream.paneDue(), 'a turn is open').toBe(true)
+      stream.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
