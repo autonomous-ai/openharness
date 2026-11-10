@@ -2,9 +2,9 @@ import { isLeads, type Conversation, type SuperTabState } from './model.js'
 import { groupProject, type SwarmProject } from './projects.js'
 import type { ProgressData } from './parts/types.js'
 
-// The coordinator is no longer woken to rewrite the status card (task #3593): the server writes the card's lines (statusCard.ts), so
-// nothing marks a work group for a report. What stays is the watermark an older host's project.report still moves, and the check
-// that a group owes its project nothing before it sleeps.
+// The coordinator is no longer woken to rewrite the status card (task #3593), so nothing marks a work group for a report. What
+// stays is the watermark an older host's project.report still moves, and the check that a group owes its project nothing
+// before it sleeps.
 
 /** The conversations whose posts count toward a project's reports: not its Lead conversation, not the Leads
  *  conversation, not a private conversation (its posts never reach the Lead's summary to everyone). */

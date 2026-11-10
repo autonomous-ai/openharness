@@ -12,12 +12,11 @@ export interface ThreadSummary {
   authors: Author[]
   /** People who wrote in the thread or were tagged in it, in order of first appearance. */
   people: string[]
-  /** A Buddy's proposal nobody has answered yet: the row's tag in the chat (Dee, 2026-11-04). A task's state is no tag: its
-   *  agent reacts 👀 and ✅ on the row instead (taskLine.ts; Dee, 11-04, 'bot messages'). */
+  /** A Buddy's proposal nobody has answered yet: the row's tag in the chat (Dee, 2026-11-04). A task's state is no tag. */
   ask?: 'proposal'
 }
 
-/** A Buddy's proposal is an ask until the PM has answered it, or a task took it (any task mark, taskLine.ts). */
+/** A Buddy's proposal is an ask until the PM has answered it, or a task took it (any task line's mark, stored before Swarm v4). */
 function askOf(group: Conversation, root: string, thread: ThreadReply[]): ThreadSummary['ask'] {
   if (thread.some(row => row.ask)) return undefined
   const asked = thread.some(row => row.id === root && row.kind === 'buddy-proposal')
