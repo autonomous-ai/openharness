@@ -455,7 +455,8 @@ Saving a change that needs it restarts the browser; the login stays.
     already exited *(measured)*. The container exits when either
     exits, including when a person closes the browser's last window. The service then restarts it.
   - Named exit codes: 3 when the profile dir is not writable (`profile_unwritable`), 4 when the proxy cannot be
-    used at start (`proxy_failed`), 5 when Device is on and the device script did not attach (`device_failed`).
+    used at start (`proxy_failed`), 5 when Device is on and the device script did not attach (`device_failed`). A
+    relay that did not start with no proxy set is exit 1, which the service restarts like a crash.
     These go straight to Failed; the service does not restart the container for
     them. The prior art falls back to a throwaway profile, which would silently lose the login.
 - **Names and labels** *(call)*: one container per agent, named `harness-browser-<agentId>`, with the labels
@@ -468,9 +469,21 @@ Saving a change that needs it restarts the browser; the login stays.
 - **Network** *(call)*: one bridge network per running container, so one browser cannot reach another container.
   - The network is created when the browser starts and removed when it stops, so stopped browsers hold none. (The
     spike made 300 networks on one Podman with no error, so the count is not a limit at 8 browsers.)
-  - A page can reach the host's address. This is accepted and stated. The daemon's loopback socket refuses any
-    request that carries an `Origin` (`cli/src/localWsServer.ts:343-353`).
-  - The browser can reach the internet and the local network, as any browser on that network can. Also accepted.
+  - **A page cannot reach the host.** Every request the browser makes, proxy or not, goes through the relay in the
+    container (§ Proxy), which refuses host destinations. The reason: on a Podman machine (macOS) gvproxy maps
+    `192.168.127.254` to the Mac's own `127.0.0.1` and serves its control API on `192.168.127.1:80`
+    (`/services/forwarder/expose`), so a page could reach the Mac's loopback services and ask gvproxy to publish
+    them. Chrome's URLBlocklist stops only navigations, not a page's fetch or WebSocket, so a policy cannot do it, and
+    Harness never changes a Podman machine the person already has, so no firewall rule inside it.
+  - The relay refuses (403, one log line naming the category, never the URL): loopback (`127.0.0.0/8`, `::1`),
+    link-local (`169.254.0.0/16`, `fe80::/10`), unspecified, `192.168.127.0/24` (gvproxy), the container's own gateway
+    and network (read from its routing table at start), and the names `host.containers.internal`,
+    `host.docker.internal`, `gateway.containers.internal` and `gateway.docker.internal`. It resolves a name itself and
+    connects to the address it checked, so DNS rebinding cannot get past it.
+  - The daemon's loopback socket still refuses any request that carries an `Origin`
+    (`cli/src/localWsServer.ts:343-353`): a second wall.
+  - The browser can reach the internet and the rest of the local network, as any browser on that network can.
+    Accepted.
 - **Hardening** *(call)*: `--cap-drop ALL --security-opt no-new-privileges --read-only`. No host folder is mounted.
   - tmpfs mounts, each with a size, all counted inside the memory cap: `/tmp` 256 MB, the user's `HOME` 256 MB with
     `mode=1777` (without it the browser crashes at start, *measured*), `/var/tmp` and `/run` 16 MB each.
@@ -638,18 +651,20 @@ Saving a change that needs it restarts the browser; the login stays.
 
 ### Proxy *(prior art: `electron/browser/proxy-relay.ts`, `pool.ts:67-134`)*
 
-- **A relay inside the container** *(call)*: `proxy-relay.mjs`, started by the entrypoint before the browser when a
-  proxy is set.
-  - The browser gets `--proxy-server=http://127.0.0.1:<relay port>` and
-    `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.
-  - The relay adds the proxy's login to every request it forwards. Chrome cannot take a proxy's login on its command
-    line.
+- **A relay inside the container** *(call)*: `proxy-relay.mjs`, always started by the entrypoint before the browser.
+  - The browser always gets `--proxy-server=http://127.0.0.1:<relay port>`, `--proxy-bypass-list=<-loopback>` (so
+    even loopback goes through the relay) and `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.
+  - **With no proxy** it is a direct forward proxy: CONNECT (which carries WebSockets too) and absolute-form plain
+    HTTP. It refuses host destinations (§ The container, Network) before it connects.
+  - **With a proxy** the relay adds the proxy's login to every request it forwards. Chrome cannot take a proxy's login
+    on its command line.
     - HTTP and HTTPS proxies: CONNECT tunnels and plain HTTP, ported from the prior art.
     - SOCKS5: a handshake with username and password. The prior art's relay has no SOCKS5, so this part is new. It
       sends the host name to the proxy and never resolves it locally, so DNS goes out through the proxy too.
-  - **Fail closed.** The relay connects to the proxy and to nothing else. An unreachable proxy or a refused login
-    gives the page an error, never a direct connection.
-  - **At start** the relay makes one request to the exit lookup through the proxy, with the proxy's login.
+  - **Fail closed.** With a proxy, the relay connects to the proxy and to nothing else. An unreachable proxy or a
+    refused login gives the page an error, never a direct connection. The proxy decides what its exit reaches.
+  - **At start**, with a proxy only, the relay makes one request to the exit lookup through the proxy, with the
+    proxy's login.
     - If the proxy cannot be reached or refuses the login, the entrypoint exits with code 4, the browser does not
       start, and the state is `proxy_failed`.
     - Any answer that comes back through the proxy passes, whatever the lookup service itself says. The lookup
@@ -875,6 +890,12 @@ design changes first and this spec is revised.
 ### Security
 
 - **Nothing on the host network.** VNC and CDP are reachable only through `podman exec`.
+- **A page cannot reach the host**, gvproxy or the container's gateway: every request goes through the relay, which
+  refuses them by address and by name (§ The container, Network).
+  - Not stopped, and accepted: a compromised renderer opening raw sockets itself. Chrome runs with `--no-sandbox` in
+    the container, so code that escapes the renderer can connect anywhere the container can, gvproxy's addresses
+    included. The relay stops what a page can do through the browser's own network stack; the container's
+    `--cap-drop ALL`, read-only root and one-network-per-browser are what is left against an escape.
 - **Viewing is protected by** the end-to-end encrypted transport, plus the agent machine's check that the caller is
   the machine's own person and not a guest.
 - **Who can read the profile.** Any process running as the person can `podman exec` into the browser and read its

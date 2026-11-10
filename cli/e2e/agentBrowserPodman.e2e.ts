@@ -1,8 +1,8 @@
 /**
  * The agent browser on real Podman (Task 20 of docs/superpowers/plans/2026-11-10-agent-browser.md): the image built from
  * the CLI's own files, a browser agent's Chrome driven through `harness browser-mcp` as an engine drives it, its screen
- * streamed as the Desktop opens it, a page that asks for a person, its login kept across a stop, its restart after a crash, Device, a proxy that fails closed,
- * and a delete that leaves nothing behind. agentBrowser.e2e.ts runs the same daemon against a fake `podman`.
+ * streamed as the Desktop opens it, a page that asks for a person, a page that cannot reach the host, its login kept across a stop, its restart after a
+ * crash, Device, a proxy that fails closed, and a delete that leaves nothing behind. agentBrowser.e2e.ts runs the same daemon against a fake `podman`.
  *
  * The daemon finds a `podman` first on its PATH that runs the real one, so nothing a person or another run keeps in
  * Podman is seen or touched, and the clean-up can remove all the run made:
@@ -22,9 +22,10 @@
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import http from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
-import { tmpdir, userInfo } from 'node:os'
+import { networkInterfaces, tmpdir, userInfo } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
@@ -49,10 +50,24 @@ const TYPED = 'Xin chào 👋'
 const DEVICE = { gpuVendor: 'Harness E2E Vendor', gpuRenderer: 'Harness E2E Renderer', cpuCores: 12, memoryGb: 4 }
 const PROXY_LOGIN = { username: 'harness-e2e', password: 'e2e-proxy-password' }
 const CHAT_LINE = 'This page asks for a person. Tell your person in chat what to do in Browser, wait for their answer, and do not act on the challenge yourself.'
-// Inside the container, the machine it runs on; Podman writes the name into the container's /etc/hosts.
+// Inside the container, the machine it runs on; Podman writes the name into the container's /etc/hosts. The browser's
+// relay refuses it (proxy-relay.mjs), so only what does not go through the browser uses it.
 const HOST = 'host.containers.internal'
-// A loopback port inside the container for the Device page (see that case).
-const SECURE_PORT = 18080
+// The pages' address, as the browser reaches them: this machine on its own network, which the relay lets through as
+// any browser on that network reaches it.
+const PAGES_HOST = Object.values(networkInterfaces()).flat()
+  .find((one) => one && one.family === 'IPv4' && !one.internal && !one.address.startsWith('169.254.') && !one.address.startsWith('192.168.127.'))?.address
+/** Reads, in the container, what a tab reports of its device: run with the tab's target id (see the Device case). */
+const DEVICE_READ = "import { chromium } from 'playwright-core';"
+  + "const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');"
+  + 'for (const context of browser.contexts()) for (const page of context.pages()) {'
+  + ' const { targetInfo } = await (await context.newCDPSession(page)).send(\'Target.getTargetInfo\');'
+  + ' if (targetInfo.targetId !== process.argv[1]) continue;'
+  + ' console.log(JSON.stringify(await page.evaluate(() => { const gl = document.createElement(\'canvas\').getContext(\'webgl\');'
+  + ' return { cores: String(navigator.hardwareConcurrency), memory: String(navigator.deviceMemory),'
+  + ' vendor: gl ? String(gl.getParameter(0x9245)) : \'\', renderer: gl ? String(gl.getParameter(0x9246)) : \'\' } })));'
+  + '}'
+  + 'process.exit(0)'
 
 const realPodman = process.platform === 'linux' || process.platform === 'darwin'
   ? (process.env.PATH ?? '').split(delimiter).filter(Boolean).map((dir) => join(dir, 'podman')).find((file) => existsSync(file)) ?? null
@@ -66,6 +81,7 @@ const podmanEnv = process.platform === 'darwin' ? { ...process.env, HOME: userIn
 function unavailable(): string | null {
   if (process.platform !== 'linux' && process.platform !== 'darwin') return `Linux and macOS only: Browser is not on ${process.platform} in v1`
   if (!realPodman) return 'podman is not on PATH'
+  if (!PAGES_HOST) return 'this machine has no network address for the browser to reach its pages at'
   try {
     if (process.platform === 'darwin') {
       const listed = JSON.parse(execFileSync(realPodman, ['machine', 'list', '--format', 'json'], { timeout: 10_000, stdio: 'pipe', env: podmanEnv }).toString()) as Array<{ Name: string; Running: boolean }>
@@ -134,12 +150,16 @@ const PAGES: Record<string, string> = {
   '/set-cookie': '<p>Cookie set</p>',
   '/cookie': '<p>Cookie read</p>',
   '/addr': '<p>Your address</p>',
-  '/device': '<script>'
-    + 'const gl = document.createElement("canvas").getContext("webgl");'
-    + 'fetch("/device-report?" + new URLSearchParams({ cores: String(navigator.hardwareConcurrency), memory: String(navigator.deviceMemory),'
-    + ' vendor: gl ? String(gl.getParameter(0x9245)) : "", renderer: gl ? String(gl.getParameter(0x9246)) : "" }))'
+  // Each `host:port` in `targets`, by fetch and by WebSocket: reached only when the canary itself answered.
+  '/probe': '<script>'
+    + 'const targets = new URLSearchParams(location.search).get("targets").split(",");'
+    + 'const fetched = (t) => fetch("http://" + t + "/", { cache: "no-store" }).then((r) => r.text()).then((b) => b === "canary" ? "reached" : "failed", () => "failed");'
+    + 'const opened = (t) => new Promise((done) => { const ws = new WebSocket("ws://" + t + "/");'
+    + ' ws.onopen = () => { ws.close(); done("reached") }; ws.onerror = () => done("failed"); setTimeout(() => done("timeout"), 15000) });'
+    + 'Promise.all(targets.map(async (t) => [t, await fetched(t), await opened(t)]))'
+    + '.then((r) => fetch("/probe-report?" + new URLSearchParams({ r: JSON.stringify(r) })))'
     + '</script>',
-  '/device-report': '',
+  '/probe-report': '',
   // A different colour in every pixel of the viewport (the stream case).
   '/noise': '<canvas id="c" style="position:fixed;inset:0"></canvas><script>'
     + 'const c = document.getElementById("c"); c.width = innerWidth; c.height = innerHeight;'
@@ -154,8 +174,8 @@ class Pages {
   private constructor(private readonly server: http.Server, readonly port: number, readonly seen: Seen[]) {}
 
   /**
-   * On every address: the container reaches this machine at its own address, never its loopback (rootless Podman's
-   * slirp4netns does not carry loopback), and only for this run.
+   * On every address: the browser reaches this machine at its own network address (PAGES_HOST), never its loopback or
+   * host.containers.internal, which the relay refuses; curl in the container still uses that name. Only for this run.
    */
   static async start(): Promise<Pages> {
     const seen: Seen[] = []
@@ -176,7 +196,7 @@ class Pages {
     return new Pages(server, (server.address() as AddressInfo).port, seen)
   }
 
-  url(path: string): string { return `http://${HOST}:${this.port}${path}` }
+  url(path: string): string { return `http://${PAGES_HOST}:${this.port}${path}` }
 
   stop(): Promise<void> {
     this.server.closeAllConnections()
@@ -204,7 +224,7 @@ class LoginProxy {
         return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'success', timezone: 'Asia/Ho_Chi_Minh', query: '203.0.113.7' }))
       }
       // Chrome's own background requests go nowhere: the machine running the test is not the internet.
-      if (url.hostname !== HOST || Number(url.port) !== pagesPort) return void res.writeHead(403).end()
+      if (url.hostname !== PAGES_HOST || Number(url.port) !== pagesPort) return void res.writeHead(403).end()
       const headers = { ...req.headers }
       delete headers['proxy-authorization']
       delete headers['proxy-connection']
@@ -219,6 +239,38 @@ class LoginProxy {
     await new Promise<void>((done, fail) => { server.once('error', fail); server.listen(0, '0.0.0.0', () => done()) })
     proxy = new LoginProxy(server, (server.address() as AddressInfo).port)
     return proxy
+  }
+
+  stop(): Promise<void> {
+    this.server.closeAllConnections()
+    return new Promise((done) => this.server.close(() => done()))
+  }
+}
+
+/**
+ * On every address of this machine: answers `canary` to any page (CORS and Private Network Access allowed, so only the
+ * relay can stop it), completes a WebSocket handshake, and records the Host of every request and upgrade it got.
+ */
+class Canary {
+  readonly hosts: string[] = []
+  private constructor(private readonly server: http.Server, readonly port: number) {}
+
+  static async start(): Promise<Canary> {
+    let canary: Canary | null = null
+    const allow = { 'access-control-allow-origin': '*', 'access-control-allow-private-network': 'true', 'cache-control': 'no-store' }
+    const server = http.createServer((req, res) => {
+      canary!.hosts.push(req.headers.host ?? '')
+      res.writeHead(req.method === 'OPTIONS' ? 204 : 200, allow).end(req.method === 'OPTIONS' ? undefined : 'canary')
+    })
+    server.on('upgrade', (req, socket: Socket) => {
+      canary!.hosts.push(req.headers.host ?? '')
+      socket.on('error', () => socket.destroy())
+      const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+    })
+    await new Promise<void>((done, fail) => { server.once('error', fail); server.listen(0, '0.0.0.0', () => done()) })
+    canary = new Canary(server, (server.address() as AddressInfo).port)
+    return canary
   }
 
   stop(): Promise<void> {
@@ -321,6 +373,7 @@ describe('the agent browser on real Podman', () => {
   let client: LocalClient | undefined
   let pages: Pages | undefined
   let proxy: LoginProxy | undefined
+  let canary: Canary | undefined
   let relay: Relay | undefined
   let agent: Record<string, any> | undefined
   let broken: string | null = null
@@ -501,6 +554,7 @@ describe('the agent browser on real Podman', () => {
     // Its own errors (hooks outside the root) are kept for after the clean-up, which must run regardless.
     const closed = await d?.close().then(() => null, (error: unknown) => error)
     await proxy?.stop()
+    await canary?.stop()
     await pages?.stop()
     if (store) await sweep()
     if (closed) throw closed
@@ -629,6 +683,38 @@ describe('the agent browser on real Podman', () => {
     expect(daemon.stdout, daemon.stderr).not.toMatch(/^2/)
   })
 
+  step('a page cannot reach the host, gvproxy or the container\'s gateway, by fetch or WebSocket, and a public page loads', 3 * CALL_MS, async () => {
+    // With no proxy, every request still goes through the relay (proxy-relay.mjs), which refuses these.
+    const shown = await relay!.call('browser_navigate', { url: 'https://example.com/' })
+    expect(shown.isError, shown.text).toBe(false)
+    expect((await relay!.call('browser_snapshot')).text).toContain('Example Domain')
+
+    canary = await Canary.start()
+    const route = await inside(['cat', '/proc/net/route'])
+    expect(route.code, route.stderr).toBe(0)
+    // The default route's gateway, little-endian hex.
+    const hex = route.stdout.split('\n').map((line) => line.trim().split(/\s+/)).find((cols) => cols[1] === '00000000')?.[2]
+    expect(hex, route.stdout).toMatch(/^[0-9A-F]{8}$/)
+    const gateway = [...Buffer.from(hex!, 'hex').reverse()].join('.')
+    // 192.168.127.254 is the Mac's own loopback on a Podman machine, and 192.168.127.1:80 gvproxy's control API.
+    const refused = [`192.168.127.254:${canary.port}`, '192.168.127.1:80', `${HOST}:${canary.port}`, `${gateway}:${canary.port}`]
+    // The same probe to this machine's own network address reaches the canary, so a failure above is the relay's.
+    const allowed = `${PAGES_HOST}:${canary.port}`
+    const from = pages!.seen.length
+    const probed = await relay!.call('browser_navigate', { url: pages!.url(`/probe?targets=${[...refused, allowed].join(',')}`) })
+    expect(probed.isError, probed.text).toBe(false)
+    const report = await until('the probe to report', () => pages!.seen.slice(from).find((seen) => seen.path === '/probe-report'), 60_000, 250)
+    expect(JSON.parse(report.query.get('r') ?? '[]')).toEqual([
+      ...refused.map((target) => [target, 'failed', 'failed']),
+      [allowed, 'reached', 'reached'],
+    ])
+    expect([...new Set(canary.hosts)]).toEqual([allowed])
+    // One line for each refusal, by category, never the destination.
+    const log = (await inside(['cat', '/tmp/proxy-relay.log'])).stdout
+    for (const category of ['gvproxy', 'host name', 'container network']) expect(log).toContain(`proxy relay: refused a ${category} destination`)
+    for (const leak of [HOST, gateway, '192.168.127', String(canary.port)]) expect(log).not.toContain(leak)
+  })
+
   step('a stop keeps the login: a cookie set before it is sent after the agent resumes', START_MS + 4 * CALL_MS, async () => {
     const set = await relay!.call('browser_navigate', { url: pages!.url('/set-cookie') })
     expect(set.isError, set.text).toBe(false)
@@ -666,25 +752,21 @@ describe('the agent browser on real Podman', () => {
     expect(back.isError, back.text).toBe(false)
   })
 
-  step('Device: a page opened without any tool call reports the chosen GPU, cores and memory', START_MS + 2 * 60_000, async () => {
+  step('Device: a tab opened without any tool call reports the chosen GPU, cores and memory', START_MS + 2 * 60_000, async () => {
     const before = await container()
     await saveSettings({ device: DEVICE })
     await settled('the browser to be ready with Device on', START_MS, (found) => found.id !== before!.id)
-    // navigator.deviceMemory exists only in a secure context, and http://host.containers.internal is not one; the
-    // container's own loopback is. socat (in the image) carries it to the pages, and `timeout` ends it whatever happens.
-    const forward = await podman(['exec', '--detach', name(), 'timeout', '300', 'socat',
-      `TCP-LISTEN:${SECURE_PORT},bind=127.0.0.1,fork,reuseaddr`, `TCP:${HOST}:${pages!.port}`])
-    expect(forward.code, forward.stderr).toBe(0)
-    await until('the loopback forward inside the container', async () => (await inside(['curl', '-sf', '--max-time', '5', `http://127.0.0.1:${SECURE_PORT}/addr`])).code === 0 || null, 30_000, 250)
     // Opened through Chrome's own DevTools HTTP endpoint, as a tab the person opens appears: no tool call, so only
-    // device-inject.mjs's own connection can report the device. The ready marker waits for it to attach, so the first
-    // tab after ready reports it.
-    const from = pages!.seen.length
-    const opened = await inside(['curl', '-sf', '--max-time', '10', '-X', 'PUT', `http://127.0.0.1:9222/json/new?http://127.0.0.1:${SECURE_PORT}/device`])
+    // device-inject.mjs's own connection can set the device. The ready marker waits for it to attach, so the first tab
+    // after ready has it. A blank tab: navigator.deviceMemory exists only in a secure context, which about:blank is and
+    // a page at this machine's network address is not, and the relay refuses the container's own loopback.
+    const opened = await inside(['curl', '-sf', '--max-time', '10', '-X', 'PUT', 'http://127.0.0.1:9222/json/new?about:blank'])
     expect(opened.code, opened.stderr).toBe(0)
-    const report = await until('the tab to report', () => pages!.seen.slice(from).find((seen) => seen.path === '/device-report'), 10_000, 100)
+    const { id } = JSON.parse(opened.stdout) as { id: string }
+    const read = await inside(['sh', '-c', `cd /opt/harness-browser && timeout 20 node --input-type=module -e ${quote(DEVICE_READ)} ${quote(id)}`])
+    expect(read.code, read.stderr).toBe(0)
     // Chrome reports memory rounded down to a power of two, at most 8 (device-inject.mjs).
-    expect(Object.fromEntries(report.query)).toEqual({ cores: '12', memory: '4', vendor: DEVICE.gpuVendor, renderer: DEVICE.gpuRenderer })
+    expect(JSON.parse(read.stdout.trim())).toEqual({ cores: '12', memory: '4', vendor: DEVICE.gpuVendor, renderer: DEVICE.gpuRenderer })
   })
 
   step('a proxy with a login carries every request, and one that goes away fails closed', START_MS + 3 * CALL_MS, async () => {

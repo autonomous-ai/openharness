@@ -1,17 +1,29 @@
-import { request as httpRequest } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { connect, createServer, type AddressInfo, type Server, type Socket } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { networkInterfaces } from 'node:os'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error — the relay is plain ESM, run by Node inside the browser's container.
-import { createRelay, probe } from '../../../assets/browser/proxy-relay.mjs'
+import { containerNetwork, createRelay, probe, refusedBy } from '../../../assets/browser/proxy-relay.mjs'
 
 const LOGIN = `Basic ${Buffer.from('kim:p4ss').toString('base64')}`
 const servers: Server[] = []
-afterEach(() => { for (const server of servers.splice(0)) server.close() })
+afterEach(() => {
+  for (const server of servers.splice(0)) server.close()
+  vi.restoreAllMocks()
+})
 
-async function listen(server: Server): Promise<number> {
+async function listen(server: Server, host = '127.0.0.1'): Promise<number> {
   servers.push(server)
-  await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
+  await new Promise<void>(done => server.listen(0, host, done))
   return (server.address() as AddressInfo).port
+}
+
+/** This machine's own address on its network: a private address, which the relay lets through as any browser would. */
+function lanAddress(): string {
+  const found = Object.values(networkInterfaces()).flat()
+    .find(one => one && one.family === 'IPv4' && !one.internal && !one.address.startsWith('169.254.') && !one.address.startsWith('192.168.127.'))
+  if (!found) throw new Error('this machine has no network address to test with')
+  return found.address
 }
 
 /** A port nothing listens on. */
@@ -90,8 +102,8 @@ function socksProxy(opts: { acceptLogin?: boolean; reply?: number } = {}) {
   return { server, asked, heads }
 }
 
-async function relay(upstream: object): Promise<number> {
-  return listen(createRelay(upstream))
+async function relay(upstream: object | null, routes: [string, number][] = []): Promise<number> {
+  return listen(createRelay(upstream, routes))
 }
 
 /** Sends a CONNECT and resolves with the relay's answer line and the socket. */
@@ -215,6 +227,102 @@ describe('proxy relay', () => {
     second.socket.resetAndDestroy()
     // The relay is still up.
     expect((await tunnel(port, 'example.test:443')).line).toBe('HTTP/1.1 200 Connection Established')
+  })
+})
+
+/** A site on every address of this machine that counts the connections it got: plain HTTP, a WebSocket upgrade, or bytes. */
+function countingSite() {
+  const seen = { connections: 0, upgrades: 0 }
+  const server = createHttpServer((_req, res) => res.end('site'))
+  server.on('connection', () => { seen.connections++ })
+  server.on('upgrade', (_req, socket: Socket) => { seen.upgrades++; socket.destroy() })
+  return { server, seen }
+}
+
+describe('proxy relay with no proxy', () => {
+  it('connects directly, by CONNECT and by plain HTTP, to an address on the local network', async () => {
+    const lan = lanAddress()
+    const echo = createServer(socket => socket.on('data', bytes => socket.write(bytes)))
+    const echoPort = await listen(echo, '0.0.0.0')
+    const heads: string[] = []
+    const site = createHttpServer((req, res) => { heads.push(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`); res.end('ok') })
+    const sitePort = await listen(site, '0.0.0.0')
+    const port = await relay(null)
+
+    const { line, socket } = await tunnel(port, `${lan}:${echoPort}`)
+    expect(line).toBe('HTTP/1.1 200 Connection Established')
+    expect(await echoed(socket, 'ping')).toBe('ping')
+    socket.destroy()
+
+    // Straight to the site, so in origin form, and with no proxy headers a page sent.
+    expect(await get(port, `http://${lan}:${sitePort}/page?q=1`, { 'proxy-authorization': 'Basic bogus' })).toEqual({ status: 200, body: 'ok' })
+    expect(heads[0]).toMatch(/^GET \/page\?q=1 /)
+    expect(heads[0]!.toLowerCase()).not.toContain('proxy-')
+  })
+
+  it('refuses the host, gvproxy and the container\'s own network, by address or by name, and never connects', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const lan = lanAddress()
+    const site = countingSite()
+    const p = await listen(site.server, '0.0.0.0')
+    // As if this machine's own address were the container's gateway, and its /24 the container's network.
+    const port = await relay(null, [[lan, 32], [lan.replace(/\.\d+$/, '.0'), 24]])
+    const refused: Record<string, string[]> = {
+      loopback: [`127.0.0.1:${p}`, `127.9.9.9:${p}`, `[::1]:${p}`, `[::ffff:127.0.0.1]:${p}`, `localhost:${p}`],
+      'link-local': [`169.254.1.2:${p}`, `[fe80::1]:${p}`],
+      unspecified: [`0.0.0.0:${p}`, `[::]:${p}`],
+      gvproxy: ['192.168.127.254:80', '192.168.127.1:80'],
+      'host name': [`host.containers.internal:${p}`, `HOST.Docker.Internal.:${p}`, `gateway.containers.internal:${p}`, `gateway.docker.internal:${p}`],
+      'container network': [`${lan}:${p}`, `${lan.replace(/\.\d+$/, '.250')}:${p}`],
+    }
+    for (const [category, authorities] of Object.entries(refused)) {
+      for (const authority of authorities) {
+        errors.mockClear()
+        expect((await tunnel(port, authority)).line, authority).toBe('HTTP/1.1 403 Forbidden')
+        expect((await get(port, `http://${authority}/`)).status, authority).toBe(403)
+        // One line each, naming the category and never the destination.
+        expect(errors.mock.calls.map(call => String(call[0])), authority).toEqual([
+          `proxy relay: refused a ${category} destination`, `proxy relay: refused a ${category} destination`,
+        ])
+      }
+    }
+    expect(site.seen.connections).toBe(0)
+  })
+
+  it('a WebSocket over CONNECT to a refused host is refused before any byte reaches it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const site = countingSite()
+    const p = await listen(site.server, '0.0.0.0')
+    const port = await relay(null)
+    for (const authority of [`host.containers.internal:${p}`, `127.0.0.1:${p}`, `localhost:${p}`]) {
+      const { line, socket } = await tunnel(port, authority)
+      expect(line, authority).toBe('HTTP/1.1 403 Forbidden')
+      socket.write(`GET / HTTP/1.1\r\nHost: ${authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`)
+      socket.destroy()
+    }
+    expect(site.seen).toEqual({ connections: 0, upgrades: 0 })
+  })
+
+  it('lets a public address through, and the local network beyond the container\'s own', () => {
+    const refused = refusedBy([['10.89.0.1', 32], ['10.89.0.0', 24]])
+    for (const address of ['93.184.215.14', '2606:4700:4700::1111', '10.0.0.5', '192.168.1.10', '172.16.0.1', 'fd00::1']) {
+      expect(refused(address), address).toBeNull()
+    }
+    expect(refused('10.89.0.1')).toBe('container network')
+    expect(refused('10.89.0.77')).toBe('container network')
+    expect(refused('::ffff:192.168.127.254')).toBe('gvproxy')
+  })
+
+  it('reads the container\'s gateway and networks from its routing table, never the default route', () => {
+    // /proc/net/route: addresses in little-endian hex.
+    const table = [
+      'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT',
+      'eth0\t00000000\t0100590A\t0003\t0\t0\t0\t00000000\t0\t0\t0',
+      'eth0\t0000590A\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0',
+      'lo\t0000007F\t00000000\t0001\t0\t0\t0\t000000FF\t0\t0\t0',
+      '',
+    ].join('\n')
+    expect(containerNetwork(table)).toEqual([['10.89.0.1', 32], ['10.89.0.0', 24]])
   })
 })
 

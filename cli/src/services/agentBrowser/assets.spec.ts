@@ -100,19 +100,35 @@ describe('browser assets', () => {
     expect(file.indexOf('google-chrome-stable ')).toBeGreaterThan(waited)
   })
 
-  it('entrypoint starts the proxy relay first, and only under PROXY=1', () => {
+  it('entrypoint always starts the proxy relay first, as its own child, and waits for its port', () => {
     const file = onDisk('entrypoint.sh')
-    const block = /^if \[ "\$\{PROXY:-\}" = 1 \]; then\n[\s\S]*?^fi$/m.exec(file)?.[0] ?? ''
-    expect(block).toContain('node /opt/harness-browser/proxy-relay.mjs')
-    expect(file.indexOf(block)).toBeLessThan(file.indexOf('Xvnc :1'))
-    // The relay listens only once its start probe passed: no port, or a relay that died, is exit 4.
-    expect(block).toMatch(/\/dev\/tcp\/127\.0\.0\.1\/3128/)
-    expect(block).toMatch(/if ! \(exec 3<> \/dev\/tcp\/127\.0\.0\.1\/3128\)[^\n]*; then[^\n]*exit 4; fi/)
-    for (const flag of ['--proxy-server=http://127.0.0.1:3128', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']) {
-      expect(block, flag).toContain(flag)
+    // Every request the browser makes goes through it, proxy or not: it refuses the host's own addresses.
+    expect(file).toMatch(/^node \/opt\/harness-browser\/proxy-relay\.mjs > \/tmp\/proxy-relay\.log 2>&1 &$/m)
+    expect(file.split('proxy-relay.mjs').length).toBe(2)
+    const started = file.indexOf('node /opt/harness-browser/proxy-relay.mjs')
+    expect(started).toBeLessThan(file.indexOf('Xvnc :1'))
+    const waited = file.search(/^if ! \(exec 3<> \/dev\/tcp\/127\.0\.0\.1\/3128\)[^\n]*; then$/m)
+    expect(waited).toBeGreaterThan(started)
+    // Its start probe runs only with a proxy: no port then is exit 4, `proxy_failed`.
+    const failed = /^if ! \(exec 3<> \/dev\/tcp\/127\.0\.0\.1\/3128\)[^\n]*; then\n([\s\S]*?)\nfi$/m.exec(file)?.[1] ?? ''
+    expect(failed).toMatch(/^ {2}if \[ "\$\{PROXY:-\}" = 1 \]; then[^\n]*exit 4; fi$/m)
+    expect(failed).toMatch(/exit 1$/)
+    expect(file.indexOf('google-chrome-stable ')).toBeGreaterThan(waited)
+  })
+
+  it('entrypoint sends every request of the browser, loopback included, through the relay', () => {
+    const file = onDisk('entrypoint.sh')
+    const browser = /^google-chrome-stable [\s\S]*?about:blank/m.exec(file)?.[0] ?? ''
+    for (const flag of [
+      '--proxy-server=http://127.0.0.1:3128',
+      // Quoted: bare, bash reads `<` as a redirection.
+      '"--proxy-bypass-list=<-loopback>"',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+    ]) {
+      expect(browser, flag).toContain(flag)
       expect(file.split(flag).length, flag).toBe(2)
     }
-    expect(file).toMatch(/google-chrome-stable [\s\S]*"\$\{PROXY_FLAGS\[@\]\}"[\s\S]*about:blank/)
+    expect(file).not.toContain('PROXY_FLAGS')
   })
 
   it('entrypoint starts the device script, detached, only when DEVICE is set', () => {

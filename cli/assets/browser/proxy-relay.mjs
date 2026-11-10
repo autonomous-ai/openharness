@@ -1,17 +1,24 @@
 /**
- * The browser's proxy inside its container: Chrome is pointed at http://127.0.0.1:3128, and this relay adds the
- * person's proxy login to every request it forwards, since Chrome cannot take a proxy's login on its command line.
- * CONNECT tunnels and absolute-form plain HTTP, to an HTTP or HTTPS proxy with Proxy-Authorization, or through a SOCKS5
- * username/password handshake that sends the host name (socks5.mjs), so DNS leaves through the proxy too. Ported from
- * ai-assitant-sanbox `electron/browser/proxy-relay.ts`, which had no SOCKS5.
+ * The browser's proxy inside its container: Chrome sends every request to http://127.0.0.1:3128, loopback included,
+ * proxy or not. CONNECT tunnels (which carry WebSockets too) and absolute-form plain HTTP.
  *
- * Fail closed: the relay connects to the proxy and to nothing else. An unreachable proxy or a refused login is a 502
- * for the page, never a direct connection.
+ * With no proxy it connects directly, but never to the host: on a Podman machine gvproxy maps 192.168.127.254 to the
+ * Mac's own 127.0.0.1 and serves its control API on 192.168.127.1, and Chrome's URLBlocklist stops only navigations,
+ * not a page's fetch or WebSocket. So it resolves the name itself, refuses (403) loopback, link-local, unspecified,
+ * gvproxy's network, the container's own gateway and network (from its routing table at start) and the host's names,
+ * and connects to the very address it checked, so a name that changes its answer (DNS rebinding) cannot get past it.
  *
- * Run by entrypoint.sh: it reads the proxy from the Podman secret, makes one start probe through it, and listens only
- * when the probe passed, so the entrypoint knows by the port alone (no port is exit code 4, `proxy_failed`). The
- * password is in that file and this process only, and is never logged.
+ * With a proxy it adds the person's login to every request it forwards, since Chrome cannot take a proxy's login on its
+ * command line: to an HTTP or HTTPS proxy with Proxy-Authorization, or through a SOCKS5 username/password handshake
+ * that sends the host name (socks5.mjs), so DNS leaves through the proxy too. Ported from ai-assitant-sanbox
+ * `electron/browser/proxy-relay.ts`, which had no SOCKS5. Fail closed: it then connects to the proxy and to nothing
+ * else. An unreachable proxy or a refused login is a 502 for the page, never a direct connection.
+ *
+ * Run by entrypoint.sh. With `PROXY=1` it reads the proxy from the Podman secret, makes one start probe through it, and
+ * listens only when the probe passed, so the entrypoint knows by the port alone (no port is exit code 4,
+ * `proxy_failed`). The password is in that file and this process only, and is never logged.
  */
+import { lookup } from 'node:dns/promises'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import http from 'node:http'
@@ -22,11 +29,54 @@ import { socks5Connect } from './socks5.mjs'
 
 const RELAY_PORT = 3128
 const SECRET = '/run/secrets/harness-proxy'
+const ROUTES = '/proc/net/route'
 const LOOKUP = new URL('http://ip-api.com/json/?fields=status,timezone,query')
 const CONNECT_TIMEOUT_MS = 30_000
 const PROBE_TIMEOUT_MS = 15_000
 const MAX_CONNECT_RESPONSE_BYTES = 64 * 1024
-const BAD_GATEWAY = 'HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nproxy relay: the proxy cannot be used'
+const answer = (status, text) => `HTTP/1.1 ${status}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nproxy relay: ${text}`
+const unusable = (up) => up ? 'the proxy cannot be used' : 'the site cannot be reached'
+const REFUSED = 'that destination is not allowed'
+
+/** The host's names in Podman and Docker: refused by name, whatever they resolve to. */
+const HOST_NAMES = new Set(['host.containers.internal', 'host.docker.internal', 'gateway.containers.internal', 'gateway.docker.internal'])
+/** Each refused category and its subnets; the container's own network is added at start. */
+const REFUSED_SUBNETS = [
+  ['loopback', [['127.0.0.0', 8], ['::1', 128]]],
+  ['link-local', [['169.254.0.0', 16], ['fe80::', 10]]],
+  ['unspecified', [['0.0.0.0', 8], ['::', 128]]],
+  // gvproxy, on a Podman machine: .254 is the Mac's loopback, .1 its control API.
+  ['gvproxy', [['192.168.127.0', 24]]],
+]
+
+/**
+ * The refused category of an IP address, or null. `routes` is the container's own gateway and network, as
+ * containerNetwork reads them. An IPv4-mapped IPv6 address is checked as its IPv4 one (BlockList does that).
+ */
+export function refusedBy(routes) {
+  const lists = [...REFUSED_SUBNETS, ['container network', routes]].map(([category, subnets]) => {
+    const list = new net.BlockList()
+    for (const [address, prefix] of subnets) list.addSubnet(address, prefix, net.isIP(address) === 6 ? 'ipv6' : 'ipv4')
+    return [category, list]
+  })
+  return (address) => {
+    const family = net.isIP(address) === 6 ? 'ipv6' : 'ipv4'
+    return lists.find(([, list]) => list.check(address, family))?.[0] ?? null
+  }
+}
+
+/** The gateway (as a /32) and the network of each route in /proc/net/route, but loopback's and the default route's. */
+export function containerNetwork(table) {
+  const address = (hex) => [...Buffer.from(hex, 'hex').reverse()].join('.')
+  const routes = []
+  for (const line of table.split('\n').slice(1)) {
+    const [iface, destination, gateway, , , , , mask] = line.trim().split(/\s+/)
+    if (!mask || iface === 'lo') continue
+    if (gateway !== '00000000') routes.push([address(gateway), 32])
+    if (mask !== '00000000') routes.push([address(destination), Number.parseInt(mask, 16).toString(2).split('1').length - 1])
+  }
+  return routes
+}
 
 const loginOf = (up) => up.username || up.password
   ? { 'proxy-authorization': `Basic ${Buffer.from(`${up.username}:${up.password}`).toString('base64')}` } : {}
@@ -55,6 +105,39 @@ async function dial(up, target) {
   return socket
 }
 
+/**
+ * With no proxy: a socket straight to `target`, unless the host is refused. Every address the name resolves to is
+ * checked, and the socket goes to the one checked, never to the name again. A refusal is logged by category only.
+ */
+async function dialDirect(refused, target) {
+  const name = target.host.toLowerCase().replace(/\.$/, '')
+  let category = HOST_NAMES.has(name) ? 'host name' : null
+  let address = name
+  if (!category) {
+    const found = net.isIP(name) ? [{ address: name }] : await resolve(name)
+    category = found.map(({ address: one }) => refused(one)).find(Boolean) ?? null
+    address = found[0].address
+  }
+  if (category) {
+    console.error(`proxy relay: refused a ${category} destination`)
+    throw Object.assign(new Error('refused'), { refused: category })
+  }
+  const socket = net.connect({ host: address, port: target.port })
+  socket.on('error', () => socket.destroy())
+  socket.setTimeout(CONNECT_TIMEOUT_MS, () => socket.destroy(new Error('the site did not answer')))
+  await once(socket, 'connect').catch((error) => { socket.destroy(); throw error })
+  return socket
+}
+
+/** Every address of a name, within the connect timeout. */
+function resolve(name) {
+  let timer
+  return Promise.race([
+    lookup(name, { all: true, verbatim: true }),
+    new Promise((_done, fail) => { timer = setTimeout(() => fail(new Error('the name did not resolve')), CONNECT_TIMEOUT_MS) }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 /** Reads an HTTP proxy's answer to CONNECT; what follows the head stays in the socket for the tunnel. */
 function connectAnswer(socket) {
   return new Promise((resolve, reject) => {
@@ -79,9 +162,14 @@ function connectAnswer(socket) {
   })
 }
 
-async function tunnel(up, authority) {
+async function tunnel(up, refused, authority) {
   const target = /^(\[[^\]]+\]|[^:]+):(\d{1,5})$/.exec(authority)
   if (!target) throw new Error('not a host and port')
+  if (!up) {
+    const socket = await dialDirect(refused, { host: bare(target[1]), port: Number(target[2]) })
+    socket.setTimeout(0)
+    return socket
+  }
   const socket = await dial(up, { host: bare(target[1]), port: Number(target[2]) })
   if (up.scheme !== 'socks5') {
     const login = loginOf(up)['proxy-authorization']
@@ -96,22 +184,30 @@ async function tunnel(up, authority) {
   return socket
 }
 
-/** A plain HTTP request for `url` through the proxy: to an HTTP proxy in absolute form, through SOCKS5 to the site. */
-function viaProxy(up, url, method, headers) {
-  const socks = up.scheme === 'socks5'
+/**
+ * A plain HTTP request for `url`: to an HTTP proxy in absolute form; through SOCKS5, or with no proxy (`up` null)
+ * directly, to the site in origin form.
+ */
+function forward(up, refused, url, method, headers) {
+  const origin = !up || up.scheme === 'socks5'
+  const target = { host: bare(url.hostname), port: Number(url.port) || 80 }
   return http.request({
     method,
-    path: socks ? url.pathname + url.search : url.href,
-    headers: socks ? headers : { ...headers, ...loginOf(up) },
+    path: origin ? url.pathname + url.search : url.href,
+    headers: origin ? headers : { ...headers, ...loginOf(up) },
     createConnection: (_options, done) => {
-      dial(up, { host: bare(url.hostname), port: Number(url.port) || 80 })
+      (up ? dial(up, target) : dialDirect(refused, target))
         .then((socket) => { socket.setTimeout(0); done(null, socket) }, done)
     },
   })
 }
 
-/** The relay's server, not yet listening. */
-export function createRelay(up) {
+/**
+ * The relay's server, not yet listening. `up` is the proxy, or null to connect directly; `routes` the container's own
+ * gateway and network (containerNetwork), refused with no proxy.
+ */
+export function createRelay(up, routes = []) {
+  const refused = refusedBy(routes)
   const server = http.createServer((req, res) => {
     let url = null
     try { url = new URL(req.url ?? '') } catch { /* answered below */ }
@@ -119,10 +215,10 @@ export function createRelay(up) {
     const headers = { ...req.headers }
     delete headers['proxy-authorization']
     delete headers['proxy-connection']
-    const upReq = viaProxy(up, url, req.method, headers)
+    const upReq = forward(up, refused, url, req.method, headers)
     upReq.on('response', (upRes) => {
       // A refused login is the relay's failure, not the site's answer.
-      if (upRes.statusCode === 407 && up.scheme !== 'socks5') {
+      if (upRes.statusCode === 407 && up && up.scheme !== 'socks5') {
         upRes.resume()
         return void res.writeHead(502, { 'content-type': 'text/plain' }).end('proxy relay: the proxy refused the login')
       }
@@ -130,9 +226,10 @@ export function createRelay(up) {
       upRes.on('error', () => res.destroy())
       upRes.pipe(res)
     })
-    upReq.on('error', () => {
+    upReq.on('error', (error) => {
       if (res.headersSent) res.destroy()
-      else res.writeHead(502, { 'content-type': 'text/plain' }).end('proxy relay: the proxy cannot be used')
+      else if (error.refused) res.writeHead(403, { 'content-type': 'text/plain' }).end(`proxy relay: ${REFUSED}`)
+      else res.writeHead(502, { 'content-type': 'text/plain' }).end(`proxy relay: ${unusable(up)}`)
     })
     req.on('error', () => upReq.destroy())
     res.on('error', () => upReq.destroy())
@@ -143,7 +240,7 @@ export function createRelay(up) {
   server.on('connection', (socket) => socket.on('error', () => socket.destroy()))
 
   server.on('connect', (req, client, head) => {
-    tunnel(up, req.url ?? '').then((upstream) => {
+    tunnel(up, refused, req.url ?? '').then((upstream) => {
       if (client.destroyed) return void upstream.destroy()
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       if (head.length) upstream.write(head)
@@ -151,7 +248,7 @@ export function createRelay(up) {
       client.pipe(upstream)
       upstream.on('close', () => client.destroy())
       client.on('close', () => upstream.destroy())
-    }, () => client.end(BAD_GATEWAY))
+    }, (error) => client.end(error.refused ? answer('403 Forbidden', REFUSED) : answer('502 Bad Gateway', unusable(up))))
   })
   return server
 }
@@ -163,7 +260,7 @@ export function createRelay(up) {
  */
 export function probe(up) {
   return new Promise((resolve, reject) => {
-    const req = viaProxy(up, LOOKUP, 'GET', { host: LOOKUP.host, connection: 'close' })
+    const req = forward(up, null, LOOKUP, 'GET', { host: LOOKUP.host, connection: 'close' })
     const timer = setTimeout(() => req.destroy(new Error('the proxy did not answer')), PROBE_TIMEOUT_MS)
     req.on('response', (res) => {
       clearTimeout(timer)
@@ -183,22 +280,34 @@ export function probe(up) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  let up
+  let up = null
+  let routes
   try {
-    up = JSON.parse(readFileSync(SECRET, 'utf8'))
-  } catch {
-    // Never the parser's message: it quotes the file, password and all.
-    console.error('proxy relay: the proxy secret cannot be read')
+    routes = containerNetwork(readFileSync(ROUTES, 'utf8'))
+  } catch (error) {
+    // Without it the container's gateway would be reachable: no relay, so no browser.
+    console.error(`proxy relay: the routing table cannot be read: ${error.message}`)
     process.exit(1)
   }
-  probe(up).then(() => {
-    const server = createRelay(up)
+  if (process.env.PROXY === '1') {
+    try {
+      up = JSON.parse(readFileSync(SECRET, 'utf8'))
+    } catch {
+      // Never the parser's message: it quotes the file, password and all.
+      console.error('proxy relay: the proxy secret cannot be read')
+      process.exit(1)
+    }
+  }
+  const listen = () => {
+    const server = createRelay(up, routes)
     server.on('error', (error) => {
       console.error(`proxy relay: ${error.message}`)
       process.exit(1)
     })
     server.listen(RELAY_PORT, '127.0.0.1')
-  }, (error) => {
+  }
+  if (!up) listen()
+  else probe(up).then(listen, (error) => {
     console.error(`proxy relay: the proxy cannot be used: ${error.message}`)
     process.exit(1)
   })
