@@ -408,10 +408,13 @@ leaderboard) share four rules.
 Goal: every element in a Swarm looks like it came from one hand, Apple-quality
 and never random (anh Dee, 2026-11-07, task #4461). Each element below has one
 implementation; a screen uses it and never draws its own. The gallery
-(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark
-against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
-to its own area: a face or ring may barely differ, an icon or letter a
-quarter of its box, and nothing else outside the words more than 38 pixels.
+(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark,
+each section against its own images,
+`test/goldens/swarm-elements/<section>-{light,dark}.png`, so a pull request
+that changes one element changes only its section's images. It holds each
+element to its own area: a face or ring may barely differ, an icon or letter a
+quarter of its box, and nothing else outside the words more than 38 pixels
+of its section's image.
 
 Seven rules hold the whole Swarm screen to minimal, clear and quiet, with less
 on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
@@ -806,7 +809,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Blue.** Blue is for the main action and for your own bubbles, nothing
   else.
 - **Adding or changing one.** A new or changed element updates this section
-  and the gallery, with its images, in the same pull request.
+  and the gallery, with its section's images, in the same pull request.
 
 ## Swarm left pane
 
