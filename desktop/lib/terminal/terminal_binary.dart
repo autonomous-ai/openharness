@@ -47,7 +47,11 @@ enum TerminalBinaryKind {
   /// never a Ctrl+V replay — unlike [imagePaste], the goal here is only "the pane gets a valid
   /// path"). See [TerminalSession.pasteFile]. Upload (client→CLI) only; nothing ever sends this
   /// back down.
-  pasteFile(7);
+  pasteFile(7),
+
+  /// An agent browser's VNC bytes, both ways — the CLI's `TerminalBinaryKind.browser`. Raw, never
+  /// compressed: VNC already is, and the far side reads the bytes as they are.
+  browser(8);
 
   final int code;
   const TerminalBinaryKind(this.code);
@@ -130,7 +134,8 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
           frame.kind == TerminalBinaryKind.sync ||
           frame.kind == TerminalBinaryKind.paste ||
           frame.kind == TerminalBinaryKind.imagePaste ||
-          frame.kind == TerminalBinaryKind.pasteFile) &&
+          frame.kind == TerminalBinaryKind.pasteFile ||
+          frame.kind == TerminalBinaryKind.browser) &&
       frame.compressed) {
     return null;
   }
@@ -182,7 +187,8 @@ TerminalBinaryFrame? decodeTerminalPlain(
               kind == TerminalBinaryKind.sync ||
               kind == TerminalBinaryKind.paste ||
               kind == TerminalBinaryKind.imagePaste ||
-              kind == TerminalBinaryKind.pasteFile) &&
+              kind == TerminalBinaryKind.pasteFile ||
+              kind == TerminalBinaryKind.browser) &&
           (flags & _flagZlib) != 0)) {
     return null;
   }

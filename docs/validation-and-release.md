@@ -206,6 +206,10 @@ GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has
 green, run it on pull requests, make `e2e-summary` required and add it to the evidence
 collector.
 
+Run workflow with **`agent_browser_podman`** ticked runs only `cli/e2e/agentBrowserPodman.e2e.ts`, the agent
+browser on real rootless Podman: it builds the browser image, so nothing else runs beside it. Use it once for a
+change to the agent browser's container, image or stream; the nightly run leaves that file out.
+
 For changes to daemon lifetime or process boundaries, select an opt-in soak and chaos workload
 (`cli/e2e/endurance.e2e.ts`). On a Mac, run `SOAK=1 E2E_BUNDLE=1 SOAK_OUT=<folder> npx vitest run
 --config vitest.e2e.config.ts e2e/endurance.e2e.ts` in `cli/`. The defaults are 60 minutes of soak and

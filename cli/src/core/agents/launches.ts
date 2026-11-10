@@ -539,6 +539,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
+      ...(payload.browser === true ? { browser: true } : {}),
     }
     // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
     // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.

@@ -42,6 +42,8 @@ import type { Machine } from '@prisma/client'
 import { machineBillingAllowsDataPlane } from './billingState.js'
 import { parseAutonomousEnvironment, storedAutonomousEnvironment } from './autonomousEnvironment.js'
 import {
+  AGENT_BROWSER_DOWN_TYPES,
+  browserRateNotice,
   isEncryptedTerminalFrame,
   TERMINAL_DOWN_TYPES,
   TERMINAL_ENVELOPE_MAX_BYTES,
@@ -71,7 +73,7 @@ export { BACKEND_ONLY_DOWN_TYPES } from './backendOnlyFrames.js'
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 
 /** Frame types the CPU self-profile may log by name; any other type a client sends is logged as `other`. */
-const WEB_FRAME_TYPES: ReadonlySet<string> = new Set([...TERMINAL_DOWN_TYPES, ...P2P_DOWN_TYPES,
+const WEB_FRAME_TYPES: ReadonlySet<string> = new Set([...TERMINAL_DOWN_TYPES, ...AGENT_BROWSER_DOWN_TYPES, ...P2P_DOWN_TYPES,
   'p2p_result', 'e2e_hello', 'machine_select', 'machine_deselect', 'machines_watch', 'devices_watch', 'message'])
 
 // Device-status re-seed: covers the silent-offline case (worker crash → presence TTL 45s ages out
@@ -176,6 +178,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   const p2pSignalRate = new P2pSignalRateGuard()
 
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { userId: user.sub })
+  // A refused browser frame would corrupt its VNC stream, so the client is told and closes its browser streams.
+  const browserRefused = browserRateNotice(send)
   // Its connect and disconnect lines (lib/wsAttribution.ts): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes
   // declared no client and lived a median 0.4 s, and these lines named only the user.
   const track = trackSocket('web', 'web user', ws, { ...declared, userId: user.sub })
@@ -548,6 +552,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
         return
       }
     }
+    const isBrowser = typeof type === 'string' && type.startsWith('agent_browser_')
+    if (isBrowser && !browserDownAllowed(frame, terminalRate, browserRefused)) return
     const p2pNamespace = typeof type === 'string' && type.startsWith('p2p_')
     const isP2pSignal = typeof type === 'string' && P2P_DOWN_TYPES.has(type)
     if (type === 'p2p_result') {
@@ -615,7 +621,10 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       // refresh the wake lease; other frames wake only when presence says the node is down.
       try {
         await sendWhenAwake(() => client, async () => {
-          if ((isTerminal && terminalFrameNeedsWake(type!)) || (!isTerminal && (type === 'message' || !(await presentRecently(binding.machineId))))) {
+          // A browser frame neither wakes the machine nor reads its presence: its stream needs the agent's browser
+          // running, and an ack every 64 KiB would otherwise read presence on the stream's hot path.
+          if ((isTerminal && terminalFrameNeedsWake(type!))
+            || (!isTerminal && !isBrowser && (type === 'message' || !(await presentRecently(binding.machineId))))) {
             await ensureMachineReady(binding)
           }
         }, frame)
@@ -666,6 +675,11 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       // check (which just validates wire shape and accepts every kind) plus that directionality —
       // paste/imagePaste/pasteFile were missing here even after being added to the kind enum and to
       // that parser, so every such frame was rejected as TERMINAL_BINARY_REJECTED, freezing the pane.
+      if (client && currentBinding && parsed?.kind === TerminalBinaryKind.browser) {
+        if (terminalRate.allow('agent_browser_input', parsed.bytes.length)) client.sendTerminalDown(parsed.bytes)
+        else browserRefused()
+        return
+      }
       const rateKey = parsed?.kind === TerminalBinaryKind.input ? 'terminal_input' : 'terminal_paste'
       if (!client || !currentBinding || !parsed || !TERMINAL_BINARY_CLIENT_UP_KINDS.has(parsed.kind)
         || !terminalRate.allow(rateKey, parsed.bytes.length)) {
@@ -704,11 +718,24 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   ws.on('error', () => cleanup())
 }
 
+/** A client's browser control frame, on either handler: a known, sealed type within its own budget. One over budget is
+ *  told (`refused`); an unknown or unsealed one is dropped, as the relay drops an unknown terminal frame. */
+function browserDownAllowed(frame: Frame, rate: TerminalRateGuard, refused: () => void): boolean {
+  const type = frame.type as string
+  if (!AGENT_BROWSER_DOWN_TYPES.has(type)) return false
+  const bytes = terminalFrameBytes(frame)
+  if (bytes > TERMINAL_ENVELOPE_MAX_BYTES || !isEncryptedTerminalFrame(frame)) return false
+  if (rate.allow(type, bytes)) return true
+  refused()
+  return false
+}
+
 /** LEGACY per-agent socket (old bundle during rolling deploys): bound to one agent for life. */
 function attachWebClient(ws: WebSocket, machineId: string, declared: ReturnType<typeof declaredKind>): void {
   const client = attachHubClient(ws, machineId, 'web')
   const terminalRate = new TerminalRateGuard()
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, connId: client.connId })
+  const browserRefused = browserRateNotice(send)
   // Tracked like the per-user socket (lib/wsAttribution.ts); untracked, each one counted as refused (review of #2029).
   const track = trackSocket('web', 'web client (legacy)', ws, { ...declared, machineId, hubConnId: client.connId })
   ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
@@ -730,6 +757,11 @@ function attachWebClient(ws: WebSocket, machineId: string, declared: ReturnType<
     if (isBinary) {
       const parsed = parseTerminalClientFrame(new Uint8Array(raw as Buffer))
       // Same client-originated kinds as the current per-user handler above — see its comment.
+      if (parsed?.kind === TerminalBinaryKind.browser) {
+        if (terminalRate.allow('agent_browser_input', parsed.bytes.length)) client.sendTerminalDown(parsed.bytes)
+        else browserRefused()
+        return
+      }
       const rateKey = parsed?.kind === TerminalBinaryKind.input ? 'terminal_input' : 'terminal_paste'
       if (parsed && TERMINAL_BINARY_CLIENT_UP_KINDS.has(parsed.kind) && terminalRate.allow(rateKey, parsed.bytes.length)) {
         client.sendTerminalDown(parsed.bytes)
@@ -747,6 +779,7 @@ function attachWebClient(ws: WebSocket, machineId: string, declared: ReturnType<
       const bytes = terminalFrameBytes(frame)
       if (bytes > TERMINAL_ENVELOPE_MAX_BYTES || !isEncryptedTerminalFrame(frame) || !terminalRate.allow(type, bytes)) return
     }
+    if (typeof type === 'string' && type.startsWith('agent_browser_') && !browserDownAllowed(frame, terminalRate, browserRefused)) return
     client.sendDown(frame)
   })
 

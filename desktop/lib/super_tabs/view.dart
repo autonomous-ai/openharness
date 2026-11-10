@@ -7,6 +7,8 @@ import 'package:flutter/rendering.dart'
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 
+import '../browser/browser_availability.dart';
+import '../browser/browser_panel.dart';
 import '../measurement/speed_marks.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/swarm_layout.dart';
@@ -22,6 +24,8 @@ import '../widgets/new_harness_paste.dart';
 import '../widgets/terminal_name_prompt.dart';
 import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
+import '../core/models.dart' show AgentBrowser;
+import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -3294,6 +3298,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// What the app knows of the agent, open beside its chat (Swarm v4).
   bool _infoOpen = false;
 
+  /// The agent's own Chrome, open beside its chat (Swarm v4).
+  bool _browserOpen = false;
+
   /// Keep each pane's state (what is typed in the instructions, what the tasks read and where they are scrolled) as a window
   /// resize moves it between the right pane and the chat's place.
   final _instructionsKey = GlobalKey(), _taskBoardKey = GlobalKey();
@@ -3305,6 +3312,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _instructionsOpen = false;
       _infoOpen = false;
+      _browserOpen = false;
       _closeTaskList();
     });
     _returnToChat();
@@ -3349,6 +3357,27 @@ class _SuperTabViewState extends State<SuperTabView>
       group != null && group.isAgentChat && group.agentIds.isNotEmpty
       ? c.snapshot?.agent(group.agentIds.first)
       : null;
+
+  /// [agent]'s own Chrome, on one of the person's own machines and never on the web build; null for anything else. A
+  /// machine shared with them is another person's, and so is the login in its browser.
+  AgentBrowser? _browserAgent(SuperTabAgent agent) {
+    final machine = widget.app?.stateOf(agent.machineId);
+    final browser = machine?.agents
+        .where((a) => a.id == agent.harnessId)
+        .firstOrNull
+        ?.browser;
+    final own =
+        machine != null &&
+        !machine.machine.isShared &&
+        !machine.machine.isSharedMachine;
+    return browserOffered(
+          web: kIsWeb,
+          windows: RuntimePlatform.isWindows,
+          offersBrowser: own && browser != null,
+        )
+        ? browser
+        : null;
+  }
 
   bool _agentsOnly(SuperTabConversation group) =>
       c.snapshot?.isProjectLead(group.id) == true || group.task != null;
@@ -3434,7 +3463,7 @@ class _SuperTabViewState extends State<SuperTabView>
             onPressed: () => setState(() {
               _infoOpen = !_infoOpen;
               if (_infoOpen) {
-                _instructionsOpen = false;
+                _instructionsOpen = _browserOpen = false;
                 if (terminalOpen) widget.onCloseTerminal?.call();
               }
             }),
@@ -3449,7 +3478,7 @@ class _SuperTabViewState extends State<SuperTabView>
             onPressed: () => setState(() {
               _instructionsOpen = !_instructionsOpen;
               if (_instructionsOpen) {
-                _infoOpen = false;
+                _infoOpen = _browserOpen = false;
                 if (terminalOpen) widget.onCloseTerminal?.call();
               }
             }),
@@ -3464,10 +3493,26 @@ class _SuperTabViewState extends State<SuperTabView>
             onPressed: terminalOpen
                 ? widget.onCloseTerminal
                 : () {
-                    setState(() => _instructionsOpen = _infoOpen = false);
+                    setState(
+                      () => _instructionsOpen = _infoOpen = _browserOpen =
+                          false,
+                    );
                     _openTerminals(group)?.call();
                   },
           ),
+          if (_browserAgent(agent) != null) ...[
+            const SizedBox(width: 4),
+            BrowserButton(
+              open: _browserOpen,
+              onPressed: () => setState(() {
+                _browserOpen = !_browserOpen;
+                if (_browserOpen) {
+                  _instructionsOpen = _infoOpen = false;
+                  if (terminalOpen) widget.onCloseTerminal?.call();
+                }
+              }),
+            ),
+          ],
         ],
       ),
     );
@@ -5570,6 +5615,23 @@ class _SuperTabViewState extends State<SuperTabView>
               onClose: () => setState(() => _instructionsOpen = false),
             );
       final infoAgent = _infoOpen ? _chatAgent(c.selected) : null;
+      final browserAgent = _browserOpen ? _chatAgent(c.selected) : null;
+      final browser =
+          browserAgent == null || _browserAgent(browserAgent) == null
+          ? null
+          : BrowserPanel(
+              // A new agent's panel is a new panel: the stream is that agent's.
+              key: ValueKey(
+                'browser-${browserAgent.machineId}/${browserAgent.harnessId}',
+              ),
+              app: widget.app!,
+              machineId: browserAgent.machineId,
+              agentId: browserAgent.harnessId,
+              thisComputer:
+                  widget.app!.stateOf(browserAgent.machineId)?.isLocalMachine ==
+                  true,
+              onClose: () => setState(() => _browserOpen = false),
+            );
       final info = infoAgent == null
           ? null
           : SwarmAgentInfo(
@@ -5584,7 +5646,7 @@ class _SuperTabViewState extends State<SuperTabView>
             );
       // What a person opened beside the chat: where two panes do not fit, it takes the chat's place, under Chat, and comes
       // before a terminal there as it does in the right pane.
-      final pane = issue ?? taskBoard ?? instructions ?? info;
+      final pane = issue ?? taskBoard ?? instructions ?? info ?? browser;
       final pagesIndex = _devicesVisible
           ? 1
           : _manageVisible
@@ -5636,6 +5698,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           taskBoard ??
                           instructions ??
                           info ??
+                          browser ??
                           (chatBeside ? terminal : null),
                 rightDefault: thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
@@ -5646,7 +5709,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     chatBeside ||
                     _taskListOpen ||
                     instructionsAgent != null ||
-                    infoAgent != null,
+                    infoAgent != null ||
+                    browser != null,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.

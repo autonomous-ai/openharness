@@ -64,7 +64,7 @@ it.each(['forget', 'checkpoint'] as const)('retains a captured Pi resume path th
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
-    detachDsh: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
+    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
     dataDir: env.ADAPTER_DATA_DIR,
   })
   await createStopAgentService(deps)(row.agentId, { checkpoint: async (_session, phase) => {

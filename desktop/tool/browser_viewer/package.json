@@ -1,0 +1,14 @@
+{
+  "name": "harness-browser-viewer",
+  "private": true,
+  "type": "module",
+  "description": "Builds desktop/assets/browser/browser_viewer.html: the viewer and noVNC in one classic script.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test viewer.test.mjs"
+  },
+  "devDependencies": {
+    "@novnc/novnc": "1.7.0",
+    "esbuild": "0.28.2"
+  }
+}

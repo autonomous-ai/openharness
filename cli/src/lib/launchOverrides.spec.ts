@@ -428,6 +428,16 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
+  it('relaunch of a browser agent keeps the args', async () => {
+    const claude = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null, browser: true }, 'a')
+    expect(claude).toMatchObject({ ok: true, overrides: { extraArgs: [
+      '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'] } })
+    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null, browser: true }, 'a')
+    expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.browser.command="harness"', 'mcp_servers.browser.args=["browser-mcp"]']))
+    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null }, 'a')
+    expect(JSON.stringify(plain)).not.toContain('browser-mcp')
+  })
+
   it('relaunches a Buddy with them, as its owner\'s own session (task #2832)', async () => {
     writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: [], projects: [] } })
     const buddy = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',

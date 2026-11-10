@@ -14,6 +14,11 @@ export const TERMINAL_UP_TYPES = new Set([
   'terminal_chunked_upload_progress',
 ])
 
+/** An agent browser stream's control frames (cli e2ee/applicationFrames.ts), sealed like terminal frames. Its bytes
+ *  are binary kind 8. Kept apart from the terminal lists so a refusal names the browser, never a terminal. */
+export const AGENT_BROWSER_DOWN_TYPES = new Set(['agent_browser_open', 'agent_browser_ack', 'agent_browser_close'])
+export const AGENT_BROWSER_UP_TYPES = new Set(['agent_browser_open_result', 'agent_browser_close'])
+
 export function terminalFrameBytes(frame: Frame): number {
   return Buffer.byteLength(JSON.stringify(frame), 'utf8')
 }
@@ -51,6 +56,11 @@ export const RELAY_BUSY_STREAMS = 64
 const ACKS_PER_STREAM_PER_MINUTE = 3_750
 /** The daemon flushes a remote stream's output at most every 8 ms (`OUTPUT_FLUSH_MS` in the CLI). */
 const OUTPUT_FRAMES_PER_STREAM_PER_MINUTE = 7_500
+/** A machine's browser bytes on the relay, counted sealed: 512 KiB a second (agent browser spec, "Stream profiles by
+ *  route"). The daemon paces at 90% of it (cli core/browserStreams.ts), so this cap is only the backstop. */
+const BROWSER_OUTPUT_BYTES_PER_MINUTE = 512 * 1024 * 60
+/** How many drawn bytes a viewer acks at once (the CLI's browser stream). */
+const BROWSER_ACK_STEP_BYTES = 64 * 1024
 
 interface Bucket {
   startedAt: number
@@ -78,7 +88,36 @@ function limits(type: string): { frames: number; bytes: number } {
     return { frames: 1_200, bytes: 8 * 1024 * 1024 }
   }
   if (type === 'terminal_open' || type === 'terminal_capabilities') return { frames: 60, bytes: 4 * 1024 * 1024 }
+  // Agent browser streams (spec 2026-11-10-agent-browser-design, "Nothing is dropped silently"), in buckets of their own
+  // so a busy browser never throttles a terminal. `agent_browser_output` is a machine's kind-8 bytes, all its browsers
+  // and viewers together, each its sealed frame's length: the most the relay carries for one machine, which its daemon
+  // paces under with room for a fixed minute that catches its one-second burst. The frame cap lets
+  // the byte cap bind first for any frame of 1 KiB or more.
+  if (type === 'agent_browser_output') return { frames: BROWSER_OUTPUT_BYTES_PER_MINUTE / 1024, bytes: BROWSER_OUTPUT_BYTES_PER_MINUTE }
+  // A viewer's kind-8 bytes: keys, pointer and clipboard, about 1 KB/s in the first spike. Frames as terminal input.
+  if (type === 'agent_browser_input') return { frames: 15_000, bytes: 64 * 1024 * 60 }
+  // The viewer acks every 64 KiB it has drawn, at most 8 a second at the machine budget. A refused ack would stall its
+  // stream until the backlog close, so twice that passes.
+  if (type === 'agent_browser_ack') return { frames: 2 * (BROWSER_OUTPUT_BYTES_PER_MINUTE / BROWSER_ACK_STEP_BYTES), bytes: 1024 * 1024 }
+  if (type === 'agent_browser_open' || type === 'agent_browser_open_result' || type === 'agent_browser_close') {
+    return { frames: 120, bytes: 4 * 1024 * 1024 }
+  }
   return { frames: 600, bytes: 64 * 1024 * 1024 }
+}
+
+/**
+ * Tells the sender of a refused browser frame, at most once a second per socket. The backend cannot name the stream
+ * (its id is inside the ciphertext), so the sender closes every browser stream it has on the relay. Every drop asks
+ * again, so a stream opened after the last notice is told too.
+ */
+export function browserRateNotice(send: (frame: Frame) => void, now: () => number = () => Date.now()): () => void {
+  let sentAt = Number.NEGATIVE_INFINITY
+  return () => {
+    const at = now()
+    if (at - sentAt < 1_000) return
+    sentAt = at
+    send({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } })
+  }
 }
 
 /** Socket-local one-minute guard. It never stores terminal payloads and has no cross-request persistence. */

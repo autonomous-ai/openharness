@@ -67,6 +67,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |
 | **Task** | The work requested. | Add a search field. |
 | **Browser** | The optional browser for web content and visual review. | Open the browser. |
+| **An agent's Browser** | That agent's own sandboxed Chrome, which it drives and its person can use too. A web pane shows one address. | Sign in to Gmail in Faye's Browser. |
 | **Connections** | Service accounts available to agents running as the same local user on a Harness computer. | Open Connections; connect GitHub. |
 | **Viewer** | A surface for inspecting or interacting with work. | The game viewer; the HTML preview. |
 | **This computer** | The local execution machine. | Run on This computer. |

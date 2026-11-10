@@ -1,0 +1,47 @@
+# The agent browser's image, built on the person's own machine by `podman build` from these files
+# (cli/src/services/agentBrowser/image.ts); there is no registry. The service rebuilds it weekly, and the
+# `apt-get upgrade` here is what keeps Chrome and the base current between Debian's own image releases.
+#
+# The base is the multi-arch index of debian:trixie, pinned by digest on 2026-11-10. The digest is the
+# `docker-content-digest` header of a HEAD on
+# https://registry-1.docker.io/v2/library/debian/manifests/trixie (Accept: application/vnd.oci.image.index.v1+json)
+# with an anonymous pull token from https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/debian:pull
+# Fully qualified, so the build never depends on the machine's short-name settings.
+FROM docker.io/library/debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Google Chrome stable from Google's signed apt repository, on amd64 and arm64 alike: Google publishes a Linux arm64
+# build (157.0.8103.50-1 on 2026-11-10), and a browser that is not Chrome is one more sign Google's sign-in checks.
+# apt reads the armored key itself when its name ends in .asc, so no gpg is installed.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL --max-time 60 https://dl.google.com/linux/linux_signing_key.pub -o /etc/apt/keyrings/google-chrome.asc \
+ && printf 'Types: deb\nURIs: https://dl.google.com/linux/chrome/deb/\nSuites: stable\nComponents: main\nSigned-By: /etc/apt/keyrings/google-chrome.asc\n' \
+      > /etc/apt/sources.list.d/google-chrome.sources \
+ && apt-get update && apt-get install -y --no-install-recommends \
+      google-chrome-stable tigervnc-standalone-server openbox socat pulseaudio \
+      fonts-dejavu-core fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
+      nodejs npm tzdata procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# playwright-core only drives the running Chrome over CDP; it never downloads a browser of its own.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN mkdir -p /opt/harness-browser && cd /opt/harness-browser && npm init -y >/dev/null \
+ && npm install --no-audit --no-fund --save-exact playwright-core@1.58.2 && rm -rf /root/.npm
+
+# The root filesystem is read-only at run time, so Chrome's policy is baked in: it hides the warning about the
+# command-line flags, and blocks every file:// URL, so no page and no tool opens a file of the container's.
+COPY policy.json /etc/opt/chrome/policies/managed/harness.json
+
+# The profile is a named volume mounted here. Mode 1777, so rootless Podman's user mapping can still write it.
+RUN useradd --create-home --shell /bin/bash browser \
+ && install -d -m 1777 /var/lib/harness-browser-profile
+
+# Last, so a change to Harness's own files rebuilds only this layer.
+COPY . /opt/harness-browser/
+
+USER browser
+WORKDIR /home/browser
+CMD ["/bin/bash", "/opt/harness-browser/entrypoint.sh"]
