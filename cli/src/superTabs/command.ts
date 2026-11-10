@@ -87,7 +87,6 @@ const idleRefusal = () => `post - read stdin until nothing more came for ${STDIN
 /** Stands in for stdin while the arguments are parsed the first time: stdin is read only for a command that wants it. */
 class WantsStdin {}
 
-
 /** [stdin] is asked for what `-` stands for: `post`'s message. */
 export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8'),
   terminal: () => boolean = () => isatty(0)) {

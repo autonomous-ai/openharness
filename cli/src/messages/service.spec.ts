@@ -457,12 +457,12 @@ describe('a harness and the harnesses it started', () => {
     expect(t.delivered.map(([agentId]) => agentId)).toEqual(['api'])
   })
 
-  it('a message an older version queued between them under no tab is never delivered, read directory or not', async () => {
+  // Queued by 0.3.75 under its `started` log, or by a v3 Buddy under `relayed`: one waiting in web's inbox for its hook, and one
+  // to api, which shares a tab with lead now.
+  it.each(['started', 'relayed'])('a message an older version queued between them under no tab (%s) is never delivered, read directory or not', async (tab) => {
     vi.useFakeTimers()
-    // Queued by 0.3.75 under its `started` log: one waiting in web's inbox for its hook, and one to api, which shares
-    // a tab with lead now.
     const store = new MessageStore(join(root, 'state'))
-    const old = (id: string, to: string) => ({ id, tabId: 'started', at: 1, text: 'Also check the footer.',
+    const old = (id: string, to: string) => ({ id, tabId: tab, at: 1, text: 'Also check the footer.',
       from: { machineId: 'm1', agentId: 'lead', name: 'lead', engine: 'codex', machine: 'studio' }, to: [{ machineId: 'm1', agentId: to, name: to }] })
     const queue = (id: string, to: string, pane: string) => {
       store.record(old(id, to))
@@ -482,7 +482,7 @@ describe('a harness and the harnesses it started', () => {
     expect(t.inbox.waiting('%2', deliveryKey('m0000ol2', 'api'))).toBe(false)
     await vi.advanceTimersByTimeAsync(TICK_MS * 2)
     expect(t.delivered).toEqual([])
-    const history = await t.ask({ action: 'history', tabId: 'started' })
+    const history = await t.ask({ action: 'history', tabId: tab })
     expect((history.messages as Array<{ statuses: unknown[] }>).map((m) => m.statuses)).toEqual([
       [expect.objectContaining({ machineId: 'm1', agentId: 'web', state: 'failed', reason: 'it was sent outside any tab' })],
       [expect.objectContaining({ machineId: 'm1', agentId: 'api', state: 'failed', reason: 'it was sent outside any tab' })],

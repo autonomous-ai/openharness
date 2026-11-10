@@ -100,7 +100,6 @@ function write(dataDir: string, row: LeadSwitch, now: number): void {
   } finally { if (existsSync(temporary)) unlinkSync(temporary) }
 }
 
-
 /** Another switch of [agentId] than [changeId] is running, its close under way or its new session awaited: refused. */
 export function leadSwitching(dataDir: string, agentId: string, changeId: string, now = Date.now()): boolean {
   const pass = passes.get(agentId)

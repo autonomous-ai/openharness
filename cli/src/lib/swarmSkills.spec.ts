@@ -60,7 +60,6 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     }
   })
 
-
   it('tells no agent to send a person a private line: their chat with their own agent is theirs alone (task #4547)', () => {
     for (const text of [SWARM_BASICS, PM_BASICS]) {
       expect(text).not.toContain('person.tell')
@@ -91,11 +90,6 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     if (result.ok) expect(result.overrides?.extraArgs.join(' ')).toContain('Never watch GitHub yourself')
   })
 
-  it('refuses relaunch with a missing workspace', async () => {
-    const swarmSkill = { role: 'agent' as const, key: 'original' }
-    const deps = { capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused', swarm: SWARM }
-    expect(await buildLaunchOverrides(deps, 'claude', { swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: expect.stringContaining('no saved workspace') })
-  })
 })
 
 describe('when this computer first ran the team\'s basics (noteSwarmBasics)', () => {

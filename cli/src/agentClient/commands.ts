@@ -364,7 +364,6 @@ const notStarted = (env: NodeJS.ProcessEnv, a: Asked, away: Away | null = null):
 
 interface Target { daemon: Daemon; frame: Frame; machineId: string; machine: string; yours: boolean; remote: boolean }
 
-
 /** A machine's harnesses by the names the verbs call them: a terminal is the person's, and an unnamed one is its id's start. */
 const named = (frames: Frame[]) => frames.filter(isAgent).map((f) => ({ ...f, name: f.name || f.id.slice(0, 8) }))
 

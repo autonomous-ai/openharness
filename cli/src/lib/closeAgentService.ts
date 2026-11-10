@@ -132,7 +132,6 @@ export interface CloseAgentServiceDeps {
   sleep?: (ms: number) => Promise<void>
 }
 
-
 class CloseRefused extends Error {
   constructor(readonly activity: CloseActivity) { super('The session is not idle.') }
 }

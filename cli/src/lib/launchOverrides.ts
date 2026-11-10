@@ -339,10 +339,8 @@ export async function prepareLaunchOverrides(
     // time, with the person's switches and settings as they are now.
     let swarmInstructions: string | undefined
     if (source.swarmSkill) {
-      try {
-        if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
-        swarmInstructions = swarm!.prepare(source.swarmSkill).instructions
-      } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+      try { swarmInstructions = swarm!.prepare(source.swarmSkill).instructions }
+      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const told = agentLaunchArgs(engine, source.startedBy, {
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),

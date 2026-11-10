@@ -1570,7 +1570,6 @@ export class SuperTabHost {
     return { plain: own, read }
   }
 
-
   /** A delivery's files, downloaded off the poll loop. A pass waits only on the downloads it starts, all together for at most
    *  downloadWaitMs (passWait); one still running is FilesDownloading, checked without a wait, and starts a pass of its own once
    *  in. A download whose tries all failed answers its "Could not download" lines, delivered as before. */
@@ -1627,7 +1626,6 @@ export class SuperTabHost {
     this.downloads.delete(deliveryId)
     download.stop.abort()
   }
-
 
   /** The message a reply answers, quoted into the delivery: agents skipped the command that reads it, and a Lead took Ken's
    * "GO" as approving a different plan. It is read as this agent through the conversation's own one-message read, so the
@@ -1689,7 +1687,6 @@ export class SuperTabHost {
       }
     } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
   }
-
 
   /** The lines that say where a delivery is (agent context design, section 2): the conversation, the agent's own work, and
    *  the thread it is in. Read fresh for each delivery, as the agent: a 60 s cache could build the delivery announcing a

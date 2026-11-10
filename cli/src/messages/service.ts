@@ -306,7 +306,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    * cannot be read (signed out, the backend down) would otherwise leave it there to be taken.
    */
   function forbidden(delivery: LocalDelivery): string | null {
-    return store.entry(delivery.messageId)?.message.tabId === 'started' ? 'it was sent outside any tab' : null
+    // `started`: 0.3.75's log of starts; `relayed`: a v3 Buddy's words for its person's harness, retired with the Buddy.
+    const tab = store.entry(delivery.messageId)?.message.tabId
+    return tab === 'started' || tab === 'relayed' ? 'it was sent outside any tab' : null
   }
 
   /** When the tabs stopped carrying each local delivery (`messageId agentId`), while they do not. */
@@ -671,7 +673,6 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
     return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
   }
-
 
   /** When programs replied to harnesses here, for the rate limit: the same 30 in 10 minutes a `tell` has. */
   const repliedAt: number[] = []

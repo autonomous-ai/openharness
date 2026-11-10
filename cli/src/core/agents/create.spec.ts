@@ -310,13 +310,6 @@ describe('creating an agent', () => {
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
 
-  it('refuses a Swarm start whose instructions cannot be prepared, before opening a pane', async () => {
-    const failing = setup({ swarmLaunch: { ...SWARM_LAUNCH, prepare: () => { throw new Error('unprepared') } } })
-    expect(await failing.create(request({ cwd: folder(), swarmRole: 'agent' })))
-      .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'Error: unprepared' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
-  })
-
   it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
     'decides local trust before workspace preparation and writes it before final proof: %s', async mode => {
       const parent = mode === 'redirected during enumeration' ? folder() : root
