@@ -30,7 +30,8 @@ import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
-import 'package:harness/super_tabs/project_sidebar.dart' show SuperTabFoldRow;
+import 'package:harness/super_tabs/project_sidebar.dart'
+    show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
@@ -459,6 +460,15 @@ class _Gallery extends StatelessWidget {
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
+                        // A New agent going on after its form closed: first, greyed, until it runs; one that failed opens
+                        // its form again.
+                        const SwarmStartRow(name: 'Faye', project: false),
+                        SwarmStartRow(
+                          name: 'Ivy',
+                          project: false,
+                          failed: true,
+                          onOpen: () {},
+                        ),
                         for (final (name, lead, unread, selected, state) in [
                           ('River', true, false, false, null),
                           ('Quinn', false, false, true, 'on #12'),
@@ -509,6 +519,15 @@ class _Gallery extends StatelessWidget {
                         ),
                         // Past the first eight: the rest, a click away.
                         SuperTabFoldRow(hidden: 32, onTap: () {}),
+                        SuperTabQuietHeading(
+                          'Projects',
+                          collapsed: false,
+                          onTap: () {},
+                          onAdd: () {},
+                          addTooltip: 'New project',
+                        ),
+                        // A New project going on after its form closed, in place of its own row.
+                        const SwarmStartRow(name: 'docs-home', project: true),
                         // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
@@ -561,7 +580,9 @@ class _Gallery extends StatelessWidget {
                 ),
               ),
               // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
-              title('Pull requests: To read, To fix, Merging; a card opens its chat'),
+              title(
+                'Pull requests: To read, To fix, Merging; a card opens its chat',
+              ),
               SizedBox(
                 width: 760,
                 height: 250,

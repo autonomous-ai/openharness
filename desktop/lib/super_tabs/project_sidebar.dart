@@ -18,6 +18,7 @@ import 'quiet_rows.dart';
 import 'identity.dart';
 import 'leaderboard/shipping.dart';
 import 'section_heading.dart';
+import 'swarm_starts.dart';
 import 'swarm_switcher.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
@@ -135,19 +136,6 @@ class ProjectSidebar extends StatelessWidget {
   /// Under the chat box and under Manage beside it, so the two end on one line.
   static const double footGap = 16;
 
-  /// A project reads as a channel; a private one keeps its lock in this mark slot.
-  Widget _channelMark({required bool isPrivate}) => isPrivate
-      ? PrivateProjectLock(size: 14, color: grid.SidebarInk.inkMuted)
-      : Text(
-          '#',
-          textAlign: TextAlign.center,
-          style: SwarmType.sidebar(
-            compact: compact,
-            color: grid.SidebarInk.inkMuted,
-            medium: true,
-          ),
-        );
-
   /// A project row's name opens the project's chat; only the chevron at its
   /// right end shows or hides its conversations (Dee, 2026-10-28).
   Widget _row(SuperTabConversation group, _ProjectReading reading) {
@@ -214,7 +202,10 @@ class ProjectSidebar extends StatelessWidget {
                     SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                     SizedBox(
                       width: _iconColumn,
-                      child: _channelMark(isPrivate: project.isPrivate),
+                      child: _channelMark(
+                        isPrivate: project.isPrivate,
+                        compact: compact,
+                      ),
                     ),
                     Expanded(
                       child: Semantics(
@@ -326,6 +317,10 @@ class ProjectSidebar extends StatelessWidget {
     required Widget? switcher,
   }) {
     final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
+    final projectStarts = [
+      for (final start in _starts)
+        if (start.project) start,
+    ];
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -339,11 +334,13 @@ class ProjectSidebar extends StatelessWidget {
         addTooltip: 'New project',
         addKey: const ValueKey('project-sidebar-projects-add'),
       ),
-      if (controller.projectsGroupOpen)
-        if (snapshot != null && projects.isEmpty)
+      if (controller.projectsGroupOpen) ...[
+        for (final start in projectStarts) _startRow(start),
+        if (snapshot != null && projects.isEmpty && projectStarts.isEmpty)
           _noProjects()
         else
           for (final (_, channel) in _channels(snapshot, reading)) channel,
+      ],
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._yourMachines(),
       ..._humans(snapshot),
@@ -468,7 +465,12 @@ class ProjectSidebar extends StatelessWidget {
         attachTooltip: 'Attach agent',
         attachKey: const ValueKey('project-sidebar-agents-attach'),
       ),
-      if (controller.agentsGroupOpen) ..._teamRows(snapshot, reading),
+      if (controller.agentsGroupOpen) ...[
+        for (final start in _starts)
+          if (!start.project && !_listedAgent(snapshot, start))
+            _startRow(start),
+        ..._teamRows(snapshot, reading),
+      ],
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
@@ -610,6 +612,32 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
+  /// This Swarm's New Project and New Agent going on without their forms (swarm_starts.dart).
+  List<SwarmStart> get _starts =>
+      app?.swarmStarts.of(controller.tabId) ?? const [];
+
+  /// Whether [start]'s agent is in the Swarm now: its own row stands, so the start's goes.
+  bool _listedAgent(SuperTabSnapshot snapshot, SwarmStart start) {
+    final harness = start.form.createdAgentId;
+    return harness != null &&
+        snapshot.agents.any(
+          (agent) =>
+              agent.machineId == start.form.machineId &&
+              agent.harnessId == harness,
+        );
+  }
+
+  /// A start's row, whose failure opens its form again as its section's + does.
+  Widget _startRow(SwarmStart start) => SwarmStartRow(
+    key: ValueKey('super-start-${start.id}'),
+    name: start.name,
+    project: start.project,
+    isPrivate: start.isPrivate,
+    failed: start.failed,
+    compact: compact,
+    onOpen: start.project ? onNewProject : onNewAgent,
+  );
+
   /// Open Projects over a Swarm with none, in the names' column.
   Widget _noProjects() => Padding(
     key: const ValueKey('super-projects-empty'),
@@ -666,12 +694,15 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading,
   ) {
     final hidden = superTabHiddenProjects(controller, app: app);
+    final starting = {for (final start in _starts) ?start.projectId};
     return [
       for (final project in ([
         ...?snapshot?.listedProjects,
       ]..sort(_compareProjects)))
         if (reading.of(project) case final read
-            when read.lead != null && !_paneless(project, read.lead!, hidden))
+            when read.lead != null &&
+                !_paneless(project, read.lead!, hidden) &&
+                !starting.contains(project.id))
           read,
     ];
   }
@@ -680,7 +711,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?leaderboard, ?agentStates]) {
+    child: switch ([?leaderboard, ?agentStates, ?app?.swarmStarts]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -909,6 +940,56 @@ Set<String> superTabHiddenProjects(
 
 /// Under Your Team's first rows (`teamShown`): "N more", which opens every row, and once they are open "Show fewer", which
 /// folds them again. Bold while a row it folds has something new.
+/// A project reads as a channel; a private one keeps its lock in this mark slot.
+Widget _channelMark({required bool isPrivate, required bool compact}) =>
+    isPrivate
+    ? PrivateProjectLock(size: 14, color: grid.SidebarInk.inkMuted)
+    : Text(
+        '#',
+        textAlign: TextAlign.center,
+        style: SwarmType.sidebar(
+          compact: compact,
+          color: grid.SidebarInk.inkMuted,
+          medium: true,
+        ),
+      );
+
+/// A New project or New agent going on after its form closed ([SwarmStart]; anh Dee, 2026-11-10: "show the agent/project
+/// on the left sidebar. grey out or something with loading status. when it's done i can go in and use it"): first in its
+/// section, a project's mark or a grey face, its name and one word, `starting`, which opens nothing yet, or `failed` in
+/// red, whose click ([onOpen]) opens its form again with why.
+class SwarmStartRow extends StatelessWidget {
+  const SwarmStartRow({
+    super.key,
+    required this.name,
+    required this.project,
+    this.isPrivate = false,
+    this.failed = false,
+    this.compact = false,
+    this.onOpen,
+  });
+  final String name;
+  final bool project, isPrivate, failed, compact;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) => SuperTabQuietRow(
+    leading: project
+        ? _channelMark(isPrivate: isPrivate, compact: compact)
+        : SuperTabAvatar(
+            identity: 'start:$name',
+            name: name,
+            size: SuperTabQuietRow.faceSize,
+            face: true,
+            offline: true,
+          ),
+    name: name,
+    detail: failed ? 'failed' : 'starting',
+    failed: failed,
+    onTap: failed ? onOpen : null,
+  );
+}
+
 class SuperTabFoldRow extends StatelessWidget {
   const SuperTabFoldRow({
     super.key = const ValueKey('super-team-more'),

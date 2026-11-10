@@ -177,10 +177,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     });
   }
 
-  /// How often a request the machine holds is asked after ([_followHeld]).
-  @visibleForTesting
-  static Duration heldFollowInterval = const Duration(seconds: 3);
-
   Timer? _heldFollow;
 
   /// A request the machine holds or is starting completes by itself (an agent
@@ -196,7 +192,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return;
     }
     if (_heldFollow != null) return;
-    _heldFollow = Timer(heldFollowInterval, () async {
+    _heldFollow = Timer(NewHarnessController.heldFollowInterval, () async {
       _heldFollow = null;
       if (!mounted) return;
       final outcome = await box.followHeld();
