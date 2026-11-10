@@ -294,8 +294,8 @@ describe('while a Swarm is deleted', () => {
     const w = world(), tab = (await w.store.create(owner, randomUUID(), 'Racing', 'public')).id
     const invitation = await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' } })
     await w.store.execute(member, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    // The member's new task read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
-    // in no project channel, agentsOnly.test.ts.)
+    // The member's new project read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
+    // in no project channel, agentsOnly.test.ts, and no command opens a task in v4.)
     const groups = await db.swarmGroup.count({ where: { tabId: tab } })
     let deleted = false
     const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
@@ -304,7 +304,7 @@ describe('while a Swarm is deleted', () => {
       await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Racing' } })
     }), () => w.clock.now)
     expect(await refusal(() => racing.execute(member, tab, { operationId: randomUUID(),
-      command: { type: 'conversation.create', title: 'After the delete', brief: '', checks: [] } }))).toEqual(MISSING)
+      command: { type: 'project.create', name: 'After the delete', visibility: 'public', brief: '' } }))).toEqual(MISSING)
     expect(deleted).toBe(true)
     expect(await db.swarmGroup.count({ where: { tabId: tab } })).toBe(groups)
   })

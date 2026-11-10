@@ -72,7 +72,7 @@ import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
-import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
+import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect, type TerminalKind } from './terminal.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
 import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
@@ -1854,7 +1854,7 @@ export class SuperTabStore {
           const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
           if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
           // A sender who has since lost write access, or is no longer an agent of the agent's project, gets nothing.
-          mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
+          mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId), row.kind as TerminalKind)
           // How long until a request still waiting turns late by itself.
           const lateIn = row.status === 'pending' ? row.createdAt.getTime() + TERMINAL_PICKUP_MS - now
             : row.status === 'claimed' ? row.claimedAt!.getTime() + TERMINAL_ANSWER_MS - now : 0
@@ -1916,7 +1916,7 @@ export class SuperTabStore {
   }
 
   private async terminalRefusal(tx: Transaction, state: SuperTabState | null,
-    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string }): Promise<string | null> {
+    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string; kind: string }): Promise<string | null> {
     const target = state?.agents.find(a => a.id === row.agentId && a.machineId === row.machineId && a.machineOwnerId === row.machineOwnerId)
     if (!state || !target) return 'The agent is no longer in the Swarm.'
     if (target.harnessId !== row.harnessId) return 'The agent’s terminal changed since the request. Read it again.'
@@ -1926,7 +1926,7 @@ export class SuperTabStore {
     try {
       agent(state, target.id)
       await this.agentGrant(tx, state, target)
-      mayDrive(state, requester, target, await this.confidential(tx, target.id))
+      mayDrive(state, requester, target, await this.confidential(tx, target.id), row.kind as TerminalKind)
     } catch (error) {
       if (error instanceof SuperTabError) return 'This request is no longer allowed.'
       throw error

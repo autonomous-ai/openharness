@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'

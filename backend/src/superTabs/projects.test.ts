@@ -345,7 +345,7 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     for (const reader of [owner, peer, host]) expect(canWatchAgent(f.state, reader, target())).toBe(true)
     // Confidential in another Swarm too: that Swarm's chats are not this one's members' to read.
     expect(canWatchAgent(f.state, peer, target(), true)).toBe(false)
-    const refusal = (actor: Actor) => { try { mayDrive(f.state, actor, target()); return null } catch (error) { if (error instanceof SuperTabError) return error.code; throw error } }
+    const refusal = (actor: Actor) => { try { mayDrive(f.state, actor, target(), false, 'input'); return null } catch (error) { if (error instanceof SuperTabError) return error.code; throw error } }
     expect(refusal(owner)).toBe('TERMINAL_PRIVATE')
     expect(refusal(peer)).toBe('TERMINAL_PRIVATE')
     expect(refusal(host)).toBeNull()

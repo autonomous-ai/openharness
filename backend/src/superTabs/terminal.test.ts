@@ -60,7 +60,7 @@ describe('reading and typing in an agent terminal', () => {
     expect(() => mayDrive(s.state, as(second), target(s.worker), false, 'screen')).not.toThrow()
     expect(s.run({ type: 'agent.screen', agentId: s.worker }, as(second)).terminal).toMatchObject({ requesterKey: `agent:${second}` })
     expect(() => s.run({ type: 'agent.input', agentId: s.worker, keys: ['Enter'] }, as(second))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    expect(() => mayDrive(s.state, as(second), target(outside))).toThrow()
+    expect(() => mayDrive(s.state, as(second), target(outside), false, 'screen')).toThrow()
     expect(() => s.run({ type: 'agent.screen', agentId: outside }, as(second))).toThrow()
     expect(() => mayDrive(s.state, as(second), target(s.lead), false, 'screen')).toThrow(expect.objectContaining({ code: 'TERMINAL_PRIVATE' }))
   })

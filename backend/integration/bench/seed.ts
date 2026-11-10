@@ -68,12 +68,13 @@ async function seedMembers(s: Setup): Promise<string> {
     name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true })).agentId)
 }
 
-/** Every group, a project's chat with its brief (Swarm v4 opens no task through a command); returns their ids in plan order. */
+/** Every group with a brief and two checks, stored as Swarms before v4 stored a task (no command opens one in v4); returns their
+ *  ids in plan order. */
 async function seedGroups(s: Setup, rng: Random): Promise<string[]> {
   const groups: string[] = []
   for (let g = 0; g < s.config.groups; g++) {
-    groups.push(String((await s.run(s.owner, { type: 'project.create', name: `Bench group ${g}`, visibility: 'public',
-      brief: words(rng, s.config.text.briefChars) })).conversationId))
+    groups.push(await s.driver.storeTask(s.tabId, s.owner, { title: `Bench group ${g}`, brief: words(rng, s.config.text.briefChars),
+      checks: [0, 1].map(() => ({ description: words(rng, 120), independent: false })) }))
   }
   return groups
 }

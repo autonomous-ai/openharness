@@ -39,6 +39,9 @@ async function swarm() {
   const tab = (await store.create(owner, randomUUID(), 'Reads', 'public')).id
   const execute = (command: Command | StoredCreate, asAgentId?: string) => command.type === 'conversation.create'
     ? storeCreate(db, tab, command, owner, asAgentId) : store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
+  // The task first, stored as Swarms before v4 stored one, while the Swarm is small: storing rewrites every part in one transaction.
+  const group = String((await execute({ type: 'conversation.create', title: 'Seed', checks: [],
+    task: { goal: 'Seed.', changes: 'The change.', constraints: 'None.', owns: ['backend/a.ts'] } })).result.conversationId)
   // One person adds at most 20 machines: the rest are copies of the first, as their own rows.
   for (let i = 0; i < OWN_MACHINES; i++) {
     await execute({ type: 'machine.contribute', machineId: `mac-${i}`, name: `Mac ${i}`, cwd: '/repo', engines: ['codex'], maxAgents: 8 })
@@ -56,9 +59,6 @@ async function swarm() {
     agents.push(String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: `mac-${i % OWN_MACHINES}`, harnessId: randomUUID(), name: `Agent ${i}`,
       configuration: config, lead: false })).result.agentId))
   }
-  const task = async (title: string) => String((await execute({ type: 'conversation.create', title, checks: [],
-    task: { goal: `${title}.`, changes: 'The change.', constraints: 'None.', owns: ['backend/a.ts'] } })).result.conversationId)
-  const group = await task('Seed')
   // The rest copied from it, as their own rows: a third of them dormant, as on prod.
   const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
   const { id: _id, ...shape } = part
@@ -135,8 +135,8 @@ describe('a slow command names its phases', () => {
     // Each read of the clock moves it on by `step`: a command that reads it a few times takes seconds, with no wait in the test.
     const store = new SuperTabStore(db, () => (now += step), null)
     const tab = (await store.create(owner, randomUUID(), 'Phases', 'public')).id
-    const create = (text: string) => store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text,
-      replyTo: null, recipientIds: [] } })
+    // A person's write that may come again and again: only agents post in a project's channel (agentsOnly.test.ts).
+    const create = (name: string) => store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'project.create', name, visibility: 'public', brief: '' } })
     const warn = vi.spyOn(logger, 'warn')
     try {
       await create('Fast words')
@@ -146,7 +146,7 @@ describe('a slow command names its phases', () => {
       const lines = warn.mock.calls.filter(call => call[0] === 'Swarm command slow')
       expect(lines).toHaveLength(1)
       const fields = lines[0]![1] as { totalMs: number; phases: Record<string, number> }
-      expect(fields).toMatchObject({ tabId: tab, type: 'message.send', byAgent: false })
+      expect(fields).toMatchObject({ tabId: tab, type: 'project.create', byAgent: false })
       expect(fields.totalMs).toBeGreaterThanOrEqual(1_000)
       expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['attempts', 'pool', 'body',
         'commit', 'stamps', 'afterCommit', 'other']))

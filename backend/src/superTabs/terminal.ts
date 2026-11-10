@@ -33,7 +33,7 @@ export interface TerminalRequest { id: string; agentId: string; harnessId: strin
 /** Any agent of the agent's project (project instructions, phase 4), or a person with write access who can see the agent, reads
  *  or types in its terminal; a private one stays its own machine owner's. `elsewhere`: the agent's session is confidential in
  *  another Swarm (confidential.ts). */
-export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, kind: TerminalKind = 'input'): void {
+export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere: boolean, kind: TerminalKind): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
     // Members may watch a Lead, but only its machine's owner drives it, whether or not its session counts as private (Ken, 2026-10-28).
