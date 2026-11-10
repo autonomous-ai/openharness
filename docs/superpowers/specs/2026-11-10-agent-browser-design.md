@@ -927,7 +927,7 @@ else (a pane opening an address).
 
 - From the service: `agent_browser_enabled`; `agent_browser_setup_ok` and `_setup_failed`; `agent_browser_start_ok`
   and `_start_failed`; one `agent_browser_failed_<state>` per failed state; `agent_browser_limit_dropped`;
-  `agent_browser_challenge_seen`; `agent_browser_proxy_set`, `_proxy_removed`,
+  `agent_browser_proxy_set`, `_proxy_removed`,
   `_proxy_test_ok` and `_proxy_test_failed`.
 - From the core: `agent_browser_stream_opened`, and one `agent_browser_stream_closed_<reason>` per close reason.
 - From Desktop, through its existing usage reports: `agent_browser_opened`.

@@ -778,7 +778,6 @@ Added after the macOS spike. On the spike's Mac the only Podman machine was list
 - Create: `cli/assets/browser/human-input.mjs`, `cli/assets/browser/challenge.mjs`
 - Modify: `cli/assets/browser/browser-tools.mjs`, `cli/src/services/agentBrowser/assets.ts`, `cli/build-bundle.mjs`,
   `cli/build.mjs`
-- Modify: `cli/src/services/agentBrowser.ts` (count `agent_browser_challenge_seen` when the relay reports one)
 - Test: `cli/src/services/agentBrowser/humanInput.spec.ts`, `challenge.spec.ts`; new cases in `browserMcp.spec.ts`
   and `assets.spec.ts`
 
@@ -805,7 +804,6 @@ Added after the macOS spike. On the spike's Mac the only Podman machine was list
   - `the word captcha in page text is not a challenge`, `an invisible or zero-size frame is not a challenge`,
     `the badge of an invisible reCAPTCHA is not a challenge`.
   - `a detected challenge is added to the tool reply with the chat line`, and `a page with none adds nothing`.
-  - `a reply with a challenge counts agent_browser_challenge_seen once per page`.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/services/agentBrowser src/agentClient/browserMcp.spec.ts`.
   Expected: FAIL on the new cases.
 - [ ] **Step 3: Implement.** Port the timing model from the prior art, `gateway-source/src/browser/human-input.ts`
