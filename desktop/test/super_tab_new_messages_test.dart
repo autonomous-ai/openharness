@@ -203,6 +203,15 @@ void main() {
     expect(c.unread(c.selected!), isFalse);
   });
 
+  testWidgets('a conversation never read anywhere opens at its end, with no '
+      'line', (tester) async {
+    await show(tester, _server(40));
+    expect(find.byKey(_line), findsNothing);
+    expect(scroll(tester).extentAfter, lessThan(40));
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
+  });
+
   // Review of #2131, item 1: the first unread is older than the latest page.
   testWidgets('a first unread a few pages back is loaded, and the view opens '
       'at it', (tester) async {
@@ -457,6 +466,15 @@ void main() {
     expect(find.text('Update 41'), findsNothing);
     expect(find.byKey(_line), findsNothing);
     expect(server.readMarkPosts, isEmpty);
+  });
+
+  testWidgets('no line when everything is read', (tester) async {
+    final server = _server(10)..markReadElsewhere('lead', 10);
+    await show(tester, server);
+    expect(find.byKey(_line), findsNothing);
+    expect(find.byKey(_jump), findsNothing);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('the line stays where it was while new messages arrive', (

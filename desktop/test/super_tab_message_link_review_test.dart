@@ -90,6 +90,18 @@ void main() {
         ..append('See ${linkTo('message-1', conversation: 'offline')}');
     }
 
+    testWidgets('a refusal reads Message unavailable, not Loading', (
+      tester,
+    ) async {
+      final server = linking()..forbidMessageReads.add('offline');
+      await show(tester, server);
+      expect(inPreview('message-1', 'Message unavailable'), findsOneWidget);
+      expect(find.text('Loading message…'), findsNothing);
+      expect(find.textContaining('Offline note'), findsNothing);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
+    });
+
     testWidgets('a transient failure is read again and then shows', (
       tester,
     ) async {
@@ -170,6 +182,20 @@ void main() {
       expect(c.selectedId, 'lead');
       expect(note('Message unavailable'), findsOneWidget);
     });
+
+    testWidgets('previews as unavailable', (tester) async {
+      final (server, chat, message) = await hidden();
+      server.append('See ${linkTo(message, conversation: chat)}');
+      await show(
+        tester,
+        server,
+        controller: server.controller(account: 'peer'),
+      );
+      expect(inPreview(message, 'Message unavailable'), findsOneWidget);
+      expect(find.textContaining('Earlier answer'), findsNothing);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
+    });
   });
 
   group('a link into another Swarm', () {
@@ -202,6 +228,17 @@ void main() {
       return server;
     }
 
+    testWidgets('previews a message of a Swarm the account can read', (
+      tester,
+    ) async {
+      final server = await first(['See ${linkTo('message-1', tab: 'tab2')}']);
+      await show(tester, server, linkSwarms: swarms);
+      expect(inPreview('message-1', 'Second Swarm note'), findsOneWidget);
+      expect(inPreview('message-1', 'You'), findsOneWidget);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
+    });
+
     testWidgets('opens it in that Swarm, through the account’s Swarms', (
       tester,
     ) async {
@@ -215,6 +252,23 @@ void main() {
         messageId: 'message-1',
       ));
       expect(c.selectedId, 'lead');
+    });
+
+    testWidgets('a private chat there shows no title, author or text', (
+      tester,
+    ) async {
+      final server = await first([
+        'See ${linkTo('message-2', tab: 'tab2', conversation: 'secret')}',
+      ]);
+      await show(tester, server, linkSwarms: swarms);
+      expect(inPreview('message-2', 'Message unavailable'), findsOneWidget);
+      expect(find.textContaining('Hidden'), findsNothing);
+      expect(
+        find.descendant(of: preview('message-2'), matching: find.byType(Text)),
+        findsOneWidget,
+      );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a Swarm the account does not list reads nothing', (

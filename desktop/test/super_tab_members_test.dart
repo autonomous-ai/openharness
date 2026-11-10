@@ -8,12 +8,10 @@ import 'package:harness/super_tabs/roster.dart';
 import 'super_tab_roster_test.dart' show RosterFixture;
 import 'support/super_tab_fixture.dart';
 
-/// Quiet Swarm, screens 4 and 5 (Dee, 2026-11-02): the right column opens
-/// only from Members, its rows are one line each, and a click opens a card.
+/// Quiet Swarm, screens 4 and 5 (Dee, 2026-11-02): the Members list, drawn on its own: its rows are one line each,
+/// and a click opens a card. The view no longer opens it (Swarm v4); it goes with roster.dart in S5.
 void main() {
   final close = find.byKey(const ValueKey('super-members-close'));
-
-  group('the right column', () {});
 
   Map<String, dynamic> score(String id, int points, int rank) => {
     'personId': id,

@@ -337,6 +337,19 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets("the PM's name is inside its plan's row", (tester) async {
+      await show(tester);
+      Finder name(String id) => find.descendant(
+        of: find.byKey(ValueKey('super-message-$id')),
+        matching: find.text('River'),
+      );
+      expect(name('message-3'), findsOneWidget);
+      // The next plain message still joins the plan's header.
+      expect(name('message-4'), findsNothing);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
+    });
+
     for (final brightness in Brightness.values) {
       testWidgets('screenshot for review (${brightness.name})', (tester) async {
         final picture = GlobalKey();
@@ -614,6 +627,22 @@ void main() {
       await tester.pumpAndSettle();
       return server;
     }
+
+    // Swarm v4: the first has a thread, so it is a task and stands on its own; the next two share one header.
+
+    testWidgets('a grouped message reads its sender and time, as a header '
+        'does', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final server = await show(tester);
+      final at = DateTime.parse(server.messages[2]['createdAt'] as String)
+          .toLocal();
+      final time = TimeOfDay.fromDateTime(at)
+          .format(tester.element(find.text('Shall I merge it?')));
+      expect(find.bySemanticsLabel(RegExp('^River, $time')), findsOneWidget);
+      semantics.dispose();
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
+    });
 
     testWidgets('the thread view groups replies by the same rule', (
       tester,

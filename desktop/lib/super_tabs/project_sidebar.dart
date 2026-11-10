@@ -5,7 +5,6 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
-import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import 'attention.dart';
 import 'controller.dart';
@@ -149,19 +148,13 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A project row's name opens the project's chat; only the chevron at its
   /// right end shows or hides its conversations (Dee, 2026-10-28).
-  Widget _row(
-    SuperTabConversation group, {
-    _ProjectReading? reading,
-    String? key,
-  }) {
-    final project = reading?.project;
+  Widget _row(SuperTabConversation group, _ProjectReading reading) {
+    final project = reading.project;
     final selected = _chatLit(group);
     // A project's row is bold for its own chat (Huy, 11-04, task #2638): a
     // person's message or a tag of the reader there, never agents' progress
     // alone (#2427). A task's unread is on its card and in Activity.
-    final unread = reading == null
-        ? controller.unreadShown(group)
-        : reading.unread.contains(group.id);
+    final unread = reading.unread.contains(group.id);
     // Only the reader's tags in its chat, which opening it clears (Dee,
     // Slack's channel badge, task #2927). Tags in its tasks and threads,
     // decisions and tasks that need the reader are in Activity.
@@ -174,38 +167,30 @@ class ProjectSidebar extends StatelessWidget {
     return _drawRow(
       group,
       project: project,
-      key: key,
       selected: selected,
       unread: unread,
       badge: badge,
       badgeTooltip: badgeTooltip,
-      buddyChat: reading?.buddyChat,
-      selectedProjectId: reading?.sidebar.selectedProjectId,
+      buddyChat: reading.buddyChat,
+      selectedProjectId: reading.sidebar.selectedProjectId,
     );
   }
 
   Widget _drawRow(
     SuperTabConversation group, {
-    SuperTabProject? project,
-    // A chat that is no project: Buddy, the reader's one Buddy chat.
-    String? label,
-    String? key,
+    required SuperTabProject project,
     required bool selected,
     required bool unread,
     int badge = 0,
     String? badgeTooltip,
     SuperTabConversation? buddyChat,
     String? selectedProjectId,
-    Widget? trailing,
-    VoidCallback? onTap,
-    bool tappable = true,
   }) {
     // A project shows as selected while one of its tasks is open; the
     // reader's Buddy chat has a row of its own.
     final highlighted =
         selected ||
-        (project != null &&
-            !_paneCovered &&
+        (!_paneCovered &&
             selectedProjectId == project.id &&
             controller.selectedId != buddyChat?.id);
     // As Slack draws it (Dee, 10-31): a read row in the muted text colour, an
@@ -234,8 +219,8 @@ class ProjectSidebar extends StatelessWidget {
           children: [
             Expanded(
               child: InkWell(
-                key: ValueKey(key ?? 'super-group-${group.id}'),
-                onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
+                key: ValueKey('super-group-${group.id}'),
+                onTap: () => onSelect(group.id),
                 hoverColor: Colors.transparent,
                 focusColor: Colors.transparent,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -244,21 +229,11 @@ class ProjectSidebar extends StatelessWidget {
                     SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                     SizedBox(
                       width: _iconColumn,
-                      child: project != null
-                          ? _channelMark(isPrivate: project.isPrivate)
-                          : label != null
-                          ? Icon(
-                              AppIcons.bot,
-                              size: AppIcons.inlineSize,
-                              color: grid.SidebarInk.ink,
-                            )
-                          : null,
+                      child: _channelMark(isPrivate: project.isPrivate),
                     ),
                     Expanded(
                       child: Semantics(
-                        label: project?.isPrivate == true
-                            ? 'Private project'
-                            : null,
+                        label: project.isPrivate ? 'Private project' : null,
                         selected: highlighted,
                         child: Tooltip(
                           // Beside the row, level with it, never over
@@ -268,43 +243,30 @@ class ProjectSidebar extends StatelessWidget {
                           // needing more room than the window has right
                           // of the list.
                           constraints: const BoxConstraints(maxWidth: 260),
-                          message: label ?? project!.name,
+                          message: project.name,
                           child: ConstrainedBox(
                             // A project a little taller than other rows
                             // (Huy, 11-03, #2427).
                             constraints: BoxConstraints(
-                              minHeight: label == null
-                                  ? SwarmType.projectRowHeight(compact: compact)
-                                  : SwarmType.sidebarRowHeight(
-                                      compact: compact,
-                                    ),
+                              minHeight: SwarmType.projectRowHeight(
+                                compact: compact,
+                              ),
                             ),
                             child: Padding(
                               padding: EdgeInsets.symmetric(
-                                vertical: label == null
-                                    ? SwarmType.projectRowPadding(
-                                        compact: compact,
-                                      )
-                                    : SwarmType.sidebarRowPadding(
-                                        compact: compact,
-                                      ),
+                                vertical: SwarmType.projectRowPadding(
+                                  compact: compact,
+                                ),
                               ),
                               child: Row(
                                 children: [
                                   Expanded(
-                                    child: label != null
-                                        ? Text(
-                                            label,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: style,
-                                          )
-                                        : Text(
-                                            project!.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: style,
-                                          ),
+                                    child: Text(
+                                      project.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: style,
+                                    ),
                                   ),
                                   if (badge > 0) ...[
                                     const SizedBox(width: 8),
@@ -348,14 +310,11 @@ class ProjectSidebar extends StatelessWidget {
                     SizedBox(
                       // A project's row keeps no column for a mark it does
                       // not have: its red number ends where Activity's does.
-                      width: project != null && trailing == null
-                          ? _rowEnd
-                          : _iconColumn,
+                      width: _rowEnd,
                       // Unread is drawn as a bold name; a screen reader
                       // hears it said, as it heard the dot it replaces.
                       child: Semantics(
                         label: unread ? 'Unread messages' : null,
-                        child: Center(child: trailing),
                       ),
                     ),
                   ],
@@ -657,7 +616,7 @@ class ProjectSidebar extends StatelessWidget {
         Column(
           key: ValueKey('super-project-${read.project.id}'),
           mainAxisSize: MainAxisSize.min,
-          children: [_row(read.lead!, reading: read)],
+          children: [_row(read.lead!, read)],
         ),
       ),
   ];
@@ -671,8 +630,7 @@ class ProjectSidebar extends StatelessWidget {
     return [
       for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
         if (reading.of(project) case final read
-            when read.lead != null &&
-                !_paneless(project, read.lead!, hidden))
+            when read.lead != null && !_paneless(project, read.lead!, hidden))
           read,
     ];
   }
@@ -870,22 +828,6 @@ class _ProjectReading {
               (sidebar.attention?.chatTagsIn(g.id) ?? 0) > 0))
         g.id,
   };
-
-  /// Tags of the reader in the project's chat and its open workgroups: why the
-  /// unread filter keeps a collapsed project. Never its number ([_row]).
-  late final int mentions = switch (sidebar.attention) {
-    null => 0,
-    final attention =>
-      attention.mentionsIn(project.leadConversationId) +
-          [
-            for (final g in conversations)
-              if (!g.closed &&
-                  !g.isBuddyChat &&
-                  g.audience == null &&
-                  g.id != project.leadConversationId)
-                attention.mentionsIn(g.id),
-          ].fold(0, (a, b) => a + b),
-  };
 }
 
 String _projectSortName(String name) =>
@@ -933,7 +875,3 @@ Set<String> superTabHiddenProjects(
   SuperTabController controller, {
   AppNotifier? app,
 }) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);
-
-/// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
-String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>
-    activity == HarnessActivity.offline ? 'offline' : leads;

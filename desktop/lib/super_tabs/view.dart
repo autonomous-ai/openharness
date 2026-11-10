@@ -4065,7 +4065,6 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsis,
-        // On the Board the Buddy card holds the Buddy's own options, so this one is the chat's (audit finding 15).
         tooltip: _isBuddyChat(group)
             ? 'Chat options'
             : _ownAgent(group) != null
@@ -5868,8 +5867,6 @@ class _SuperTabViewState extends State<SuperTabView>
         _readVisibleTailAfterFrame();
       }
       _chatCovered = chatCovered;
-      // Swarm v4: an agent's terminal opens right of its chat, as its instructions do.
-      final terminalRight = chatBeside;
       final instructionsAgent = _instructionsOpen
           ? _chatAgent(c.selected)
           : null;
@@ -5881,7 +5878,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ? 3
           : c.snapshot?.projects.isEmpty == true
           ? 0
-          : _terminalsVisible && !terminalRight
+          : _terminalsVisible && !chatBeside
           ? 1
           : _showPullRequests
           ? 2
@@ -5903,7 +5900,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 storage: widget.paneStore ?? widget.app?.localStore,
                 onLeave: _leaveResize,
                 left: narrow ? null : _sidebar(),
-                // An open thread takes the roster's side, as in Slack.
+                // An open thread takes the right side, as in Slack.
                 right: !wide
                     ? null
                     : issue ??
@@ -5937,10 +5934,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                   onClose: () =>
                                       setState(() => _instructionsOpen = false),
                                 )
-                              : terminalRight
-                              ? terminal
+                              // Swarm v4: an agent's terminal opens right of its chat, as its instructions do.
                               : chatBeside
-                              ? chat
+                              ? terminal
                               : null),
                 rightDefault: thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
@@ -5978,11 +5974,9 @@ class _SuperTabViewState extends State<SuperTabView>
                       child: SuperTabPages(
                         index: pagesIndex,
                         children: [
-                          chatBeside && !terminalRight
-                              ? const SizedBox.shrink()
-                              : chat,
+                          chat,
                           // Beside an agent's chat the terminal is in the right pane, and one widget is in one place.
-                          terminalRight
+                          chatBeside
                               ? const SizedBox.shrink()
                               : terminal ?? const SizedBox.shrink(),
                           _showPullRequests

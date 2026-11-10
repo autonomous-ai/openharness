@@ -87,7 +87,35 @@ void main() {
 
   group('the header', () {});
 
-  group('the chat', () {});
+  group('the chat', () {
+    testWidgets("a proposal sent in your name is your own bubble, on the "
+        "right with your message; an agent's task line is on the left "
+        '(#4529)', (tester) async {
+      final server = swarm();
+      server.messages
+        ..add(_said(1, 'A plain message.'))
+        ..add(_taskLine(2, 'working', 'Windows credential fix'))
+        ..add({
+          ..._said(3, 'Goal: Activity read fix'),
+          'thread': 'said-3',
+          'source': {'kind': 'buddy-proposal', 'personId': 'owner'},
+        });
+      await showView(tester, server);
+      Rect bubble(String text) => tester.getRect(
+        find
+            .ancestor(
+              of: find.textContaining(text),
+              matching: find.byKey(const ValueKey('swarm-bubble')),
+            )
+            .first,
+      );
+      final mine = bubble('A plain message.');
+      expect(bubble('Goal: Activity read fix').right, mine.right);
+      expect(bubble('Windows credential fix').left, lessThan(mine.left));
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
+    });
+  });
 
   group("a task message's thread pane", () {
     Future<void> open(WidgetTester tester) async {

@@ -143,74 +143,75 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('an agent waiting on its person is answered in its own chat: '
-      'neither the project channel nor the task chat takes the person\'s words', (
-    tester,
-  ) async {
-    final (server, c, _) = await open(tester);
-    // A task chat from before v4: its agent asked its person a question, which is the only thing waiting.
-    (server.state['conversations'] as List).add({
-      ...conversationFixture('task-chat', 'Which build?'),
-      'projectId': 'lead',
-      'number': 7,
-      'task': {
-        'goal': 'Which build?',
-        'changes': '',
-        'constraints': '',
-        'owns': <String>[],
-      },
-      'agentIds': ['second'],
-      'assignment': {
-        'id': 'work-7',
-        'agentId': 'second',
-        'status': 'needs_human',
-        'askedOf': 'owner',
-        'result': 'Which build do you want?',
-      },
-    });
-    server.append('Which build do you want?', conversationId: 'task-chat');
-    server.messages.last['author'] = {
-      'kind': 'agent',
-      'id': 'second',
-      'name': 'second',
-    };
-    await tester.runAsync(c.refresh);
-    await c.select('task-chat');
-    await tester.pumpAndSettle();
-    // The task chat is read here, with a way to the question and none to answer in it.
-    expect(key('super-agents-only'), findsOneWidget);
-    expect(find.byType(EditableText), findsNothing);
-    expect(key('super-needs-human-second'), findsOneWidget);
-    // The channel is the same.
-    await c.select('lead');
-    await tester.pumpAndSettle();
-    expect(key('super-agents-only'), findsOneWidget);
-    expect(find.byType(EditableText), findsNothing);
-    // The answer goes to the agent's own chat, from the left pane.
-    await tester.tap(key('super-agent-second'));
-    await tester.pumpAndSettle();
-    final box = find.byType(EditableText);
-    expect(box, findsOneWidget);
-    await tester.tap(box);
-    await tester.enterText(box, 'The arm64 one');
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    final sent = [
-      for (final post in server.posts)
-        if ((post['command'] as Map?)?['type'] == 'message.send')
-          post['command'] as Map,
-    ];
-    expect(sent, isNotEmpty);
-    expect(
-      sent.map((m) => m['conversationId']),
-      everyElement('agent-chat-second'),
-      reason: 'no message of a person reaches the channel or a task chat',
-    );
-    expect(sent.single['text'], 'The arm64 one');
-    // The read marks' save is on its way: let it land.
-    await tester.pump(const Duration(seconds: 1));
-  });
+  testWidgets(
+    'an agent waiting on its person is answered in its own chat: '
+    'neither the project channel nor the task chat takes the person\'s words',
+    (tester) async {
+      final (server, c, _) = await open(tester);
+      // A task chat from before v4: its agent asked its person a question, which is the only thing waiting.
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('task-chat', 'Which build?'),
+        'projectId': 'lead',
+        'number': 7,
+        'task': {
+          'goal': 'Which build?',
+          'changes': '',
+          'constraints': '',
+          'owns': <String>[],
+        },
+        'agentIds': ['second'],
+        'assignment': {
+          'id': 'work-7',
+          'agentId': 'second',
+          'status': 'needs_human',
+          'askedOf': 'owner',
+          'result': 'Which build do you want?',
+        },
+      });
+      server.append('Which build do you want?', conversationId: 'task-chat');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'second',
+        'name': 'second',
+      };
+      await tester.runAsync(c.refresh);
+      await c.select('task-chat');
+      await tester.pumpAndSettle();
+      // The task chat is read here, with a way to the question and none to answer in it.
+      expect(key('super-agents-only'), findsOneWidget);
+      expect(find.byType(EditableText), findsNothing);
+      expect(key('super-needs-human-second'), findsOneWidget);
+      // The channel is the same.
+      await c.select('lead');
+      await tester.pumpAndSettle();
+      expect(key('super-agents-only'), findsOneWidget);
+      expect(find.byType(EditableText), findsNothing);
+      // The answer goes to the agent's own chat, from the left pane.
+      await tester.tap(key('super-agent-second'));
+      await tester.pumpAndSettle();
+      final box = find.byType(EditableText);
+      expect(box, findsOneWidget);
+      await tester.tap(box);
+      await tester.enterText(box, 'The arm64 one');
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      final sent = [
+        for (final post in server.posts)
+          if ((post['command'] as Map?)?['type'] == 'message.send')
+            post['command'] as Map,
+      ];
+      expect(sent, isNotEmpty);
+      expect(
+        sent.map((m) => m['conversationId']),
+        everyElement('agent-chat-second'),
+        reason: 'no message of a person reaches the channel or a task chat',
+      );
+      expect(sent.single['text'], 'The arm64 one');
+      // The read marks' save is on its way: let it land.
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
 
   testWidgets('an empty Swarm says how to start, and one that cannot be read '
       'says so, neither with an error', (tester) async {

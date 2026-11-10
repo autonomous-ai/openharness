@@ -174,4 +174,19 @@ void main() {
       });
     }
   });
+
+  // anh Dee (11-07 16:23), rule 7: empty means empty. An empty chat shows no
+  // line; the composer under it is what fills it.
+  testWidgets('an empty chat shows no line', (tester) async {
+    final c = await showView(tester, ConversationServer.chat());
+    for (final chat in ['lead', 'offline']) {
+      await c.select(chat);
+      await tester.pumpAndSettle();
+      expect(find.text('Start the conversation.'), findsNothing);
+      expect(find.textContaining('Discuss the plan'), findsNothing);
+      expect(find.textContaining('Say what you want to build'), findsNothing);
+    }
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
+  });
 }
