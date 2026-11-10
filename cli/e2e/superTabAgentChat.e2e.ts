@@ -87,6 +87,8 @@ async function begin(engine: 'claude' | 'codex', attached = false) {
       if (!value) throw new Error('Unknown delivery')
       if (value.claimId && value.claimId !== body.claimId) throw new Error('Claim changed')
       if (body.type === 'claim') { value.claimId = body.claimId; return { data: { message: value.message } } }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value.status = body.uncertain ? 'uncertain' : 'delivered'
       value.receipt = body.receipt
       return { data: {} }
@@ -114,11 +116,11 @@ async function begin(engine: 'claude' | 'codex', attached = false) {
   }
   /** The turns of the agent that have ended, live. */
   const ended = () => client.frames.filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.agent.id && !frame.replay).length
-  return { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask, ended }
+  return { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask, ended, person, deliveries }
 }
 
 it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types %s what its person typed, and posts its answer into their chat once its turn ends (attached: %s)', async (engine, attached) => {
-  const { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask } = await begin(engine, attached)
+  const { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask, person, deliveries } = await begin(engine, attached)
   const typed = 'Please say hello to the team, then wait.'
   const first = ask('one', typed)
   await until('the native input acknowledgement', () => first.status === 'delivered' || null, 60_000, 250)

@@ -184,10 +184,13 @@ function paneHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission'>, sessio
 }
 
 /** The pane as a typed delivery's write first reads it (`beforeTeamWrite`), and what holds it there. Before the pane is read, an
- *  agent the short-turn guard holds: its Swarm deliveries are asked again every second. */
-async function readTeamHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission' | 'readScreen' | 'shortTurns' | 'terminal'>,
+ *  agent the short-turn guard holds: its Swarm deliveries are asked again every second, but for its person's own message, which is
+ *  their input and never held. */
+async function readTeamHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission' | 'readScreen' | 'shortTurns' | 'terminal' | 'answersQuestion'>,
   session: RegisteredSession, deliveryId?: string): Promise<{ capture: string | null; screen: ScreenReading | null; hold: string | null }> {
-  if (deps.shortTurns?.holding(session.sessionId)) return { capture: null, screen: null, hold: 'team_waiting_control' }
+  if (deps.shortTurns?.holding(session.sessionId) && !(deliveryId && deps.answersQuestion?.(deliveryId))) {
+    return { capture: null, screen: null, hold: 'team_waiting_control' }
+  }
   const capture = await deps.terminal.captureTerminal(session.agentId)
   const screen = await deps.readScreen(session, capture)
   return { capture, screen, hold: paneHold(deps, session, screen, capture, deliveryId) }
@@ -372,9 +375,10 @@ export function createInput(deps: InputDeps) {
   const holdOf = async (id: string, deliveryId: string): Promise<string | null> => {
     const session = resolve(id)
     if (!session) return 'team_waiting_unavailable'
-    // As the write reads it: its first check, then its lease, then what the pane shows a message (messageWriter).
+    // As the write reads it: its first check, then what the pane shows a message (messageWriter). Not its lease: its maker asks
+    // before it takes one, and the write checks it.
     const { screen, hold } = await readTeamHold(deps, session, deliveryId)
-    return hold ?? (deps.deliveries.canWrite(deliveryId) ? null : 'team_waiting_control') ?? screen?.messageHold ?? null
+    return hold ?? screen?.messageHold ?? null
   }
   return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest, holdOf }
 }

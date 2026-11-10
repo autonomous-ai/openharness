@@ -1481,12 +1481,16 @@ export class SuperTabHost {
     // Its pane held it before: the core is asked what holds it now, before anything is read, granted, leased or written, and it
     // waits while something does. Tried every second, each try wrote and fsynced the journal twice, its intent and then
     // 'prepared' again (Q3, 2026-11-10). A dialog or a question may be one a person's message answers: only the write may close
-    // it (it presses Escape), so a person's message goes on to the write there.
+    // it (it presses Escape), so a person's message goes on to the write there. The short-turn guard holds an agent's input,
+    // never its person's own message (core/input.ts readTeamHold), which goes on to the write as well.
     if (claim.refused) {
       const hold = await this.core.turns.holdOf(entry.harnessId, id)
       if (this.stopped || this.journal.entries[deliveryId] !== entry || this.active.has(id)) return false
       const person = object(message.author).kind === 'person'
-      if (hold && !(hold === 'team_waiting_user' && person)) { this.reportWithheld(entry, hold); return false }
+      if (hold && !(hold === 'team_waiting_user' && person) && !(hold === 'team_waiting_control' && await this.ownPersons(message))) {
+        this.reportWithheld(entry, hold)
+        return false
+      }
     }
     // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
     let files = this.files.get(deliveryId)
@@ -1495,7 +1499,6 @@ export class SuperTabHost {
       files = { text: downloaded.text, paths: downloaded.paths }
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
-    const fromPerson = object(message.author).kind === 'person'
     this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
     // Which of the messages the delivery quotes an agent of another account wrote, as the server says (audit M3).
@@ -1533,11 +1536,17 @@ export class SuperTabHost {
     this.active.add(id)
     // A person's message closes the question it answers, only the one of this machine's own signed-in account, and only a
     // question opened after it was written (core/input.ts `beforeTeamWrite`).
-    const answers = fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind))
-      && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
+    const answers = await this.ownPersons(message)
     const writtenAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
     this.core.turns.deliver(entry.harnessId, text, id, ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}) }] : []))
     return false
+  }
+
+  /** Whether [message] is the words of this machine's own signed-in person, typed by them: not an agent's, another account's, an
+   *  agent-only notice or a native turn already typed in the terminal. */
+  private async ownPersons(message: Json): Promise<boolean> {
+    return object(message.author).kind === 'person' && !['agent-only', 'native'].includes(String(object(message.source).kind))
+      && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
   }
 
   /** Whether [message] is its person's own words in [target]'s own 1:1 chat (backend agentChats.ts: kind `agent-chat`), which

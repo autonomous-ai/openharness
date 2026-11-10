@@ -829,6 +829,21 @@ describe('Super Tab native delivery handoff', () => {
     expect(await line({ author: person, text: 'How is it going?', thread: 'message' })).toMatch(/ --answers 'message'$/)
     expect(await line({ author: person, text: 'And the tests?', thread: 'root', replyTo: 'root' })).toMatch(/ --reply-to 'message'$/)
   })
+  // The short-turn guard holds an agent's automatic input, never its person's (core/input.ts readTeamHold): asked what holds a
+  // delivery its pane held once, the core says the guard, and the host goes on to the write for its person's own message alone.
+  it('goes on to the write of its person\'s own message under a short-turn hold, and keeps an agent\'s waiting', async () => {
+    const twice = async (author: Record<string, unknown>) => {
+      const t = setup({ author, text: 'Next one, please.' })
+      vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'p1', email: 'p1@example.com' })
+      vi.mocked(t.core.turns.holdOf).mockResolvedValue('team_waiting_control')
+      const host = t.open()
+      await host.tick(); t.event('rejected', 'team_waiting_control')
+      await host.tick()
+      return vi.mocked(t.core.turns.deliver).mock.calls.length
+    }
+    expect(await twice({ kind: 'person', id: 'p1', name: 'sam@example.com' })).toBe(2)
+    expect(await twice({ kind: 'agent', id: 'agent-2', name: 'Kai' })).toBe(1)
+  })
   it('only the machine\'s own person\'s message may close its question', async () => {
     const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
       vi.mocked(t.core.account.identity).mockResolvedValue(accountId ? { accountId, email: `${accountId}@example.com` } : null)
