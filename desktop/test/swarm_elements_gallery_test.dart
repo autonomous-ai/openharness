@@ -11,7 +11,6 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
-import 'package:harness/super_tabs/chat/fold.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -20,8 +19,10 @@ import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_board.dart';
+import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
@@ -136,12 +137,32 @@ Future<List<SuperTabController>> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
+  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, as her computer sends them.
+  final computer =
+      SwarmV4Computer(
+          files: {'h/Faye': 'Answer in Vietnamese.\nNever push to main.'},
+        )
+        ..shared = [
+          {
+            'name': 'AGENTS.md',
+            'text': '# lampOS\n\nShip small.\nKeep the answer short, and say\nwhat you checked.',
+            'truncated': true,
+          },
+          {
+            'name': 'CLAUDE.md',
+            'text': 'Read AGENTS.md first.',
+            'truncated': false,
+          },
+        ]
+        ..skipped = [
+          {'name': 'CLAUDE.local.md', 'why': 'link'},
+        ];
   // The task cards read the lampOS review Swarm's channel.
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1950);
+  tester.view.physicalSize = const Size(760, 2030);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -155,12 +176,13 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           // The decision cards read their answers' state from a reader's Decisions.
           swarm: c,
+          instructions: computer.link,
         ),
       ),
     ),
   );
+  // The pane's read answers after the first frame, and shows on the next.
   await tester.pump();
-  // A fold says More a frame after it measures what it holds.
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
@@ -199,8 +221,12 @@ const _rest = .0001;
     (
       regions: _regions(tester),
       // A glyph's smoothed edge reaches a little past its box.
+      // Selectable text (the Instructions pane's files) draws its words through an editable, not a RichText.
       words: [
-        for (final text in find.byType(RichText).evaluate())
+        for (final text in [
+          ...find.byType(RichText).evaluate(),
+          ...find.byType(EditableText).evaluate(),
+        ])
           tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
       ],
     );
@@ -316,15 +342,17 @@ const _faces = [
   'Nova',
 ];
 
-SuperTabAgent _agent(String name, {String? kind}) => SuperTabAgent.fromJson({
-  'id': 'id-$name',
-  'name': name,
-  'machineId': 'm',
-  'harnessId': 'h',
-  'contributorId': 'p',
-  'configuration': {'engine': 'claude'},
-  'kind': ?kind,
-});
+SuperTabAgent _agent(String name, {String? kind, bool offline = false}) =>
+    SuperTabAgent.fromJson({
+      'id': 'id-$name',
+      'name': name,
+      'machineId': 'm',
+      'harnessId': 'h',
+      'contributorId': 'p',
+      'configuration': {'engine': 'claude'},
+      'kind': ?kind,
+      if (offline) 'downSince': '2026-11-09T05:00:00Z',
+    });
 
 final _person = SuperTabPerson.fromJson({
   'id': 'p1',
@@ -333,7 +361,12 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces, required this.swarm});
+  const _Gallery(
+    this.brightness, {
+    required this.faces,
+    required this.swarm,
+    required this.instructions,
+  });
   final Brightness brightness;
   final List<String> faces;
 
@@ -341,6 +374,9 @@ class _Gallery extends StatelessWidget {
 
   /// The lampOS review Swarm, whose channel the task cards read.
   final SuperTabController swarm;
+
+  /// How the Instructions pane asks Faye's computer.
+  final SwarmInstructionsLink instructions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -418,19 +454,25 @@ class _Gallery extends StatelessWidget {
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, unread, selected) in [
-                          ('River', true, false, false),
-                          ('Quinn', false, false, true),
-                          ('Kai', false, true, false),
+                        for (final (name, lead, unread, selected, state) in [
+                          ('River', true, false, false, null),
+                          ('Quinn', false, false, true, 'on #12'),
+                          ('Kai', false, true, false, 'free'),
+                          ('Wren', false, false, false, 'offline'),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
-                              _agent(name, kind: lead ? 'pm' : null),
+                              _agent(
+                                name,
+                                kind: lead ? 'pm' : null,
+                                offline: state == 'offline',
+                              ),
                               size: SuperTabQuietRow.faceSize,
                               engineBadge: false,
                               lead: lead,
                             ),
                             name: name,
+                            detail: state,
                             selected: selected,
                             unread: unread,
                             onTap: () {},
@@ -447,9 +489,20 @@ class _Gallery extends StatelessWidget {
                           detail: 'Mac Studio',
                           onTap: () {},
                         ),
+                        // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
-                          collapsed: true,
+                          collapsed: false,
+                          onTap: () {},
+                        ),
+                        SuperTabQuietRow(
+                          leading: Icon(
+                            AppIcons.monitorOff,
+                            size: AppIcons.inlineSize,
+                            color: grid.SidebarInk.inkMuted,
+                          ),
+                          name: 'Old Rig',
+                          detail: 'offline',
                           onTap: () {},
                         ),
                         SuperTabQuietHeading(
@@ -487,7 +540,7 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -543,14 +596,6 @@ class _Gallery extends StatelessWidget {
                           action: 'Read',
                           details: SizedBox.shrink(),
                         ),
-                        const SizedBox(height: 8),
-                        SwarmFold(
-                          child: Text(
-                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
-                                .join('\n'),
-                            style: SwarmType.body(context),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -589,6 +634,19 @@ class _Gallery extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+              title(
+                'Instructions: the agent\'s own file, then its folder\'s AGENTS.md and CLAUDE.md, read only',
+              ),
+              SizedBox(
+                width: 380,
+                height: 500,
+                child: SwarmAgentInstructions(
+                  agent: _agent('Faye'),
+                  machineName: 'Mac Studio',
+                  onClose: () {},
+                  link: instructions,
+                ),
               ),
             ],
           ),

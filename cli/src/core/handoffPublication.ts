@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { controlTranscriptEvidence, transcriptEvidence } from '../engines/transcriptBindings.js'
 import { NativeFiles } from '../engines/kit/nativeFiles.js'
 import { nativeFileKey, verifyNativePathFacts } from '../engines/kit/nativePaths.js'
-import { HandoffError, handoffExcludeText, handoffSessionFact, nativeContentVersion,
+import { HANDOFF_DEADLINE_MS, HandoffError, handoffExcludeText, handoffSessionFact, nativeContentVersion,
   type HandoffPermit, type PreparedHandoff } from '../lib/handoffAuthority.js'
 import { handoffGitRoute } from '../lib/handoffGit.js'
 import { verifyHandoffVersion } from '../lib/handoffFiles.js'
@@ -21,11 +21,14 @@ export interface HandoffPublicationDeps {
   ownedByOther(sessionId: string, agentId: string): boolean
   isRecentlyDeleted(sessionId: string): boolean
   now?(): number
+  /** How long a discovery or a selection is kept for its request: the request's deadline. */
+  deadlineMs?: number
 }
 const hold = (): never => { throw new HandoffError('IDENTITY_UNAVAILABLE') }
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 export function createHandoffPublisher(deps: HandoffPublicationDeps) {
   const now = deps.now ?? (() => performance.now())
+  const keptMs = deps.deadlineMs ?? HANDOFF_DEADLINE_MS
   const discoveries = new Map<string, { found: Pick<TurnSource, 'engine' | 'sessionId' | 'transcriptPath'> | null; until: number }>()
   const located = new Map<string, { path: string | null; until: number }>()
   const locatorKey = (engine: string, id: string, profile?: string) => JSON.stringify([engine, id, profile ?? null])
@@ -33,13 +36,13 @@ export function createHandoffPublisher(deps: HandoffPublicationDeps) {
     for (const [key, value] of located) if (value.until < now()) located.delete(key)
     const key = locatorKey(engine, id, profile)
     if (!located.has(key) && located.size >= 128) throw new HandoffError('HANDOFF_UNAVAILABLE')
-    located.set(key, { path, until: now() + 5_000 })
+    located.set(key, { path, until: now() + keptMs })
   }
   const observed = (session: RegisteredSession, source: TurnSource | null): void => {
     for (const [key, value] of discoveries) if (value.until < now()) discoveries.delete(key)
     if (!discoveries.has(handoffSessionFact(session).fingerprint) && discoveries.size >= 128) throw new HandoffError('HANDOFF_UNAVAILABLE')
     discoveries.set(handoffSessionFact(session).fingerprint, { found: source && {
-      engine: source.engine, sessionId: source.sessionId, transcriptPath: source.transcriptPath }, until: now() + 5_000 })
+      engine: source.engine, sessionId: source.sessionId, transcriptPath: source.transcriptPath }, until: now() + keptMs })
   }
   const publish = async (prepared: PreparedHandoff, permit: HandoffPermit) => {
     try {

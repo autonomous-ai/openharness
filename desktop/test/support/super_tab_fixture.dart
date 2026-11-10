@@ -1069,36 +1069,6 @@ class ConversationServer {
     revision++;
   }
 
-  /// A reaction as the backend keeps it (reactions.ts): one per reactor and
-  /// emoji, and the group bumped only on a change.
-  bool _react(Map command, String reader) {
-    final message = messages.firstWhere((m) => m['id'] == command['messageId']);
-    final counts = [
-      for (final row in message['reactions'] as List? ?? const [])
-        Map<String, dynamic>.from(row as Map),
-    ];
-    final row = counts.where((r) => r['emoji'] == command['emoji']).firstOrNull;
-    final by = [...(row?['by'] as List? ?? const [])];
-    final mine = by.any((who) => (who as Map)['id'] == reader);
-    if (mine == command['on']) return false;
-    if (command['on'] == true) {
-      by.add({'kind': 'person', 'id': reader});
-    } else {
-      by.removeWhere((who) => (who as Map)['id'] == reader);
-    }
-    counts.removeWhere((r) => r['emoji'] == command['emoji']);
-    if (by.isNotEmpty) {
-      counts.add({'emoji': command['emoji'], 'count': by.length, 'by': by});
-    }
-    message['reactions'] = counts;
-    final group = (state['conversations'] as List)
-        .cast<Map<String, dynamic>>()
-        .firstWhere((g) => g['id'] == command['conversationId']);
-    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
-    revision++;
-    return true;
-  }
-
   /// An edit as the backend keeps it (messageEdits.ts): the new text, when it
   /// changed, and the group's `reactionSeq` moved. False for the same text.
   bool editMessage(String messageId, String text) {
@@ -1124,8 +1094,7 @@ class ConversationServer {
         ..['text'] = 'This message was deleted.'
         ..['deletedAt'] = '2026-10-18T00:06:00Z'
         ..['attachments'] = <dynamic>[]
-        ..['mentions'] = <dynamic>[]
-        ..['reactions'] = <dynamic>[];
+        ..['mentions'] = <dynamic>[];
     } else {
       messages.remove(message);
     }
@@ -1413,8 +1382,6 @@ class ConversationServer {
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');
-      } else if (command['type'] == 'message.react') {
-        output['changed'] = _react(command, reader ?? 'owner');
       } else if (command['type'] == 'message.edit') {
         output['changed'] = editMessage(
           command['messageId'] as String,
@@ -1941,6 +1908,33 @@ class ConversationServer {
                   (g) => g['id'] == command['conversationId'],
                 )['archived'] =
             command['archived'];
+        revision++;
+      } else if (command['type'] == 'project.closeTab') {
+        // As backend commands.ts closes a v3 tab's project: gone when none of its chats has a message, else kept
+        // read-only and archived.
+        final projectId = command['projectId'];
+        final groups = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((g) => g['projectId'] == projectId)
+            .toList();
+        if (groups.any((g) => ((g['lastMessageSequence'] ?? 0) as num) > 0)) {
+          for (final project
+              in (state['projects'] as List).cast<Map<String, dynamic>>()) {
+            if (project['id'] == projectId) project['archived'] = true;
+          }
+          for (final group in groups) {
+            group['archived'] = true;
+          }
+          output['outcome'] = 'archived';
+        } else {
+          state['projects'] = (state['projects'] as List)
+              .where((p) => p['id'] != projectId)
+              .toList();
+          (state['conversations'] as List).removeWhere(
+            (g) => g['projectId'] == projectId,
+          );
+          output['outcome'] = 'deleted';
+        }
         revision++;
       } else if (command['type'] == 'project.delete') {
         final projectId = command['projectId'];

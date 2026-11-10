@@ -1,12 +1,12 @@
 import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
-import { readAuthSession } from '../lib/authSession.js'
+import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
-import { backend, swarmListedFor, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
+import { swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
-import { within } from './wire.js'
+import { backend, identifier, object, SuperTabHostError, within } from './wire.js'
 import { isCoordinator, isStep } from './agentContext.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
@@ -17,21 +17,11 @@ import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { GitHubMentions, watchedAgents } from './githubMentions.js'
+import { ShippingReporter } from './shipping.js'
 import { githubRest } from './githubRest.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
-import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
-import { readTeamConfig } from '../team/config.js'
-import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
-import { downloadVerified } from '../lib/selfUpdate.js'
-import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
-import { ensureTeamGh, ghRunsAt, unzipArchive, type TeamGhDeps, type TeamGhOutcome } from '../team/gh.js'
-import { managedNodePath } from '../lib/nodeRuntime.js'
-import { linkTeamNodeTools, type TeamNodeToolsDeps } from '../team/nodeTools.js'
-import { env as appEnv } from '../config/env.js'
-import { homedir, userInfo } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { peopleNamed } from './personName.js'
@@ -52,6 +42,7 @@ async function withSteps(page: unknown, steps: Array<Record<string, unknown>>, r
 /** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
 const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
+const NOT_IN_SWARM = 'This agent is not in a Swarm on this machine\'s roster. If it should be, this machine may have no access to it, or its billing does not allow it: check how this machine is shared.'
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
 
 /** Leads see each other's work (spec 2026-10-23): a Lead reads other projects' active work in the backend's fields alone;
@@ -120,16 +111,6 @@ export interface SuperTabServiceOptions {
   cards?: (core: CoreApi, machineId: string) => SwarmCards
   /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
-  /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
-  teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
-  /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
-  team?: () => boolean
-  /** The Harness Team account's own tmux (team/tmux.ts), for a spec. */
-  teamTmux?: () => Promise<TeamTmuxOutcome>
-  /** What installs the Harness Team account's own gh (team/gh.ts), for a spec. */
-  teamGh?: () => Promise<TeamGhOutcome>
-  /** What links the Harness Team account's npm and npx (team/nodeTools.ts), for a spec. */
-  teamNodeTools?: () => unknown
   /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
   pullRequests?: BuddyStatusDeps['pullRequests']
   /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
@@ -138,6 +119,8 @@ export interface SuperTabServiceOptions {
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
   githubAssign?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubAssign, 'start' | 'stop'>
+  /** What reports what this computer's person's agents shipped to the Swarm's leaderboard (superTabs/shipping.ts), for a spec. */
+  shipping?: (core: CoreApi) => Pick<ShippingReporter, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -202,6 +185,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     get: github.get, send: github.send })))(core, sources)
+  // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
+  const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
@@ -211,6 +196,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     mentions.start()
     merges.start()
     assigns.start()
+    shipping.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -227,38 +213,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // Sessions doing another person's project work keep a live GitHub App token while their task lasts, and none after.
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
-  // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
-  const engines = (options.teamEngines ?? teamEngineReporter)()
-  // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
-  // at as it connects, and a failed install again half an hour later.
-  const settled = (outcome: string) => outcome === 'present' || outcome === 'installed' || outcome === 'not-team'
-  let tmuxCheckedAt = -Infinity, ghCheckedAt = -Infinity
-  const ensureTmux = options.teamTmux ?? (() => ensureTeamTmux(realTeamTmuxDeps()))
-  const ensureGh = options.teamGh ?? (() => ensureTeamGh(realTeamGhDeps()))
-  const checkTmux = () => {
-    if (Date.now() - tmuxCheckedAt >= 30 * 60_000) {
-      tmuxCheckedAt = Date.now()
-      void ensureTmux().then(outcome => { if (settled(outcome)) tmuxCheckedAt = Infinity })
-    }
-    if (Date.now() - ghCheckedAt >= 30 * 60_000) {
-      ghCheckedAt = Date.now()
-      void ensureGh().then(outcome => { if (settled(outcome)) ghCheckedAt = Infinity })
-      ;(options.teamNodeTools ?? (() => linkTeamNodeTools(realTeamNodeToolsDeps())))()
-    }
-  }
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()
-      engines.start()
-      checkTmux()
-      // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
-      // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
-      // check, so the Swarm read the account as offline and never sent it a teammate's work (third VM run).
-      if (identifier(core.daemon.machineId()) && (existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))
-        || (options.team ?? (() => readAuthSession()?.kind === 'team'))())) wake()
+      if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
       // A machine can be in a Swarm without this daemon ever adding it (Amon, #3215: the server moved his computer's entry to his
       // account, backend computerMoves.ts), so it keeps no host record and the check above never starts its host. The server says
       // when one of this machine's Swarms changes, naming it: that starts the host. Its word that it pushes names none.
@@ -298,15 +259,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           return await githubToken(core, String(payload.harnessId ?? ''), sources())
         }
-        // Why this Mac's Harness Team account has not joined a Swarm, while adding it fails (host.ts joinTeams), and Retry on the
-        // row (Amon, #3215: "joining" for good, the reason only in the log). Only a client on this computer asks.
-        // The status starts nothing; Retry starts the host if it never ran, which then reads its roster as any start does.
-        if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') {
-          if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          // Retry starts a host that never ran (Amon, #3215): it then reads its Swarms in full, the Team account's join among them.
-          if (payload.action === 'teamJoinRetry') { wake().retryTeamJoins(); return { ok: true } }
-          return { ok: true, failure: host?.teamJoinFailure() ?? null, hostRunning: !!host }
-        }
+        // A Desktop from before team machines went asks why its Mac's Harness Team account has not joined, and sends Retry
+        // (machines.dart, until its own removal; delete on or after 2026-12-10). No Team account joins any more: nothing to say.
+        if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') return asker.local ? { ok: true } : { error: 'OWNER_REQUIRED' }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in
@@ -408,7 +363,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const tabs = [...new Set((await sources().feed.refresh()).roster.filter(row => object(row.agent).harnessId === payload.harnessId
             && object(row.agent).machineId === core.daemon.machineId() && row.closeSession !== true).map(row => row.tabId).filter(identifier))]
           if (tabs.length > 1) return { error: 'SWARM_AMBIGUOUS', detail: `This agent is in ${tabs.length} Swarms: name one with --tab (${tabs.join(', ')}).` }
+          // In none on this machine's roster no id would help it; the server also leaves off one this machine has no access or
+          // billing for, so that is said too.
           if (tabs.length === 1) payload.tabId = tabs[0]
+          else return { error: 'NOT_IN_SWARM', detail: NOT_IN_SWARM }
         }
         if (!identifier(payload.tabId)) return { error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' }
         if (!(named ?? hashed)) return { error: 'INVALID_REQUEST' }
@@ -540,57 +498,4 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     },
   }
   return { requests, port }
-}
-
-/** The team daemon's own: its account, its PATH and Homebrew's places, the published manifest (team/tmux.ts). */
-function realTeamTmuxDeps(): TeamTmuxDeps {
-  return {
-    team: () => { try { return readTeamConfig()?.user === userInfo().username } catch { return false } },
-    platform: process.platform,
-    arch: process.arch,
-    candidates: () => {
-      const managed = managedTmuxPath()
-      const dirs = [...(process.env.PATH ?? '').split(delimiter).filter(isAbsolute), ...tmuxInstallDirectories()]
-      return [...(managed ? [managed] : []), ...dirs.map(dir => join(dir, 'tmux'))].filter(path => existsSync(path))
-    },
-    runs: tmuxRunsAt,
-    manifest: async () => {
-      const reply = await fetch(process.env.HARNESS_TMUX_METADATA_URL || TMUX_MANIFEST_URL, { signal: AbortSignal.timeout(30_000) })
-      if (!reply.ok) throw new Error(`the tmux manifest answered HTTP ${reply.status}`)
-      return reply.json()
-    },
-    download: (build) => downloadVerified({ url: build.url, sha256: build.sha256, ...(build.size ? { size: build.size } : {}) }),
-    untar: untarGz,
-    runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
-    binDir: join(homedir(), '.local', 'bin'),
-    log: (line) => console.log(`[team] ${line}`),
-  }
-}
-
-/** The team daemon's own Node and bin folder (team/nodeTools.ts). */
-function realTeamNodeToolsDeps(): TeamNodeToolsDeps {
-  return {
-    team: () => { try { return readTeamConfig()?.user === userInfo().username } catch { return false } },
-    node: managedNodePath,
-    binDir: join(homedir(), '.local', 'bin'),
-    log: (line) => console.log(`[team] ${line}`),
-  }
-}
-
-/** The team daemon's own, as for its tmux: its account, its PATH and Homebrew's places (team/gh.ts). */
-function realTeamGhDeps(): TeamGhDeps {
-  const binDir = join(homedir(), '.local', 'bin')
-  return {
-    team: () => { try { return readTeamConfig()?.user === userInfo().username } catch { return false } },
-    platform: process.platform,
-    arch: process.arch,
-    candidates: () => [binDir, ...(process.env.PATH ?? '').split(delimiter).filter(isAbsolute), '/opt/homebrew/bin', '/usr/local/bin']
-      .map(dir => join(dir, 'gh')).filter(path => existsSync(path)),
-    runs: ghRunsAt,
-    download: (build) => downloadVerified({ url: build.url, sha256: build.sha256, size: build.size }),
-    unzip: unzipArchive,
-    runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
-    binDir,
-    log: (line) => console.log(`[team] ${line}`),
-  }
 }

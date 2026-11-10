@@ -11,7 +11,6 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon } from './harness/fleet.js'
 import { isTeamAccount } from '../src/team/config.js'
-import { isTeamDaemon } from '../src/superTabs/teamDaemon.js'
 import { overOldRoutes } from './harness/swarmReads.js'
 
 const TAB = 'buddy-tab'
@@ -132,7 +131,7 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
 })
 
 // A Buddy is forbidden on a Team OS account even in an isolated daemon; this native flow needs an owner's account.
-it.skipIf(isTeamDaemon())('releases an idle Buddy session and wakes the same conversation on its person’s message', async () => {
+it.skipIf(isTeamAccount())('releases an idle Buddy session and wakes the same conversation on its person’s message', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
   backend.me = { id: ME.account, email: ME.email }

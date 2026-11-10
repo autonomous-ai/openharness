@@ -14,6 +14,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
@@ -75,8 +76,12 @@ class ProjectSidebar extends StatelessWidget {
     this.boardProjectId,
     this.onOpenAgentTerminal,
     this.leaderboard,
+    this.agentStates,
   });
   final SuperTabController controller;
+
+  /// What each agent of Your Team is doing, its row's one line; without it a row says only that its agent is offline.
+  final SwarmAgentStates? agentStates;
 
   /// The board Humans lists on the Desktop (task #4466): the view's, which the right pane reads too. Without it, or
   /// before it is read, Humans is its heading alone.
@@ -631,7 +636,7 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading, {
     required Widget? switcher,
   }) {
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -656,8 +661,9 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, folded until it is opened, each opening
-  /// Manage where it is managed. What the machine list says is up is up. A person with none sees no heading.
+  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, each opening Manage where it is managed.
+  /// What the machine list says is up is up. A person with none sees no heading. Folded until it is opened, but open by itself
+  /// while a computer is off, so why an agent is silent is in sight; what its person chose stands.
   List<Widget> _yourMachines() {
     final machines =
         [
@@ -669,14 +675,17 @@ class ProjectSidebar extends StatelessWidget {
           ),
         );
     if (machines.isEmpty) return const [];
+    final open = controller.yourMachinesGroupChosen
+        ? controller.yourMachinesGroupOpen
+        : machines.any((m) => m.reportedOnline == false);
     return [
       SuperTabQuietHeading(
         'Your Machines',
         key: const ValueKey('project-sidebar-machines'),
-        collapsed: !controller.yourMachinesGroupOpen,
-        onTap: controller.toggleYourMachinesGroup,
+        collapsed: !open,
+        onTap: () => controller.setYourMachinesGroup(!open),
       ),
-      if (controller.yourMachinesGroupOpen)
+      if (open)
         for (final machine in machines)
           _iconRow(
             key: 'super-machine-${machine.machineId}',
@@ -697,8 +706,12 @@ class ProjectSidebar extends StatelessWidget {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
     final scores = [...?leaderboard?.board?.people].take(humansShown).toList();
-    // An empty list shows nothing (anh Dee's rule): no heading until someone has points.
-    if (scores.isEmpty) return const [];
+    // An empty list shows nothing (anh Dee's rule): no heading until someone has points. A Swarm of one person before its first
+    // task ships has a board of one zero, empty too; a team's zeros stay, the way to its Leaderboard.
+    if (scores.isEmpty ||
+        (snapshot.people.length < 2 && (scores.first.points) <= 0)) {
+      return const [];
+    }
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [
@@ -889,6 +902,7 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
+      detail: agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1018,14 +1032,17 @@ class ProjectSidebar extends StatelessWidget {
       ),
   ];
 
-  /// The projects Projects lists, each with a chat, in its order.
+  /// The projects Projects lists, each with a chat, in its order. An archived one is not listed (a v3 tab's project that
+  /// had messages: personal_projects.dart).
   Iterable<_ProjectReading> _listed(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
   ) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
-      for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
+      for (final project in ([
+        ...?snapshot?.listedProjects,
+      ]..sort(_compareProjects)))
         if (reading.of(project) case final read
             when read.lead != null &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
@@ -1038,7 +1055,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?places, ?leaderboard]) {
+    child: switch ([?attention, ?places, ?leaderboard, ?agentStates]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -1050,7 +1067,7 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
@@ -1344,7 +1361,7 @@ List<String> superTabSidebarOrder(
 }) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
-  final projects = [...snapshot.projects]..sort(_compareProjects);
+  final projects = [...snapshot.listedProjects]..sort(_compareProjects);
   final hidden = superTabHiddenProjects(controller, app: app);
   return [
     if (controller.oneBuddy)

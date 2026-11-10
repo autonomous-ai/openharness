@@ -2,7 +2,8 @@ import { sign } from 'node:crypto'
 import http2 from 'node:http2'
 import type { ApnsKey, ApnsKeys } from './keys.js'
 import type { PushDevice } from './devices.js'
-import { SEND_TIMEOUT_MS, SWARM_CHANNEL, swarmNoticeId, withTimeout, type PhoneNotice, type Sender, type SendResult } from './sender.js'
+import { SEND_TIMEOUT_MS, SWARM_CHANNEL, swarmNoticeId, type PhoneNotice, type Sender, type SendResult } from './sender.js'
+import { withTimeout } from '../lib/withTimeout.js'
 
 /** One request to Apple: to its production host, or to the sandbox host a development build's token needs. */
 export interface ApnsRequest { sandbox: boolean; path: string; headers: Record<string, string>; body: string }
@@ -34,7 +35,7 @@ export function apnsSender(keys: ApnsKeys, options: { transport?: ApnsTransport;
     return value
   }
   const noSandboxKey: SendResult = { outcome: 'unconfigured', reason: 'no APNs sandbox key' }
-  const ask = async (device: PushDevice, notice: PhoneNotice, sandbox: boolean): Promise<ApnsAnswer> => withTimeout(transport({
+  const ask = async (device: PushDevice, notice: PhoneNotice, sandbox: boolean): Promise<ApnsAnswer> => withTimeout(() => transport({
     sandbox, path: `/3/device/${device.token}`,
     // The collapse id is the app's own notice id for the slot (task #3248): a newer push for it, or the app's notice, replaces
     // the one shown instead of adding a second.

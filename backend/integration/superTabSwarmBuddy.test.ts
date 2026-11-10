@@ -659,9 +659,11 @@ describe('security reviews of #2435', () => {
     const line = String((await send(f, old, 'From the phone')).result.messageId)
     await expect(send(f, old, 'From new Desktop', { oneBuddy: true })).rejects.toMatchObject({ code: 'BUDDY_CHAT_EARLIER' })
     await expect(send(f, old, 'A thread reply', { replyTo: line, oneBuddy: true })).rejects.toMatchObject({ code: 'BUDDY_CHAT_EARLIER' })
-    await expect(f.execute({ type: 'message.react', conversationId: old, messageId: line, emoji: 'eyes', on: true, oneBuddy: true }, peer))
-      .rejects.toMatchObject({ code: 'BUDDY_CHAT_EARLIER' })
-    await f.execute({ type: 'message.react', conversationId: old, messageId: line, emoji: 'eyes', on: true }, peer)
+    // A person's reaction is retired (reactions.ts): answered as ignored before anything is read, from any app.
+    expect((await f.execute({ type: 'message.react', conversationId: old, messageId: line, emoji: 'eyes', on: true, oneBuddy: true }, peer)).result)
+      .toMatchObject({ ignored: true })
+    expect((await f.execute({ type: 'message.react', conversationId: old, messageId: line, emoji: 'eyes', on: true }, peer)).result)
+      .toMatchObject({ ignored: true })
     expect(await texts(f, old, peer)).not.toContain('From new Desktop')
   })
 

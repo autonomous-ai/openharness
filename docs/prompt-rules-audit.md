@@ -59,6 +59,12 @@ By source:
 | Role skills | 46 | 23 | 28 | 47 | 25 |
 | Tools, frame, launch | 52 | 15 | 20 | 35 | 31 |
 
+**The shell guard is removed (anh Dee, 2026-11-09).** A Swarm v4 agent runs with its person's own settings, and no hook of
+Harness's runs before its tools. Every row below that names `shellGuard.ts`, `shellGuardHook.ts` or `guard` as its code
+(stop only your own processes, no system-wide installs, temporary files in your own folder, never remove a live worktree,
+and the merge and secret checks it was to grow) is enforced by neither code nor prompt now; the CLI keeps a no-op
+`__swarm-shell-guard` entry until 2026-12-10 so agents started before still run.
+
 ## New code: one task per family of rules
 
 Each task names its rows here, and removes their prompt lines once its code fully enforces them; a safety rule's line
@@ -100,6 +106,12 @@ labels (`part:`, `needs:`, `size:`, `p0`-`p2`, "after #N"), the project's builde
 quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<name>` with why, keeping every list two deep.
 The PM's line "Give a task to the builder who owns its part, is free and has what it needs; keep every builder's list two
 deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
+
+**The PM announces each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
+`PM_BASICS`, "Pip, you have #12", once per hand-off, the rest of the task's talk staying on its issue. It is a prompt line only
+until code does it: the PM does not see who a task went to until it reads the issue, and Harness knows at the moment it
+labels. Proposal to the maintainers: `githubAssign.ts give()` posts the line itself as it sets `builder:<name>`, keyed by
+repository, number and builder so a restart or a second daemon posts nothing twice; the prompt line goes with it (standard 13).
 
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts

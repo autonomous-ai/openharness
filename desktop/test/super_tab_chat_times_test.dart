@@ -9,9 +9,14 @@ import 'support/super_tab_fixture.dart';
 /// sits centered between messages only after a pause of more than about five
 /// minutes; a bubble's exact time is on its tooltip.
 void main() {
-  ConversationServer server() {
+  /// Three messages before [last]: by default noon yesterday, not now: from
+  /// 00:10 to 00:28 "now" put the messages on two days, and a new day has no
+  /// pause time (CI at 00:13 UTC).
+  ConversationServer server({DateTime? last}) {
     final server = ConversationServer.chat();
-    final now = DateTime.now().toUtc();
+    final today = DateTime.now();
+    final now = (last ?? DateTime(today.year, today.month, today.day - 1, 12))
+        .toUtc();
     for (final (text, minutesAgo) in [
       ('First', 30),
       ('Two minutes on', 28),
@@ -53,6 +58,15 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('after a midnight the day line stands for the time', (
+    tester,
+  ) async {
+    // The third falls on the next day: its day line, and no time of its own.
+    await showView(tester, server(last: DateTime(2026, 11, 8, 0, 15)));
+    expect(time('message-3'), findsNothing);
+    expect(find.textContaining('Nov 8'), findsWidgets);
   });
 
   testWidgets('a bubble\'s exact time is on its tooltip', (tester) async {

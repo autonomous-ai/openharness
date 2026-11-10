@@ -25,7 +25,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
-import { prepareContribution, prepareTeamContribution } from './contribution.js'
+import { prepareContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
 import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { RebindSender, replacementObservations } from './replacements.js'
@@ -36,7 +36,6 @@ import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { conversationTokens } from '../lib/conversationSize.js'
-import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { ADDED_MAX, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
@@ -52,7 +51,8 @@ const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
   `${prefix} --tab ${shellQuote(entry.tabId)}${buddy ? '' : ` --agent ${shellQuote(entry.agentId)}`}`
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
-export { backend, identifier, object, SuperTabHostError } from './wire.js'
+// The Pro dial's Swarm face (cards.ts) still takes these two from here; every other file takes them from wire.ts.
+export { backend, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, swarmBasics, swarmBasicsSince, wireRole, type SkillRefresh, type SwarmSkill,
@@ -64,7 +64,7 @@ import { adoptReplies, AgentReplies, type Owed } from './agentReplies.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
-export function groupSkillMode(state: Record<string, unknown>, group: Record<string, unknown> | undefined): SwarmSkillMode {
+function groupSkillMode(state: Record<string, unknown>, group: Record<string, unknown> | undefined): SwarmSkillMode {
   const project = group && (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === (group.projectId ?? 'lead'))
   return project?.skillMode === 'default' ? 'default' : 'orchestration'
 }
@@ -182,13 +182,12 @@ interface Entry {
  *  entry, which goes once the backend has its acknowledgement, so a restart in the middle of a turn still posts its answer
  *  (agentReplies.ts). Older hosts drop it, and then owe none. */
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget>; replies?: Record<string, Owed> }
-/** `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither.
- *  `agent.chatId`: its own 1:1 chat with its person, which the server's time check gives each agent but a Buddy within 30 s of
+/** `agent.chatId`: its own 1:1 chat with its person, which the server's time check gives each agent but a Buddy within 30 s of
  *  its joining (backend agentChats.ts); an older backend sends none. `agent.displayName` and `agent.name`: what its person calls it
  *  (shownName), for the line they are told if its answer cannot be posted (agentReplies.ts). */
 interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; chatId?: unknown; displayName?: unknown; name?: unknown
   switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown
-  buddySleepManaged?: true; leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
+  buddySleepManaged?: true }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -200,8 +199,6 @@ export interface SuperTabHostOptions {
   /** How long a delivery waits on each read for its context lines (CONTEXT_WAIT_MS), for a spec. */
   contextWaitMs?: number
   prepareContribution?: typeof prepareContribution
-  /** This Mac's Harness Team account preparing its workspace through the relay (contribution.ts), for a spec. */
-  prepareTeam?: (core: CoreApi, input: { tabId: string; machineId: string }) => Promise<Record<string, unknown>>
   /** The `… super-tab` prefix agents are told to run (superTabs/shortCommand.ts), for a spec. */
   agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
   /** The Swarm start this machine made of a harness (superTabs/reservations.ts), or null. */
@@ -217,8 +214,6 @@ export interface SuperTabHostOptions {
   machines?: Partial<MachineDeps>
   /** What carries out a Buddy's model switch here (superTabs/buddyModel.ts), for a spec. */
   buddyModels?: Pick<BuddyModelRequests, 'serve'>
-  /** What restarts a stuck Product Manager in its own pane, on the same session (watchLead), for a spec. */
-  restartLead?: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -279,9 +274,6 @@ async function sessionOfFolder(home: string, sessionId: string, folder: string):
 const JOIN_RETRY_MS = 60_000
 /** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
 const SKILL_RETRY_MS = 60_000
-/** What a session is told about: a Buddy's own skill, which only a CLI release changes. Plain agents (Swarm v4) are told
- *  nothing: they read only their repo's files. */
-function skillSetOf(_target: HostAgent): string { return 'none' }
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
 const UPDATE_BACKOFF_MS = 60_000
@@ -351,10 +343,6 @@ const LEAD_RETRY_MS = 5_000
 const LATE_REPLACEMENT_MS = SWITCH_RECOVERY_MS
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
-/** How often a running Product Manager is checked for a hang (watchLead): its owed ask's time is in minutes. */
-const LEAD_WATCH_MS = 30_000
-/** How long a restart of a stuck Product Manager may take: the relaunch waits on the engine's command and its pane. */
-const LEAD_RESTART_TIMEOUT_MS = 60_000
 /** Prod 10-30: acknowledgements failed through two hours of SWARM_BUSY, past the backend's 10-minute claim quiet time
  *  (backend superTabs/deliverySettle.ts CLAIM_QUIET_MS), so its delivery pass ended claims the agents had in fact received and
  *  their senders saw Not sent. A typed delivery the backend ended is acknowledged again after 10 s, doubling to 5 minutes, for
@@ -488,11 +476,8 @@ export class SuperTabHost {
   private shareWoken = false
   private readonly attachedFiles: typeof attachedFiles
   private readonly prepareContribution: typeof prepareContribution
-  private readonly prepareTeam: NonNullable<SuperTabHostOptions['prepareTeam']>
   /** Per tab the roster marks, the add in progress or when the next may run. */
   private readonly joins = new Map<string, { running: boolean; failures: number; retryAt: number }>()
-  /** This Mac's Harness Team account being added to a Swarm, by `tabId:machineId` (joinTeams). */
-  private readonly teamJoins = new Map<string, { running: boolean; failures: number; retryAt: number; error?: string }>()
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, { text: string; paths: string[] }>()
@@ -598,27 +583,18 @@ export class SuperTabHost {
   /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
    *  its re-read notice is still owed. */
   private readonly skillChecks = new Map<string, number>()
-  /** What each session was last compared with (skillSetOf): a change makes it due again at once. */
-  private readonly skillModes = new Map<string, string>()
-  /** Per running session, the skill set the latest roster names: a refresh started from an older roster installs and
-   *  tells nothing once this has moved on (the review of #1660). */
-  private readonly rosterSkills = new Map<string, string>()
+  /** The running sessions the latest roster names: a refresh started from an older roster installs and tells nothing once its
+   *  session is no longer on it (the review of #1660). */
+  private readonly rosterSkills = new Set<string>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** A Buddy with no pending switch is checked once at roster admission, never on idle passes. */
   private readonly buddySwitches = new Map<string, number>()
   /** Per protected harness here: its reopen, failures, retry time and last logged reason. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
-  /** Per Product Manager harness here (watchLead): when it was last checked, since when it has been in one turn, the owed ask
-   *  it was last restarted for, a check or restart in progress, and until when the keep-alive leaves its relaunch be. */
-  private readonly leadWatches = new Map<string, { checkedAt: number; workingSince?: number; restartedFor?: string; checking: boolean
-    restarting: boolean; settleUntil: number }>()
-  private readonly restartLead: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number
     forgotten?: boolean; unforgotten?: string; scrub?: PurgeTarget | null; scrubbed?: true }>()
-  /** Deliveries withheld from an agent that leads nothing, each said once. */
-  private readonly unreadable = new Set<string>()
   /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
   private readonly sources: SwarmSources
   /** Until when the host waits after an update-required answer, and whether it has said so. */
@@ -640,7 +616,6 @@ export class SuperTabHost {
     this.contextWaitMs = options.contextWaitMs ?? CONTEXT_WAIT_MS
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.machineDeps = options.machines ?? {}
-    this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
     this.claudeHome = options.claudeHome ?? homedir()
@@ -649,25 +624,16 @@ export class SuperTabHost {
     this.started = this.now()
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
-    // Through this machine's own daemon socket, as the apps ask it: `agent_restart`
-    // relaunches the agent in its own pane on the same session, so it is never a second one.
-    this.restartLead = options.restartLead ?? (async harnessId => {
-      const local = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId })
-      try {
-        const answer = await local.request('agent_restart', { agentId: harnessId }, LEAD_RESTART_TIMEOUT_MS)
-        return typeof answer.error === 'string' ? { ok: false, error: answer.error } : { ok: true }
-      } finally { local.close() }
-    })
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil })
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
-    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon,
+    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log,
       stillSince: harnessId => this.terminal.stillSince(harnessId),
       owns: async harnessId => (await this.sources.feed.fresh()).assignments.some(a => a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
-    this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
+    this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log })
     // Over this machine's own daemon socket, which answers as the machine owner: the Buddy runs only on its owner's machine.
     this.buddyModels = options.buddyModels ?? new BuddyModelRequests({ dataDir: core.dataDir, now: this.now, log: this.log,
       open: () => openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId }),
@@ -834,11 +800,11 @@ export class SuperTabHost {
     else this.pushAll = true
     void this.tick()
   }
-  /** A delivery this host has nothing more to do for until someone acts: withheld from an agent that may not read it, or
-   *  reported uncertain and waiting for a person. Any other keeps its agent's list read each second. */
+  /** A delivery this host has nothing more to do for until someone acts: reported uncertain and waiting for a person. Any other
+   *  keeps its agent's list read each second. */
   private settled(delivery: Json): boolean {
     const id = delivery.id as string, entry = this.journal.entries[id]
-    return this.unreadable.has(id) || (!!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt)
+    return !!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt
   }
   /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second. */
   private failed(error: unknown): void {
@@ -1183,7 +1149,6 @@ export class SuperTabHost {
     this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
-    this.joinTeams(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
     if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data); void this.crew.tick(data) }
@@ -1209,7 +1174,7 @@ export class SuperTabHost {
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (identifier(agent.harnessId) && agent.machineId === this.machineId && row.closeSession !== true && row.stopRequested !== true) {
-        this.rosterSkills.set(agent.harnessId, skillSetOf(row as unknown as HostAgent))
+        this.rosterSkills.add(agent.harnessId)
       }
     }
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
@@ -1272,7 +1237,6 @@ export class SuperTabHost {
       if (row.lead === true || target.agent.switchLanded || buddySwitch) {
         leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId, buddy ? row.buddySleepManaged === true ? 'buddy' : 'buddy-switch' : 'pm')
-        if (row.lead === true) this.watchLead(target.agent.harnessId, row.owed)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`Engine switch: ${error instanceof Error ? error.name : typeof error}`))
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
@@ -1333,10 +1297,6 @@ export class SuperTabHost {
             if (download?.said && !download.result || [...this.copiesHeld.values()].some(hold => hold.deliveries.has(String(delivery.id)))) held = true
             continue
           }
-          // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
-          // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
-          const entry = this.journal.entries[delivery.id]
-          if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !this.mayRead(target, delivery)) continue
           try {
             if (await this.accept(target, delivery, path)) acked.add(delivery.id)
             const failed = this.deliveryRetries.get(claimKey)
@@ -1397,14 +1357,10 @@ export class SuperTabHost {
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
     for (const harnessId of this.buddySwitches.keys()) if (!rosterHarnesses.has(harnessId)) this.buddySwitches.delete(harnessId)
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
-    for (const [harnessId, watch] of this.leadWatches) if (!leads.has(harnessId) && !watch.checking && !watch.restarting) this.leadWatches.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
-    for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
     for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
     // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
-    for (const skills of [this.skillChecks, this.skillModes]) {
-      for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
-    }
+    for (const harnessId of this.skillChecks.keys()) if (!this.rosterSkills.has(harnessId)) this.skillChecks.delete(harnessId)
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {
@@ -1472,7 +1428,7 @@ export class SuperTabHost {
     const key = `${row.tabId}:${row.agent.harnessId}`
     if (this.rested.get(key) === rest) return
     const buddy = isBuddy(object(row.agent)), agent = object(row.agent)
-    if (buddy && (row.buddySleepManaged !== true || agent.buddySession || agent.modelRequest || agent.teamAccount || isTeamDaemon() || rest !== 'sleep')) return
+    if (buddy && (row.buddySleepManaged !== true || agent.buddySession || agent.modelRequest || agent.teamAccount || rest !== 'sleep')) return
     this.rested.set(key, rest)
     const check = Symbol()
     if (buddy) this.buddyRestChecks.set(key, check)
@@ -1507,10 +1463,6 @@ export class SuperTabHost {
     this.keepAlives.set(harnessId, state)
     if (state.running) return
     const now = this.now()
-    // Being restarted in its own pane (watchLead), its session reads as gone until the relaunch is up: reopening it then would
-    // run a second Product Manager beside it.
-    const watch = this.leadWatches.get(harnessId)
-    if (watch && (watch.restarting || now < watch.settleUntil)) return
     // Its owner switched its engine from its pane (leadSwitch.ts), stopping it once the stop went through.
     const switched = leadSwitchOf(this.core.dataDir, harnessId)
     const held: boolean = switchWithin(switched, now)
@@ -1560,55 +1512,6 @@ export class SuperTabHost {
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
       delete state.reason
     })().catch(error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
-  }
-
-  /**
-   * Task #3385 (anh Dee, 11-05): a Product Manager hung in one turn while five people's asks waited 3 to 10 hours, as the
-   * keep-alive reopens only one whose session is gone. Every LEAD_WATCH_MS, a running one that owes a person an answer
-   * past [owed]'s `restartAfterMs` (the server's number, backend timeChecks.ts), while it has been in one turn that long or its
-   * screen has not changed that long, is restarted in its own pane on the same session: never a second one, and the keep-alive
-   * leaves it be until its relaunch is up. Once per owed ask: a relaunched PM reads idle at its prompt before that ask is typed
-   * into it, so one the same ask hangs again is left to people, never restarted in a loop until the ask ages out (security
-   * review of #3213); a newer ask owed past its time may restart it again. Nothing during an engine switch or a reopen, checked
-   * again right before the restart, as either may begin while its turn is read.
-   */
-  private watchLead(harnessId: string, owed: unknown): void {
-    const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, checking: false, restarting: false, settleUntil: -Infinity }
-    this.leadWatches.set(harnessId, watch)
-    const now = this.now()
-    if (watch.checking || watch.restarting || now - watch.checkedAt < LEAD_WATCH_MS) return
-    // Not while its session is gone, a reopen runs or its engine is being switched: those are the keep-alive's and the switch's.
-    const heldElsewhere = () => !this.core.agents.byAgent(harnessId) || !!this.keepAlives.get(harnessId)?.running || !!leadSwitchOf(this.core.dataDir, harnessId)
-    if (heldElsewhere()) return
-    watch.checkedAt = now
-    watch.checking = true
-    const ask = object(owed)
-    const due = identifier(ask.messageId) && typeof ask.since === 'number' && Number.isFinite(ask.since)
-      && typeof ask.restartAfterMs === 'number' && ask.restartAfterMs > 0 ? { messageId: ask.messageId, since: ask.since, after: ask.restartAfterMs } : null
-    void (async () => {
-      const turn = (await this.core.agents.activity([harnessId]))[harnessId]
-      const at = this.now()
-      if (turn === 'idle') delete watch.workingSince
-      else if (turn === 'working') watch.workingSince ??= at
-      if (!due || turn === 'idle' || watch.restartedFor === due.messageId || at - due.since < due.after) return
-      const shown = this.terminal.progressOf([harnessId])[harnessId]
-      const inTurn = watch.workingSince !== undefined && at - watch.workingSince >= due.after
-      const frozen = typeof shown === 'number' && at - shown >= due.after
-      if (!inTurn && !frozen) return
-      if (heldElsewhere()) return
-      watch.restartedFor = due.messageId
-      watch.restarting = true
-      this.log(`Restarting the Product Manager ${harnessId.slice(0, 8)} in place: it owes an answer sent ${Math.round((at - due.since) / 60_000)} min ago and `
-        + `${inTurn ? `has been in one turn for ${Math.round((at - watch.workingSince!) / 60_000)} min` : `its screen has not changed for ${Math.round((at - shown!) / 60_000)} min`}.`)
-      try {
-        const result = await this.restartLead(harnessId)
-        if (!result.ok) this.log(`Could not restart the Product Manager ${harnessId.slice(0, 8)}: ${result.error}. Not tried again for this ask.`)
-      } finally {
-        delete watch.workingSince
-        watch.restarting = false
-        watch.settleUntil = this.now() + LEAD_REOPEN_WAIT_MS
-      }
-    })().catch(error => this.log(`Product Manager watch: ${error instanceof Error ? error.message : String(error)}`)).finally(() => { watch.checking = false })
   }
 
   /** The new session [switched] started, when it runs here: its native creation receipt is the switch's own change id. */
@@ -1765,7 +1668,7 @@ export class SuperTabHost {
           .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
         if (scrub) {
           const unread = new Set<string>()
-          await scrubClaudeSession(this.claudeHome, scrub, [], undefined, what => {
+          await scrubClaudeSession(this.claudeHome, scrub, what => {
             if (what === 'shared') this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`)
             else unread.add(UNREAD_CODES[what])
           }).catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
@@ -1829,13 +1732,8 @@ export class SuperTabHost {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
     const skill = parseSwarmSkill(session?.swarmSkill)
-    const set = skillSetOf(target)
-    const current = () => this.rosterSkills.get(target.agent.harnessId) === set
-    // A checked session waits for the next host (Infinity); a change the roster names must reach it now.
-    if (this.skillModes.get(target.agent.harnessId) !== set) {
-      this.skillModes.set(target.agent.harnessId, set)
-      this.skillChecks.delete(target.agent.harnessId)
-    }
+    const current = () => this.rosterSkills.has(target.agent.harnessId)
+    // A checked session waits for the next host (Infinity).
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
     // Every Swarm agent follows the team's basics of this release (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), which its
     // launch carries. One its person attached (Desktop's Attach) was started outside the Swarm, without them; one the Swarm
@@ -1932,7 +1830,9 @@ export class SuperTabHost {
   /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
    *  (Swarm creation never added it; on 2026-10-22 Ken's Mac ran a Lead outside its own Swarm's machines). The host
    *  adds it as the + dialog does (desktop/lib/super_tabs/machines.dart), only if it is still missing, so a person's
-   *  own contribution is never changed. A slow engine probe never delays deliveries. */
+   *  own contribution is never changed. A slow engine probe never delays deliveries. Never one its person took out of the
+   *  Swarm (its `removedMachines`): only a person adds that back. The server refuses it too (`unlessRemoved`). The roster still
+   *  marks a removed machine, so the host looks again only every half hour while it does, and says so each time. */
   private joinSwarms(rows: unknown[]): void {
     const marked = new Set(rows.map(object).filter(row => row.joinSwarm === true && identifier(row.tabId)).map(row => row.tabId as string))
     for (const [tabId, join] of this.joins) if (!marked.has(tabId) && !join.running) this.joins.delete(tabId)
@@ -1942,65 +1842,24 @@ export class SuperTabHost {
       join.running = true
       this.joins.set(tabId, join)
       void (async () => {
+        const removed = (await this.sources.reads.read(tabId)).state.removedMachines
+        if (Array.isArray(removed) && removed.includes(this.machineId)) {
+          this.log('Not adding this machine back to a Swarm its person removed it from')
+          return false
+        }
         const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' }, { reads: this.sources.reads })
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
           type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
           // Joining sets no limit: free memory is checked at each start (Dee, 11-04: "remove the limit").
-          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, agents: 'memory', ifMissing: true } })
-      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS }, error => {
+          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, agents: 'memory', ifMissing: true,
+          unlessRemoved: true } })
+        return true
+      })().then(asked => { join.failures = 0; join.retryAt = this.now() + (asked ? JOIN_RETRY_MS : JOIN_RETRY_MAX_MS) }, error => {
         join.retryAt = error instanceof SuperTabHostError && JOIN_FINAL.has(error.code) ? Infinity
           : this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
         this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
       }).finally(() => { join.running = false })
     }
-  }
-
-  /**
-   * This Mac's Harness Team account joins wherever its owner added this Mac ("One machine" in
-   * docs/plans/2026-10-24-swarm-team-account.md): the roster names each Swarm where it is missing (backend store.ts hostTabs
-   * `joinTeam`). It prepares its own folder and engines, asked through the relay, and this host adds it as the person, who
-   * owns both; the backend gives it this Mac's name, slots and pause. Retried like joinSwarms while it is offline.
-   */
-  private joinTeams(rows: unknown[]): void {
-    const marked = new Map<string, { tabId: string; machineId: string; name: unknown; maxAgents: unknown }>()
-    for (const row of rows.map(object)) {
-      const team = object(row.joinTeam)
-      if (identifier(row.tabId) && identifier(team.machineId)) {
-        marked.set(`${row.tabId}:${team.machineId}`, { tabId: row.tabId, machineId: team.machineId, name: team.name, maxAgents: team.maxAgents })
-      }
-    }
-    for (const [key, join] of this.teamJoins) if (!marked.has(key) && !join.running) this.teamJoins.delete(key)
-    for (const [key, team] of marked) {
-      const join = this.teamJoins.get(key) ?? { running: false, failures: 0, retryAt: 0 }
-      if (join.running || join.retryAt > this.now()) continue
-      join.running = true
-      this.teamJoins.set(key, join)
-      void (async () => {
-        const prepared = await this.prepareTeam(this.core, { tabId: team.tabId, machineId: team.machineId })
-        await backend(this.core, 'POST', `/api/super-tabs/${team.tabId}/commands`, { operationId: randomUUID(), command: {
-          type: 'machine.contribute', machineId: team.machineId, name: typeof team.name === 'string' && team.name ? team.name : this.core.account.machineName() ?? hostname(),
-          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines,
-          maxAgents: typeof team.maxAgents === 'number' ? team.maxAgents : prepared.maxAgents, ifMissing: true } })
-      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS; delete join.error }, error => {
-        // Every refusal is tried again with the backoff, never for good (Amon, #3215: one stopped the join until a restart, and
-        // the row read "joining" with no reason). The roster stops asking once it no longer applies (backend hostRows.ts).
-        join.retryAt = this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
-        join.error = error instanceof Error ? error.message : String(error)
-        this.log(`Could not add this Mac's Harness Team account to its Swarm: ${join.error}`)
-      }).finally(() => { join.running = false })
-    }
-  }
-
-  /** Why adding this Mac's Harness Team account to a Swarm last failed, while it still fails; null when none does: what this
-   *  Mac's own row says instead of "joining" (service.ts teamJoinStatus). */
-  teamJoinFailure(): string | null {
-    for (const join of this.teamJoins.values()) if (join.error) return join.error
-    return null
-  }
-
-  /** Retry on the row: each Team account join that failed is tried on the next poll, not after its backoff. */
-  retryTeamJoins(): void {
-    for (const join of this.teamJoins.values()) if (join.error) join.retryAt = 0
   }
 
   /** Its owner removed this machine from a Swarm: the roster names the cleanup until this host acknowledges it, so a host
@@ -2051,19 +1910,6 @@ export class SuperTabHost {
     this.authorized.delete(id)
     if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
     this.persist()
-  }
-
-  /** The Leads conversation is removed (Dee, 10-31): the server takes no post there, and a delivery still queued for it from
-   *  before reaches nobody, a Lead included. The roster names it while a server does, so this needs no read of the Swarm
-   *  (design 2026-10-26 section 5.3); the server's delivery rules decide every other conversation, a private one's audience
-   *  included. */
-  private mayRead(target: HostAgent, delivery: Json): boolean {
-    if (typeof target.leadsConversationId !== 'string' || delivery.conversationId !== target.leadsConversationId) return true
-    if (!this.unreadable.has(delivery.id as string)) {
-      this.unreadable.add(delivery.id as string)
-      this.log(`Withheld delivery ${String(delivery.id)}: it is not in a conversation ${target.agent.harnessId} can read.`)
-    }
-    return false
   }
 
   /** Hands one delivery on: acknowledges a written one, renews the lease of one being written, or claims and writes it.

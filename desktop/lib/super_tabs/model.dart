@@ -581,9 +581,12 @@ class SuperTabConversation {
   /// person's first message since that backend.
   final int lastPersonSequence;
 
-  /// Counts reaction changes here (backend reactions.ts), as its messages
-  /// pages also say: a move asks for the page shown again. Absent, as before
-  /// the first reaction, it is 0, the pages' own value then.
+  /// Counts changes to rows already sent here (backend messageEdits.ts), as
+  /// its messages pages also say: a move asks for the page shown again. An
+  /// edit or a delete moves it; so does a reaction, which it began counting
+  /// and still does until the backend stops writing them, though Desktop draws
+  /// none (that read finds nothing new). Absent, it is 0, the pages' own value
+  /// then.
   final int reactionSeq;
 
   /// The person who asked for this task; null on a conversation that is no
@@ -682,6 +685,7 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       boardMode = row['boardMode'] == true,
+      archived = row['archived'] == true,
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
@@ -692,6 +696,10 @@ class SuperTabProject {
   /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
   /// False when not switched and from an older backend: everything then works as today.
   final bool boardMode;
+
+  /// Kept read-only and out of the project list: a v3 tab's project that had messages when it was closed (backend
+  /// commands.ts `project.closeTab`).
+  final bool archived;
 
   /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
   final List<String> canChatIds;
@@ -1177,6 +1185,12 @@ class SuperTabSnapshot {
       _machines = _machineRows(rows);
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
+
+  /// The projects a list offers: an archived one (a v3 tab's project kept read-only, personal_projects.dart) is no
+  /// longer worked in.
+  late final List<SuperTabProject> listedProjects = List.unmodifiable(
+    projects.where((p) => !p.archived),
+  );
   final List<Map<String, dynamic>> invitations;
 
   /// Each agent start's outcome so far, by its id: the harness it made, or
@@ -1245,8 +1259,8 @@ class SuperTabSnapshot {
   /// Empty from a backend before it (task #3029).
   final List<SuperTabPromptWait> promptsWaiting;
 
-  /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
-  /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).
+  /// Which of the reader's Activity rows are unread (replies to them), as a digest that moves when one comes or is
+  /// read; null from a backend before Activity (superTabs/activity.ts).
   final String? activityDigest;
 
   /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
@@ -1972,9 +1986,6 @@ class SuperTabMessage {
       editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
       deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
-      reactions = List.unmodifiable(
-        SuperTabReactionCount.listFromJson(row['reactions']),
-      ),
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
@@ -2029,7 +2040,6 @@ class SuperTabMessage {
   final DateTime? deletedAt;
   bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
-  final List<SuperTabReactionCount> reactions;
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;

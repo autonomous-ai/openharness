@@ -7,18 +7,19 @@
  *
  * A pull request into the default branch is merged, squashed, when
  * - it is not a draft;
- * - its head has a READ-OK from someone other than its author: `READ-OK <sha>` in a comment's first line, the reader the name
+ * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` in a comment's first line, the reader the name
  *   the comment is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned; two from two
- *   readers when its text or a comment's first line says TWO READS;
+ *   readers when its text or a comment's first line says TWO READS. A comment signed by one of its writers (writersOf), in any
+ *   spelling, is that writer's, and an unsigned READ-OK from the login that opened it counts for nothing (verdicts);
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
  * - and GitHub says it can merge.
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
-import { labelOf, teamOf, type Crew } from './assign/crew.js'
+import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
@@ -61,39 +62,95 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
   return [...found.values()]
 }
 
-/** What one pull request's comments say: each reader's last verdict, by its name in lowercase, with the name as it signs,
- *  and whether it asks for two reads. */
-export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; at: string }>()
+/** Who a pull request's verdicts can be from: its [writers] (writersOf), the GitHub [opener] that opened it, and its [team]'s
+ *  builder labels (teamOf). */
+export interface PullPeople { writers: readonly string[]; opener: string; team: ReadonlySet<string> }
+
+/** A verdict's own words where a signature would be ("READ-OK f6edb44: looks good"): no one's name. */
+const VERDICT_FIRST = /^(?:READ-OK|HOLD)\b/
+
+/** What one pull request's comments say: each reader's last verdict, by its name as `sameKey` reads it, with the name as it signs,
+ *  and whether it asks for two reads. A comment signed by one of its writers (`signedAs`) is that writer's, by the name the
+ *  pull request gives it: the signature pattern reads one or two plain words, and a name it cannot read (three words, another
+ *  script, an apostrophe, an emoji) fell back to the GitHub login every agent of a person shares, so the author read as a reader.
+ *  From the login that opened it, which every agent of the author's person posts as, a signature is one only when it names one
+ *  of the team; any other is unsigned, its reader that login, and its READ-OK is `ownLogin`: it counts for no read. */
+export function verdicts(comments: Json[], body: string, people: PullPeople):
+  { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean }>; twoReads: boolean } {
+  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; signed: boolean; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
+  // The team's names as sameKey reads them, from its builder labels: a team agent is known however it signs.
+  const team = new Set([...people.team].map(label => sameKey(label.replace(/^builder:/i, ''))))
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = VERDICT.exec(first)
     if (!found) continue
-    const reader = SIGNATURE.exec(first)?.[1] ?? String(object(comment.user).login ?? '')
+    const login = String(object(comment.user).login ?? '')
+    const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
+    const pattern = SIGNATURE.exec(first)?.[1]
+    const signature = people.writers.find(writer => signedAs(first, writer))
+      ?? (pattern && !VERDICT_FIRST.test(pattern) && (!fromOpener || team.has(sameKey(pattern))) ? pattern : undefined)
+    const reader = signature ?? login
     if (!reader || reader === SELF) continue
     const at = String(comment.created_at ?? '')
-    const key = reader.toLowerCase()
+    // One reader however it writes its name (a HOLD as "Kai Lee" is lifted by its READ-OK as "kai-lee"); a name of no letters
+    // or digits, as written.
+    const key = readerKey(reader)
     const last = readers.get(key)
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, at })
+    // A HOLD is lifted only by its own kind: a signature's by a signature, a login's (unsigned) by that login. A person whose
+    // login reads as an agent's name is not that agent.
+    if (last?.verdict === 'HOLD' && found[1] === 'READ-OK' && last.signed !== !!signature) continue
+    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, signed: !!signature, at })
   }
-  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
+  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin }])), twoReads }
 }
 
-/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
- *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
- *  and the merger merged it (found by the other session's Q3 tester, 2026-11-09; #3665 reads names more fully). */
-export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
+/** Whether [name] is one of a pull request's [writers] (writersOf), however either is written. */
+export const isWriter = (writers: readonly string[], name: string): boolean => writers.some(writer => sameKey(writer) === sameKey(name))
+
+/** How much of a first line is read for a writer's name: enough for any name and its markup, and a line of 60,000 of one
+ *  character costs nothing. */
+const SIGNATURE_SCAN = 200
+
+/** A character as a name is compared, one at a time: in lower case (a final sigma as any other), and nothing unless a letter or
+ *  a digit. Its text is NFKC first, so letters typed in parts (Hangul jamo, an accent after its letter) are whole. */
+const nameChar = (char: string): string => char.toLowerCase().replace(/ς/g, 'σ').replace(/[^\p{L}\p{N}]/gu, '')
+
+/** Whether [line] is signed [name], however the name is written: the line's first letters and digits are the name's, then,
+ *  before any other letter or digit, a comma, colon or bracket ("Đức Anh, 14:20:", "**Pip Two** (builder):", "Atlas Reed Two 🐝,").
+ *  The name is read against the line, not the line by a pattern, so a name of any length, script or punctuation is known; one
+ *  pass over at most 200 characters, stopped at the first letter that is not the name's. */
+export function signedAs(line: string, name: string): boolean {
+  const want = [...name.normalize('NFKC')].map(nameChar).join('')
+  if (!want) return false
+  const text = line.slice(0, SIGNATURE_SCAN).normalize('NFKC')
+  let key = '', at = 0
+  for (const char of text) {
+    at += char.length
+    const part = nameChar(char)
+    if (!want.startsWith(part, key.length)) return false
+    key += part
+    if (key === want) return /^[^\p{L}\p{N}]*?[,:(]/u.test(text.slice(at))
+  }
+  return false
+}
+
+/** Every agent a pull request names as its writer: each builder label's name (`Builder:` in any case) and its branch's first part
+ *  (`pip/12`). A task taken over can carry one agent's branch and another's label; neither of them reads it. */
+export function writersOf(pull: Json): string[] {
+  const labels = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).filter(name => /^builder:/i.test(name))
+  const branch = String(object(pull.head).ref ?? '')
+  return [...labels.map(name => name.slice('builder:'.length)), ...branch.includes('/') ? [branch.split('/')[0]!.toLowerCase()] : []]
+}
+
+/** A pull request's people for `verdicts`, with its [team]. */
+export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople => ({ writers: writersOf(pull), opener: String(object(pull.user).login ?? ''), team })
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
-export function authorOf(pull: Json): string | null {
-  const label = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).find(n => n.startsWith('builder:'))
-  if (label) return label.slice('builder:'.length)
-  const branch = String(object(pull.head).ref ?? '')
-  return branch.includes('/') ? branch.split('/')[0]!.toLowerCase() : null
-}
+export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
 /** Whether every check on a head passed (none at all passes), is still running, or failed with which names. */
 export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[] } {
@@ -114,7 +171,8 @@ export class GitHubMerge {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly reads: GitHubReads
-  private readonly unreadable = new Map<string, number>()
+  /** How long each repository is left alone after it failed: one this login cannot read, or one whose pass failed. */
+  private readonly waits = new Waits()
   /** What each pull request was last told, by head and reason, so it is told once for each head. */
   private readonly told = new Map<string, string>()
   private projects: { at: number; list: LedProject[] } | null = null
@@ -151,21 +209,27 @@ export class GitHubMerge {
   private async pass(): Promise<void> {
     if (!this.projects || this.now() - this.projects.at >= PROJECTS_FRESH_MS) this.projects = { at: this.now(), list: await this.deps.projects() }
     if (!this.projects.list.length || this.now() < this.offUntil) return
+    // Whether a repository is being left alone: the pass then says nothing of running again.
+    let held = false
     try {
       for (const project of this.projects.list) {
-        if ((this.unreadable.get(project.repo) ?? 0) > this.now()) continue
-        try { await this.mergeReady(project) } catch (error) {
+        if (this.waits.held(project.repo, this.now())) { held = true; continue }
+        try { await this.mergeReady(project); this.waits.ok(project.repo) } catch (error) {
           this.reads.forget(project.repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
-          if (error instanceof GitHubStop) this.unreadable.set(project.repo, error.until)
-          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
+          held = true
+          // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so).
+          const wait = this.waits.miss(project.repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
+          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
         }
       }
-      this.note('', '')
+      this.waits.ran()
+      if (!held) this.note('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
-      this.offUntil = error.until
-      this.note(error.code, error.message)
+      const wait = this.waits.stop(error.until - this.now())
+      this.offUntil = this.now() + wait
+      this.note(error.code, `${error.message} (again in ${waitWords(wait)})`)
     }
   }
 
@@ -184,10 +248,19 @@ export class GitHubMerge {
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
-      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
+      const people = pullPeople(pull, team)
+      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && sameKey(reader) !== sameKey(author))
-      if (reads.length < (twoReads ? 2 : 1)) continue
+      // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
+      const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(people.writers, reader))
+      const reads = new Map(onHead.filter(([, r]) => !r.ownLogin))
+      if (reads.size < (twoReads ? 2 : 1)) {
+        // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
+        const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
+        if (unsigned) await this.tellOnce(repo, number, head, author, `the READ-OK from ${unsigned.name} is unsigned, and every agent of its person posts as that `
+          + `login: its reader signs it, as in "<name>, ${this.clock()}: READ-OK ${head.slice(0, 7)}".`, comments)
+        continue
+      }
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
@@ -205,24 +278,25 @@ export class GitHubMerge {
         this.note('MERGE_REFUSED', `${repo}#${number}: GitHub answered ${merged.status}`)
         continue
       }
-      const by = reads.map(([, r]) => r.name).join(' and ')
+      const by = [...reads.values()].map(r => r.name).join(' and ')
       await this.comment(repo, number, `${SELF}, ${this.clock()}: merged. READ-OK on ${head.slice(0, 7)} by ${by}, checks green.`)
       this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
       this.reads.forget(repo)
     }
   }
 
-  /** Tells the pull request's author, by name on the pull request itself, once for each head and reason. */
   /** Says once for a head why it is not merged. It names the head, and a restart finds it among the pull request's comments:
    *  remembered only in memory, every release (each restarts the PM's daemon, seven on 2026-11-10) said it again. */
   private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string, comments: Json[]): Promise<void> {
     const key = `${repo}#${number}`, said = `${head}\n${what}`
     if (this.told.get(key) === said) return
+    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
+    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) {
+      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
+    }
+    // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.set(key, said)
     if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
-    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
-    if (comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) return
-    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {

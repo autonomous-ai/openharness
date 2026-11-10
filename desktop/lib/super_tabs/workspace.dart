@@ -11,6 +11,7 @@ import '../state/workspace_chrome.dart';
 import 'agent_group_picker.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
 import 'personal_machines.dart';
@@ -33,6 +34,7 @@ class SuperTabWorkspace extends StatefulWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onNewSwarm,
+    this.github,
   });
   final AppNotifier app;
   final Widget canvas;
@@ -46,6 +48,9 @@ class SuperTabWorkspace extends StatefulWidget {
   final VoidCallback? onAttachAgent;
   final VoidCallback? onNewSwarm;
 
+  /// Reads a project's tasks with `gh`; tests give their own.
+  final SwarmGitHub? github;
+
   @override
   State<SuperTabWorkspace> createState() => _SuperTabWorkspaceState();
 }
@@ -56,13 +61,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   (String, String, String?, String, bool, String)? _terminalRequest;
   (String, String, String?, String, bool, String)? _readyRequest;
   // Navigation never undoes a person's stop. Only the pane's explicit Resume
-  // action may restart a saved session, with the Swarm's native context.
+  // action may restart a saved session.
   (String, String)? _resumeRequest;
   (String, String)? _focusRequest;
   Future<void> _terminalChange = Future.value();
   final _nativePanes = <TerminalPane>[];
   final _failures = <(String, String?), String>{};
-  final _nativeHeartbeats = <Timer>[];
 
   /// The Swarm tab last told to the client as the one on screen.
   String? _shown;
@@ -90,10 +94,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   }
 
   void _clearNativeContext() {
-    for (final timer in _nativeHeartbeats) {
-      timer.cancel();
-    }
-    _nativeHeartbeats.clear();
     final panes = _nativePanes.toList();
     _nativePanes.clear();
     _readyRequest = null;
@@ -220,7 +220,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             agent,
             controller,
             swarmId,
-            request.$2,
             current,
             resume == (request.$2, agent.id),
           );
@@ -243,13 +242,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           );
         }
         if (current() && agents.isEmpty && tab != null) {
-          final personal = PersonalProjects.of(app);
-          if (personal.soleTab(local) case final source?) {
+          if (PersonalProjects.of(app).soleTab(local) case final source?) {
             app.copySuperTabLayout(swarmId, source);
-          } else if (local.isNotEmpty) {
-            // Panes from several tabs: the sizes the person gave this
-            // project on this computer, if any (task #3099).
-            personal.applyLayout(controller, request.$2, tab);
           }
         }
         if (current()) {
@@ -295,7 +289,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     SuperTabAgent agent,
     SuperTabController controller,
     String swarmId,
-    String conversationId,
     bool Function() current,
     bool resume,
   ) async {
@@ -328,7 +321,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         );
       }
       if (!current()) return;
-      String? inputContext;
       // A narrowly shared harness remains its existing read-only observer.
       // Controlling a machine and joining a Swarm are separate grants.
       if (controller.canWrite && machine?.machine.isShared != true) {
@@ -346,45 +338,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             throw SuperTabFailure('TERMINAL_UNAVAILABLE', resumeError);
           }
         }
-        if (stopped != true || resume) {
-          final issued = await controller.request(
-            'POST',
-            '/api/super-tabs/${controller.tabId}/native',
-            body: {
-              'operationId': superTabOperationId(),
-              'conversationId': conversationId,
-              'agentId': agent.id,
-            },
-          );
-          if (!current()) return;
-          inputContext = issued['contextId'] as String?;
-          if (inputContext == null ||
-              !RegExp(r'^[A-Za-z0-9_-]{16,160}$').hasMatch(inputContext)) {
-            throw const SuperTabFailure(
-              'NATIVE_UNAVAILABLE',
-              'Could not prepare terminal sharing. Try opening it again.',
-            );
-          }
-          final prepared = await app.superTabMachineRequest(agent.machineId, {
-            'action': 'prepareNative',
-            'tabId': controller.tabId,
-            'contextId': inputContext,
-          });
-          if (!current()) return;
-          if (prepared['inputContext'] != inputContext) {
-            throw const SuperTabFailure(
-              'NATIVE_UNAVAILABLE',
-              'This machine could not confirm terminal sharing.',
-            );
-          }
-        }
       }
       await app.assignAgentToPane(
         null,
         agent.machineId,
         agent.harnessId,
         swarmId: swarmId,
-        inputContext: inputContext,
         watchOnly: !controller.canWrite,
         autoTile: true,
         focus: false,
@@ -400,50 +359,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           case final pane?) {
         pane.composerVisible = false;
         _nativePanes.add(pane);
-      }
-      if (inputContext != null) {
-        var renewing = false;
-        _nativeHeartbeats.add(
-          Timer.periodic(const Duration(seconds: 20), (timer) async {
-            if (!current()) {
-              timer.cancel();
-              return;
-            }
-            if (renewing) return;
-            renewing = true;
-            try {
-              await app.superTabMachineRequest(agent.machineId, {
-                'action': 'renewNative',
-                'tabId': controller.tabId,
-                'contextId': inputContext,
-              });
-            } catch (failure) {
-              if (mounted && current()) {
-                _failures[(agent.machineId, agent.harnessId)] =
-                    'Terminal sharing paused. $failure';
-                final pane = tab.panes
-                    .where(
-                      (p) =>
-                          p.machineId == agent.machineId &&
-                          p.agentId == agent.harnessId,
-                    )
-                    .firstOrNull;
-                pane?.session?.stageInputContext(null, watchOnly: true);
-                if (pane != null) {
-                  pane.inputContext = null;
-                  pane.watchOnly = true;
-                  unawaited(
-                    pane.session?.setInputContext(null, watchOnly: true),
-                  );
-                }
-                setState(() {});
-              }
-              timer.cancel();
-            } finally {
-              renewing = false;
-            }
-          }),
-        );
       }
     } catch (failure) {
       if (mounted && current()) {
@@ -677,6 +592,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onNewAgent: widget.onNewAgent,
                   onAttachAgent: widget.onAttachAgent,
                   onNewSwarm: widget.onNewSwarm,
+                  github: widget.github,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,
                     tab.id,

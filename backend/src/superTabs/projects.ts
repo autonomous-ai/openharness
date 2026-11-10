@@ -164,6 +164,14 @@ export function projectsOf(state: SuperTabState): SwarmProject[] {
   }]
 }
 
+/** The projects' channels, each project's own chat (Swarm v4). A person's stored mute of one silences nothing (2026-11-10):
+ *  v4's project menu has no Notifications, so a channel muted before could never be unmuted. Desktop reads that mute as
+ *  Mentions only (SuperTabController.notifyOf, #3768), and so do reply rows and phone pushes (activity.ts
+ *  writeReplyActivity, push/notices.ts); the stored row stays as it is. */
+export function projectChannels(state: SuperTabState): Set<string> {
+  return new Set(projectsOf(state).map(p => p.leadConversationId))
+}
+
 export function projectOf(state: SuperTabState, projectId: string): SwarmProject {
   return projectsOf(state).find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
 }
@@ -294,8 +302,17 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     return home === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
-  return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||
-    project.members.some(p => p.id === member.id && p.generation === member.generation))
+  return !!member && personReadsProject(member, project)
+}
+
+/** Whether a person in the Swarm, at membership [member], reads [project]: a public one; one they own at this membership (a
+ *  project from before the owner's generation was stored matches by id, as ownsProject); one they are listed in at it. Never by a
+ *  listing or an ownership from an earlier membership. canReadProject asks it with the Swarm's state; a read that has only the
+ *  project and the member row (shipping/service.ts) asks it alone. */
+export function personReadsProject(member: Pick<Person, 'id' | 'generation'>,
+  project: Pick<SwarmProject, 'visibility' | 'ownerId' | 'ownerGeneration' | 'members'>): boolean {
+  return project.visibility === 'public' || (!!member.id && project.ownerId === member.id && (project.ownerGeneration === undefined || project.ownerGeneration === member.generation))
+    || (project.members ?? []).some(p => p.id === member.id && p.generation === member.generation)
 }
 
 /** Whether [target] is an agent of [project]'s channel (Swarm v4, anh Dee 2026-11-08): one that reads the project as an agent

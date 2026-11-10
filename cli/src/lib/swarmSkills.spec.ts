@@ -38,6 +38,31 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     }
   })
 
+  // Swarm v4 (anh Dee, 2026-11-09): the team's talk is visible to people only if agents post it. Harness labels who gets a task;
+  // the PM announces it once in the project's channel, as "Pip, you have #12", and the rest of that task's talk stays on its
+  // issue (the basics' own rule). No other agent is told to.
+  it('tells the PM to announce each hand-off once in the project\'s channel, and no other agent', () => {
+    const lead = prepareSwarmSkill(fixture(), { role: 'coordinator', key: 'lead' }).instructions
+    expect(lead.split('\n').filter(row => row.includes('hand-off'))).toHaveLength(1)
+    expect(lead).toMatch(/announce that hand-off once in your project's channel, as "Pip, you have #12"/)
+    expect(lead).toContain('the rest of that task\'s talk stays on its issue')
+    for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
+      expect(prepareSwarmSkill(fixture(), saved).instructions).not.toMatch(/hand-off|you have #/)
+    }
+  })
+
+  // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
+  // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
+  it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
+    for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
+      const rows = prepareSwarmSkill(fixture(), saved).instructions.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
+      expect(rows, saved.key).toHaveLength(1)
+      // By id, never by name; no privilege; a template a Mac's mktemp honours, and Windows' own folder; no other agent's worktree.
+      for (const part of ['by the process id you recorded, never by name (pkill, killall, taskkill /IM)', 'no sudo or system-wide installs',
+        'mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX"', '$env:TEMP', 'never remove another agent\'s worktree']) expect(rows[0], part).toContain(part)
+    }
+  })
+
   it('tells no agent to send a person a private line: their chat with their own agent is theirs alone (task #4547)', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'private-buddy' }).file, 'utf8')
     expect(text).not.toContain('person.tell')

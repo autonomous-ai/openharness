@@ -6,7 +6,7 @@
 import { buddySleepManaged } from '../buddySleep.js'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
-import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
+import { buddyChatOf, isBuddy, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
 import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
@@ -21,7 +21,6 @@ export interface HostLookups {
   confidential: Set<string>
   /** Throws a SuperTabError when the agent's machine grant is gone (store.ts agentGrant). */
   agentGrant(target: Agent): Promise<void>
-  githubApp: boolean
 }
 
 /** Removed machines whose host has not yet said it cleaned up (store.ts cleanups). */
@@ -31,7 +30,7 @@ const cleanups = (state: SuperTabState): MachineCleanup[] => [
 
 export async function hostTab(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostTabRows> {
   const rows = { tabId, lastChangedAt, roster: await roster(tabId, state, machineId, user, lastChangedAt, lookups),
-    pool: pool(tabId, state, machineId, user, lookups.githubApp), assignments: assignments(tabId, state, machineId, user) }
+    pool: pool(tabId, state, machineId, user), assignments: assignments(tabId, state, machineId, user) }
   return { ...rows, etag: hostEtag(rows) }
 }
 
@@ -74,12 +73,17 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     resume,
     agent: target,
     ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),
-    // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
-    // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
-    // Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins.
-    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly)
-      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub))
-      && state.conversations.some(c => !c.archived && c.leadId === target.id),
+    // The Swarm owner's host adds the machine any live agent of theirs runs on, in any Swarm they own: a Lead, or a plain v4 agent, which
+    // leads nothing (a Personal Swarm may hold nothing else, and never got its machine). Since #4120 a machine takes only its own person's
+    // agents, so this adds no one else's work to it. Never for a Buddy: a Buddy-only record is not the machine in the Swarm; an agent of the
+    // owner there still joins it, which makes the record an ordinary machine (commands.ts machine.contribute ifMissing; security review 2
+    // of #2234). Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins. Never
+    // a machine its person took out of the Swarm (removedMachines): an older host adds it back on this word alone (cli host.ts); a person
+    // who wants it back adds it.
+    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !isBuddy(target)
+      && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
+      && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly) && !state.removedMachines?.some(r => r.machineId === machineId)
+      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub)),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
     roleName: roleNameOf(state, target),
@@ -110,7 +114,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   }
 }
 
-function pool(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, githubApp: boolean): HostPool | null {
+function pool(tabId: string, state: SuperTabState, machineId: string, user: AuthUser): HostPool | null {
   let contribution
   try { contribution = machineContribution(state, machineId) } catch (error) { if (error instanceof SuperTabError) return null; throw error }
   if (!contribution || contribution.contributorId !== user.sub) return null
@@ -140,7 +144,6 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     ...(removedHere.length ? { removedHarnessIds: removedHere } : {}),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),
       ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])],
-    ...(githubApp ? { githubApp: true as const } : {}),
     // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
     // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
     buddySleepWanted: true as const, capabilitiesWanted: true as const }

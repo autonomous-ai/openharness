@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor } from './model.js'
+import { createSuperTab, visibleState, type Actor, type Author, type Person } from './model.js'
 import { split } from './parts/shape.js'
 import { readerView } from './read/views.js'
 import { actorName } from './activity.js'
-import { authorForAgent, lazyUsernames, namesPerson, nameRefusal, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
+import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, nameRefusal, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
@@ -112,6 +112,59 @@ describe('the name a person set', () => {
 
 // Task #2954 (Ken, 11-04): a person's message is stored with their email as its author's name, and agents copied it into
 // commands and pull request bodies until a machine's privacy hook stopped their sessions. An agent reads names instead.
+// anh Dee, 2026-11-10: with no editor left, a person's name in a Swarm follows their account's.
+describe('a name that follows the account', () => {
+  const someone = (): Person => ({ id: 'p1', email: 'minh@example.com', role: 'collaborator', generation: 'g' })
+
+  it('takes the account name, keeps a name chosen here before out of sight, and keeps it only once', () => {
+    const chose: Person = { ...someone(), name: 'Minh (design)' }
+    expect(nameFromAccount(chose, ' Minh Nguyen ')).toBe(true)
+    expect(chose).toMatchObject({ name: 'Minh Nguyen', chosenName: 'Minh (design)', nameFollowsAccount: true })
+    expect(nameFromAccount(chose, 'Minh Tran')).toBe(true)
+    expect(chose).toMatchObject({ name: 'Minh Tran', chosenName: 'Minh (design)' })
+    expect(nameFromAccount(chose, 'Minh Tran')).toBe(false)
+  })
+
+  it('shows the username when the account has no name, writes nothing where nothing would show otherwise, and keeps no chosen '
+    + 'name where there was none', () => {
+    const plain = someone()
+    expect(nameFromAccount(plain, null)).toBe(false)
+    expect(nameFromAccount(plain, '  ')).toBe(false)
+    expect(plain).toEqual(someone())
+    const named: Person = { ...someone(), name: 'Minh' }
+    nameFromAccount(named, null)
+    expect(named).not.toHaveProperty('name')
+    expect(named.chosenName).toBe('Minh')
+  })
+
+  // An SSO or an admin can set what Harness's own editor refuses (lib/accountName.ts): a Swarm never shows it.
+  it('shows the username instead of a name a Swarm may not show: a role\'s, a web address, hidden characters', () => {
+    for (const refused of ['PM', 'https://ev.il', 'Ken\u202Eadmin']) {
+      const person = { ...someone(), name: 'Minh' }
+      expect(nameFromAccount(person, refused), refused).toBe(true)
+      expect(person, refused).not.toHaveProperty('name')
+    }
+  })
+
+  it('names them so everywhere the Swarm shows them, and an agent reads it', () => {
+    const f = fixture()
+    const stored = f.state.people.find(p => p.id === 'peer')!
+    nameFromAccount(stored, 'Dee Ho')
+    expect(f.shown('peer')).toBe('Dee Ho')
+    expect(writtenNameOf(f.state, 'peer')).toBe('Dee Ho')
+    const author: Author = { kind: 'person', id: 'peer', name: 'dee@autonomous.ai', membershipGeneration: 'g' }
+    expect(authorForAgent(f.state, author, lazyUsernames(f.state)).displayName).toBe('Dee Ho')
+  })
+
+  it('takes the account name when an invitation is accepted', () => {
+    const f = fixture()
+    const newcomer = person('newcomer', 'nam@example.com')
+    const invited = f.run({ type: 'invite.create', email: newcomer.email, role: 'collaborator', conversationId: 'lead' })
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, newcomer, { accountName: 'Nam Le' })
+    expect(f.shown('newcomer')).toBe('Nam Le')
+  })
+})
+
 describe('a person author as an agent reads it', () => {
   const stored = (id: string, email: string) => ({ kind: 'person' as const, id, name: email, membershipGeneration: 'g' })
 

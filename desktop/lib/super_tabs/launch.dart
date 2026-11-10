@@ -8,7 +8,6 @@ import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/first_task.dart';
-import '../logging/app_log.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -22,7 +21,6 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'new_repository.dart';
-import 'personal_projects.dart' show PersonalProjects;
 import 'agent_names.dart';
 import 'launch_prompt.dart';
 import 'identity.dart' show superTabMachineName;
@@ -1037,30 +1035,8 @@ class SuperTabLaunch {
     checkAccount();
   }
 
-  /// A Personal start whose pane would need a tab the full desk cannot hold
-  /// is refused here, before any agent runs (task #3099). A start already
-  /// asked for is not: its agent may be running. A Product Manager started
-  /// on a Swarm machine ([startInSwarm]) puts no pane on this desk, so it
-  /// needs no tab.
-  void refuseFullDesk() {
-    if (started) return;
-    final refusal = PersonalProjects.of(app).startRefusal(
-      saved['tabId'] as String?,
-      saved['conversationId'] as String?,
-      newProject:
-          saved['newProject'] == true && saved['projectPrepared'] != true,
-    );
-    if (refusal != null) {
-      // Said in the log by its code alone: how often a full desk stops a
-      // start is what warns that the desk's 24 tabs are near.
-      appLog.warn('super-tabs', 'Personal start refused (TABS_FULL)');
-      throw SuperTabFailure('TABS_FULL', refusal);
-    }
-  }
-
   Future<String> prepare(String machine, String task, [String? engine]) async {
     checkAccount();
-    refuseFullDesk();
     if (app.stateOf(machine)?.belongsToOtherAccount == true) {
       throw const SuperTabFailure(
         'CONTRIBUTION_REQUIRED',
@@ -1351,20 +1327,6 @@ class SuperTabLaunch {
         tabId,
         saved['visibility'] == 'private' ? 'Swarm' : saved['title'] as String,
       );
-    }
-    // The pane goes to its project's own tab in Personal (task #3099). A
-    // failure there never undoes the join: the agent is in its project.
-    if (controller.snapshot?.projectFor(saved['conversationId'] as String)
-        case final project?) {
-      try {
-        await PersonalProjects.of(app)
-            .placeInProjectTab(controller, project.id, machine, harnessId);
-      } catch (error) {
-        appLog.warn(
-          'super-tabs',
-          'Personal project tab placement failed (${error.runtimeType})',
-        );
-      }
     }
     // Its person goes on in their chat with it: a PM's own chat since Swarm v4, as only agents post in the project's channel.
     final joined = controller.snapshot?.agents

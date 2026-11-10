@@ -18,7 +18,7 @@ const BATCH = 500
 /** Tells each machine once per agent that has a delivery queued REPUSH_AFTER_MS or more. Reads queued rows only, by the
  *  delivery status index `(status, _id)` with a plain match, page by page: ids are hashes, so no page order puts new rows
  *  first. Resolves to the agents told and the rows read: the rows are the pass's cost, and grow with an offline machine's
- *  queue while the agents told stay few (review of #2977). A delivery its host keeps withholding (cli host.ts mayRead) stays
+ *  queue while the agents told stay few (review of #2977). A delivery its host keeps withholding stays
  *  queued and is told every pass, so that one agent's list is read every 15 s, where it was every 30 s. */
 export async function repushQueuedDeliveries(db: PrismaClient, tell: (waiting: DeliveriesWaiting) => void, now: number): Promise<{ told: number; read: number }> {
   const told = new Set<string>()

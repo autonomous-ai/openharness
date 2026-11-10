@@ -32,6 +32,8 @@ describe('an agent\'s instructions file through the socket', () => {
     cwd = await mkdtemp(join(tmpdir(), 'harness-instructions-socket-'))
     await mkdir(join(cwd, 'agents'))
     await writeFile(join(cwd, 'agents', 'Faye.md'), 'SECRET words')
+    // What else instructs the agent, in its folder: read with its own file, and as much the person's own words as it is.
+    await writeFile(join(cwd, 'AGENTS.md'), 'SECRET shared words')
     socket = relaySocket('fixture')
     sockets.push(socket)
     // The real project readers answer, over a real folder: what the socket hands them is what they trust.
@@ -85,7 +87,7 @@ describe('an agent\'s instructions file through the socket', () => {
     await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
     await vi.waitFor(() => expect(replied()).toHaveLength(1), SETTLED)
     const [{ payload: read }] = replied()
-    expect(read).toEqual({ text: 'SECRET words', version: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    expect(read).toEqual({ text: 'SECRET words', version: expect.stringMatching(/^[0-9a-f]{64}$/), shared: [{ name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], text: 'SECRET shared words', truncated: false }] })
     await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'SECRET rewrite', version: read.version })
     await vi.waitFor(() => expect(replied()).toHaveLength(2), SETTLED)
     expect(replied().map((reply) => reply.type)).toEqual(['agent_instructions_read_result', 'agent_instructions_write_result'])

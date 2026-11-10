@@ -119,7 +119,7 @@ const both = (into: unknown, value: unknown): unknown => Array.isArray(into) && 
 
 /**
  * [args] with every settings object given by [flag] merged into one, where the first was: the engine keeps only the
- * last, and a Swarm's shell guard (lib/agentShellGuard.ts), Harness's status line and the pull request setting are each
+ * last, and Harness's status line and the pull request setting are each
  * one. Left as they are when any of them is not an object.
  */
 export function joinedSettings(flag: string, args: readonly string[]): string[] {

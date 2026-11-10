@@ -172,6 +172,7 @@ export interface FirstLoad extends ReadMeta {
   /** Own active Tasks; absent for agent readers and older servers. */
   personalTasks?: import('./personalTasks.js').PersonalTasks
   tabId: string
+  /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App; never now. */
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
   steps?: true
@@ -257,8 +258,8 @@ export interface MessagePageCursor { sequence: number; id: string }
 export interface MessagePage<M = Record<string, unknown>> {
   messages: M[]
   next: MessagePageCursor | null
-  /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
-   *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
+  /** Moves when a message here is edited or deleted (messageEdits.ts): read the page shown again. Named for the reactions it
+   *  first counted. Each message still carries `reactions`, always empty since 2026-11-09 (reactions.ts), for apps from before. */
   reactionSeq: number
 }
 
@@ -359,6 +360,7 @@ export interface HostPool {
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   removedHarnessIds?: string[]
+  /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App, for a host to ask for a start's token; never now. */
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true

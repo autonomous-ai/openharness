@@ -97,7 +97,8 @@ async function scene(extra: Array<{ kind: 'person'; userId: string; email: strin
   s.join(outsiderActor)
   for (const person of extra) s.join(person)
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
-  const open = s.run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }).projectId as string
+  const created = s.run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' })
+  const open = created.projectId as string, openChannel = created.conversationId as string
   const openChat = s.group('Open chat', open)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
@@ -117,7 +118,7 @@ async function scene(extra: Array<{ kind: 'person'; userId: string; email: strin
   await writeLegacySwarm(db, { state, revision: 3 })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
-  return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat, swarmBuddy }
+  return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat, openChannel, swarmBuddy }
 }
 
 const run = async (tabId: string, command: Command, as: AuthUser = owner, asAgentId?: string) =>
@@ -287,6 +288,26 @@ describe('Phone push end to end on the server: a write, its phones, and what App
     await tag('Peer, look again')
     // Its phone here; earlier tests may have given peer others.
     expect(apple.filter(r => r.path.endsWith(token)).map(r => JSON.parse(r.body).aps.alert.title)).toEqual([expect.stringMatching(/ tagged you$/)])
+  })
+
+  it('a project\'s channel muted before Swarm v4, which has no way to unmute it, rings as if not muted; the stored mute stays (2026-11-10)', async () => {
+    const apple: ApnsRequest[] = []
+    const senders = { ios: apnsSender(apnsKeys, { transport: async request => { apple.push(request); return { status: 200, reason: null } } }), android: null }
+    const sending: Array<Promise<void>> = []
+    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices)) } })
+    const s = await scene()
+    const token = 'd4'.repeat(32)
+    await registerPushDevice(db, peer.sub, { platform: 'ios', token }, Date.now())
+    const root = await send(s.tabId, s.openChannel, 'Peer root', peer)
+    expect((await notify(s.tabId, s.openChannel, 'muted', peer)).status).toBe(200)
+    for (const [text, mentions] of [['Owner answers', []], ['Peer, look', [peer.sub]]] as const) {
+      await pushing.execute(owner, s.tabId, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: s.openChannel, text, replyTo: root, recipientIds: [], mentions: [...mentions] } })
+      await Promise.all(sending.splice(0))
+    }
+    expect(apple.filter(r => r.path.endsWith(token)).map(r => JSON.parse(r.body).aps.alert.title))
+      .toEqual([expect.stringMatching(/ replied in a thread$/), expect.stringMatching(/ tagged you$/)])
+    expect((await db.superTabChatSetting.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.openChannel, peer.sub, 'notify') } })).notify).toBe('muted')
   })
 
   it('weighs a write\'s tags against their chats\' mutes in one read by id, examining no other setting', async () => {
@@ -589,6 +610,15 @@ describe('Activity: a reply tells everyone in its thread (task #2745)', () => {
     expect((await tags(s.tabId, peer)).map(t => t.messageId)).toEqual([tag])
   })
 
+  it('writes reply rows in a project\'s channel muted before Swarm v4, which has no way to unmute it; the stored mute stays (2026-11-10)', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.openChannel, 'Peer root', peer)
+    expect((await notify(s.tabId, s.openChannel, 'muted', peer)).status).toBe(200)
+    const reply = await send(s.tabId, s.openChannel, 'Owner answers', owner, root)
+    expect(await rowsOf(s.tabId, peer)).toEqual([reply])
+    expect((await db.superTabChatSetting.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.openChannel, peer.sub, 'notify') } })).notify).toBe('muted')
+  })
+
   it('tells nobody new of a Swarm notice or an agent-only notice in a thread: the starter alone, as before', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
@@ -668,29 +698,16 @@ describe('Activity: what one thread reply costs (task #2745)', () => {
   })
 })
 
-describe('Activity: reactions to a person\'s messages', () => {
-  it('lists a reaction by someone else, removes it with the reaction, and never one\'s own', async () => {
+// Reactions are gone (anh Dee, 2026-11-09): nobody's reaction makes a row, and a row one made before is listed to nobody.
+describe('Activity: no reactions', () => {
+  it('lists no reaction, a person\'s or an agent\'s, made now or stored before', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
-    await react(s.tabId, s.web, root, true, owner)
-    expect(await items(s.tabId)).toEqual([])
     await react(s.tabId, s.web, root, true, peer)
     await react(s.tabId, s.web, root, true, owner, 'check', s.worker)
-    const list = await items(s.tabId)
-    expect(list.map(i => [i.kind, i.emoji, i.actor.kind, i.text])).toEqual([['reaction', 'check', 'agent', 'Owner root'], ['reaction', 'thumbs_up', 'person', 'Owner root']])
-    // The same reaction again keeps one row.
-    await react(s.tabId, s.web, root, true, peer)
-    expect((await items(s.tabId)).length).toBe(2)
-    await react(s.tabId, s.web, root, false, peer)
-    expect((await items(s.tabId)).map(i => i.emoji)).toEqual(['check'])
-  })
-
-  it('drops a reaction by someone who left the Swarm', async () => {
-    const s = await scene()
-    const root = await send(s.tabId, s.web, 'Owner root')
-    await react(s.tabId, s.web, root, true, outsider)
-    expect((await items(s.tabId)).length).toBe(1)
-    await run(s.tabId, { type: 'member.remove', userId: outsider.sub })
+    expect(await db.superTabActivity.count({ where: { tabId: s.tabId, kind: 'reaction' } })).toBe(0)
+    await db.superTabActivity.create({ data: { id: `${root}-old`, tabId: s.tabId, personId: owner.sub, kind: 'reaction', conversationId: s.web,
+      messageId: root, threadId: null, actorKind: 'person', actorId: peer.sub, emoji: 'tada', createdAt: new Date(), readAt: null } })
     expect(await items(s.tabId)).toEqual([])
   })
 })
@@ -700,15 +717,14 @@ describe('Activity: only what the person can read now', () => {
     const s = await scene()
     const root = await send(s.tabId, s.openChat, 'Peer root', peer)
     await send(s.tabId, s.openChat, 'Owner answers', owner, root)
-    await react(s.tabId, s.openChat, root, true, outsider)
-    expect((await items(s.tabId, peer)).length).toBe(2)
+    expect((await items(s.tabId, peer)).length).toBe(1)
     // The owner makes the project private to themselves: peer can no longer read the chat, and its rows say nothing.
     await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'private', memberIds: [] })
     const answer = await activity(s.tabId, peer)
     expect(answer.body.data).toEqual({ items: [], more: false })
     expect(JSON.stringify(answer.body)).not.toContain('Open chat')
     await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'public', memberIds: [] })
-    expect((await items(s.tabId, peer)).length).toBe(2)
+    expect((await items(s.tabId, peer)).length).toBe(1)
   })
 
   it('is the reader\'s alone: another member, an outsider of the Swarm and a Team session read none of it', async () => {
@@ -804,7 +820,7 @@ describe('Activity: read state and its digest', () => {
     expect((await items(s.tabId)).map(i => i.read)).toEqual([true, true])
   })
 
-  it('leaves another person\'s rows, other threads\' rows and reactions unread when a thread is read', async () => {
+  it('leaves another person\'s rows and other threads\' rows unread when a thread is read', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
     const other = await send(s.tabId, s.web, 'Owner other root')
@@ -812,11 +828,9 @@ describe('Activity: read state and its digest', () => {
     await send(s.tabId, s.web, 'Answer to peer', owner, peerRoot)
     await send(s.tabId, s.web, 'Answer', owner, root, s.worker)
     await send(s.tabId, s.web, 'Answer elsewhere', owner, other, s.worker)
-    await react(s.tabId, s.web, root, true, peer)
     const newest = await sequenceOf((await db.superTabMessage.findFirstOrThrow({ where: { tabId: s.tabId }, orderBy: { sequence: 'desc' } })).id)
     await markThread(s.tabId, s.web, root, newest)
-    expect((await items(s.tabId)).map(i => [i.text, i.read])).toEqual([[null, false], ['Answer elsewhere', false], ['Answer', true]].map(([text, read]) =>
-      [text ?? 'Owner root', read]))
+    expect((await items(s.tabId)).map(i => [i.text, i.read])).toEqual([['Answer elsewhere', false], ['Answer', true]])
     expect((await items(s.tabId, peer)).map(i => i.read)).toEqual([false])
   })
 
