@@ -1,6 +1,6 @@
 /**
  * Brought: what a person's machines did for the Swarm (contributor view, #2444; AGENTS.md, contributed capacity: seen). Each machine
- * they brought that the reader may see, a Mac's Harness Team account folded into its Mac, with the verified requests that
+ * they brought that the reader may see, with the verified requests that
  * shipped on it, its busy time on other people's tasks (lent.ts), and each contributed engine's weekly window. And the
  * period's contributors: people whose machine ran an attempt. Pure, from what the board already holds.
  */
@@ -32,12 +32,6 @@ export const shippedByMerge = (group: Conversation): boolean =>
 /** Verified, as far as the server knows (the PM's north star): shipped by its merge, and no fix merged after it. */
 export const verified = (group: Conversation): boolean => shippedByMerge(group) && group.ledger!.fixedAfterMergeAt == null
 
-/** The machine a pool stands for among [machines]: a Harness Team account's Mac when the reader sees it, else itself. */
-export function homeOf(machines: readonly ContributedMachine[], machineId: string): ContributedMachine | undefined {
-  const pool = machines.find(m => m.machineId === machineId)
-  return pool?.hostMachineId ? machines.find(m => m.machineId === pool.hostMachineId) ?? pool : pool
-}
-
 /** A window's reset as epoch milliseconds: vendors give a date, epoch seconds or milliseconds. */
 function resetMs(value: string | number | null | undefined): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value < 1e12 ? value * 1000 : value
@@ -63,20 +57,18 @@ const subscriptions = (pool: ContributedMachine): BroughtMachine['subscriptions'
  * The machines [mine] (one person's, the reader's visible ones) as Brought rows: [shipped] the verified requests whose
  * shipping attempt ran on each, [busyMs] each pool's lent time. Most shipped first, then busiest, then by name.
  */
-export function broughtMachines(state: SuperTabState, mine: readonly ContributedMachine[], visible: readonly ContributedMachine[],
+export function broughtMachines(state: SuperTabState, mine: readonly ContributedMachine[],
   shippedRequests: readonly Conversation[], span: Span, busyMs: (pool: ContributedMachine) => number): BroughtMachine[] {
   const rows = new Map<string, BroughtMachine & { busy: number }>()
   for (const pool of mine) {
-    const home = homeOf(visible, pool.machineId) ?? pool
-    let row = rows.get(home.machineId)
-    if (!row) rows.set(home.machineId, row = { machineId: home.machineId, machineName: home.name, shipped: 0, busyHours: 0, subscriptions: subscriptions(home), busy: 0 })
+    let row = rows.get(pool.machineId)
+    if (!row) rows.set(pool.machineId, row = { machineId: pool.machineId, machineName: pool.name, shipped: 0, busyHours: 0, subscriptions: subscriptions(pool), busy: 0 })
     row.busy += busyMs(pool)
   }
   for (const group of shippedRequests) {
     if (!verified(group) || !within(group.ledger!.shippedAt!, span)) continue
     const machineId = shippedOnMachine(state, group)
-    const home = machineId ? homeOf(visible, machineId) : undefined
-    const row = home && rows.get(home.machineId)
+    const row = machineId ? rows.get(machineId) : undefined
     if (row) row.shipped++
   }
   return [...rows.values()].map(({ busy, ...row }) => ({ ...row, busyHours: Math.round(busy / 3_600_000 * 10) / 10 }))

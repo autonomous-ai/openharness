@@ -34,7 +34,6 @@ const reader = (rows = (urls: string[]) => urls.map(url => found(url)), error?: 
   const asked: string[][] = []
   return { asked, read: async (urls: string[]): Promise<PullRequestsResult> => { asked.push(urls); return { rows: rows(urls), checkedAt: 'now', ...(error ? { error } : {}) } } }
 }
-const decisions = (list: Record<string, unknown>[] = []) => async () => ({ decisions: list, more: false })
 const input = (state: Record<string, unknown>, changedAt: Record<string, number> = {}, since: number | null = null) =>
   ({ state, lastChangedAt: 5000, groupChangedAt: new Map(Object.entries(changedAt)), agentId: 'buddy', since })
 
@@ -47,8 +46,7 @@ describe('a Buddy\'s status', () => {
 
   it('says which task owns what, its pull request with merge and CI state, and what blocks it, without brief or machines', async () => {
     const prs = reader()
-    const status = await buddyStatus(input(swarm([offline]), { offline: Date.parse('2026-10-29T03:00:00.000Z') }), { pullRequests: prs.read,
-      decisions: decisions([{ id: 'd1', conversationId: 'offline', question: 'Ship it behind a flag?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }]) })
+    const status = await buddyStatus(input(swarm([offline]), { offline: Date.parse('2026-10-29T03:00:00.000Z') }), { pullRequests: prs.read })
     expect(status).toEqual({
       project: { name: 'App', chat: 'app-chat' }, chat: 'buddy-chat', since: null, more: 0,
       archived: 'Archived tasks the PM has reported on are left out: read them with status --archived.',
@@ -57,7 +55,6 @@ describe('a Buddy\'s status', () => {
           { name: 'Reviewer', role: 'Reviewer', state: 'down' }],
         checks: [{ description: 'Edits survive a restart', passed: false }, { description: 'Specs pass', passed: true }],
         pullRequests: [{ url: pr(12), state: 'Open', ci: 'failing', checks: { passed: 3, failed: 1, pending: 0, total: 4 }, review: 'REVIEW_REQUIRED', merge: 'BLOCKED' }],
-        decisions: [{ question: 'Ship it behind a flag?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }],
         lastActivity: '2026-10-29T03:00:00.000Z', changed: false }],
     })
     expect(JSON.stringify(status)).not.toMatch(/owner-mac|studio|peer-mac|whole brief/)
@@ -68,14 +65,14 @@ describe('a Buddy\'s status', () => {
   it('says each task\'s priority, a legacy title\'s marker as one, and none for a step', async () => {
     const groups = [{ ...offline, priority: 'P0', pullRequestUrls: [] }, { ...offline, id: 'legacy', number: 13, title: 'Fix login (high)', pullRequestUrls: [] },
       { ...offline, id: 'review', number: 14, title: 'Review', reviewOf: 'offline', step: 'Review', pullRequestUrls: [] }]
-    const status = await buddyStatus(input(swarm(groups), { offline: 3, legacy: 2, review: 1 }), { pullRequests: reader().read, decisions: decisions() })
+    const status = await buddyStatus(input(swarm(groups), { offline: 3, legacy: 2, review: 1 }), { pullRequests: reader().read })
     expect((status.tasks as Array<Record<string, unknown>>).map(t => [t.conversationId, t.priority])).toEqual([['offline', 'P0'], ['legacy', 'P1'], ['review', undefined]])
   })
 
   it('marks the tasks that changed since its last read, newest first; shows one archived until its report, and leaves out dormant ones', async () => {
     const groups = [{ ...offline, id: 'a', number: 1, pullRequestUrls: [] }, { ...offline, id: 'b', number: 2, pullRequestUrls: [] },
       { ...offline, id: 'c', number: 3, archived: true, pullRequestUrls: [] }, { ...offline, id: 'd', number: 4, dormant: true, pullRequestUrls: [] }]
-    const status = await buddyStatus(input(swarm(groups), { a: 1000, b: 3000, c: 4000, d: 4000 }, 2000), { pullRequests: reader().read, decisions: decisions() })
+    const status = await buddyStatus(input(swarm(groups), { a: 1000, b: 3000, c: 4000, d: 4000 }, 2000), { pullRequests: reader().read })
     const tasks = status.tasks as Array<{ number: number; changed: boolean }>
     // An archived task stays active until the PM's report covers it (backend commands.ts), and the archived list has only
     // dormant ones: the summary shows it, marked, so it is in one of the two (security review 1 of #2115).
@@ -86,7 +83,7 @@ describe('a Buddy\'s status', () => {
   it('stays bounded: the newest tasks, and pull requests checked up to the reader\'s limit', async () => {
     const groups = Array.from({ length: BUDDY_TASKS_MAX + 5 }, (_, i) => ({ ...offline, id: `g${i}`, number: i + 1, pullRequestUrls: [pr(i + 1)] }))
     const prs = reader()
-    const status = await buddyStatus(input(swarm(groups), Object.fromEntries(groups.map((g, i) => [g.id, i]))), { pullRequests: prs.read, decisions: decisions() })
+    const status = await buddyStatus(input(swarm(groups), Object.fromEntries(groups.map((g, i) => [g.id, i]))), { pullRequests: prs.read })
     const tasks = status.tasks as Array<{ number: number; pullRequests: Array<{ state?: string }> }>
     expect(tasks).toHaveLength(BUDDY_TASKS_MAX)
     expect(status.more).toBe(5)
@@ -98,14 +95,13 @@ describe('a Buddy\'s status', () => {
   it('checks only valid pull request links, so one malformed link never fails the rest', async () => {
     const prs = reader(urls => urls.map(url => found(url)))
     const status = await buddyStatus(input(swarm([{ ...offline, pullRequestUrls: [pr(12), 'https://github.com/acme/app/pull/0', 'https://github.com/acme/app/pull/12/files'] }])),
-      { pullRequests: prs.read, decisions: decisions() })
+      { pullRequests: prs.read })
     expect(prs.asked).toEqual([[pr(12)]])
     expect((status.tasks as Array<{ pullRequests: Array<{ url: string; state: string }> }>)[0]!.pullRequests.map(p => p.state)).toEqual(['Open'])
   })
 
   it('still lists its tasks when GitHub cannot be read, saying why', async () => {
-    const status = await buddyStatus(input(swarm([offline])), { pullRequests: reader(urls => urls.map(url => ({ url, status: 'unavailable', error: 'GH_SIGNED_OUT' })), 'GH_SIGNED_OUT').read,
-      decisions: decisions() })
+    const status = await buddyStatus(input(swarm([offline])), { pullRequests: reader(urls => urls.map(url => ({ url, status: 'unavailable', error: 'GH_SIGNED_OUT' })), 'GH_SIGNED_OUT').read })
     expect(status.pullRequestsError).toBe('GH_SIGNED_OUT')
     expect((status.tasks as Array<{ pullRequests: unknown }>)[0]!.pullRequests).toEqual([{ url: pr(12), state: 'unavailable' }])
   })
@@ -114,7 +110,7 @@ describe('a Buddy\'s status', () => {
 describe('a Buddy\'s archived tasks', () => {
   it('lists one page of them in the same rows, with the cursor for the next', async () => {
     const page = { groups: [{ key: 'old', version: 1, changedAt: 1000, data: { ...offline, id: 'old', number: 9, dormant: true } }], next: 'cursor-2' }
-    const status = await buddyArchived(page, swarm(), 'buddy', { pullRequests: reader().read, decisions: decisions() })
+    const status = await buddyArchived(page, swarm(), 'buddy', { pullRequests: reader().read })
     expect((status.tasks as Array<{ number: number }>).map(t => t.number)).toEqual([9])
     expect(status.next).toBe('cursor-2')
   })
@@ -138,7 +134,7 @@ describe('a person\'s one Buddy\'s status (spec 2026-10-31-one-buddy-per-swarm)'
 
   it('is an index: one line per project, at most 50, and the 20 newest tasks across them, each naming its project', async () => {
     const state = many(60)
-    const status = await buddyStatus(input(state, changed(state)), { pullRequests: reader().read, decisions: decisions() })
+    const status = await buddyStatus(input(state, changed(state)), { pullRequests: reader().read })
     expect(status.projects).toHaveLength(50)
     expect(status.moreProjects).toBe(10)
     expect((status.projects as Array<Record<string, unknown>>)[0]).toEqual({ id: expect.any(String), name: 'Project p0', chat: 'p0-chat', open: 2, changed: 0 })
@@ -154,12 +150,12 @@ describe('a person\'s one Buddy\'s status (spec 2026-10-31-one-buddy-per-swarm)'
 
   it('reads one project by name or id with status --project, and says which projects there are for a name it does not know', async () => {
     const state = many(3)
-    const one = await buddyStatus({ ...input(state, changed(state)), project: 'project p1' }, { pullRequests: reader().read, decisions: decisions() })
+    const one = await buddyStatus({ ...input(state, changed(state)), project: 'project p1' }, { pullRequests: reader().read })
     expect(one.project).toEqual({ name: 'Project p1', chat: 'p1-chat' })
     expect((one.tasks as Array<Record<string, unknown>>).map(t => t.conversationId)).toEqual(['p1-t2', 'p1-t1'])
-    expect((await buddyStatus({ ...input(state, changed(state)), project: 'p2' }, { pullRequests: reader().read, decisions: decisions() })).project)
+    expect((await buddyStatus({ ...input(state, changed(state)), project: 'p2' }, { pullRequests: reader().read })).project)
       .toEqual({ name: 'Project p2', chat: 'p2-chat' })
-    expect(await buddyStatus({ ...input(state), project: 'Nope' }, { pullRequests: reader().read, decisions: decisions() }))
+    expect(await buddyStatus({ ...input(state), project: 'Nope' }, { pullRequests: reader().read }))
       .toEqual({ error: 'No project named Nope that your owner reads.', projects: ['Project p0', 'Project p1', 'Project p2'] })
   })
 })

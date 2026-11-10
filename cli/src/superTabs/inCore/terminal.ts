@@ -30,8 +30,8 @@ const CHANGED = { ok: false as const, error: 'The screen changed before the keys
 
 export function createSuperTabTerminal({ resolve, capture, read, type, key, locked }: SuperTabTerminalDeps) {
   /**
-   * One writer at a time per pane, among the Swarm's own: the Lead's typed input, a resumed limit's continue and the host's
-   * conditional keys. The pane's `locked` guard is the device input's `legacyWrite`, which runs ordinary writers at once, so
+   * One writer at a time per pane, among the Swarm's own: the Lead's typed input and the host's conditional
+   * keys. The pane's `locked` guard is the device input's `legacyWrite`, which runs ordinary writers at once, so
    * on its own it cannot keep the Lead's Esc from landing between the host's read of a screen and its key (reproduced with
    * the real classes in review of 6c82a2cbd: the Lead's Esc cleared Codex's update prompt, then the dismissal's Esc went into
    * the composer, where Esc can interrupt a turn). A person typing at the same moment is not covered: they write through

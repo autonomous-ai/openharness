@@ -109,6 +109,10 @@ export interface Agent {
   gridModelName?: string
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
+  /** The liveness sweep's moves of a PM on another account back to the default one (pmAccount.ts): how many it asked for, when
+   *  the last was asked or seen to end (ms), whether it is asking now, and whether its project chat heard it failed 3 times.
+   *  Dropped once the PM is on the default account. */
+  accountReturn?: { tries: number; at: number; asking?: true; gaveUp?: true }
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
@@ -183,9 +187,6 @@ export interface Agent {
   /** A Buddy's thread session (buddySessions.ts): it hears and answers only the thread rooted at `thread`, and reads the main
    *  chat only up to `from`, the sequence before the message that started it. The main Buddy has none. */
   buddySession?: BuddySession
-  /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
-   *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
-  teamAccount?: true
   /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
    *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
    *  only by the server. */
@@ -366,7 +367,7 @@ export interface ReviewPlan { focus?: string; reviews?: 1 | 2 }
 /** How many independent reviews [task] wants: 2 only when its review plan says so. */
 const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
 /** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
- *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
+ *  machine by policy order). `machines`: it runs only there. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
  *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
 /** `access`: an older client's: the names of what the work needs to reach, stored and read by nothing since machine.access went.
@@ -678,15 +679,11 @@ export interface SuperTabState {
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
-  /** `heldFor`: a confidential session in a Harness Team account, whose project the account keeps serving alone until its
-   *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
-   *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
   /** `buddyOnly`: a Buddy's session on a Buddy-only machine, kept from every reader as its machine is (read/changes.ts). */
   /** What a report's removal of a closed agent must restore if its session reopens (closedAgents.ts): only its machine's host hears
    *  of it (read/hostRows.ts), and no reader gets it, as it names private chats. */
   removedSessions?: RemovedSession[]
-  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true
-    buddyOnly?: true }>
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
@@ -710,9 +707,9 @@ export interface SwarmLocalModels {
   ready?: boolean
   error?: string
 }
-/** An account a project's PM runs on (Ken, 11-05): its machine (a Mac's Harness Team account names that Mac too, whose
- *  subscription it spends) and engine. A project the reader may not read is "another project", its PM unnamed. */
-export interface PmAccount { machineId: string; hostMachineId?: string; engine: string; project: string; pm: string }
+/** An account a project's PM runs on (Ken, 11-05): its machine and engine. A project the reader may not read is "another
+ *  project", its PM unnamed. */
+export interface PmAccount { machineId: string; engine: string; project: string; pm: string }
 
 /** Every project's PM account (PmAccount): a PM could drain the account another project's PM ran on, and the route, reading
  *  as an agent of one project, saw no other project's PM (review of #3134). */
@@ -722,10 +719,9 @@ export function pmAccounts(state: SuperTabState, actor: Actor): PmAccount[] {
     const pm = leadId ? state.agents.find(a => a.id === leadId) : undefined
     const engine = pm?.configuration?.engine
     if (!pm || !engine) return []
-    const host = state.machines?.find(m => m.machineId === pm.machineId)?.hostMachineId
     // A public project is named to every project agent, as otherProjectsWork names it (sharedWithLeads).
     const readable = canReadProject(state, actor, project) || sharedWithLeads(project)
-    return [{ machineId: pm.machineId, ...(host ? { hostMachineId: host } : {}), engine,
+    return [{ machineId: pm.machineId, engine,
       project: readable ? project.name : 'another project', pm: readable ? pm.displayName ?? pm.name : 'its PM' }]
   })
 }
@@ -855,7 +851,8 @@ export const NOTICE_READERS = {
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
   // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
   switch: 'people',
-  // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
+  // The machine owner's one line when another person moved a PM onto one of their non-default accounts: written until a PM ran on
+  // its machine's default account alone (pmAccount.ts), read still. Delete it with the notice readers of v1-v3 (slice S18).
   'pm-switch-notice': 'people',
   // The machine owner's line, once a week, when someone else's work started on their machine: written until Swarm v4, read still.
   // Delete it with the notice readers of v1-v3 (slice S18).
@@ -886,19 +883,17 @@ export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harness
   return { ...rest, machineId: '', harnessId: '',
     ...(target.lostTask ? { lostTask: { ...target.lostTask, reason: lostReasonWithoutMachine(target.lostTask.reason) } } : {}) } as T
 }
-/** An agent as a Buddy [buddyId] reads it: no machine, and for any agent but itself not whose machine, membership or Team
- *  account runs it, which says whose Mac runs the PM (security reviews of #2258). Its membership's generation matches a
+/** An agent as a Buddy [buddyId] reads it: no machine, and for any agent but itself not whose machine or membership runs it, which says whose Mac runs the PM (security reviews of #2258). Its membership's generation matches a
  *  person's, so it goes too (delta review 1 of #2258), and so does its host grant, which under an older share policy names
  *  its contributor's email (lib/machineSharePolicy.ts; final check of #2258). */
-export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant' | 'teamAccount'
+export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant'
   | 'replacement' | 'lostTask' | 'modelRequest'>>(target: T, buddyId: string): T => {
   // A pending model switch names the machines serving the model (buddyModel.ts); its host reads it from its own rows, never here
   // (security review 1 of #2787).
   const { modelRequest: _switching, ...unswitched } = target
   const bare = agentWithoutMachine(unswitched as T)
   if (target.id === buddyId) return bare
-  const { teamAccount: _team, ...rest } = bare
-  return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T
+  return { ...bare, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T
 }
 /** A group as a Buddy reads it: its task names no machine, terminal or machine owner. */
 /** A conversation as a Buddy reads it: no machine (below), and no list of its chat's sessions, which names other threads, other
@@ -1116,10 +1111,6 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 }
 
 /** Pending invitations are management data, not part of the shared conversation. */
-/** What every read appends to a Mac's Harness Team account entry's name (task #3060). */
-export const TEAM_ENTRY_LABEL = ' · Team account'
-/** A Team account entry's name as people read it: its Mac's, then TEAM_ENTRY_LABEL, once. */
-export const teamEntryName = (name: string): string => name.endsWith(TEAM_ENTRY_LABEL) ? name : `${name}${TEAM_ENTRY_LABEL}`
 
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
@@ -1149,10 +1140,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // What Swarm v4 retired on a machine (RETIRED_MACHINE_FIELDS) stays stored until the contribution is saved again, and no reader gets it.
   for (const pool of visible.machines ?? []) for (const field of RETIRED_MACHINE_FIELDS) delete (pool as unknown as Record<string, unknown>)[field]
-  // A Mac's Harness Team account is stored under its Mac's name (machines.ts followAccountName), and read so it named two
-  // entries alike: a lamp start picked the Team account's thinking it was the Mac (task #3060). Every read tells them apart;
-  // the stored name, which renames and the server's own sentences read, stays the Mac's.
-  for (const pool of visible.machines ?? []) if (pool.hostMachineId) pool.name = teamEntryName(pool.name)
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
@@ -1173,7 +1160,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const pool of visible.machines ?? []) {
     // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
     if (pool.observation) delete pool.observation.idleBuddyHarnessIds
-    // A Team daemon's privacy check, stored by an older release, can name paths on its Mac: Swarm v4 keeps none and shows none.
+    // A Team daemon's privacy check, stored by an older release, can name paths on its Mac: shown to nobody until the Team
+    // machines carrying it are taken out (migration/teamMachinesJob.ts); goes with that job, 2026-12-10.
     if (pool.observation) delete (pool.observation as { privacy?: unknown }).privacy
   }
   // A machine's accounts (labels, percent left) are for those who may switch a PM running there: its owner, and the owners of
@@ -1292,7 +1280,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A project agent's route notes the accounts PMs run on, on machines it may see: after the Buddy's machines are gone.
   if (actor.kind === 'agent' && visible.machines?.length) {
     const machines = new Set(visible.machines.map(m => m.machineId))
-    visible.pmAccounts = pmAccounts(state, actor).filter(a => machines.has(a.machineId) || (a.hostMachineId !== undefined && machines.has(a.hostMachineId)))
+    visible.pmAccounts = pmAccounts(state, actor).filter(a => machines.has(a.machineId))
   }
   return visible
 }

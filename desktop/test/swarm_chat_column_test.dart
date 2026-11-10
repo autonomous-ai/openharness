@@ -14,11 +14,11 @@ import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_data.dart';
 
 /// Swarm v4's chat is a column (anh Dee 2026-11-09, mockups Main and TwoPanes): its rows, its day lines, its New messages
-/// line and its composer share one column of at most 720, centred in the chat's pane; a narrower pane keeps the 24 each side
+/// line and its composer share one column of at most 880 (720 until anh Dee's 2026-11-10 "the center chat area is too small"), centred in the chat's pane; a narrower pane keeps the 24 each side
 /// that its rows and its composer already inset by; the header and the scrollbar stay at the pane's edges; and two panes
 /// share the width half and half, the column centred in its half.
 void main() {
-  const column = 720.0, gutter = 24.0, window = 1800.0;
+  const column = 880.0, gutter = 24.0, window = 2400.0;
   Finder key(String k) => find.byKey(ValueKey(k));
 
   /// Settles, and lets the read mark the chat saves 200 ms after it is read go, so no timer outlives the test.
@@ -96,7 +96,7 @@ void main() {
   }
 
   testWidgets(
-    'in a wide pane the chat is one 720 column, centred: its rows, its day line and its composer, under a full-width header and list',
+    'in a wide pane the chat is one 880 column, centred: its rows, its day line and its composer, under a full-width header and list',
     (tester) async {
       await show(tester, swarmV4Server());
       final pane = centre(tester);

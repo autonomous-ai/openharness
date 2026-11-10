@@ -1,10 +1,7 @@
 import { randomInt } from 'node:crypto'
-import { teamCleanupPending } from '../superTabs/computerMoves.js'
-import { pub, publishDown } from './bus.js'
+import { pub } from './bus.js'
 import type { Prisma } from '@prisma/client'
-import { machineAlive, prisma } from './prisma.js'
-import { normalizeComputerId } from './deviceAuth.js'
-import { TEAM_CONVERTED_FRAME } from './teamSession.js'
+import { prisma } from './prisma.js'
 import { userService } from '../services/UserService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from './autonomousEnvironment.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
@@ -24,8 +21,6 @@ import {
   HARNESS_QR_POLL_PREFIX,
   HARNESS_QR_PREFIX,
   HARNESS_REFRESH_PREFIX,
-  HARNESS_TEAM_ACCESS_PREFIX,
-  HARNESS_TEAM_REFRESH_PREFIX,
   harnessTokenHash,
   isHarnessHandoffCode,
   isHarnessQrCode,
@@ -59,16 +54,8 @@ import {
  * a route that forwards the caller's token there (billing, via lib/autonomousBff.ts) cannot be used
  * from a Harness session. The phone uses none of them.
  *
- * The same code, asked for with `{ kind: 'team' }`, signs in a Mac's team account instead: the second
- * macOS user that runs teammates' Swarm agents (lib/teamSession.ts). Only a computer can ask for one, and
- * the daemon that redeems it names its computer, which the session is bound to for good.
- *
- *   computer → POST /api/auth/handoff          { kind: 'team' }                → { code, expiresIn, kind }
- *   team     → POST /api/auth/handoff/redeem   { code, label, computerId }     → { token, refreshToken, expiresIn, kind }
- *
- * A computer may also turn ITSELF into a team machine, keeping its computer id (`harness team on`): its code
- * names that computer, the redeem must name it too, and redeeming ends the computer's ordinary sign-ins in
- * the same transaction. Who may ask for that is routes/auth.ts's to decide.
+ * Harness Team accounts are gone (anh Dee, 2026-11-10): no Team code is minted or redeemed, and a Team account's session
+ * made before (its tokens `hta_`/`htr_`, harnessTokenFormat.ts) is refused, so an old Team daemon stops.
  */
 
 /** How long a code in a QR stays good. The Add Phone dialog asks for a new one every minute. */
@@ -92,131 +79,37 @@ export interface HarnessTokens {
   autonomousEnv: AutonomousEnvironment
 }
 
-export type HarnessSessionKind = 'viewer' | 'computer' | 'team'
-/** What a handoff code signs in: a phone (the Add Phone QR), or a Mac's team account. */
-export type HandoffKind = 'viewer' | 'team'
-/** What a QR sign-in can ask to become. Never a team session: that one is only ever a computer's handoff. */
+export type HarnessSessionKind = 'viewer' | 'computer'
+/** What a QR sign-in can ask to become. */
 export type QrSignInKind = 'viewer' | 'computer'
 
-/**
- * A one-time code a signed-in computer puts in its Add Phone QR, or hands its team account.
- *
- * A viewer's code holds the bare user id, as every code did before team sessions. A team code holds JSON,
- * so a server that predates team sessions finds no account under it and refuses it: it can never become
- * a viewer's session, which reaches far more than a team session may.
- */
-export async function startHandoff(
-  userId: string,
-  kind: HandoffKind = 'viewer',
-  /** `convert`: a team code for this computer turning itself into a team machine, already proven to be that computer.
-   *  `host`: the machine of the Mac whose team account redeems this code, already checked to be one of the account's
-   *  own (routes/auth.ts); the team machine records it, so lists show that Mac once. */
-  { convert, host }: { convert?: string; host?: string } = {},
-): Promise<{ code: string; expiresIn: number; kind: HandoffKind }> {
+/** A one-time code a signed-in computer puts in its Add Phone QR. It holds the bare user id. */
+export async function startHandoff(userId: string): Promise<{ code: string; expiresIn: number }> {
   const code = newHarnessToken(HARNESS_HANDOFF_PREFIX)
-  const held = kind === 'team' ? JSON.stringify({ userId, kind, ...(convert ? { convert } : {}), ...(host ? { host } : {}) }) : userId
-  await pub.set(handoffKey(harnessTokenHash(code)), held, 'EX', HANDOFF_TTL_SEC)
-  return { code, expiresIn: HANDOFF_TTL_SEC, kind }
-}
-
-/** Who a spent code was minted for, and as what; null for anything else. */
-function handoffOf(held: unknown): { userId: string; kind: HandoffKind; convert?: string; host?: string } | null {
-  if (typeof held !== 'string' || !held) return null
-  if (!held.startsWith('{')) return { userId: held, kind: 'viewer' }
-  try {
-    const parsed = JSON.parse(held) as { userId?: unknown; kind?: unknown; convert?: unknown; host?: unknown }
-    if (typeof parsed.userId !== 'string' || !parsed.userId || parsed.kind !== 'team') return null
-    return { userId: parsed.userId, kind: 'team', ...(typeof parsed.convert === 'string' && parsed.convert ? { convert: parsed.convert } : {}),
-      ...(typeof parsed.host === 'string' && parsed.host ? { host: parsed.host } : {}) }
-  } catch { return null }
-}
-
-/** A team sign-in for another account while the previous account's Swarm work in that Harness Team account is still being
- *  deleted (superTabs/computerMoves.ts teamCleanupPending): what its person reads, and does. */
-export class TeamCleanupPending extends Error {
-  readonly code = 'TEAM_CLEANUP_PENDING'
-  constructor() {
-    super("The previous account's Swarm work in Harness Team on this computer is still being cleaned up, so it was not signed in for you yet. Try Repair again in a few minutes.")
-  }
+  await pub.set(handoffKey(harnessTokenHash(code)), userId, 'EX', HANDOFF_TTL_SEC)
+  return { code, expiresIn: HANDOFF_TTL_SEC }
 }
 
 /**
- * Spend [code] and sign [label]'s device in as the account that minted it, as the kind it was minted
- * for. A team code also needs the redeeming daemon's [computerId], which its session is bound to. Null
- * for a code that is malformed, expired or already spent, and for a team code without a usable computer
- * — one answer for all of them, so a caller learns nothing.
+ * Spend [code] and sign [label]'s phone in as the account that minted it. Null for a code that is malformed, expired or
+ * already spent, and for a Team account's code minted before Team accounts went (it held JSON, never a bare user id): one
+ * answer for all of them, so a caller learns nothing.
  */
-export async function redeemHandoff(code: string, label: string, computerId?: string): Promise<HarnessTokens | null> {
+export async function redeemHandoff(code: string, label: string): Promise<HarnessTokens | null> {
   if (!isHarnessHandoffCode(code)) return null
   // Read and spend in ONE step: two phones racing the same QR must not both get in. MULTI rather
   // than GETDEL, which a Redis older than 6.2 does not have.
   const key = handoffKey(harnessTokenHash(code))
   const [read] = (await pub.multi().get(key).del(key).exec()) ?? []
   if (!read || read[0]) throw read?.[0] ?? new Error('handoff redeem: no reply from Redis')
-  const handoff = handoffOf(read[1])
-  if (!handoff) return null
-  if (handoff.kind === 'viewer') return createSession(handoff.userId, label || 'phone', 'viewer')
-  const computer = computerId ? normalizeComputerId(computerId) : null
-  if (!computer) return null
-  // The computer that asked to become a team machine, and no other.
-  if (handoff.convert) return handoff.convert === computer ? convertComputer(handoff.userId, label || 'Team', computer) : null
-  if (await computerHeldByAnotherSignIn(handoff.userId, computer)) return null
-  // Another account's Team machine here still has Swarm folders to delete, which only its own sign-in can (#3122).
-  if (await teamCleanupPending(prisma, { computerId: computer, userId: handoff.userId })) throw new TeamCleanupPending()
-  // A repair run signs the same team account in again: its machine already exists and records its Mac now. A new one
-  // records it when it registers (MachineService.resolveForTeamComputer), from the session made here.
-  if (handoff.host) {
-    await prisma.machine.updateMany({ where: { userId: handoff.userId, computerId: computer, sessionKind: 'team', ...machineAlive },
-      data: { hostMachineId: handoff.host } })
-  }
-  return createSession(handoff.userId, label || 'Team', 'team', computer, handoff.host)
+  const userId = read[1]
+  if (typeof userId !== 'string' || !userId || userId.startsWith('{')) return null
+  return createSession(userId, label || 'phone', 'viewer')
 }
 
 // Not yet revoked. A session is created without `revokedAt`, and on MongoDB `revokedAt: null` alone
 // does not match a field that is absent — so a revoke filtered on it alone never revoked anything.
 const notRevoked: Prisma.HarnessSessionWhereInput = { OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }
-
-/**
- * [computerId] becomes a team machine in place: in one transaction its Harness computer sessions end, its machine
- * rows are marked `team`, and its team session is created. A socket still connected for it under the old sign-in is
- * then told to close (lib/adapterWs.ts). An Autonomous sign-in on that computer is not this backend's to end; if it
- * connects again, the machine is an ordinary one again (adapterWs.ts) and the team session acts for nothing.
- */
-async function convertComputer(userId: string, label: string, computerId: string): Promise<HarnessTokens | null> {
-  const user = await userService.get(userId)
-  if (!user) return null
-  const refreshToken = newHarnessToken(HARNESS_TEAM_REFRESH_PREFIX)
-  const { session, machineIds } = await prisma.$transaction(async (tx) => {
-    await tx.harnessSession.updateMany({ where: { userId, kind: 'computer', computerId, ...notRevoked }, data: { revokedAt: new Date() } })
-    const machines = await tx.machine.findMany({ where: { userId, computerId, ...machineAlive }, select: { machineId: true } })
-    await tx.machine.updateMany({ where: { userId, computerId, ...machineAlive }, data: { sessionKind: 'team' } })
-    const created = await tx.harnessSession.create({ data: {
-      userId, refreshHash: harnessTokenHash(refreshToken), label, kind: 'team', computerId, expiresAt: sessionExpiry(),
-    } })
-    return { session: created, machineIds: machines.map((m) => m.machineId) }
-  })
-  await signInsChanged(userId)
-  for (const machineId of machineIds) {
-    await publishDown(machineId, { connId: '', frame: { type: TEAM_CONVERTED_FRAME } }).catch(() => { /* best effort: the next connect decides */ })
-  }
-  return {
-    token: await issueAccess(session.id, userId, 'team'),
-    refreshToken,
-    expiresIn: HARNESS_ACCESS_TTL_SEC,
-    kind: 'team',
-    autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
-  }
-}
-
-/**
- * Whether the account already runs [computerId] as a machine under a sign-in that is not a team one. A
- * team session bound to that computer could connect as that machine; so it is never minted for one.
- * Rows from before `sessionKind` count as such a sign-in: they were all made by one.
- */
-async function computerHeldByAnotherSignIn(userId: string, computerId: string): Promise<boolean> {
-  const rows = await prisma.machine.findMany({ where: { userId, computerId, ...machineAlive }, select: { sessionKind: true } })
-  return rows.some((row) => row.sessionKind !== 'team')
-}
 
 /**
  * A session for [userId] that their SSO sign-in [grant] backs (lib/ssoSession.ts): what the CLI and Desktop trade an SSO
@@ -229,33 +122,28 @@ export async function createSsoSession(
   autonomousEnv: AutonomousEnvironment,
   clientId?: SsoClientId,
 ): Promise<HarnessTokens | null> {
-  return createSession(userId, label, kind, undefined, undefined, ssoSessionData(grant, autonomousEnv, clientId))
+  return createSession(userId, label, kind, ssoSessionData(grant, autonomousEnv, clientId))
 }
 
 /** A new session for [userId]: a refresh token (stored hashed) and its first access token. */
 async function createSession(
-  userId: string, label: string, kind: HarnessSessionKind, computerId?: string, hostMachineId?: string,
-  sso?: ReturnType<typeof ssoSessionData>,
+  userId: string, label: string, kind: HarnessSessionKind, sso?: ReturnType<typeof ssoSessionData>,
 ): Promise<HarnessTokens | null> {
   const user = await userService.get(userId)
   if (!user) return null
-  const refreshToken = newHarnessToken(kind === 'team' ? HARNESS_TEAM_REFRESH_PREFIX : HARNESS_REFRESH_PREFIX)
+  const refreshToken = newHarnessToken(HARNESS_REFRESH_PREFIX)
   const session = await prisma.harnessSession.create({
     data: {
       userId,
       refreshHash: harnessTokenHash(refreshToken),
       label,
       kind,
-      // A team session's bound computer; a computer's own, as its QR sign-in declared it (what lets it convert itself).
-      ...(kind !== 'viewer' && computerId ? { computerId } : {}),
-      // A team session's Mac, which its machine records (MachineService.resolveForTeamComputer).
-      ...(kind === 'team' && hostMachineId ? { hostMachineId } : {}),
       ...(sso ?? {}),
       expiresAt: sessionExpiry(),
     },
   })
   return {
-    token: await issueAccess(session.id, userId, kind),
+    token: await issueAccess(session.id, userId),
     refreshToken,
     expiresIn: HARNESS_ACCESS_TTL_SEC,
     kind,
@@ -275,12 +163,11 @@ async function createSession(
  */
 export async function refreshHarnessSession(refreshToken: string): Promise<HarnessTokens | null> {
   if (!isHarnessRefreshToken(refreshToken)) return null
+  if (isTeamRefreshToken(refreshToken)) return endTeamSession(refreshToken)
   const session = await prisma.harnessSession.findUnique({
     where: { refreshHash: harnessTokenHash(refreshToken) },
   })
   if (!session || session.revokedAt || session.expiresAt <= new Date()) return null
-  // A team session's tokens carry its own prefixes, and only its (harnessTokenFormat.ts).
-  if ((session.kind === 'team') !== isTeamRefreshToken(refreshToken)) return null
   const user = await userService.get(session.userId)
   if (!user) return null
   const sso = await recheckSsoSession(session)
@@ -293,10 +180,24 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
   })
   if (count === 0) return null
   return {
-    token: await issueAccess(session.id, session.userId, session.kind === 'team' ? 'team' : 'viewer'),
+    token: await issueAccess(session.id, session.userId),
     expiresIn: HARNESS_ACCESS_TTL_SEC,
     autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
   }
+}
+
+/**
+ * A Harness Team account's daemon renewing its sign-in, after Team accounts went: its session ends, and the answer is an
+ * invalid refresh token, on which an old Team daemon stops for good. Until 2026-12-10 (the daemons of the last 30 days);
+ * then `htr_` goes with its prefix (harnessTokenFormat.ts), and such a token is simply not ours.
+ */
+async function endTeamSession(refreshToken: string): Promise<null> {
+  const refreshHash = harnessTokenHash(refreshToken)
+  const session = await prisma.harnessSession.findUnique({ where: { refreshHash }, select: { userId: true } })
+  if (!session) return null
+  await prisma.harnessSession.updateMany({ where: { refreshHash, kind: 'team', ...notRevoked }, data: endedSessionData() })
+  await signInsChanged(session.userId)
+  return null
 }
 
 /** Sign out: the session's refresh token stops working, and so, at once, does its access token. Any SSO
@@ -311,8 +212,8 @@ export async function revokeHarnessSession(refreshToken: string): Promise<void> 
   await signInsChanged(session.userId)
 }
 
-async function issueAccess(sessionId: string, userId: string, kind: HarnessSessionKind): Promise<string> {
-  const token = newHarnessToken(kind === 'team' ? HARNESS_TEAM_ACCESS_PREFIX : HARNESS_ACCESS_PREFIX)
+async function issueAccess(sessionId: string, userId: string): Promise<string> {
+  const token = newHarnessToken(HARNESS_ACCESS_PREFIX)
   await pub.set(
     accessKey(harnessTokenHash(token)),
     JSON.stringify({ sessionId, userId }),
@@ -335,6 +236,9 @@ const invalid = (): SsoAuthError => new SsoAuthError('Invalid or expired access 
  * refresh and, failing that, to sign in again, over what is only an outage.
  */
 export async function authenticateHarnessAccessToken(token: string): Promise<AuthUser> {
+  // A Harness Team account's, made before Team accounts went: a bad token, so an old Team daemon's socket and requests
+  // answer 401 and it stops. Read nowhere. Until 2026-12-10, then `hta_` goes with its prefix (harnessTokenFormat.ts).
+  if (isTeamAccessToken(token)) throw invalid()
   const hash = harnessTokenHash(token)
   const remembered = harnessAuthCache.get(hash)
   let user: Awaited<ReturnType<typeof userService.get>>
@@ -342,7 +246,6 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
   let userId: string
   let epoch: string | null
   let kind: string | null | undefined
-  let computerId: string | null | undefined
   try {
     let raw: string | null
     if (remembered) {
@@ -367,25 +270,22 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
     const session = await prisma.harnessSession.findUnique({ where: { id: sessionId } })
     if (!session || session.revokedAt || session.userId !== userId) throw invalid()
     kind = session.kind
-    computerId = session.computerId
     user = await userService.get(userId)
   } catch (err) {
     if (err instanceof SsoAuthError) throw err
     throw new SsoAuthError('Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
   }
   if (!user) throw invalid()
-  const answer = identityOf(token, user, sessionId, kind, computerId)
+  const answer = identityOf(user, sessionId, kind)
   harnessAuthCache.set(hash, { sessionId, userId, epoch, user: answer })
   return { ...answer }
 }
 
-/** What a live session answers for [token]; throws INVALID_TOKEN for a session of the wrong kind or bound to nothing. */
+/** What a live session answers. A Team account's never gets here: its tokens alone were `hta_` (refused above). */
 function identityOf(
-  token: string,
   user: NonNullable<Awaited<ReturnType<typeof userService.get>>>,
   sessionId: string,
   kind: string | null | undefined,
-  computerId: string | null | undefined,
 ): AuthUser {
   const identity = {
     sub: user.id,
@@ -394,14 +294,7 @@ function identityOf(
     autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
     harnessSessionId: sessionId,
   }
-  // A team session's token is never a computer's or a phone's, and the other way round (harnessTokenFormat.ts).
-  if ((kind === 'team') !== isTeamAccessToken(token)) throw invalid()
-  // A team session is nothing without the computer it is bound to: a row that lost it is no session.
-  if (kind === 'team') {
-    if (typeof computerId !== 'string' || !computerId) throw invalid()
-    return { ...identity, harnessSessionKind: 'team', harnessComputerId: computerId }
-  }
-  if (kind === 'computer') return { ...identity, harnessSessionKind: 'computer', ...(computerId ? { harnessComputerId: computerId } : {}) }
+  if (kind === 'computer') return { ...identity, harnessSessionKind: 'computer' }
   return { ...identity, harnessSessionKind: 'viewer' }
 }
 
@@ -438,7 +331,6 @@ interface QrRecord {
   pollHash: string
   label: string
   kind: QrSignInKind
-  computerId?: string
   ip?: string
   country?: string
   createdAt: number
@@ -532,7 +424,7 @@ function ipHint(ip: string | undefined): string | undefined {
 }
 
 export async function startQrSignIn(
-  req: { label: string; kind: QrSignInKind; computerId?: string; spokenCode?: boolean },
+  req: { label: string; kind: QrSignInKind; spokenCode?: boolean },
   origin: QrSignInOrigin,
 ): Promise<{ code: string; pollToken: string; expiresIn: number; spokenCode?: string }> {
   const code = newHarnessToken(HARNESS_QR_PREFIX)
@@ -544,7 +436,6 @@ export async function startQrSignIn(
     pollHash: harnessTokenHash(pollToken),
     label: req.label,
     kind: req.kind,
-    ...(req.computerId ? { computerId: req.computerId } : {}),
     ...(origin.ip ? { ip: origin.ip } : {}),
     ...(origin.country ? { country: origin.country } : {}),
     createdAt: Date.now(),
@@ -713,7 +604,6 @@ export async function claimQrSignIn(pollToken: string): Promise<(HarnessTokens &
   await pub.del(qrPollKey(r.pollHash))
   if (r.spokenCode) await pub.del(qrSpokenKey(r.spokenCode))
   if (r.pollHash !== harnessTokenHash(pollToken) || r.status !== 'approved' || !r.userId || !r.email) return null
-  const computer = r.kind === 'computer' && r.computerId ? normalizeComputerId(r.computerId) : null
-  const tokens = await createSession(r.userId, r.label, r.kind, computer ?? undefined)
+  const tokens = await createSession(r.userId, r.label, r.kind)
   return tokens ? { ...tokens, email: r.email, kind: r.kind } : null
 }

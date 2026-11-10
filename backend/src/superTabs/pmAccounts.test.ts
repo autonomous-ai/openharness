@@ -49,10 +49,7 @@ describe('pmAccounts', () => {
     expect(visibleState(s.state, agentActor(s.buddy), NOW)).not.toHaveProperty('pmAccounts')
   })
 
-  it('names the Mac of a PM on a Harness Team account, and leaves out a PM on a machine the reader cannot see', () => {
-    const s = twoPms('host-team')
-    s.edit(draft => { draft.machines!.push({ ...structuredClone(draft.machines!.find(m => m.machineId === 'host')!), machineId: 'host-team', name: 'host', hostMachineId: 'host' }) })
-    expect(pmAccounts(s.state, owner).find(a => a.pm === 'Sage')).toMatchObject({ machineId: 'host-team', hostMachineId: 'host' })
+  it('leaves out a PM on a machine the reader cannot see', () => {
     const hidden = twoPms('nowhere')
     expect(visibleState(hidden.state, agentActor(hidden.lead), NOW).pmAccounts!.map(a => a.pm)).not.toContain('its PM')
   })

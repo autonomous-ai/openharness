@@ -813,8 +813,7 @@ describe('a Buddy\'s status', () => {
       conversations: [{ id: 'app-chat', projectId: 'app', title: 'App', leadId: null, agentIds: [], checks: [] },
         { id: 'offline', projectId: 'app', number: 12, title: 'Offline sync', brief: 'The whole brief', leadId: null, agentIds: [], checks: [],
           assignment: { status: 'blocked', result: 'Waiting for the sync API' }, pullRequestUrls: ['https://github.com/acme/app/pull/12'] }] }
-    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/decisions?') ? { decisions: [], more: false }
-      : path.includes('/groups?dormant=1') ? { groups: [], next: null } : path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path, state) } }))
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/groups?dormant=1') ? { groups: [], next: null } : path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path, state) } }))
     const pullRequests = vi.fn(async (urls: string[]) => ({ rows: urls.map(url => ({ url, status: 'found' as const, state: 'Open' as const, ci: 'passing' as const })), checkedAt: 'now' }))
     const service = superTabService(t.core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, pullRequests })
     return { ...t, pullRequests, ask: service.requests.super_tabs }
@@ -827,7 +826,8 @@ describe('a Buddy\'s status', () => {
     expect(object(value.summary).tasks).toEqual([expect.objectContaining({ number: 12, title: 'Offline sync', status: 'blocked', note: 'Waiting for the sync API',
       pullRequests: [expect.objectContaining({ url: 'https://github.com/acme/app/pull/12', state: 'Open', ci: 'passing' })] })])
     expect(JSON.stringify(value)).not.toContain('The whole brief')
-    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/decisions?state=open&asAgentId=${t.agentId}`, undefined)
+    // Backend S10 (#3805): Decisions are gone; their read answers empty, so it is not asked.
+    expect(t.call.mock.calls.filter(([, path]) => String(path).includes('/decisions'))).toEqual([])
   })
 
   it('reads its archived tasks a page at a time, in its own project only', async () => {
