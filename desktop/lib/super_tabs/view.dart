@@ -1832,7 +1832,7 @@ class _SuperTabViewState extends State<SuperTabView>
       return;
     }
     // A channel's feed reads its older cards as the top comes near, as the channel's own older pages are read.
-    if (_feeds[id] case final feed?
+    if (_feedShown(id) case final feed?
         when feed.hasMore && !feed.loadingMore && !feed.moreFailed) {
       WidgetsBinding.instance
         ..addPostFrameCallback((_) {
@@ -3877,6 +3877,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// What each project channel's agents do on GitHub, read for the channel while it is open (Swarm v4), by channel.
   final _feeds = <String, SwarmChannelFeed>{};
 
+  /// The feed the selected channel's last build drew ([_feedShown]).
+  SwarmChannelFeed? _shownFeed;
+
   /// Where each channel's list divides when the feed's cards are among its rows: its first row drawn, own or a card, until a
   /// reader at the end moves it down ([_moveSplitToView]).
   final _feedAnchor = <String, SuperTabMessage>{};
@@ -3920,9 +3923,11 @@ class _SuperTabViewState extends State<SuperTabView>
     _returnToChat();
   }
 
-  /// Closes a project's tasks and forgets the task open in them, so Tasks opens on the list again. Within setState.
+  /// Closes a project's tasks. A task opened from a card in the channel is forgotten with them, so Tasks opens on the list
+  /// again; one opened from the list stays, where the person left it. Within setState.
   void _closeTaskList() {
     _taskListOpen = false;
+    if (!_issueFromChannel) return;
     _issue = null;
     _issueFromChannel = false;
   }
@@ -3990,11 +3995,7 @@ class _SuperTabViewState extends State<SuperTabView>
       group.id,
       app: widget.app,
     );
-    if (repository == null) {
-      // Unlinked: its cards go, and nothing of it is read again, an earlier page included.
-      _dropFeed(group.id);
-      return null;
-    }
+    if (repository == null) return null;
     final held = _feeds[group.id];
     if (held != null && held.repository == repository) return held;
     _dropFeed(group.id);
@@ -4004,6 +4005,11 @@ class _SuperTabViewState extends State<SuperTabView>
       channelId: group.id,
     )..addListener(_feedChanged);
   }
+
+  /// The feed channel [id] shows, as its last build drew it; null when it shows none. Scrolling reads only from it, so a feed
+  /// that is held but not shown (its repository unlinked, the channel no longer its project's) reads nothing until shown again.
+  SwarmChannelFeed? _feedShown(String id) =>
+      _shownFeed?.channelId == id ? _shownFeed : null;
 
   /// Forgets channel [id]'s feed and where its cards stood among its rows.
   void _dropFeed(String id) {
@@ -4887,7 +4893,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }) {
     _index();
     if (message.source['kind'] == SwarmChannelFeed.earlierKind) {
-      return switch (_feeds[c.selectedId]) {
+      return switch (_feedShown(c.selectedId)) {
         final feed? => SwarmFeedEarlier(
           key: ValueKey('super-message-${message.id}'),
           feed: feed,
@@ -5242,7 +5248,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// rows above the view can regroup.
   void _moveSplitToView(String id, SuperTabChatScroll scroll) {
     final split = _split[id];
-    if (_feeds.containsKey(id)) {
+    if (_feedShown(id) != null) {
       _moveFeedSplitToView(id, scroll);
       return;
     }
@@ -5288,7 +5294,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (offset == null) return;
     scroll.moveContent(-offset);
     _feedAnchor[id] = first;
-    final feed = _feeds[id];
+    final feed = _feedShown(id);
     final own = rows
         .skip(index)
         .where((m) => feed?.owns(m) != true)
@@ -5515,7 +5521,7 @@ class _SuperTabViewState extends State<SuperTabView>
         .reversed
         .where(c.isOwn)
         .firstOrNull;
-    final feed = _channelFeed(group);
+    final feed = _shownFeed = _channelFeed(group);
     final actualMessages = feed == null
         ? _shownMessages(c.selectedId)
         : feed.mixedInto(_shownMessages(c.selectedId), [

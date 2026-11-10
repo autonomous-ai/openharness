@@ -632,7 +632,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Pip to Juno`, `Faye to Pip, Juno`: the agents the Swarm has, each once, never
   its author; the name and who it is to share one line, each giving way to the
   other with an ellipsis. A post that names nobody (`free: Pip`) keeps the name
-  alone, on one line too. Under a post that names an agent that was offline
+  alone. Under a post that names an agent that was offline
   when it was posted and still is (`downSince`), one quiet line
   (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
   `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
@@ -649,7 +649,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   GitHub. A tap on a card that is on a task opens it beside the channel
   (`SwarmIssuePanel`); closing it, Tasks or Chat goes back to the channel, and
   Tasks opens on its list again. A repository unlinked from the project takes
-  its cards with it, and nothing of it is read again. A comment is shown
+  its cards with it, and nothing of it is read until it is linked again. A comment is shown
   when an agent of the project signed it with its name and the repository's own
   people wrote it; a pull request when it is opened and when it is merged, by
   the agent whose branch (`pip/12`) or label (`builder:pip`) it has; a task when

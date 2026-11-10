@@ -175,10 +175,10 @@ class SuperTabShippingReader extends ChangeNotifier {
         error = failure.message;
         _logFailed(failure.code);
       }
-    } catch (error) {
+    } catch (thrown) {
       if (read != _read) return;
-      this.error = "Couldn't read the leaderboard.";
-      _logFailed('${error.runtimeType}');
+      error = "Couldn't read the leaderboard.";
+      _logFailed('${thrown.runtimeType}');
     } finally {
       if (read == _read) loading = false;
     }
