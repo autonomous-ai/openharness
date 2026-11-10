@@ -72,6 +72,7 @@ export default defineConfig({ test: {
     'integration/swarmAgentTombstones.test.ts',
     'integration/superTabTimeChecks.test.ts',
     'integration/superTabTeamMachines.test.ts',
+    'integration/superTabGithubComments.test.ts',
     'integration/superTabProposals.test.ts',
     'integration/superTabCanChat.test.ts',
     'integration/superTabChatPush.test.ts',

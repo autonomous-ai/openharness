@@ -35,6 +35,7 @@ import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
+import { COMMENT_KINDS, MAX_COMMENT_IDS } from '../superTabs/githubComments.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { PICTURES_RETIRED, REMINDERS_RETIRED, RETIRED_READS, RETIRED_WRITES, retiredCatchUp } from '../superTabs/retired.js'
@@ -59,6 +60,12 @@ const nothingChanged = (changes: object): boolean =>
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
+// A GitHub comment an agent posted (superTabs/githubComments.ts): `owner/name`, and GitHub's numeric id.
+const repository = z.string().max(200).regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+const commentRecordQuery = z.object({ asAgentId: id }).strict()
+const commentRecordBody = z.object({ repository, kind: z.enum(COMMENT_KINDS), commentId: z.string().regex(/^[1-9]\d{0,19}$/) }).strict()
+const commentAuthorsQuery = z.object({ repository, asAgentId: id.optional(),
+  ids: z.string().max(4000).transform(ids => ids.split(',')).pipe(z.array(z.string().regex(/^[a-z-]+:[1-9]\d{0,19}$/)).min(1).max(MAX_COMMENT_IDS)) }).strict()
 const uploadParams = z.object({ tabId: id, uploadId: id })
 const voiceParams = z.object({ tabId: id, attachmentId: id })
 const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })
@@ -363,6 +370,14 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (req.query.refresh === '1' && req.query.record !== '0') await recorded(req.params.tabId, () => store.githubSeen(req.params.tabId, req.params.projectId, access.state))
       return access
     }))
+  // Which agent wrote a GitHub comment (superTabs/githubComments.ts): its daemon records each one it posted; the merger and news
+  // read them by id, and fall back to the signature for a comment nothing recorded.
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof commentRecordQuery>; Body: z.infer<typeof commentRecordBody> }>('/api/super-tabs/:tabId/github-comments',
+    { preHandler: [validateParams(tabParams), validateQuery(commentRecordQuery), validateBody(commentRecordBody)] },
+    (req, reply) => respond(reply, () => store.recordGithubComment(req.user!, req.params.tabId, req.query.asAgentId, req.body)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof commentAuthorsQuery> }>('/api/super-tabs/:tabId/github-comments',
+    { preHandler: [validateParams(tabParams), validateQuery(commentAuthorsQuery)] },
+    (req, reply) => respond(reply, () => store.githubCommentAuthors(req.user!, req.params.tabId, req.query.repository, req.query.ids, req.query.asAgentId)))
   // The CI load a CLI's route read (retired with it, above NO_APP): who may read the project hears what a server without the app
   // said; anyone else is refused as before.
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/ci-load',
