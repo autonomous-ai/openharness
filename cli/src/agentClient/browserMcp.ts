@@ -73,10 +73,12 @@ export function browserMcpCommand(
   let initParams: Record<string, unknown> = {}
   let child: { process: BrowserMcpChild; pending: Set<Message['id']> } | null = null
 
-  const start = (podman: string, agentId: string) => {
+  /** `connection`: Harness's own machine's, when the daemon names one; absent, the person's default. */
+  const start = (podman: string, agentId: string, connection: unknown) => {
     // ownProcessGroup: `detached` would flash a console window on Windows (docs/windows-rules.md, rule 1). stderr goes
     // to the engine's MCP log, so a podman refusal ("no such container") is seen there.
-    const exec = spawn(podman, ['exec', '-i', `harness-browser-${agentId}`, 'node', '/opt/harness-browser/browser-tools.mjs'],
+    const on = typeof connection === 'string' && connection ? ['--connection', connection] : []
+    const exec = spawn(podman, [...on, 'exec', '-i', `harness-browser-${agentId}`, 'node', '/opt/harness-browser/browser-tools.mjs'],
       { ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'inherit'] })
     const made = { process: exec, pending: new Set<Message['id']>() }
     // A write after the child died fails here; its exit answers the calls.
@@ -114,7 +116,7 @@ export function browserMcpCommand(
       send({ id: message.id, result: failed(NOT_READY[reason] ?? "Browser isn't available right now") })
       return
     }
-    child ??= start(String(state.podman), String(state.agentId))
+    child ??= start(String(state.podman), String(state.agentId), state.connection)
     child.pending.add(message.id)
     // The human-input setting rides on every call, so a change in settings applies to the next one.
     child.process.stdin.write(`${JSON.stringify({ ...message, params: { ...message.params, _harness: { human: state.human } } })}\n`)

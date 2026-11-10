@@ -350,6 +350,19 @@ describe('the agent browser service', () => {
     expect(await bare.requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
   })
 
+  it('state carries Harness\'s own connection, so the relay\'s exec reaches the machine the browser runs on', async () => {
+    writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers: {}, deleting: [], setup: null, connection: 'harness' }))
+    fake.reply('--connection harness info --format json', { stdout: JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: 8 * GiB } }) })
+    fake.reply('--connection harness ps', { stdout: '[]' })
+    fake.reply('--connection harness images --format json --filter reference=localhost/harness-browser', {
+      stdout: JSON.stringify([{ Names: [`localhost/${imageTag(browserAssetsHash(), NOW)}`], Created: 1, Containers: 0 }]),
+    })
+    const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => 'a1' } }))
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'ready', podman: fake.path, connection: 'harness', human: 'normal' })
+  })
+
   it('a failed browser\'s state names its failure', async () => {
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
     const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => 'a1' } }))

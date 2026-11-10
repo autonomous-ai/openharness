@@ -90,6 +90,14 @@ describe('harness browser-mcp', () => {
     expect(r.spawn).not.toHaveBeenCalled()
   })
 
+  it('the exec runs on the connection the daemon names: Harness\'s own machine, not the person\'s default', async () => {
+    const r = relay([{ ...READY, connection: 'harness' }])
+    r.send(call(7))
+    await vi.waitFor(() => expect(r.spawn).toHaveBeenCalled())
+    expect(r.spawn).toHaveBeenCalledWith('/opt/podman/bin/podman',
+      ['--connection', 'harness', 'exec', '-i', 'harness-browser-a1', 'node', '/opt/harness-browser/browser-tools.mjs'], expect.anything())
+  })
+
   it('tools/call when ready is forwarded', async () => {
     const r = relay([READY])
     const init = { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'claude-code' } }

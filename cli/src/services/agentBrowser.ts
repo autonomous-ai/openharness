@@ -218,8 +218,10 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const agentId = pane && core.agents.ofPane ? await core.agents.ofPane(pane).catch(() => null) : null
       const shown = agentId ? browsers.state(agentId) : undefined
       if (!agentId || !shown) return { error: 'NO_BROWSER' }
+      // The connection, when Harness runs its own machine: the relay's exec must reach the machine the browser is on.
+      const connection = podman.connection()
       try {
-        return { agentId, state: shown.state, ...(shown.error ? { error: shown.error } : {}), podman: (await podman.path()) ?? '', human: humanMode(browsers.settings(agentId)) }
+        return { agentId, state: shown.state, ...(shown.error ? { error: shown.error } : {}), podman: (await podman.path()) ?? '', ...(connection ? { connection } : {}), human: humanMode(browsers.settings(agentId)) }
       } catch (error) {
         return named(error)
       }
