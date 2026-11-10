@@ -77,6 +77,9 @@ export interface InputDeps {
   controlHeld?: (agentId: string) => boolean
   /** An agent whose turns keep ending at once has its automatic writes held a while (turns/shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'holding'>
+  /** Whether an engine's reader is starting: null when there is nothing to wait for, else whether it came up within its start
+   *  wait (core/serviceLinks.ts `whenStarting`). */
+  engineStarting?: (engine: string) => Promise<boolean> | null
 }
 
 /**
@@ -242,6 +245,11 @@ export function sessionInputDeps(
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
+    engineStarting: (session) => deps.engineStarting?.(session.engine) ?? null,
+    // The app hears that the message waits, and why: it shows the agent as starting until the message is typed or refused (`error`).
+    onWaiting: (sessionId, reason) => {
+      clients.send({ type: 'message_waiting', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { reason } })
+    },
     onError: (sessionId, message) => {
       clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
       const engine = resolve(sessionId)?.engine

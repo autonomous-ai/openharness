@@ -164,6 +164,11 @@ export interface SessionInputDeps {
    * moment at which a turn is known to have started, and this one is exact: we sent it.
    */
   onSubmitted?: (sessionId: string, content: string) => void
+  /** Whether the engine's reader of [session] is starting: null when it is up (or the engine needs none), else whether it came up
+   *  within its bounded wait (core/serviceLinks.ts `whenUp`). A message waits for it before the lease's wait begins. */
+  engineStarting?: (session: RegisteredSession) => Promise<boolean> | null
+  /** A message waits for something before it is typed: said once, as it starts to wait. */
+  onWaiting?: (sessionId: string, reason: 'engine_starting') => void
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -230,6 +235,20 @@ export class SessionInputController {
    */
   private readingSession(session: RegisteredSession): RegisteredSession {
     return launchBound(session, this.controlSession(session.agentId))
+  }
+
+  /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once to the person (a team delivery is
+   *  automatic: its mailbox hears how it ends); one that does not come in time is logged by name. Whether it waited: the agent may
+   *  have gone meanwhile, which its caller checks again. */
+  private async engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<boolean> {
+    const starting = this.deps.engineStarting?.(session)
+    if (!starting) return false
+    console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
+    if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
+    const since = (this.deps.now ?? Date.now)()
+    const up = await starting
+    console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
+    return true
   }
 
   /**
@@ -656,6 +675,16 @@ export class SessionInputController {
       // would corrupt it into a run-on prompt anyway, which is worse and harder to notice.
       await this.deps.sendKey(session.agentId, 'C-u')
     }
+    if (await this.engineReady(sessionId, session, false)) {
+      // Seconds may have passed: the agent may have been closed, or its process ended.
+      if (this.states.get(sessionId) !== state || this.deps.getSession(sessionId) === undefined) return
+      if (!(await this.deps.validateRuntime(session))) {
+        console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+        receipt?.('runtime_gone')
+        this.deps.onError(sessionId, 'This agent process is no longer running.')
+        return
+      }
+    }
     const delivery = await this.injectWhenLeased(() => this.write(session.agentId, content, inputContext),
       () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
@@ -725,6 +754,17 @@ export class SessionInputController {
         this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
         if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
         return
+      }
+      if (state.cancelled || this.states.get(sessionId) !== state) return
+      // Before the team's own check of the pane, which a reader not yet up cannot read either.
+      if (await this.engineReady(sessionId, session, deliveryId.startsWith('team:'))) {
+        if (state.cancelled || this.states.get(sessionId) !== state) return
+        if (!(await this.deps.validateRuntime(session))) {
+          console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+          this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
+          if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
+          return
+        }
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (deliveryId.startsWith('team:')) {
