@@ -9,7 +9,8 @@
  *
  * Only whole collections that nothing reads or writes are listed. A row of a collection that v4 still uses (Swarms, chats,
  * agents, machines, the leaderboard's records) is never removed here: those go by a strict row filter in their own jobs.
- * Delete this list, its job and its test 30 days after the release that carries it, and not before 2026-12-09.
+ * Delete this list, its job and its test 30 days after the release that carries its newest entries: for the Decision, tag,
+ * Activity and reminder collections, not before 2026-12-11.
  */
 import type { PrismaClient } from '@prisma/client'
 import { removeChunk } from '../../lib/chunkSweep.js'
@@ -21,6 +22,8 @@ export const REMOVED_COLLECTIONS = [
   'SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceInvitation', 'SwarmWorkspaceRemoval',
   // The nightly scorecard's rows (removed in #3629) and the terminal recording's receipts (removed in #3631).
   'SuperTabScorecard', 'SuperTabNativeContext',
+  // Decisions (removed in #3805), and tags, Activity and reminders (removed in #3827): an agent reaches its person in their 1:1 chat.
+  'SuperTabDecision', 'SuperTabMention', 'SuperTabActivity', 'SuperTabReminder',
 ] as const
 
 /** Rows removed by one write: a few megabytes at most. */

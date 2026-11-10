@@ -516,13 +516,20 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
 
   /// The sender's name: opens the agent when it is one.
   Widget _name(TextStyle style, bool finger) {
+    // Beside who a post is to ("Pip to Juno"), one line that gives way with an ellipsis; alone, the whole name.
+    final phrase = widget.to.isNotEmpty;
     final name = fingerTarget(
       enabled: finger,
       Align(
         alignment: Alignment.centerLeft,
         widthFactor: 1,
         heightFactor: 1,
-        child: Text(widget.author, style: style),
+        child: Text(
+          widget.author,
+          maxLines: phrase ? 1 : null,
+          overflow: phrase ? TextOverflow.ellipsis : null,
+          style: style,
+        ),
       ),
     );
     return InkWell(onTap: widget.onOpenAgent, child: name);
