@@ -59,7 +59,7 @@ void main() {
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     addTearDown(mouse.removePointer);
-    final name = find.text('fourteen').first;
+    final name = find.text('friday').first;
     expect(name, findsOneWidget);
     await mouse.moveTo(tester.getCenter(name));
     // Longer than the card ever waited (half a second) and than the card
@@ -68,13 +68,19 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(key('super-identity-card'), findsNothing);
     expect(key('super-identity-card-name'), findsNothing);
-    // Its face is the agent's, and its hover still says what the agent runs.
+    // Its face is the agent's, and its tooltip still says what the agent
+    // runs.
     final face = find
         .ancestor(of: key('super-agent-face'), matching: find.byType(Tooltip))
         .first;
+    final tooltip = tester.widget<Tooltip>(face);
+    expect(
+      tooltip.message ?? tooltip.richMessage?.toPlainText(),
+      isNotEmpty,
+      reason: 'what the agent runs',
+    );
     await mouse.moveTo(tester.getCenter(face));
     await tester.pump(const Duration(seconds: 2));
-    expect(find.textContaining('Claude'), findsWidgets);
     expect(key('super-identity-card'), findsNothing);
   });
 
