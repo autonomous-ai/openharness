@@ -121,7 +121,9 @@ class SuperTabMessageText extends StatelessWidget {
         : tagsIn(text);
     final unsaid = [
       for (final name in [...mentions, ...addressed])
-        if (!said.any((tag) => _says(tag, name, addresses))) '@$name',
+        if (!said.any((tag) => _says(tag, name, addresses)) &&
+            _Mention.whole(name)?.hasMatch(_prose(text)) != true)
+          '@$name',
     ];
     final body = MarkdownBody(
       data: withTags(unsaid, text),
@@ -346,8 +348,41 @@ class _Mention extends md.InlineSyntax {
   );
   final List<String> mentions;
   final Map<String, String> addresses, labels;
+
+  /// `@` and all of [name] when it is several words ("first builder", lampOS's PM; "a2a swarm"), in any case, or null for a
+  /// name of one word: [tag] reads a word, so `@first builder` was drawn as plain text and a post to that agent opened
+  /// with its tag a second time. The backend reads such a name the same way (superTabs/mentions.ts agentsNamedIn).
+  static RegExp? whole(String name) => !name.trim().contains(RegExp(r'\s'))
+      ? null
+      : RegExp(
+          '(?<![\\w@/])@${name.trim().split(RegExp(r'\s+')).map(RegExp.escape).join(r'\s+')}'
+          r'(?![\w+-]|\.[\w+-])',
+          caseSensitive: false,
+        );
+
   @override
   bool onMatch(md.InlineParser parser, Match match) {
+    // The longest several-word name that starts here is the tag, as written; what the pattern matched is its first word.
+    Match? spaced;
+    String? named;
+    for (final name in mentions) {
+      final said = whole(name)?.matchAsPrefix(parser.source, parser.pos);
+      if (said != null && said.end > (spaced?.end ?? 0)) {
+        spaced = said;
+        named = name;
+      }
+    }
+    if (spaced != null) {
+      parser
+        ..addNode(
+          md.Element.text(
+            'mention',
+            labels[named] == null ? spaced[0]! : '@${labels[named]}',
+          ),
+        )
+        ..consume(spaced[0]!.length - match[0]!.length);
+      return true;
+    }
     final tag = '${match[1]}${match[2] ?? ''}'.toLowerCase();
     final name = mentions.where((n) => _says(tag, n, addresses)).firstOrNull;
     parser.addNode(
