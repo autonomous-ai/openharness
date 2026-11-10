@@ -79,6 +79,10 @@ const SELF = 'Harness'
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ', blocked: 'GitHub\'s rules for ' } as const
 type NoteKind = keyof typeof NOTES
+/** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
+ *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
+ *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
+const CHECKS_SETTLE_MS = 3 * 60_000
 /** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
 const TOLD_MAX = 5_000
 
@@ -195,19 +199,22 @@ export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople =>
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
-/** Whether every check on a head passed (none at all passes), is still running, or failed with which names. */
-export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[] } {
-  const failed: string[] = []
+/** Whether every check on a head passed (none at all passes), is still running, or failed with which names, and what was read,
+ *  in one line, to tell two looks apart. */
+export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
+  const failed: string[] = [], seen: string[] = []
   let running = false
   for (const run of runs) {
+    seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
   }
   for (const each of Array.isArray(status.statuses) ? status.statuses.map(object) : []) {
+    seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed }
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|') }
 }
 
 export class GitHubMerge {
@@ -218,6 +225,10 @@ export class GitHubMerge {
   private readonly waits = new Waits()
   /** The notes said, as `<repo>#<number> <kind> <head>` (NOTES), so each is said once. */
   private readonly told = new Set<string>()
+  /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
+   *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
+  private readonly seenAt = new Map<string, number>()
+  private readonly looked = new Map<string, string>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -282,14 +293,19 @@ export class GitHubMerge {
     const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
-    if (!pulls.length) return
+    if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
     const team = teamOf(await this.deps.crew(project), project.pm)
+    const open = new Set<string>()
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
+      // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
+      const at = `${repo}#${number}@${head}`
+      open.add(at)
+      if (!this.seenAt.has(at)) this.seenAt.set(at, this.now())
       const comments = await pullTalk(this.reads, repo, number)
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
@@ -308,6 +324,10 @@ export class GitHubMerge {
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
       if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
+      // Passed, or none yet: only once they hold still (CHECKS_SETTLE_MS).
+      const before = this.looked.get(at)
+      this.looked.set(at, checks.summary)
+      if (this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary) continue
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
       if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
@@ -326,6 +346,12 @@ export class GitHubMerge {
       this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
       this.reads.forget(repo)
     }
+    this.forgetHeads(repo, open)
+  }
+
+  /** Lets go of [repo]'s heads no longer open, as `<repo>#<number>@<head>`. */
+  private forgetHeads(repo: string, open: ReadonlySet<string>): void {
+    for (const key of [...this.seenAt.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) { this.seenAt.delete(key); this.looked.delete(key) }
   }
 
   /** Says once for a pull request, [kind] and head why it is not merged (NOTES). It names the head, and a restart finds it among
