@@ -3,9 +3,7 @@ import { applyCommand, commandSchema, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
 import { projectsOf } from './projects.js'
 import { readerView } from './read/views.js'
-import { reassemble, split } from './parts/index.js'
-import { stepsOf } from './steps.js'
-import { touchesFor } from './parts/touches.js'
+import { split } from './parts/index.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -43,13 +41,11 @@ function fixture() {
     const worker = run({ type: 'agent.add', conversationId: id, machineId: 'machine', harnessId: `worker-${sequence}`, name: `Worker${sequence}`,
       configuration, lead: false }, peer).result.agentId as string
     run({ type: 'work.assign', conversationId: id, agentId: worker }, peer)
-    const status = (status: string, files?: string[]) => run({ type: 'work.status', conversationId: id,
-      assignmentId: group(id).assignment!.id, status, result: status === 'review' ? 'https://github.com/acme/app/pull/1' : 'Finished' }, as(worker),
-    files ? { pullRequestFiles: { urls: ['https://github.com/acme/app/pull/1'], head: 'a'.repeat(40), files } } : {})
+    const status = (status: string) => run({ type: 'work.status', conversationId: id,
+      assignmentId: group(id).assignment!.id, status, result: status === 'review' ? 'https://github.com/acme/app/pull/1' : 'Finished' }, as(worker))
     return { id, worker, status }
   }
-  const reload = () => { state = reassemble(split(state, { tabId: state.id, version: sequence, now: 1000 })) }
-  return { run, create, set, project, view, as, add, task, group, reload, get state() { return state } }
+  return { run, create, set, project, view, as, add, task, group, get state() { return state } }
 }
 
 describe('project process settings and board columns', () => {
@@ -133,12 +129,6 @@ describe('project process settings and board columns', () => {
 })
 
 describe('Simple task lifecycle', () => {
-  it.each([['docs/a.md'], ['backend/src/routes/auth.ts'], ['desktop/lib/a.dart']])('opens no automatic steps for %s', file => {
-    const f = fixture(), project = f.create('simple'), task = f.task(project)
-    task.status('review', [file])
-    expect(stepsOf(f.state, task.id)).toEqual([])
-  })
-
   it('finishes a Simple task directly and exposes Done without any merge or pull request', () => {
     const f = fixture(), project = f.create('simple'), task = f.task(project)
     expect(f.group(task.id).assignment?.status).toBe('working')
@@ -146,109 +136,5 @@ describe('Simple task lifecycle', () => {
     const read = f.view(peer).parts.groups.find(p => p.key === task.id)!.data
     expect(read).toMatchObject({ process: 'simple', assignment: { status: 'done' } })
     expect(read.pullRequestUrls ?? []).toEqual([])
-    expect(stepsOf(f.state, task.id)).toEqual([])
-  })
-
-  it('keeps Full review and test automation unchanged', () => {
-    const f = fixture(), project = f.create('full'), task = f.task(project)
-    task.status('review', ['backend/src/routes/auth.ts', 'desktop/lib/a.dart'])
-    expect(stepsOf(f.state, task.id).map(s => s.step)).toEqual(['Security review 1', 'Security review 2', 'Test'])
-  })
-
-  it.each(['Review', 'Test', 'Merge', 'Release'])('refuses a new explicit %s step for Simple work', step => {
-    const f = fixture(), project = f.create('simple'), task = f.task(project)
-    expect(() => f.run({ type: 'conversation.create', projectId: project, title: step, brief: 'Check the work', reviewOf: task.id, step, checks: [] }, peer))
-      .toThrow(expect.objectContaining({ code: 'SIMPLE_PROCESS' }))
-    expect(stepsOf(f.state, task.id)).toEqual([])
-  })
-
-  it('also refuses an older client’s linked review without an explicit step name', () => {
-    const f = fixture(), project = f.create('simple'), task = f.task(project)
-    expect(() => f.run({ type: 'conversation.create', projectId: project, title: 'Review', brief: 'Read it', reviewOf: task.id, checks: [] }, peer))
-      .toThrow(expect.objectContaining({ code: 'SIMPLE_PROCESS' }))
-  })
-
-  it('keeps earlier Simple tasks Simple when switching to Full, including dormant records', () => {
-    const f = fixture(), project = f.create('simple'), old = f.task(project)
-    const dormant = structuredClone(f.group(old.id))
-    f.state.conversations = f.state.conversations.filter(g => g.id !== old.id)
-    f.set(project, 'full')
-    f.state.conversations.push(dormant)
-    f.reload()
-    old.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, old.id)).toEqual([])
-    const fresh = f.task(project)
-    fresh.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test'])
-  })
-
-  it('does not change open steps or their evidence when switching Full to Simple', () => {
-    const f = fixture(), project = f.create('full'), task = f.task(project)
-    task.status('review', ['desktop/lib/a.dart'])
-    const before = structuredClone(stepsOf(f.state, task.id))
-    f.set(project, 'simple')
-    expect(stepsOf(f.state, task.id)).toEqual(before)
-  })
-
-  it('simplifies existing Full tasks immediately without changing their stored history', () => {
-    const f = fixture(), project = f.create('full'), old = f.task(project)
-    const before = structuredClone(f.group(old.id))
-    f.set(project, 'simple')
-    expect(f.group(old.id)).toEqual(before)
-    old.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, old.id)).toEqual([])
-  })
-
-  it('preserves dormant legacy tasks when switching back to Full without loading them', () => {
-    const f = fixture(), project = f.create('full'), old = f.task(project)
-    delete (f.group(old.id) as { process?: string }).process
-    const dormant = structuredClone(f.group(old.id))
-    f.state.conversations = f.state.conversations.filter(g => g.id !== old.id)
-    f.set(project, 'simple')
-    f.set(project, 'full')
-    f.state.conversations.push(dormant)
-    f.reload()
-    old.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, old.id)).toEqual([])
-    const fresh = f.task(project)
-    fresh.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test'])
-  })
-
-  it('keeps an unnumbered dormant task Simple when its first later command gives it a number', () => {
-    const f = fixture(), project = f.create('full'), old = f.task(project)
-    const dormant = structuredClone(f.group(old.id))
-    delete dormant.number
-    delete (dormant as { process?: string }).process
-    f.state.conversations = f.state.conversations.filter(g => g.id !== old.id)
-    f.set(project, 'simple'); f.set(project, 'full')
-    f.state.conversations.push(dormant)
-    old.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, old.id)).toEqual([])
-  })
-
-  it('keeps the old tasks Simple across repeated switches, and a repeated Full save does not change newer work', () => {
-    const f = fixture(), project = f.create('full'), first = f.task(project)
-    f.set(project, 'simple'); f.set(project, 'full')
-    const second = f.task(project)
-    f.set(project, 'simple'); f.set(project, 'full')
-    const newest = f.task(project)
-    f.set(project, 'full')
-    f.reload()
-    for (const task of [first, second]) {
-      task.status('review', ['desktop/lib/a.dart'])
-      expect(stepsOf(f.state, task.id)).toEqual([])
-    }
-    newest.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, newest.id).map(s => s.step)).toEqual(['Review', 'Test'])
-  })
-
-  it('guards a Ready decision against a concurrent process change', () => {
-    const f = fixture(), project = f.create('simple'), task = f.task(project)
-    const before = structuredClone(f.state)
-    const command = commandSchema.parse({ type: 'work.status', conversationId: task.id, assignmentId: f.group(task.id).assignment!.id,
-      status: 'review', result: 'Ready' })
-    const effects = f.run(command, f.as(task.worker))
-    expect(touchesFor(command, f.as(task.worker), before, effects)).toContainEqual({ kind: 'head', key: 'head' })
   })
 })

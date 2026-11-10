@@ -12,7 +12,6 @@ import { agentDisplayName } from './agentNames.js'
 import { holdOf, pulseIndex, type PulseIndex } from './pulse.js'
 import { pullRequestLinks, type Conversation, type SuperTabState } from './model.js'
 import { groupRepositoryUrl, type SwarmProject } from './projects.js'
-import { stepName } from './steps.js'
 import { isBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
 
@@ -28,17 +27,8 @@ export interface StatusCard { lines: CardLine[]; more?: number; text: string; ch
 /** A growth bound on the card: far above the tasks a project has open at once. */
 export const CARD_LINES_MAX = 50
 const ENDED = new Set(['done', 'stopped', 'cancelled'])
-const DONE_STEP = new Set(['done', 'stopped', 'cancelled'])
 
 const pullRequest = (url: string): string => { const n = url.match(/\/pull\/(\d+)(?:[/?#]|$)/)?.[1]; return n ? `PR #${n}` : url }
-
-/** The steps of [task] that are not finished, by name: what a task in review or at work waits on. */
-function openSteps(state: SuperTabState, task: Conversation): string[] {
-  return (task.stepIds ?? []).flatMap(id => {
-    const step = state.conversations.find(c => c.id === id)
-    return step && !step.archived && !DONE_STEP.has(step.assignment?.status ?? '') ? [stepName(step)] : []
-  })
-}
 
 /** [task]'s line (no time), or none when its work ended. */
 function lineOf(state: SuperTabState, task: Conversation, today: string): string | null {
@@ -49,8 +39,6 @@ function lineOf(state: SuperTabState, task: Conversation, today: string): string
   if (!assignment && task.taskApproval?.state === 'rejected') return null
   const name = task.number !== undefined ? `#${task.number} ${JSON.stringify(task.title)}` : JSON.stringify(task.title)
   const owner = assignment ? agentDisplayName(state.agents, assignment.agentId) ?? 'an agent that left' : 'none'
-  const steps = openSteps(state, task)
-  const stepsText = steps.length ? `${steps.length > 1 ? 'steps' : 'step'} ${steps.join(', ')}` : null
   // Its linked pull requests, and those its builder's result names: the store links those right after the command (store.ts), so a
   // line written by the command says them already, as the card built after says them.
   const unlinked = new Set(task.unlinkedPullRequests?.map(entry => entry.url))
@@ -73,7 +61,7 @@ function lineOf(state: SuperTabState, task: Conversation, today: string): string
     status = hold ? 'held' : 'to do'
     waits = hold ? hold.reason ?? 'a person\'s word' : 'an owner'
   } else switch (assignment.status) {
-    case 'review': status = `in review${prText}`; waits = stepsText ?? 'a review'; break
+    case 'review': status = `in review${prText}`; waits = 'a review'; break
     case 'needs_human': {
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
       status = 'needs a person'; waits = asked ? `@${asked}` : 'a decision'; break
@@ -82,7 +70,7 @@ function lineOf(state: SuperTabState, task: Conversation, today: string): string
     case 'lost': status = 'lost'; waits = 'another engineer'; break
     case 'reconciling': status = 'stopping'; waits = 'its host'; break
     case 'planned': status = 'to do'; waits = 'its builder to start'; break
-    default: status = 'working'; waits = stepsText ?? 'nothing'
+    default: status = 'working'; waits = 'nothing'
   }
   return `${name}: ${status}. Waits on: ${waits}. Owner: ${owner}.`
 }

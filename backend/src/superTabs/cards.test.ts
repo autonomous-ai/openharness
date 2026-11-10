@@ -72,45 +72,6 @@ describe('live cards', () => {
     expect(group.cards?.pullRequests).toBeUndefined()
   })
 
-  it('records a merge on the card and posts the merged line in its thread, not the main chat', () => {
-    const f = fixture()
-    const id = f.create().result.conversationId as string
-    const card = f.post(id, `Opened ${PR}`, f.as(f.add('Kai', id)))
-    const [line] = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead)).messages
-    expect(line).toMatchObject({ text: `Merged ${PR}`, thread: card.id, replyTo: card.id })
-    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: card.id, mergedAt: 1000 }])
-  })
-
-  it('keeps the first merge when one is recorded again, and posts nothing more', () => {
-    const f = fixture()
-    const id = f.create().result.conversationId as string
-    const card = f.post(id, `Opened ${PR}`, f.as(f.add('Kai', id)))
-    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 900 })
-    const again = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 2000 })
-    expect(again.messages).toEqual([])
-    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: card.id, mergedAt: 900 }])
-  })
-
-  it('posts each pull request\'s merge in its own card\'s thread, a later second merge too', () => {
-    const f = fixture()
-    const id = f.create().result.conversationId as string
-    const builder = f.add('Kai', id)
-    const first = f.post(id, `Opened ${PR}`, f.as(builder))
-    const second = f.post(id, `Opened ${OTHER}`, f.as(builder))
-    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 900 })
-    const [line] = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: OTHER }, f.as(f.lead), { now: 2000 }).messages
-    expect(line).toMatchObject({ text: `Merged ${OTHER}`, thread: second.id, replyTo: second.id })
-    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: first.id, mergedAt: 900 }, { url: OTHER, messageId: second.id, mergedAt: 2000 }])
-  })
-
-  it('makes the merged line the card of a pull request no message linked yet', () => {
-    const f = fixture()
-    const id = f.create().result.conversationId as string
-    const [line] = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead)).messages
-    expect(line!.thread).toBeUndefined()
-    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: line!.id, mergedAt: 1000 }])
-  })
-
   it('shows a card only to readers of its own conversation', () => {
     const f = fixture()
     const id = f.create().result.conversationId as string

@@ -1,12 +1,10 @@
 /** People talk only to the PM (anh Dee, 2026-11-05; task #3404, River's ruling). When an agent other than its project's PM
- *  tags a person, needs a person (needs_human), asks a person a decision or sends a person a line, the person is not told:
+ *  tags a person, needs a person (needs_human) or sends a person a line, the person is not told:
  *  the PM gets a crew need, and the agent's command result says so. This routes; it never refuses. The PM tags anyone. Any
  *  other agent may still tag the person it is answering (the author of the message it answers or replies to). A project with
- *  no PM in its chat routes nothing, so its tags reach people as before.
- *  In a switched project (boardRights.ts) an agent's ask of a person is not routed: it goes to the person directly, through
- *  their default Buddy (decisions.ts asksDirectly, task #3826).
+ *  no PM in its chat routes nothing, so its tags reach people as before. Swarm v4 has no decisions (2026-11-10).
  *
- *  A crew need is either its own row (source kind `crew-need`: a tag, a decision ask, a line to a person) or the needs_human
+ *  A crew need is either its own row (source kind `crew-need`: a tag or a line to a person) or the needs_human
  *  status row the agent already writes to the PM (`source.crewNeed`). `crewNeedOf` reads both; the PM's inbox (#3403) lists
  *  them. Neither is gathered into the notice digest (noticeDigest.ts DIGEST_KINDS). */
 import { isBuddyChat } from './buddies.js'

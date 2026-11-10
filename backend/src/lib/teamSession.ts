@@ -142,7 +142,7 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // "unavailable" since Swarm v4, slice S6).
   { method: 'GET', url: '/api/super-tabs/:tabId/costs', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/ci-load', scope: 'agent' },
-  // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).
+  // The decisions its agent asked of people: none since Swarm v4 (superTabs/retired.ts RETIRED_READS).
   { method: 'GET', url: '/api/super-tabs/:tabId/decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages', scope: 'agent' },
   // A fresh link to one file of a message its agent may read (superTabs/fileLinks.ts).

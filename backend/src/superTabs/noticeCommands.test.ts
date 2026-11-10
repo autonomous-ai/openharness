@@ -44,7 +44,7 @@ describe('the super-tab verbs a text names', () => {
   it('names none that the CLI lacks in any text the backend writes', () => {
     const files = sources(SRC)
     // The walk reads the notices' own files: an empty or misplaced walk would pass anything.
-    expect(files.map(file => relative(SRC, file))).toEqual(expect.arrayContaining(['superTabs/decisions.ts', 'superTabs/noticeDigest.ts', 'superTabs/inbox.ts']))
+    expect(files.map(file => relative(SRC, file))).toEqual(expect.arrayContaining(['superTabs/noticeDigest.ts', 'superTabs/inbox.ts']))
     const cli = superTabVerbs()
     const named = files.flatMap(file => missingVerbs(readFileSync(file, 'utf8'), cli).map(verb => `${relative(SRC, file)}: harness super-tab ${verb}`))
     expect(named).toEqual([])

@@ -9,9 +9,6 @@
 import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
 import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
-import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
-import type { PullRequestFile } from '../superTabs/pullRequestPatch.js'
-import type { MergeSides } from '../superTabs/mergeCarry.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
@@ -32,30 +29,7 @@ export const NEVER_ON_INSTALLATION_TOKENS = ['administration', 'repository_creat
 export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 /** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
-/** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
- *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
-export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
-/** What reading a pull request head's patch may do (superTabs/pullRequestPatch.ts, #3394): read the pull request, and the
- *  comparison of its base and head commits, which is repository contents. Read only, revoked when the watch's pass ends. */
-export const PULL_PATCH_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
-/** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
-const WATCH_KEPT = 2000
-/** The most files GitHub gives for a comparison of two commits (GET /compare/{base}...{head}). */
-export const COMPARE_FILES_MAX = 300
-/** Pages of 100 a pull request's file list reads: GitHub lists at most 3,000 files. */
-const PULL_FILES_PAGES = 30
 const PUSH_ORIGINS_KEPT = 1000
-/** GitHub's files of a comparison as [PullRequestFile]s, or null when one lacks its name, status or blob. */
-function filesOf(body: unknown[]): PullRequestFile[] | null {
-  const text = (value: unknown) => typeof value === 'string' ? value : undefined
-  const files: PullRequestFile[] = []
-  for (const file of body as Array<Record<string, unknown>>) {
-    const filename = text(file?.filename), status = text(file?.status), sha = text(file?.sha), patch = text(file?.patch), previousFilename = text(file?.previous_filename)
-    if (!filename || !status || sha === undefined) return null
-    files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
-  }
-  return files
-}
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 
@@ -156,8 +130,6 @@ export class GitHubApp {
   private readonly orgInstallations = new Map<string, { id: number | null; until: number }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
-  /** The watch's last answer and its ETag, by path ([watchPullRequest]). */
-  private readonly watched = new Map<string, { etag: string; body: Record<string, unknown> | unknown[]; link: string | null }>()
 
   constructor(readonly config: GitHubAppConfig, options: GitHubAppOptions = {}) {
     this.fetch = options.fetch ?? fetch
@@ -205,14 +177,14 @@ export class GitHubApp {
     return jwt
   }
 
-  private async call(method: string, path: string, auth: string | null, body?: unknown, headers: Record<string, string> = {}):
-    Promise<{ link?: string | null; etag?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
+  private async call(method: string, path: string, auth: string | null, body?: unknown):
+    Promise<{ link?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
         method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness-backend',
-          ...(auth ? { Authorization: auth } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
+          ...(auth ? { Authorization: auth } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
     } catch {
@@ -222,7 +194,7 @@ export class GitHubApp {
     let parsed: unknown = {}
     try { parsed = text ? JSON.parse(text) : {} } catch { parsed = {} }
     return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
-      link: response.headers.get('link'), etag: response.headers.get('etag') }
+      link: response.headers.get('link') }
   }
 
   private misconfigured(): GitHubAppError {
@@ -503,182 +475,6 @@ export class GitHubApp {
       return listed.status === 200 && typeof number === 'number' ? await this.pushOrigin(repository, number) : 'unknown'
     } catch {
       return 'unknown'
-    }
-  }
-
-  /** Whether pull request [number] is open, merged or closed (GET /repos/{owner}/{repo}/pulls/{number}); missing when GitHub
-   *  answers 404, as for another repository's number read in this one (#2602); null when GitHub cannot say, which a caller
-   *  must read as possibly open. */
-  async pullRequestState(repository: GitHubRepository, number: number, token: string): Promise<'open' | 'merged' | 'closed' | 'missing' | null> {
-    try {
-      const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
-      if (answer.status === 404) return 'missing'
-      const body = answer.body as Record<string, unknown>
-      if (answer.status !== 200 || !['open', 'closed'].includes(String(body.state))) return null
-      return body.state === 'open' ? 'open' : typeof body.merged_at === 'string' ? 'merged' : 'closed'
-    } catch (error) {
-      if (error instanceof GitHubAppError) return null
-      throw error
-    }
-  }
-
-  /**
-   * What a task's Engineer is told of its pull request [number] (superTabs/pullRequestEvents.ts): the pull request, its head's
-   * latest check runs and its check suites, its reviews and its conversation comments, read with a [PULL_WATCH_PERMISSIONS]
-   * token. Each read names the last answer's ETag, and a 304 reuses that answer. Reviews and comments come oldest first, so
-   * their last page is read too when there is more than one (review of #2750). Null when GitHub cannot say.
-   */
-  async watchPullRequest(repository: GitHubRepository, number: number, token: string): Promise<PullRequestWatch | null> {
-    const base = `/repos/${repository.owner}/${repository.name}`
-    const answerOf = async (path: string, fresh = false): Promise<{ body: Record<string, unknown> | unknown[]; link: string | null } | null> => {
-      const kept = this.watched.get(path)
-      const answer = await this.call('GET', path, `Bearer ${token}`, undefined, kept && !fresh ? { 'If-None-Match': kept.etag } : {})
-      if (answer.status === 304 && kept) return kept
-      if (answer.status !== 200) return null
-      this.watched.delete(path)
-      if (answer.etag) {
-        if (this.watched.size >= WATCH_KEPT) this.watched.delete(this.watched.keys().next().value!)
-        this.watched.set(path, { etag: answer.etag, body: answer.body, link: answer.link ?? null })
-      }
-      return { body: answer.body, link: answer.link ?? null }
-    }
-    const read = async (path: string) => (await answerOf(path))?.body ?? null
-    // A full first page is read afresh: a new last page changes its Link, not its body.
-    const pages = async (path: string): Promise<unknown[] | null> => {
-      const first = await answerOf(path, (this.watched.get(path)?.body as unknown[] | undefined)?.length === 100)
-      if (!first || !Array.isArray(first.body)) return null
-      const last = /<([^>]+)>;\s*rel="last"/.exec(first.link ?? '')?.[1]
-      const lastPath = last?.startsWith(this.apiUrl) ? last.slice(this.apiUrl.length) : null
-      if (!lastPath) return first.body
-      const tail = await read(lastPath)
-      return Array.isArray(tail) ? [...first.body, ...tail] : null
-    }
-    const text = (value: unknown) => typeof value === 'string' ? value : ''
-    const login = (value: unknown) => text((value as { login?: unknown } | null)?.login)
-    const at = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null
-    try {
-      const pull = await read(`${base}/pulls/${number}`) as Record<string, unknown> | null
-      const head = text((pull?.head as { sha?: unknown } | undefined)?.sha)
-      if (!pull || (pull.state !== 'open' && pull.state !== 'closed') || !/^[0-9a-f]{7,64}$/.test(head)) return null
-      const [runs, suites, reviews, comments] = await Promise.all([read(`${base}/commits/${head}/check-runs?per_page=100`),
-        read(`${base}/commits/${head}/check-suites?per_page=100`), pages(`${base}/pulls/${number}/reviews?per_page=100`),
-        pages(`${base}/issues/${number}/comments?per_page=100`)])
-      if (!runs || !suites || !Array.isArray(reviews) || !Array.isArray(comments)) return null
-      const list = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, unknown>> : []
-      return {
-        url: text(pull.html_url) || `https://github.com/${repository.owner}/${repository.name}/pull/${number}`, number,
-        state: pull.state, ...typeof pull.merged_at === 'string' ? { merged: true as const } : {}, draft: pull.draft === true, head, base: text((pull.base as { ref?: unknown } | undefined)?.ref) || 'main',
-        mergeable: typeof pull.mergeable === 'boolean' ? pull.mergeable : null,
-        checkRuns: list((runs as Record<string, unknown>).check_runs).map(run => ({ name: text(run.name), status: text(run.status),
-          conclusion: typeof run.conclusion === 'string' ? run.conclusion : null, completedAt: at(run.completed_at) })),
-        checkSuites: list((suites as Record<string, unknown>).check_suites).map(suite => ({ status: text(suite.status),
-          runs: typeof suite.latest_check_runs_count === 'number' ? suite.latest_check_runs_count : 0 })),
-        reviews: list(reviews).filter(review => typeof review.id === 'number').map(review => ({ id: review.id as number, login: login(review.user),
-          association: text(review.author_association) || 'NONE', state: text(review.state), body: text(review.body), url: text(review.html_url) })),
-        comments: list(comments).filter(comment => typeof comment.id === 'number').map(comment => ({ id: comment.id as number,
-          login: login(comment.user), association: text(comment.author_association) || 'NONE', body: text(comment.body), url: text(comment.html_url) })),
-      }
-    } catch (error) {
-      if (error instanceof GitHubAppError) return null
-      throw error
-    }
-  }
-
-  /** The files of a pull request at [head], for its patch id (superTabs/pullRequestPatch.ts, #3394), read with a token of
-   *  [PULL_PATCH_PERMISSIONS]: the comparison of the base and head commits the pull request names in one answer
-   *  (GET /pulls/{number}, then GET /compare/{base}...{head}), two fixed commits no push changes (review of #3218, round 3:
-   *  a listing of the pull request's files ties removed ones to no head, and pages to no single head). Null unless the pull request still names [head], and when GitHub cannot
-   *  say or gives as many files as it ever gives ([COMPARE_FILES_MAX]), as it may then have left some out. With the branch it
-   *  merges into from the same answer, which the patch id names (security review of #3218, round 3). */
-  async pullRequestPatchFiles(repository: GitHubRepository, number: number, token: string, head: string): Promise<{ base: string; files: PullRequestFile[] } | null> {
-    const base = `/repos/${repository.owner}/${repository.name}`
-    const sha = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : undefined
-    try {
-      const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
-      if (pull.status !== 200) return null
-      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown; ref?: unknown } }
-      const at = sha(named.head?.sha), from = sha(named.base?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
-      if (!at || !from || !branch || at !== head.toLowerCase()) return null
-      const compared = await this.call('GET', `${base}/compare/${from}...${at}?per_page=1`, `Bearer ${token}`)
-      const listed = compared.status === 200 ? (compared.body as { files?: unknown }).files : undefined
-      if (!Array.isArray(listed) || listed.length >= COMPARE_FILES_MAX) return null
-      const files = filesOf(listed)
-      return files && { base: branch, files }
-    } catch (error) {
-      if (error instanceof GitHubAppError) return null
-      throw error
-    }
-  }
-
-  /** What the head [head] of pull request [number] is, to judge whether it is git's own merge of its reviewed head and main
-   *  (superTabs/mergeCarry.ts, task #3553), read with a token of [PULL_PATCH_PERMISSIONS]: its parents (GET /git/commits); for
-   *  a two-parent head, whether its second parent is on the branch the pull request merges into (GET /compare/{it}...{tip},
-   *  the base commit the same answer names: identical or ahead), and the files of the three comparisons of fixed commits, each GET /compare/{a}...{b} from their merge
-   *  base: main's side (first parent to second), the pull request's (second to first) and the merge (first parent to head). Null
-   *  unless the pull request still names [head], when GitHub cannot say, or when a side gives as many files as GitHub ever
-   *  gives ([COMPARE_FILES_MAX]), as it may have left some out. With the branch from the same answer as the pull request. */
-  async mainMergeSides(repository: GitHubRepository, number: number, token: string, head: string): Promise<{ base: string; sides: MergeSides } | null> {
-    const base = `/repos/${repository.owner}/${repository.name}`
-    const sha = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : undefined
-    const files = async (from: string, to: string) => {
-      const compared = await this.call('GET', `${base}/compare/${from}...${to}?per_page=1`, `Bearer ${token}`)
-      const listed = compared.status === 200 ? (compared.body as { files?: unknown }).files : undefined
-      return Array.isArray(listed) && listed.length < COMPARE_FILES_MAX ? filesOf(listed) : null
-    }
-    try {
-      const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
-      if (pull.status !== 200) return null
-      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown; ref?: unknown } }
-      // The base as a commit, from the same answer (security review of #3284, Important 1): a branch name a tag of the same
-      // name could shadow is never compared against.
-      const at = sha(named.head?.sha), tip = sha(named.base?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
-      if (!at || !tip || !branch || at !== head.toLowerCase()) return null
-      const commit = await this.call('GET', `${base}/git/commits/${at}`, `Bearer ${token}`)
-      const listed = commit.status === 200 ? (commit.body as { parents?: unknown }).parents : undefined
-      if (!Array.isArray(listed)) return null
-      const parents = listed.map(p => sha((p as { sha?: unknown })?.sha))
-      if (parents.some(p => p === undefined)) return null
-      const none: MergeSides = { parents: parents as string[], onBase: false, prSide: [], mainSide: [], mergeSide: [] }
-      if (parents.length !== 2) return { base: branch, sides: none }
-      const [parent, merged] = parents as [string, string]
-      const onBranch = await this.call('GET', `${base}/compare/${merged}...${tip}?per_page=1`, `Bearer ${token}`)
-      const status = onBranch.status === 200 ? (onBranch.body as { status?: unknown }).status : undefined
-      if (status !== 'identical' && status !== 'ahead') return { base: branch, sides: none }
-      const [mainSide, prSide, mergeSide] = [await files(parent, merged), await files(merged, parent), await files(parent, at)]
-      if (!mainSide || !prSide || !mergeSide) return null
-      return { base: branch, sides: { parents: [parent, merged], onBase: true, prSide, mainSide, mergeSide } }
-    } catch (error) {
-      if (error instanceof GitHubAppError) return null
-      throw error
-    }
-  }
-
-  /**
-   * The files pull request [number] changes, read with the watch's read-only token (task #3401: its review steps are planned
-   * from them): GET /pulls/{n}/files, 100 a page. A renamed file is listed under its old name too, so moving a file out of a
-   * sensitive path still counts as changing it. Null when GitHub cannot say, or when the list may be cut at GitHub's 3,000.
-   */
-  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<Array<{ filename: string }> | null> {
-    const names = new Set<string>()
-    const text = (value: unknown) => typeof value === 'string' && value ? value : undefined
-    try {
-      for (let page = 1; page <= PULL_FILES_PAGES; page++) {
-        const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}/files?per_page=100&page=${page}`, `Bearer ${token}`)
-        if (answer.status !== 200 || !Array.isArray(answer.body)) return null
-        for (const file of answer.body as Array<Record<string, unknown>>) {
-          const filename = text(file.filename)
-          if (!filename) return null
-          names.add(filename)
-          const previous = text(file.previous_filename)
-          if (previous) names.add(previous)
-        }
-        if (answer.body.length < 100) return [...names].map(filename => ({ filename }))
-      }
-      // A full last page: GitHub lists at most 3,000 files, so more may exist.
-      return null
-    } catch (error) {
-      if (error instanceof GitHubAppError) return null
-      throw error
     }
   }
 

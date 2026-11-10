@@ -486,7 +486,7 @@ export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
 }
 
 /** The Swarm's own machines: every contribution but a Buddy-only one (ContributedMachine.buddyOnly). */
-export const swarmMachines = (state: Pick<SuperTabState, 'machines'>): ContributedMachine[] => (state.machines ?? []).filter(m => !m.buddyOnly)
+const swarmMachines = (state: Pick<SuperTabState, 'machines'>): ContributedMachine[] => (state.machines ?? []).filter(m => !m.buddyOnly)
 
 export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)

@@ -15,7 +15,6 @@ import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { plan, profiled, reads } from './plans.test-support.js'
-import { quotaReset } from './holds.test-support.js'
 
 // Ken, 2026-11-02 (docs/plans/2026-11-02-pm-notice-digest-design.md): the server's routine notices to a project's coordinator
 // go in one message at most every 5 minutes; what someone waits on still goes at once. A fresh loopback replica set, created here.
@@ -697,17 +696,8 @@ describe('the notice digest alone', () => {
 })
 
 // Two more kinds (docs/plans/2026-11-02-pm-digest-more-kinds-design.md): the coordinator's own skills notices, and usage-limit or
-// failing-model alerts. Each was delivered at once until then. A step's Stuck still is: a person must act on it (review of #2797).
-describe('a step\'s Stuck, skills notices and quiet alerts', () => {
-  /** A review step of the task, assigned to a Reviewer on the worker's machine. */
-  async function stepOf(f: Awaited<ReturnType<typeof swarm>>) {
-    const step = String((await f.execute({ type: 'conversation.create', title: 'Review: Ship the parser', brief: 'Review it', checks: [],
-      reviewOf: f.group })).result.conversationId)
-    const reviewer = await f.add(step, 'test-host', 'Reviewer')
-    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
-    const status = (s: 'blocked' | 'needs_human') => f.execute({ type: 'work.status', conversationId: step, assignmentId, status: s, result: 'Changes needed' }, host, reviewer)
-    return { step, reviewer, status }
-  }
+// failing-model alerts. Each was delivered at once until then.
+describe('skills notices and quiet alerts', () => {
   /** The alert rows about [agentId] the coordinator was sent, oldest first. */
   const alertsTo = async (f: Awaited<ReturnType<typeof swarm>>, alert: string) => {
     const rows = (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
@@ -718,36 +708,6 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
   }
   const alert = (f: Awaited<ReturnType<typeof swarm>>, active: boolean) =>
     f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active }, host, f.worker)
-
-  it('a step\'s Stuck goes at once to the coordinator and to the task\'s owner: a person must act on it (review of #2797)', async () => {
-    const f = await swarm()
-    const s = await stepOf(f)
-    await s.status('blocked')
-    const row = await statusRow(f.tab, s.step, 'Stuck')
-    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
-    expect((await deliveryOf(row.id, f.worker)).status).toBe('queued')
-  })
-
-  it('a step\'s Stuck goes at once to the coordinator when no owner of its task is told (review of the more-kinds branch)', async () => {
-    const f = await swarm()
-    const orphan = String((await f.execute({ type: 'conversation.create', title: 'Nobody holds this', brief: 'Unassigned', checks: [] })).result.conversationId)
-    const step = String((await f.execute({ type: 'conversation.create', title: 'Review: Nobody holds this', brief: 'Review it', checks: [],
-      reviewOf: orphan })).result.conversationId)
-    const reviewer = await f.add(step, 'test-host', 'Reviewer')
-    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
-    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', hold: quotaReset(f.clock.now), result: 'Needs the owner\'s account' }, host, reviewer)
-    const row = await statusRow(f.tab, step, 'Stuck')
-    expect(row.recipientIds).toEqual([f.lead])
-    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
-  })
-
-  it('a step\'s Needs a human goes at once to the coordinator', async () => {
-    const f = await swarm()
-    const s = await stepOf(f)
-    await s.status('needs_human')
-    const row = await statusRow(f.tab, s.step, 'Needs a human')
-    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
-  })
 
   it('the coordinator\'s skills notice is gathered; its other agent-only notices are not', async () => {
     const f = await swarm()
