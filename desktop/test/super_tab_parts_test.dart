@@ -56,8 +56,8 @@ void main() {
     expect(after['downSince'], isNull);
   });
 
-  // Backend S18 stops sending a role's id and name and the avatars' signed links: an agent then goes by its kind, and an
-  // uploaded picture with no link draws its pattern.
+  // Backend S18 stops sending a role's id and name and the avatars' signed links: an agent then goes by its kind's role,
+  // and an uploaded picture with no link reads as none, drawn as any agent with no picture is (identity.dart).
   test('a read with no role ids, role names or avatar links falls back', () {
     final load = recorded('first_load');
     final derived = Map<String, dynamic>.from(load['derived'] as Map)
