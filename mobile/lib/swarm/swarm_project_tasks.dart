@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -10,10 +8,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
-import 'swarm_activity_page.dart' show confirmSwarmApprove;
 import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
-import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart' show swarmProjectWork;
 import 'swarm_pulse.dart';
 import 'swarm_reader.dart';
@@ -337,10 +333,8 @@ String? swarmWorkStatusWords(
 /// One thing in the project that waits on the person, as B2 draws it: a
 /// yellow dot, the task it is in, who asks what and when under it — work's
 /// own line ([SwarmTaskLine]) where it has one, after its agent — and at its
-/// end what can be done there. A decision's is its recommended answer
-/// ("Approve"), held for the session's Undo window and then sent, as on
-/// Needs you; anything else is Reply, which opens where it was asked, as a
-/// tap anywhere on the row does.
+/// end Reply, which opens where it was asked, as a tap anywhere on the row
+/// does.
 class SwarmWaitingRow extends StatelessWidget {
   const SwarmWaitingRow({
     super.key,
@@ -382,10 +376,8 @@ class SwarmWaitingRow extends StatelessWidget {
         work.conversation.changedAt,
       ),
     };
-    final (line, action) = _action(context);
     final task = switch (need) {
-      SwarmWorkNeed(:final work) when line == null => switch (chat ??
-          work.conversation) {
+      SwarmWorkNeed(:final work) => switch (chat ?? work.conversation) {
         final g when swarmTaskStatus(g, clock.now()) != null => g,
         _ => null,
       },
@@ -399,108 +391,27 @@ class SwarmWaitingRow extends StatelessWidget {
       detail: task != null
           ? SwarmTaskLine(task, personName: personName, lead: who, mark: false)
           : SwarmRow.line(
-              line ??
-                  [
-                    who,
-                    // The task is the row's name: work with no question
-                    // says how it waits.
-                    switch (need) {
-                      SwarmWorkNeed(:final work) =>
-                        work.question ??
-                            (work.status == 'blocked' ? 'stuck' : 'needs you'),
-                      _ => swarmNeedAsk(need),
-                    },
-                    if (at != null) fzfAge(at.toLocal(), now.toLocal()),
-                  ].where((part) => part.isNotEmpty).join(' · '),
+              [
+                who,
+                // The task is the row's name: work with no question
+                // says how it waits.
+                switch (need) {
+                  SwarmWorkNeed(:final work) =>
+                    work.question ??
+                        (work.status == 'blocked' ? 'stuck' : 'needs you'),
+                  _ => swarmNeedAsk(need),
+                },
+                if (at != null) fzfAge(at.toLocal(), now.toLocal()),
+              ].where((part) => part.isNotEmpty).join(' · '),
               lines: 2,
             ),
-      // As wide as a long answer may make it, and no wider: the task's
-      // name keeps the rest.
-      trailing: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 132),
-        child: action,
+      trailing: SwarmButton(
+        key: ValueKey('swarm-reply-${need.key}'),
+        label: 'Reply',
+        onPressed: onOpen,
       ),
       onTap: onOpen,
     );
-  }
-
-  /// What the row says in place of who asks, if anything, and its button.
-  (String?, Widget) _action(BuildContext context) {
-    final need = this.need;
-    final reply = SwarmButton(
-      key: ValueKey('swarm-reply-${need.key}'),
-      label: 'Reply',
-      onPressed: onOpen,
-    );
-    if (need is! SwarmDecisionNeed) return (null, reply);
-    final decision = need.decision;
-    final asks = session.inbox.asks(need.swarmId);
-    if (session.heldDelegate(need)) {
-      return (
-        'Leaving it to be decided',
-        SwarmButton(
-          key: ValueKey('swarm-undo-${decision.id}'),
-          label: 'Undo',
-          style: SwarmButtonStyle.link,
-          onPressed: () => session.undo(need),
-        ),
-      );
-    }
-    if (session.held(need) case final held?) {
-      return (
-        'Sending “${swarmOption(decision.options, held)}”',
-        SwarmButton(
-          key: ValueKey('swarm-undo-${decision.id}'),
-          label: 'Undo',
-          style: SwarmButtonStyle.link,
-          onPressed: () => session.undo(need),
-        ),
-      );
-    }
-    if (asks?.answering.contains(decision.id) ?? false) {
-      return (
-        'Sending…',
-        SwarmButton(
-          label: swarmOption(decision.options, decision.recommended),
-          style: SwarmButtonStyle.fill,
-          busy: true,
-          busyLabel: 'Sending…',
-          onPressed: null,
-        ),
-      );
-    }
-    // Sent and not confirmed, or a recommendation the decision does not
-    // offer: its chat says what can be done.
-    if (asks?.unconfirmed(decision) != null ||
-        (asks?.unconfirmedDelegate(decision) ?? false) ||
-        decision.recommended < 0 ||
-        decision.recommended >= decision.options.length) {
-      return (null, reply);
-    }
-    final option = swarmOption(decision.options, decision.recommended);
-    return (
-      session.dropped(need) ? 'Not sent, choose again.' : null,
-      SwarmButton(
-        key: ValueKey('swarm-approve-${decision.id}'),
-        label: option,
-        style: SwarmButtonStyle.fill,
-        onPressed: () => unawaited(_approve(context, need, option)),
-      ),
-    );
-  }
-
-  /// Approve asks first ([confirmSwarmApprove]); confirmed, the recommended
-  /// answer is held for Undo and then sent — unless meanwhile its row went:
-  /// the decision left the person's list (answered elsewhere, or access
-  /// taken away).
-  Future<void> _approve(
-    BuildContext context,
-    SwarmDecisionNeed need,
-    String option,
-  ) async {
-    if (!await confirmSwarmApprove(context, need, option)) return;
-    if (!context.mounted) return;
-    session.hold(need, need.decision.recommended);
   }
 }
 

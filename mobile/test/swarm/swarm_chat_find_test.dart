@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_chat_find.dart';
-import 'package:harness_mobile/swarm/swarm_new_message_sheet.dart'
-    show swarmSearchFold;
 import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 /// Find in the open chat's model (task #2826): it lights the loaded messages

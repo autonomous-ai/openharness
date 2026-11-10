@@ -16,7 +16,6 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
@@ -28,8 +27,6 @@ import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
 import 'swarm_session_widgets.dart';
-import 'swarm_buddy_tab.dart'
-    show SwarmBuddyDot, SwarmBuddyMark, swarmBuddyMark;
 import 'swarm_chat_find.dart';
 import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
@@ -159,7 +156,6 @@ class SwarmConversationPage extends StatefulWidget {
     this.threadId,
     this.threadFocus,
     this.mention,
-    this.tabRoot = false,
     this.swarmSwitch,
   });
 
@@ -191,10 +187,6 @@ class SwarmConversationPage extends StatefulWidget {
   /// holds it, for its own header's menu; null makes the chat its own while
   /// it is their Buddy chat.
   final SwarmBuddyActions? buddy;
-
-  /// At the root of a tab, as the Buddy tab holds the person's Buddy chat: no
-  /// back in its header, and its Buddy's dot before its name.
-  final bool tabRoot;
 
   /// The Swarm it is in and how to pick another, for its Buddy menu; null with
   /// no other Swarm to pick.
@@ -1339,76 +1331,54 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     required String? title,
     String? subtitle,
     Widget? action,
-    SwarmBuddyMark? mark,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
-    padding: EdgeInsets.fromLTRB(
-      widget.tabRoot ? AppSpace.screenInset : 0,
-      AppSpace.xs,
-      _headerEnd,
-      AppSpace.xs,
-    ),
+    padding: EdgeInsets.fromLTRB(0, AppSpace.xs, _headerEnd, AppSpace.xs),
     child: Row(
       children: [
-        if (!widget.tabRoot)
-          TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
-        if (mark != null)
-          Padding(
-            padding: const EdgeInsetsDirectional.only(end: AppSpace.s),
-            child: Semantics(
-              label: 'Buddy ${mark.label}',
-              child: SwarmBuddyDot(
-                mark,
-                key: const ValueKey('swarm-buddy-dot'),
-              ),
-            ),
-          ),
+        TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
         Expanded(
-          child: _switchOnTitle(
-            title,
-            subtitle,
-            title == null
-                ? Column(
-                    key: const ValueKey('swarm-header-placeholder'),
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SkeletonText(
-                        style: tty.style(
-                          size: TtySize.title,
-                          weight: FontWeight.w600,
-                        ),
-                        width: 140,
+          child: title == null
+              ? Column(
+                  key: const ValueKey('swarm-header-placeholder'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SkeletonText(
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w600,
                       ),
-                      SkeletonText(style: swarmChatText(13), width: 72),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                      width: 140,
+                    ),
+                    SkeletonText(style: swarmChatText(13), width: 72),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      key: const ValueKey('swarm-title'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    if (subtitle != null)
                       Text(
-                        title,
-                        key: const ValueKey('swarm-title'),
+                        subtitle,
+                        key: const ValueKey('swarm-subtitle'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: tty.style(
-                          size: TtySize.title,
-                          weight: FontWeight.w600,
+                        style: swarmChatText(
+                          13,
+                          color: AppPalette.textSecondary,
                         ),
                       ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle,
-                          key: const ValueKey('swarm-subtitle'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: swarmChatText(
-                            13,
-                            color: AppPalette.textSecondary,
-                          ),
-                        ),
-                    ],
-                  ),
-          ),
+                  ],
+                ),
         ),
         // The screen's side margin from its edge: the header's own end
         // inset, and the rest of the margin.
@@ -1423,30 +1393,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       ],
     ),
   );
-
-  /// The Buddy tab's title, with several Swarms to switch between: a tap on
-  /// it opens the switcher, as Home's title does (Tony, 2026-11-03); the
-  /// menu's Swarm row stays, and a screen reader hears [subtitle] with the
-  /// title. [words] alone otherwise.
-  Widget _switchOnTitle(String? title, String? subtitle, Widget words) {
-    final swarm = widget.swarmSwitch;
-    if (!widget.tabRoot || swarm == null || title == null) return words;
-    return Semantics(
-      button: true,
-      label: '${subtitle == null ? title : '$title, $subtitle'}. Switch Swarm',
-      excludeSemantics: true,
-      onTap: swarm.open,
-      child: InkWell(
-        key: const ValueKey('swarm-buddy-title-switch'),
-        borderRadius: BorderRadius.circular(AppCard.insetRadius),
-        onTap: swarm.open,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: minTouchTarget),
-          child: Align(alignment: Alignment.centerLeft, child: words),
-        ),
-      ),
-    );
-  }
 
   /// The header's inset at its end.
   static const _headerEnd = AppSpace.s;
@@ -1474,7 +1420,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ? view.title
                 : null,
             subtitle: view.project ?? view.swarm,
-            mark: widget.tabRoot ? swarmBuddyMark(c.reader) : null,
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
             // chat menu).
@@ -1711,20 +1656,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// From an old chat, back to the person's one Buddy: the Buddy tab, in this
   /// Swarm, with what covered it gone; its chat as its own page with no tabs
   /// up.
-  void _openBuddy(SwarmConversation c) {
-    final session = _session;
-    if (session == null) return;
-    final show = session.showBuddyTab;
-    if (show == null) {
-      unawaited(
-        openSwarmBuddy(context, c.reader, widget.swarmId, swarmBuddyKey),
-      );
-      return;
-    }
-    session.home.showBuddy(widget.swarmId);
-    Navigator.of(context).popUntil((route) => route.isFirst);
-    show();
-  }
+  void _openBuddy(SwarmConversation c) => unawaited(
+    openSwarmBuddy(context, c.reader, widget.swarmId, swarmBuddyKey),
+  );
 
   /// Opens [projectId]'s chat with [pmId] mentioned in its draft: the PM's
   /// private line answered where the PM reads, and everyone with it.

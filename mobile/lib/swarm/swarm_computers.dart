@@ -241,15 +241,16 @@ class AppSwarmComputers extends ChangeNotifier
   );
 
   /// The harnesses on them, told of on their own: a change there is no
-  /// computer coming or going for Swarm's reads.
+  /// computer coming or going for Swarm's reads. Made when first asked for.
   @override
-  late final AppSwarmAgents agents = AppSwarmAgents(notifier);
+  AppSwarmAgents get agents => _agents ??= AppSwarmAgents(notifier);
+  AppSwarmAgents? _agents;
 
   @override
   void dispose() {
     _disposed = true;
     notifier.removeListener(_changed);
-    agents.dispose();
+    _agents?.dispose();
     super.dispose();
   }
 }
