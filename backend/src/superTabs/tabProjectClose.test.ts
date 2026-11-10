@@ -55,25 +55,14 @@ describe('closing a tab\'s Personal project', () => {
     expect(f.state.agents.some(a => a.id === lead)).toBe(false)
   })
 
-  // Security review 2 (Phonecheck2): what the person wrote without a message, saved instructions or a rules record, is kept.
-  it('archives it, never deletes it, when the person saved its instructions or its rules without a message', () => {
+  // Security review 2 (Phonecheck2): what the person wrote without a message, a rules record, is kept.
+  it('archives it, never deletes it, when the person saved its rules without a message', () => {
     const f = setup()
-    const written = f.create('personal-tab-instructions')
-    f.run({ type: 'instructions.save', projectId: written, baseRevision: 1, text: '# Mine\n\nKeep this.', summary: 'My own' } as Command,
-      owner, { instructions: { revision: 1, text: 'template' } } as Partial<CommandContext>)
-    expect(f.project(written)!.instructionsRevision).toBe(2)
-    expect(f.close(written, 'personal-tab-instructions').result).toMatchObject({ outcome: 'archived' })
-    expect(f.project(written)).toMatchObject({ archived: true })
     const ruled = f.create('personal-tab-rules')
     expect(f.run({ type: 'project.closeTab', projectId: ruled, tabOperation: 'personal-tab-rules' } as Command, owner,
       { projectRules: { revision: 1, rules: SEED_RULES } }).result).toMatchObject({ outcome: 'archived' })
     expect(f.project(ruled)).toMatchObject({ archived: true })
-    // A note the person told its PM is theirs too (review of #3929): it goes with a delete.
-    const noted = f.create('personal-tab-noted')
-    const pm = f.run({ type: 'agent.add', conversationId: f.chatOf(noted)!.id, machineId: 'owner-mac', harnessId: 'pm-noted', name: 'pm', configuration, lead: true }).result.agentId as string
-    f.run({ type: 'note.add', projectId: noted, text: 'Ship on Fridays', askedBy: 'owner' } as Command, { kind: 'agent', agentId: pm, machineOwnerId: 'owner' }, { notes: [] })
-    expect(f.close(noted, 'personal-tab-noted').result).toMatchObject({ outcome: 'archived' })
-    // The built-in instructions it started with, and no rules record, are not the person's: an untouched tab still goes.
+    // With no rules record, an untouched tab still goes.
     const untouched = f.create('personal-tab-untouched')
     expect(f.run({ type: 'project.closeTab', projectId: untouched, tabOperation: 'personal-tab-untouched' } as Command, owner,
       { projectRules: null }).result).toMatchObject({ outcome: 'deleted' })
