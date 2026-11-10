@@ -8,7 +8,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart' show stableId;

@@ -9,8 +9,6 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import 'controller.dart';
 import 'join_link.dart';
-import 'join/bring_agent.dart';
-import 'join_machine.dart' show swarmNewMemberRole;
 
 /// The native URL channel queues links before authentication. This host only
 /// presents them after sign-in and never joins on the person's behalf.
@@ -44,48 +42,6 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
   Future<void> _next() async {
     final app = widget.app;
     final account = app.currentUser;
-    final accountRequest = app.joinAccountRequest;
-    if (accountRequest != null && accountRequest.accountId != account?.id) {
-      accountRequest.complete(null);
-      return;
-    }
-    if (mounted &&
-        !_presenting &&
-        accountRequest != null &&
-        app.status == AppStatus.authenticated &&
-        account?.id != null) {
-      _presenting = true;
-      final accountId = account!.id!;
-      try {
-        final c = await app.superTabs.open(accountRequest.tabId);
-        if (!mounted || app.currentUser?.id != accountId) return;
-        final started = await showBringAgentForm(
-          context,
-          controller: c,
-          app: app,
-          isCurrent: () =>
-              app.currentUser?.id == accountId && !accountRequest.answered,
-        );
-        if (started != null &&
-            mounted &&
-            app.status == AppStatus.authenticated &&
-            app.currentUser?.id == accountId) {
-          app.openSuperTab(accountRequest.tabId, accountRequest.swarmName);
-        }
-        final choice = started != null;
-        accountRequest.complete(
-          app.status == AppStatus.authenticated &&
-                  app.currentUser?.id == accountId
-              ? choice
-              : null,
-        );
-      } finally {
-        accountRequest.complete(null);
-        _presenting = false;
-        if (mounted) _schedule();
-      }
-      return;
-    }
     if (!mounted ||
         _presenting ||
         swarmJoinInbox.pending.isEmpty ||
@@ -114,10 +70,6 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
                   onJoined: (id, name) {
                     if (!current()) return;
                     app.openSuperTab(id, name);
-                  },
-                  onNewMember: (id, role) {
-                    if (!current()) return;
-                    unawaited(app.addMachineOnJoin(id, role: role));
                   },
                 )
               : AlertDialog(
@@ -157,16 +109,11 @@ class SwarmJoinDialog extends StatefulWidget {
     required this.request,
     required this.onJoined,
     required this.isCurrent,
-    this.onNewMember,
   });
   final SwarmJoinLink link;
   final String accountEmail;
   final SuperTabRequest request;
   final void Function(String id, String name) onJoined;
-
-  /// After a join that made this account a member, with the role it joined
-  /// as; never for someone who was one already.
-  final void Function(String id, String role)? onNewMember;
   final bool Function() isCurrent;
 
   @override
@@ -233,7 +180,6 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
       _error = null;
     });
     try {
-      String? newRole;
       if (_preview!['alreadyMember'] != true) {
         final result = await widget.request(
           'POST',
@@ -244,13 +190,9 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
         if (result['id'] != widget.link.tabId) {
           throw const FormatException('Invalid invitation');
         }
-        newRole = swarmNewMemberRole(result);
       }
       if (!_current) return;
       widget.onJoined(widget.link.tabId, _preview!['name'] as String);
-      if (newRole != null) {
-        widget.onNewMember?.call(widget.link.tabId, newRole);
-      }
       if (mounted) Navigator.pop(context);
     } catch (failure) {
       if (_current) setState(() => _error = _errorMessage(failure));

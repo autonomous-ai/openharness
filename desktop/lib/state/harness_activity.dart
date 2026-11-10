@@ -1,6 +1,5 @@
 import '../core/models.dart';
 import '../notify/alert_sounds.dart';
-import '../super_tabs/buddy_chat.dart' show buddyUnreadLabel;
 import '../widgets/engine_identity.dart' show isTerminalEngine;
 import 'app_state.dart';
 import 'swarm.dart';
@@ -97,39 +96,25 @@ HarnessActivity? harnessActivity(
   return HarnessActivity.idle;
 }
 
-/// The tags waiting for this account in a Swarm tab, for the tab's badge.
-int tabMentionsWaiting(AppNotifier app, Swarm tab) =>
-    tab.superTabId == null ? 0 : app.superTabs.waitingTags(tab.superTabId!);
+/// The reader's agents that ask them in a Swarm tab ([superTabAgentsAsking]): what the tab's badge counts.
+int tabAgentsAsking(AppNotifier app, Swarm tab) =>
+    tab.superTabId == null ? 0 : app.superTabs.agentsAsking(tab.superTabId!);
 
-/// What a Swarm tab's tag count says: "Tagged in 2 messages".
-String tabMentionsLabel(int count) =>
-    'Tagged in $count ${count == 1 ? 'message' : 'messages'}';
+/// What a Swarm tab's count says: "2 agents ask you".
+String tabAgentsAskingLabel(int count) =>
+    count == 1 ? '1 agent asks you' : '$count agents ask you';
 
-/// The unread messages in this account's own Buddy chats in a Swarm tab,
-/// the PM's private lines among them.
-int tabBuddyWaiting(AppNotifier app, Swarm tab) =>
-    tab.superTabId == null ? 0 : app.superTabs.waitingBuddy(tab.superTabId!);
-
-/// What a Swarm tab's badge counts: its tags and its unread Buddy chat messages.
-int tabWaiting(AppNotifier app, Swarm tab) =>
-    tabMentionsWaiting(app, tab) + tabBuddyWaiting(app, tab);
-
-/// What a Swarm tab's badge says, or null when it counts nothing:
-/// "Tagged in 1 message · 2 new in your Buddy chat".
+/// What a Swarm tab's badge says, or null when it counts nothing.
 String? tabWaitingLabel(AppNotifier app, Swarm tab) {
-  final tags = tabMentionsWaiting(app, tab), pm = tabBuddyWaiting(app, tab);
-  final parts = [
-    if (tags > 0) tabMentionsLabel(tags),
-    if (pm > 0) buddyUnreadLabel(pm),
-  ];
-  return parts.isEmpty ? null : parts.join(' · ');
+  final asking = tabAgentsAsking(app, tab);
+  return asking > 0 ? tabAgentsAskingLabel(asking) : null;
 }
 
 /// A viewer refers to its owner; showing the same harness twice adds no vote.
-/// A Lead's tag waiting in a Swarm tab needs the person, like a question.
+/// An agent asking in a Swarm tab needs the person, like a question.
 HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
   if (tab.isStore || tab.isOrchestrator) return null;
-  if (tabMentionsWaiting(app, tab) > 0) return HarnessActivity.needsInput;
+  if (tabAgentsAsking(app, tab) > 0) return HarnessActivity.needsInput;
   HarnessActivity? result;
   final seen = <(String, String)>{};
   for (final pane in tab.panes) {
@@ -143,15 +128,14 @@ HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
   return result;
 }
 
-/// What needs this account across its Swarm tabs: the tags and open decisions
-/// the Swarm counts for it alone, each Swarm once. None from a Swarm it lost,
-/// none signed out. The Dock's badge, and what the Swarm's sidebar row counted.
+/// What needs this account across its Swarm tabs: its agents that ask it, each
+/// Swarm once. None from a Swarm it lost, none signed out. The Dock's badge.
 int swarmsNeedYou(AppNotifier app) {
   if (app.currentUser == null) return 0;
   var count = 0;
   for (final id in {for (final tab in app.swarms) ?tab.superTabId}) {
     if (app.superTabs.peek(id)?.accessRevoked == true) continue;
-    count += app.superTabs.waitingTags(id) + app.superTabs.waitingDecisions(id);
+    count += app.superTabs.agentsAsking(id);
   }
   return count;
 }

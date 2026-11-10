@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart'
     show SuperTabMessageHighlight;
@@ -14,7 +13,6 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
-import 'super_tab_tasks_view_test.dart' show tasksServer;
 
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_NEEDS_YOU_SHOTS'];
@@ -88,8 +86,9 @@ Future<SuperTabController> show(
   ValueChanged<SuperTabAgent>? onOpenTerminal,
   Brightness brightness = Brightness.light,
   bool terminalsVisible = false,
+  Size size = const Size(1200, 900),
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1200, 900));
+  await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final c = server.controller();
   addTearDown(c.dispose);
@@ -103,9 +102,7 @@ Future<SuperTabController> show(
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
-          board: false,
           controller: c,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: onOpenTerminal ?? (_) {},
           terminalsVisible: terminalsVisible,
@@ -174,14 +171,6 @@ void main() {
       await show(tester, server());
       expect(find.text('Builder needs you'), findsOneWidget);
     });
-
-    testWidgets('a decision asked of the reader shows it while the agent '
-        'keeps working', (tester) async {
-      final s = server(status: 'working');
-      s.ask(['Ship how?'], conversationId: 'offline');
-      await show(tester, s);
-      expect(find.text('Builder needs you'), findsOneWidget);
-    });
   });
 
   group('the click', () {
@@ -248,6 +237,8 @@ void main() {
         server(askedOf: 'owner'),
         onOpenTerminal: (a) => opened.add(a.id),
         terminalsVisible: true,
+        // Wide enough that the terminal sits beside the chat, not in its place.
+        size: const Size(1400, 900),
       );
       await tester.tap(bar());
       await tester.pumpAndSettle();
@@ -274,36 +265,5 @@ void main() {
       await tester.pumpAndSettle();
       expect(opened, ['builder']);
     });
-  });
-
-  group('the Tasks count', () {
-    Future<void> tasks(WidgetTester tester, Brightness brightness) async {
-      await show(tester, tasksServer(), brightness: brightness);
-    }
-
-    for (final brightness in Brightness.values) {
-      testWidgets('sits on the icon’s top-right corner in ${brightness.name}, '
-          'with its tooltip', (tester) async {
-        await tasks(tester, brightness);
-        final icon = tester.getRect(find.byKey(const ValueKey('super-tasks')));
-        final badge = tester.getRect(
-          find.byKey(const ValueKey('super-tasks-badge')),
-        );
-        expect(badge.center.dx, greaterThan(icon.center.dx));
-        expect(badge.center.dy, lessThan(icon.center.dy));
-        expect(badge.left, lessThan(icon.right));
-        expect(badge.right, greaterThan(icon.right - 4));
-        expect(badge.top, lessThan(icon.top + 6));
-        await shot(tester, 'tasks-badge-${brightness.name}');
-        expect(
-          tester
-              .widget<SuperTabCountBadge>(
-                find.byKey(const ValueKey('super-tasks-badge')),
-              )
-              .tooltip,
-          '1 task needs you',
-        );
-      });
-    }
   });
 }

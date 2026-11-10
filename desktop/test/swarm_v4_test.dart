@@ -44,7 +44,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             // The workspace shows the selected chat's terminals beside it.
@@ -52,7 +51,6 @@ void main() {
             machineName: (_) => 'Mac Studio',
             github: swarmV4GitHub(calls: ghCalls),
             instructions: computer?.link,
-            board: true,
           ),
         ),
       ),

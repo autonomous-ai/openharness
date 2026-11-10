@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -124,12 +124,10 @@ void main() {
           body: SuperTabView(
             controller: c,
             app: createApp(),
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
             github: swarmV4GitHub(),
-            board: true,
           ),
         ),
       ),

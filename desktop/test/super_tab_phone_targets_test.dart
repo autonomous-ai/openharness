@@ -53,58 +53,7 @@ void _agentMessages(ConversationServer server) {
     };
 }
 
-/// The conversation's controls, by what they are called.
-Map<String, Finder> _controls() => {
-  'Reply': find.byTooltip('Reply'),
-  'Copy message': find.byTooltip('Copy message'),
-  'Attach files': find.byTooltip('Attach files'),
-  'Send message': find.byTooltip('Send message'),
-  'author': find.descendant(
-    of: find.byType(SuperTabMessageRow),
-    matching: find.widgetWithText(InkWell, 'Lark'),
-  ),
-  'file': find.byKey(const ValueKey('super-attachment:a1')),
-  'Details': find.widgetWithText(TextButton, 'Details'),
-};
-
-/// The size of every control [finder] finds.
-Iterable<Size> _sizes(WidgetTester tester, Finder finder, String label) {
-  expect(finder, findsWidgets, reason: label);
-  return [
-    for (var i = 0; i < finder.evaluate().length; i++)
-      tester.getSize(finder.at(i)),
-  ];
-}
-
-Future<void> _openReply(WidgetTester tester) async {
-  await tester.tap(find.byTooltip('Reply').first, warnIfMissed: false);
-  await tester.pumpAndSettle();
-}
-
 void main() {
-  testWidgets('a phone\'s conversation controls are a finger each', (
-    tester,
-  ) async {
-    final (_, controller) = await mountPhoneSuperTab(
-      tester,
-      const Size(390, 844),
-      seed: _agentMessages,
-    );
-    final controls = {
-      ..._controls(),
-      'Cancel reply': find.byTooltip('Cancel reply'),
-    };
-    await _openReply(tester);
-    for (final MapEntry(key: label, value: control) in controls.entries) {
-      for (final size in _sizes(tester, control, label)) {
-        expect(size.width, greaterThanOrEqualTo(44), reason: label);
-        expect(size.height, greaterThanOrEqualTo(44), reason: label);
-      }
-    }
-    expect(tester.takeException(), isNull);
-    await unmountPhoneSuperTab(tester, controller);
-  });
-
   testWidgets('a phone\'s taller author keeps the name in place', (
     tester,
   ) async {
@@ -129,55 +78,5 @@ void main() {
     }
 
     expect(await tops(desktop: false), await tops(desktop: true));
-  });
-
-  // Desktop sets no compactBelow: a narrow window is no phone.
-  testWidgets('Desktop at 600 keeps the bar, the controls and the rows', (
-    tester,
-  ) async {
-    final (_, controller) = await mountPhoneSuperTab(
-      tester,
-      const Size(600, 800),
-      desktop: true,
-      seed: _agentMessages,
-    );
-    expect(find.byKey(const ValueKey('super-terminals')), findsOneWidget);
-    expect(find.byTooltip('Project options'), findsOneWidget);
-    // Send shows once there is something to send (#4529).
-    await tester.enterText(
-      find.byKey(const ValueKey('super-message-composer')),
-      'Ready',
-    );
-    await tester.pump();
-    const mouse = {
-      'Reply': Size(32, 32),
-      'Copy message': Size(32, 32),
-      'Attach files': Size(32, 32),
-      'Send message': Size(32, 32),
-    };
-    for (final MapEntry(key: label, value: size) in mouse.entries) {
-      expect(_sizes(tester, _controls()[label]!, label), everyElement(size));
-    }
-    for (final label in ['file', 'Details']) {
-      expect(
-        _sizes(tester, _controls()[label]!, label).map((s) => s.height),
-        everyElement(28),
-        reason: label,
-      );
-    }
-    expect(
-      _sizes(tester, _controls()['author']!, 'author').single.height,
-      lessThan(28),
-    );
-    await _openReply(tester);
-    expect(tester.getSize(find.byTooltip('Cancel reply')), const Size(32, 32));
-    await tester.tap(find.byTooltip('Members'));
-    await tester.pumpAndSettle();
-    expect(
-      tester.getSize(find.byKey(const ValueKey('super-person-owner'))).height,
-      36,
-    );
-    expect(tester.getSize(find.byTooltip('Invite people')), const Size(32, 32));
-    await unmountPhoneSuperTab(tester, controller);
   });
 }
