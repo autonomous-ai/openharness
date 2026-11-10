@@ -7298,8 +7298,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
-  /// What Attach's picker lists and allows: a Claude Code or Codex session running on one of this person's own computers
-  /// (the server takes no other, backend agent.add), and none already on the team, which it does not list.
+  /// What Attach's picker lists and allows: a Claude Code or Codex session on one of this person's own computers, running
+  /// or stopped and resumable (the server takes no other, backend agent.add), and none already on the team, which it does
+  /// not list.
   HarnessPickerContext _attachContext(String tabId) {
     bool inSwarm(SwarmDestination row) =>
         app.superTabs
@@ -7332,7 +7333,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (engine != 'claude' && engine != 'codex') {
           return 'Only Claude Code or Codex can join this Swarm.';
         }
-        return native != null && native.terminalAvailable && !native.isStopped
+        // A stopped session is resumed as it joins (anh Dee 2026-11-10).
+        if (native != null && native.isStopped) {
+          return native.canPauseAndResume
+              ? null
+              : 'This session cannot resume.';
+        }
+        return native != null && native.terminalAvailable
             ? null
             : 'Choose a running agent.';
       },
