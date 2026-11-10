@@ -171,8 +171,29 @@ const PAGES: Record<string, string> = {
 }
 
 /** The pages the browser opens, and every request they were asked, with where it came from. */
+/**
+ * Listens on every address, and answers how to stop: every socket it took is destroyed first, the upgraded and CONNECT
+ * ones too. `closeAllConnections` leaves those, and `server.close` waits for them: through gvproxy, a container's end of
+ * one may never close once the container is gone (the clean-up hung its 10 minutes on macOS, 2026-11-10).
+ */
+async function listen(server: http.Server): Promise<{ port: number; stop: () => Promise<void> }> {
+  const sockets = new Set<Socket>()
+  server.on('connection', (socket: Socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
+  await new Promise<void>((done, fail) => { server.once('error', fail); server.listen(0, '0.0.0.0', () => done()) })
+  return {
+    port: (server.address() as AddressInfo).port,
+    stop: () => {
+      for (const socket of sockets) socket.destroy()
+      return new Promise((done) => server.close(() => done()))
+    },
+  }
+}
+
 class Pages {
-  private constructor(private readonly server: http.Server, readonly port: number, readonly seen: Seen[]) {}
+  private constructor(readonly stop: () => Promise<void>, readonly port: number, readonly seen: Seen[]) {}
 
   /**
    * On every address: the browser reaches this machine at its own network address (PAGES_HOST), never its loopback or
@@ -193,16 +214,11 @@ class Pages {
       })
       res.end(`<!doctype html><meta charset="utf-8"><title>${url.pathname}</title>${body}`)
     })
-    await new Promise<void>((done, fail) => { server.once('error', fail); server.listen(0, '0.0.0.0', () => done()) })
-    return new Pages(server, (server.address() as AddressInfo).port, seen)
+    const { port, stop } = await listen(server)
+    return new Pages(stop, port, seen)
   }
 
   url(path: string): string { return `http://${PAGES_HOST}:${this.port}${path}` }
-
-  stop(): Promise<void> {
-    this.server.closeAllConnections()
-    return new Promise((done) => this.server.close(() => done()))
-  }
 }
 
 /**
@@ -212,7 +228,7 @@ class Pages {
  */
 class LoginProxy {
   readonly upstreamPorts = new Set<number>()
-  private constructor(private readonly server: http.Server, readonly port: number) {}
+  private constructor(readonly stop: () => Promise<void>, readonly port: number) {}
 
   static async start(pagesPort: number): Promise<LoginProxy> {
     const login = `Basic ${Buffer.from(`${PROXY_LOGIN.username}:${PROXY_LOGIN.password}`).toString('base64')}`
@@ -237,14 +253,9 @@ class LoginProxy {
     })
     // Only https goes through CONNECT, and the pages are plain http.
     server.on('connect', (_req, socket: Socket) => { socket.on('error', () => socket.destroy()); socket.end('HTTP/1.1 403 Forbidden\r\n\r\n') })
-    await new Promise<void>((done, fail) => { server.once('error', fail); server.listen(0, '0.0.0.0', () => done()) })
-    proxy = new LoginProxy(server, (server.address() as AddressInfo).port)
+    const { port, stop } = await listen(server)
+    proxy = new LoginProxy(stop, port)
     return proxy
-  }
-
-  stop(): Promise<void> {
-    this.server.closeAllConnections()
-    return new Promise((done) => this.server.close(() => done()))
   }
 }
 
@@ -254,7 +265,7 @@ class LoginProxy {
  */
 class Canary {
   readonly hosts: string[] = []
-  private constructor(private readonly server: http.Server, readonly port: number) {}
+  private constructor(readonly stop: () => Promise<void>, readonly port: number) {}
 
   static async start(): Promise<Canary> {
     let canary: Canary | null = null
@@ -269,14 +280,9 @@ class Canary {
       const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
     })
-    await new Promise<void>((done, fail) => { server.once('error', fail); server.listen(0, '0.0.0.0', () => done()) })
-    canary = new Canary(server, (server.address() as AddressInfo).port)
+    const { port, stop } = await listen(server)
+    canary = new Canary(stop, port)
     return canary
-  }
-
-  stop(): Promise<void> {
-    this.server.closeAllConnections()
-    return new Promise((done) => this.server.close(() => done()))
   }
 }
 
