@@ -14,14 +14,13 @@ import 'swarm_message_link.dart';
 /// link to message with its [link], which copies it and says so, and on the
 /// reader's own message Edit message and Delete message: each closes the
 /// sheet, then calls [onEdit] or [onDelete]. Reactions are gone (anh Dee,
-/// 2026-11-09). Opens nothing when there is nothing to offer.
+/// 2026-11-09).
 Future<void> showSwarmMessageActions(
   BuildContext context, {
-  SwarmMessageLink? link,
+  required SwarmMessageLink link,
   VoidCallback? onEdit,
   VoidCallback? onDelete,
 }) async {
-  if (link == null && onEdit == null && onDelete == null) return;
   HapticFeedback.lightImpact();
   await showModalBottomSheet<void>(
     context: context,
@@ -33,9 +32,9 @@ Future<void> showSwarmMessageActions(
 }
 
 class _Actions extends StatelessWidget {
-  const _Actions({this.link, this.onEdit, this.onDelete});
+  const _Actions({required this.link, this.onEdit, this.onDelete});
 
-  final SwarmMessageLink? link;
+  final SwarmMessageLink link;
   final VoidCallback? onEdit, onDelete;
 
   /// The sheet closed, then [act]: what it opens goes over the chat.
@@ -80,13 +79,12 @@ class _Actions extends StatelessWidget {
                 shape: const StadiumBorder(),
               ),
             ),
-            if (link case final link?)
-              _Action(
-                key: const ValueKey('swarm-copy-link'),
-                icon: LucideIcons.link300,
-                label: 'Copy link to message',
-                onTap: () => _copy(context, link),
-              ),
+            _Action(
+              key: const ValueKey('swarm-copy-link'),
+              icon: LucideIcons.link300,
+              label: 'Copy link to message',
+              onTap: () => _copy(context, link),
+            ),
             if (onEdit case final edit?)
               _Action(
                 key: const ValueKey('swarm-edit-message'),

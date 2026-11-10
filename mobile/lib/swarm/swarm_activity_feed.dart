@@ -141,8 +141,7 @@ class SwarmActivityFeed extends ChangeNotifier {
       !entry.read || _newThisVisit.contains(entry.id);
 
   /// Replies not read on any device: what the Activity badge adds.
-  int get unreadReplies =>
-      items.where((e) => !e.read).length;
+  int get unreadReplies => items.where((e) => !e.read).length;
 
   /// Activity is in sight: reads now; what is unread stays bold until
   /// [closed].
@@ -317,7 +316,8 @@ class SwarmActivityFeed extends ChangeNotifier {
       final read = <SwarmActivityEntry>[];
       final before = _listed, listed = <String>{};
       for (final row in answer['items'] as List? ?? const []) {
-        // A reaction's row from a backend before they went (2026-11-09).
+        // A reaction's row from a backend before they went (2026-11-09); goes
+        // from 2026-12-09, with the backend's retired commands.
         if (row is Map && row['kind'] == 'reaction') continue;
         final SwarmActivityEntry entry;
         try {

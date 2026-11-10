@@ -815,13 +815,19 @@ class _SwarmMarks {
 
   Future<void> _load() async {
     final held = <String, int>{};
+    var dropped = false;
     try {
       if (await store?.read(_key) case final raw?) {
         if (jsonDecode(raw) case {'marks': final Map marks}) {
           for (final MapEntry(:key, :value) in marks.entries) {
-            // A reaction's mark (a String) from before reactions went is
-            // left behind.
-            if (key is String && value is int) held[key] = value;
+            // A reaction's mark (a String) from before reactions went
+            // (2026-11-09) is dropped, and the marks written again without
+            // it. Goes from 2026-12-09, as the backend's retired commands.
+            if (key is String && value is int) {
+              held[key] = value;
+            } else {
+              dropped = true;
+            }
           }
         }
       }
@@ -838,7 +844,7 @@ class _SwarmMarks {
       }
     }
     loaded = true;
-    if (values.isNotEmpty) _write();
+    if (values.isNotEmpty || dropped) _write();
     onLoaded();
   }
 

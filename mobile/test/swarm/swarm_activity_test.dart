@@ -263,11 +263,24 @@ void main() {
       final activity = session.activity..watch();
       await settle();
 
-      expect(
-        swarmActivityAll(activity).map((item) => item.key),
-        everyElement(isNot(startsWith('reaction:'))),
-      );
+      final keys = swarmActivityAll(activity).map((item) => item.key);
+      expect(keys, isNotEmpty, reason: 'its replies and threads still list');
+      expect(keys, everyElement(isNot(startsWith('reaction:'))));
     });
+
+    test(
+      'drops the reaction marks an older phone kept, from the phone too',
+      () async {
+        final store = MemoryKeyValueStore()
+          ..values['swarm_activity.$me.$tab'] =
+              '{"marks":{"r:mine-2":"check"}}';
+        final session = await start(backend(page: page), store: store);
+        session.activity.watch();
+        await settle();
+
+        expect(store.values['swarm_activity.$me.$tab'], isNot(contains('r:')));
+      },
+    );
 
     test('handled threads stay handled on this phone, until something new '
         'comes', () async {
