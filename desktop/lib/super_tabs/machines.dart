@@ -43,7 +43,6 @@ import 'machine_details.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
-import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'personal_machine_rows.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
@@ -52,15 +51,12 @@ export 'machine_status.dart';
 
 part 'machines_manage.dart';
 
-/// The backend's upper bound. A machine's own total RAM may set a lower one.
+/// The backend's bounds for a machine's `maxAgents`.
 const _agentSlotsMin = 1;
 const _agentSlotsMax = 1024;
 
 int _clampAgentSlots(num value) =>
     value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
-
-int? _suggestedAgentSlots(MachineResources? resources) =>
-    superTabSuggestedAgentSlots(resources);
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -169,37 +165,52 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
   return engines;
 }
 
-/// Adds the prepared [machineId] to the Swarm, offering [maxAgents] slots, as many as its memory allows.
-/// False when [alive] says the asker is gone or the reader can no longer
-/// write, in which case nothing was added.
-Future<bool> _sendContribution(
+/// Adds the reader's own computer [machineId] to the Swarm, running as many
+/// agents as its memory allows. Resolves to [machineId], null when [alive]
+/// ended first or the reader can no longer write. Throws a [SuperTabFailure]
+/// saying why it could not. [setupId] is the caller's to keep between tries: a
+/// setup still running answers the next try with the same one. With
+/// [teamAccountOnly], teammates' work reaches it only through its Harness Team
+/// account once that passes its privacy check (backend superTabs/machines.ts
+/// `teamWorkRefusal`).
+Future<String?> contributeComputer(
   SuperTabController c,
   AppNotifier app,
-  String machineId,
-  Map<String, dynamic> prepared,
-  List<String> engines, {
-  required int maxAgents,
+  String machineId, {
+  required String setupId,
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool ifMissing = false,
   bool unlessRemoved = false,
 }) async {
+  final prepared = await _prepareContribution(
+    c,
+    app,
+    machineId,
+    setupId: setupId,
+    alive: alive,
+  );
+  if (prepared == null) return null;
+  final engines = _contributedEngines(prepared);
+  if (!alive() || !c.canWrite) return null;
   // An earlier lost reply leaves an uncertain attempt holding its own
-  // receipt, and only one action may be in flight: check that one first, then
-  // send the number the owner is looking at — the stored attempt cannot know
-  // it was changed.
+  // receipt, and only one action may be in flight: check that one first.
   if (c.pendingCommand?['type'] == 'machine.contribute') {
     // If that attempt cannot be confirmed, its own error is the one worth
     // showing: it says why it is still unclear.
     if (await c.retry() == null) {
-      if (!alive()) return false;
+      if (!alive()) return null;
       throw SuperTabFailure(
         c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
-        c.operationError ?? 'The earlier attempt is still not confirmed. Try again to check it.',
+        c.operationError ??
+            'The earlier attempt is still not confirmed. Try again to check it.',
       );
     }
-    if (!alive() || !c.canWrite) return false;
+    if (!alive() || !c.canWrite) return null;
   }
+  // With `agents: memory` the server sets no limit; `maxAgents` is only
+  // preparation's own figure, which the command still carries.
+  final offered = prepared['maxAgents'];
   final result = await c.command({
     'type': 'machine.contribute',
     'machineId': machineId,
@@ -207,7 +218,7 @@ Future<bool> _sendContribution(
     'cwd': prepared['cwd'],
     if (prepared['scope'] != null) 'scope': prepared['scope'],
     'engines': engines,
-    'maxAgents': maxAgents,
+    'maxAgents': offered is num ? _clampAgentSlots(offered) : _agentSlotsMin,
     'agents': 'memory',
     if (teamAccountOnly) 'teamAccountOnly': true,
     if (ifMissing) 'ifMissing': true,
@@ -220,62 +231,7 @@ Future<bool> _sendContribution(
     );
   }
   await app.wakeSuperTabHost(machineId);
-  return true;
-}
-
-/// Adds the reader's own computer [machineId] to the Swarm as the Add machine
-/// form does when its Add machine is clicked untouched: the slots its memory
-/// suggests, else what preparation offered. Resolves to [machineId], null when
-/// [alive] ended first. Throws a [SuperTabFailure] saying why it could not.
-/// [setupId] is the caller's to keep between tries: a setup still running
-/// answers the next try with the same one. With [teamAccountOnly], teammates'
-/// work reaches it only through its Harness Team account once that passes its
-/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`).
-/// [readResources] stands in for [AppNotifier.readMachineResources].
-Future<String?> contributeComputer(
-  SuperTabController c,
-  AppNotifier app,
-  String machineId, {
-  required String setupId,
-  required bool Function() alive,
-  bool teamAccountOnly = false,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
-  Future<MachineResources?> Function(String machineId)? readResources,
-}) async {
-  final prepared = await _prepareContribution(
-    c,
-    app,
-    machineId,
-    setupId: setupId,
-    alive: alive,
-  );
-  if (prepared == null) return null;
-  final engines = _contributedEngines(prepared);
-  MachineResources? resources;
-  try {
-    resources = await (readResources ?? app.readMachineResources)(machineId);
-  } catch (_) {
-    // The suggestion only sizes the offer; preparation's own number stands in.
-  }
-  final offered = prepared['maxAgents'];
-  final slots =
-      _suggestedAgentSlots(resources) ??
-      (offered is num ? _clampAgentSlots(offered) : _agentSlotsMin);
-  if (!alive() || !c.canWrite) return null;
-  final added = await _sendContribution(
-    c,
-    app,
-    machineId,
-    prepared,
-    engines,
-    maxAgents: slots,
-    alive: alive,
-    teamAccountOnly: teamAccountOnly,
-    ifMissing: ifMissing,
-    unlessRemoved: unlessRemoved,
-  );
-  return added ? machineId : null;
+  return machineId;
 }
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
@@ -1385,7 +1341,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   now: widget.now,
                 ),
               ),
-              // One clear action at the right; the rarer ones quiet at the left (Ken, 2026-10-28).
+              // Its rarer actions, quiet at the left (Ken, 2026-10-28).
               leadingActions: [
                 if (shared != null && contributor == c.accountId)
                   TextButton(
@@ -2046,12 +2002,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final failingSince = c.backendUnreachable ? c.unreachableSince : null;
     final add = c.canWrite && widget.app != null
         ? () => unawaited(
-            showAddComputers(
-              context,
-              c,
-              widget.app!,
-              readResources: widget.readLocal,
-            ),
+            showAddComputers(context, c, widget.app!),
           )
         : null;
     if (widget.manage) return _manageScreen(add);
