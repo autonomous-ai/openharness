@@ -194,6 +194,7 @@ abstract final class AppIcons {
   static const shieldOff = LucideIcons.shieldOff400;
   static const slidersHorizontal = LucideIcons.slidersHorizontal400;
   static const smartphone = LucideIcons.smartphone400;
+  static const tablet = LucideIcons.tablet400;
   static const smartphoneNfc = LucideIcons.smartphoneNfc400;
   static const snowflake = LucideIcons.snowflake400;
   static const sparkles = LucideIcons.sparkles400;
