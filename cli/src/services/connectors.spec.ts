@@ -38,21 +38,33 @@ describe('the connectors service', () => {
     rmSync(home, { recursive: true, force: true })
     for (const made of shortHomes.splice(0)) rmSync(made, { recursive: true, force: true })
   })
-  /** A port held as another account holds it, hanging up on whoever dials it: another process on this Mac may, and a connection it
-   *  kept held close() until the test timed out. */
+  /** A port held as another account holds it: it only holds, and hangs up on whoever dials it. */
   const holdPort = async () => {
     const holder = createServer(socket => socket.destroy())
     await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
     return holder
   }
+  /** A loopback port free a moment ago. */
+  const freePort = async (): Promise<number> => {
+    const free = await holdPort()
+    const { port } = free.address() as { port: number }
+    await new Promise(done => free.close(done))
+    return port
+  }
+  /** What a request answered, or 0 when it was not answered within a second. */
+  const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.status, () => 0)
 
-  // Another process on this Mac can dial any port a test listens on: under load one dialed two holders of parallel runs at once, and
-  // a holder that kept what it accepted waited for it in close() until the test timed out at 30 s (Q3, 2026-11-10).
+  // Any process can dial a port a test listens on: under load another run's request reached a held port just released and taken
+  // again (one node process held connections to the holders of two parallel runs), and a holder that kept the connection waited
+  // for it in close() until the test timed out at 30 s (Q3, 2026-11-10).
   it('lets go of a held port at once, whatever an outsider left connected to it', async () => {
     const holder = await holdPort()
+    const accepted = new Promise(resolve => holder.once('connection', resolve))
     const outsider = connect((holder.address() as { port: number }).port, '127.0.0.1')
-    await new Promise(resolve => outsider.once('connect', resolve))
+    // Hung up on, as a held port does.
+    outsider.on('error', () => {})
     try {
+      await accepted
       const closing = Date.now()
       await new Promise<void>(resolve => holder.close(() => resolve()))
       expect(Date.now() - closing).toBeLessThan(5_000)
@@ -188,13 +200,13 @@ describe('the connectors service', () => {
       expect(moved).not.toBe(taken)
       expect(said.mock.calls.flat().join(' ')).toContain(`bridge port ${taken} is not available`)
       expect(said.mock.calls.flat().join(' ')).toContain(`the bridge moved to port ${moved}`)
-      expect(await fetch(`http://127.0.0.1:${moved}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status)).toBe(404)
+      expect(await answered(`http://127.0.0.1:${moved}/x/linear/mcp`)).toBe(404)
       // Once the holder lets go, agents still on the old address recover: the bridge answers there too.
       await new Promise<void>(resolve => holder.close(() => resolve()))
       let status = 0
       for (let n = 0; n < 200 && !status; n++) {
         await new Promise(resolve => setTimeout(resolve, 10))
-        status = await fetch(`http://127.0.0.1:${taken}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status, () => 0)
+        status = await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)
       }
       expect(status).toBe(404)
     } finally {
@@ -223,7 +235,7 @@ describe('the connectors service', () => {
       let status = 0
       for (let n = 0; n < 200 && !status; n++) {
         await new Promise(resolve => setTimeout(resolve, 10))
-        status = await fetch(`http://127.0.0.1:${taken}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status, () => 0)
+        status = await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)
       }
       expect(status).toBe(404)
     } finally {
@@ -277,23 +289,18 @@ describe('the connectors service', () => {
     beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
     afterEach(() => { vi.unstubAllEnvs() })
 
-    const freePort = async () => {
-      const server = await holdPort()
-      const { port } = server.address() as { port: number }
-      await new Promise<void>(resolve => server.close(() => resolve()))
-      return port
-    }
     const status = async (port: number, path: string) => {
       for (let n = 0; n < 40; n++) {
-        const answer = await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}' }).then(reply => reply.status, () => 0)
+        const answer = await answered(`http://127.0.0.1:${port}${path}`)
         if (answer) return answer
         await new Promise(resolve => setTimeout(resolve, 25))
       }
       return 0
     }
-    const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}' }).then(reply => reply.text())
+    const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.text())
     const rawStatus = (port: number, path: string) => new Promise<number>((resolve, reject) => {
-      const sent = httpRequest({ host: '127.0.0.1', port, path, method: 'POST' }, (reply) => { reply.resume(); resolve(reply.statusCode ?? 0) })
+      const sent = httpRequest({ host: '127.0.0.1', port, path, method: 'POST', timeout: 1_000 }, (reply) => { reply.resume(); resolve(reply.statusCode ?? 0) })
+      sent.once('timeout', () => sent.destroy(new Error('no answer within a second')))
       sent.once('error', reject)
       sent.end('{}')
     })
@@ -344,14 +351,12 @@ describe('the connectors service', () => {
     const behindLink = JSON.stringify({ key: 'k'.repeat(40) })
     writeFileSync(join(elsewhere, 'bridge.json'), behindLink, { mode: 0o600 })
     symlinkSync(elsewhere, root)
-    const server = await holdPort()
-    const { port } = server.address() as { port: number }
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    const port = await freePort()
     startConnectors(fakeCore(), { vault: new Store(root, env), env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not replace Harness\'s key'))
     let answer = ''
     for (let n = 0; n < 40 && !answer; n++) {
-      answer = await fetch(`http://127.0.0.1:${port}/${'k'.repeat(40)}/linear/mcp`, { method: 'POST', body: '{}' }).then(reply => reply.text(), () => '')
+      answer = await fetch(`http://127.0.0.1:${port}/${'k'.repeat(40)}/linear/mcp`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.text(), () => '')
       if (!answer) await new Promise(resolve => setTimeout(resolve, 25))
     }
     expect(answer).toContain('Unknown connection address')
@@ -364,7 +369,8 @@ describe('the connectors service', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const vault = new Store(join(shortHome(), 's'), env), path = join(vault.root, 'bridge.sock')
       mkdirSync(vault.root, { recursive: true, mode: 0o700 })
-      const holder = createServer()
+      // It hangs up on each probe of the service's (localSocket.ts refuseLiveSocket), so close() waits on none.
+      const holder = createServer(socket => socket.destroy())
       await new Promise<void>(resolve => holder.listen(path, resolve))
       startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
       const said = () => warn.mock.calls.filter(([line]) => String(line).includes('socket is not listening'))
@@ -402,19 +408,13 @@ describe('the connectors service', () => {
     let status = 0
     for (let n = 0; n < 40 && !status; n++) {
       await new Promise(resolve => setTimeout(resolve, 25))
-      status = await fetch(`http://127.0.0.1:${port}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status, () => 0)
+      status = await answered(`http://127.0.0.1:${port}/x/linear/mcp`)
     }
     expect(status).toBe(404)
   })
 
   // Task #2162 (Reed's review of #2605): on Windows the bridge had only its port, which the Team account can hold from boot.
   describe('on Windows', () => {
-    const freePort = async (): Promise<number> => {
-      const free = await holdPort()
-      const port = (free.address() as { port: number }).port
-      await new Promise(done => free.close(done))
-      return port
-    }
     // A Unix socket named as a pipe stands for it; short, as a socket has to fit.
     const shortPipe = (): { folder: string; pipe: string } => {
       const folder = mkdtempSync(join('/tmp', 'cw-'))
@@ -434,7 +434,7 @@ describe('the connectors service', () => {
         expect(vault.file('harness-key.json')).toMatchObject({ socketOnly: true })
         expect(harnessKey(vault)).not.toBe(stale)
         expect(typeof vault.file('bridge.json').keyRetiresAt).toBe('number')
-        await vi.waitFor(async () => expect((await fetch(`http://127.0.0.1:${port}/${harnessKey(vault)}/connections`)).status).toBe(404))
+        await vi.waitFor(async () => expect((await fetch(`http://127.0.0.1:${port}/${harnessKey(vault)}/connections`, { signal: AbortSignal.timeout(1_000) })).status).toBe(404))
       } finally { rmSync(folder, { recursive: true, force: true }) }
     })
 
