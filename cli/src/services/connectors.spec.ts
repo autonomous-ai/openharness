@@ -38,9 +38,10 @@ describe('the connectors service', () => {
     rmSync(home, { recursive: true, force: true })
     for (const made of shortHomes.splice(0)) rmSync(made, { recursive: true, force: true })
   })
-  /** A port held as another account holds it. */
+  /** A port held as another account holds it, hanging up on whoever dials it: another process on this Mac may, and a connection it
+   *  kept held close() until the test timed out. */
   const holdPort = async () => {
-    const holder = createServer()
+    const holder = createServer(socket => socket.destroy())
     await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
     return holder
   }
@@ -169,8 +170,7 @@ describe('the connectors service', () => {
   })
 
   it('moves off a port another account holds, tells agents, and comes back to the saved port next time', async () => {
-    const holder = createServer()
-    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const holder = await holdPort()
     const taken = (holder.address() as { port: number }).port
     // No port named: the bridge's own choice, which is the one that may move.
     const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
@@ -207,8 +207,7 @@ describe('the connectors service', () => {
     ['its own account holds the port, by the real lookup', undefined],
     ['nobody can say who holds it', async () => null],
   ])('never moves when %s', async (_name, holderIsMine) => {
-    const holder = createServer()
-    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const holder = await holdPort()
     const taken = (holder.address() as { port: number }).port
     const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
     const vault = new Store(join(home, 'store'), free)
@@ -235,8 +234,7 @@ describe('the connectors service', () => {
   }, 30_000)
 
   it('does not move on one answer: a handover ending just then reads as another account, so it tries the port again first', async () => {
-    const holder = createServer()
-    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const holder = await holdPort()
     const taken = (holder.address() as { port: number }).port
     const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
     const vault = new Store(join(home, 'store'), free)
@@ -257,8 +255,7 @@ describe('the connectors service', () => {
   }, 30_000)
 
   it('says so when the port it moved to cannot be saved', async () => {
-    const holder = createServer()
-    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const holder = await holdPort()
     const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
     const vault = new Store(join(home, 'store'), free)
     saveBridgePort(vault, (holder.address() as { port: number }).port)
@@ -281,8 +278,7 @@ describe('the connectors service', () => {
     afterEach(() => { vi.unstubAllEnvs() })
 
     const freePort = async () => {
-      const server = createServer()
-      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      const server = await holdPort()
       const { port } = server.address() as { port: number }
       await new Promise<void>(resolve => server.close(() => resolve()))
       return port
@@ -348,8 +344,7 @@ describe('the connectors service', () => {
     const behindLink = JSON.stringify({ key: 'k'.repeat(40) })
     writeFileSync(join(elsewhere, 'bridge.json'), behindLink, { mode: 0o600 })
     symlinkSync(elsewhere, root)
-    const server = createServer()
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const server = await holdPort()
     const { port } = server.address() as { port: number }
     await new Promise<void>(resolve => server.close(() => resolve()))
     startConnectors(fakeCore(), { vault: new Store(root, env), env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
@@ -398,8 +393,7 @@ describe('the connectors service', () => {
   })
 
   it('waits for its port while another process holds it', async () => {
-    const holder = createServer()
-    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const holder = await holdPort()
     const port = (holder.address() as { port: number }).port
     startConnectors(fakeCore(), { vault: new Store(join(home, 'store'), env), env, port, offered: async () => ({}), retryMs: 20 })
     await new Promise(resolve => setTimeout(resolve, 60))
@@ -416,8 +410,7 @@ describe('the connectors service', () => {
   // Task #2162 (Reed's review of #2605): on Windows the bridge had only its port, which the Team account can hold from boot.
   describe('on Windows', () => {
     const freePort = async (): Promise<number> => {
-      const free = createServer()
-      await new Promise<void>(resolve => free.listen(0, '127.0.0.1', resolve))
+      const free = await holdPort()
       const port = (free.address() as { port: number }).port
       await new Promise(done => free.close(done))
       return port
