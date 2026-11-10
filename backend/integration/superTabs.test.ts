@@ -536,7 +536,7 @@ describe('private swarm projects on the real control API', () => {
     expect((await store.messages(peer, tab, conversationId, {})).messages.map(m => m.text)).toContain('Private result')
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(true)
     // A write of the person's own there, retried once the project is no longer shared with them.
-    const command: Command = { type: 'conversation.create', projectId, title: 'Shared review', brief: '', checks: [] }
+    const command: Command = { type: 'conversation.rename', conversationId: task, title: 'Shared review' }
     const operationId = randomUUID()
     await run(tab, command, peer, undefined, operationId)
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
@@ -2902,6 +2902,8 @@ describe('grant checks of the host roster', () => {
 describe('the Lead reads and types in an agent terminal', () => {
   async function terminalFixture() {
     const { tab, lead } = await fixture()
+    // Its machine's person types in the worker's terminal: only an agent's own login does (Swarm v4).
+    await joinHost(tab)
     const group = (await run(tab, { type: 'conversation.create', title: 'Terminal', brief: 'Answer the prompt', checks: [] })).result.conversationId as string
     const harnessId = randomUUID()
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId,
