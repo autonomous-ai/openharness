@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness/core/models.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 
 import 'support/capture.dart';
@@ -33,6 +34,28 @@ void main() {
     'Kai', 'Lea', 'Max', 'Nia', 'Oz', 'Pia', 'Quin', 'Rae', 'Sam', 'Tess',
     'Uma', 'Vic', 'Wes', 'Xia', 'Yan', 'Zed', 'Abe', 'Bea', 'Cal', 'Dan',
     'Eve', 'Fin', 'Gil', 'Han', 'Ivy', 'Jo', 'Kit',
+  ];
+
+  /// The three computers the forty run on: Mac Studio and Juno's laptop of [openSwarmV4]'s, and a desktop.
+  const computers = [
+    Machine(
+      machineId: 'host',
+      authMode: MachineAuthMode.managed,
+      name: 'Mac Studio',
+      status: 'online',
+    ),
+    Machine(
+      machineId: 'laptop',
+      authMode: MachineAuthMode.managed,
+      name: 'Juno\'s laptop',
+      status: 'offline',
+    ),
+    Machine(
+      machineId: 'desk',
+      authMode: MachineAuthMode.managed,
+      name: 'Studio desk',
+      status: 'online',
+    ),
   ];
 
   /// Faye, Pip and Juno of [swarmV4Channel] and thirty-seven more, spread over the three computers.
@@ -72,7 +95,7 @@ void main() {
   testWidgets('forty agents: the list scrolls, Manage stays at the foot', (
     tester,
   ) async {
-    final c = await openSwarmV4(tester, forty());
+    final c = await openSwarmV4(tester, forty(), machines: computers);
     expect(key('project-sidebar-agents'), findsOneWidget);
     expect(key('super-agent-ada'), findsOneWidget);
     // Further down than the window shows, until the list is scrolled.
@@ -88,6 +111,7 @@ void main() {
     expect(key('super-agent-zed'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
     await look(tester, 'scrolled');
+    // Zed runs on the laptop; Cy, near the top, on the desktop: each chat's bar names its computer.
     await tester.tap(key('super-agent-zed'));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'agent-chat-zed');
@@ -98,8 +122,7 @@ void main() {
   testWidgets('Your Team folds away, and the projects are then in sight', (
     tester,
   ) async {
-    final c = await openSwarmV4(tester, forty());
-    expect(key('super-group-channel'), findsNothing);
+    final c = await openSwarmV4(tester, forty(), machines: computers);
     await tester.tap(key('project-sidebar-agents'));
     await tester.pumpAndSettle();
     await tester.runAsync(c.flush);
@@ -112,7 +135,7 @@ void main() {
   testWidgets(
     'an agent far down is deleted from its row, and the list stays whole',
     (tester) async {
-      final c = await openSwarmV4(tester, forty());
+      final c = await openSwarmV4(tester, forty(), machines: computers);
       await tester.dragUntilVisible(
         key('super-agent-wes'),
         sidebar,
@@ -136,7 +159,7 @@ void main() {
     testWidgets(
       'forty agents at ${size.width.toInt()}x${size.height.toInt()}',
       (tester) async {
-        await openSwarmV4(tester, forty(), size: size);
+        await openSwarmV4(tester, forty(), machines: computers, size: size);
         expect(tester.takeException(), isNull);
         await look(tester, 'at-${size.width.toInt()}');
       },

@@ -2,10 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/super_tabs/instructions_link.dart';
 
 import 'support/capture.dart';
 import 'support/swarm_v4_channel.dart';
+import 'support/swarm_v4_data.dart';
 
 /// Set to a folder to write this file's screenshots there, with the system's real fonts.
 final shots = Platform.environment['SWARM_V4_SHOTS'];
@@ -17,28 +17,14 @@ void main() {
 
   Finder key(String k) => find.byKey(ValueKey(k));
 
-  /// A computer that holds one file: what it answers to a read and a write, or its error [code].
-  SwarmInstructionsLink computer({
-    String? text,
-    String? error,
-    List<String>? asked,
-  }) {
-    var held = text;
-    var version = 1;
-    return SwarmInstructionsLink((machine, type, payload) async {
-      asked?.add(type);
-      if (error != null) return {'error': error};
-      if (type == 'agent_instructions_write') {
-        held = payload['text'] as String;
-        return {'version': 'v${++version}'};
-      }
-      return {'text': held, 'version': 'v$version'};
-    });
-  }
+  /// A computer that holds Pip's file ([SwarmV4Computer]: it refuses as a real link fails, and a save checks the version).
+  SwarmV4Computer computer({String? text, String? error}) =>
+      SwarmV4Computer(files: {'session-pip/Pip': ?text})
+        ..refuse = error;
 
   Future<void> open(
     WidgetTester tester,
-    SwarmInstructionsLink link, {
+    SwarmV4Computer computer, {
     Size size = const Size(1440, 860),
     Brightness brightness = Brightness.light,
   }) async {
@@ -48,7 +34,7 @@ void main() {
       saved: 'agent-chat-pip',
       size: size,
       brightness: brightness,
-      instructions: link,
+      instructions: computer.link,
     );
     await tester.tap(key('swarm-instructions-button'));
     await tester.pumpAndSettle();
@@ -58,14 +44,11 @@ void main() {
       captureWindow(tester, shots, 'instructions-$name');
 
   testWidgets('a short file reads, edits and saves', (tester) async {
-    final asked = <String>[];
-    await open(
-      tester,
-      computer(
-        text: '# Pip\n\nAlways say hello first.\nNever touch the lamp firmware.\n',
-        asked: asked,
-      ),
+    final pc = computer(
+      text:
+          '# Pip\n\nAlways say hello first.\nNever touch the lamp firmware.\n',
     );
+    await open(tester, pc);
     expect(find.text('agents/Pip.md'), findsOneWidget);
     expect(find.textContaining('Always say hello first.'), findsOneWidget);
     await look(tester, 'read');
@@ -80,7 +63,12 @@ void main() {
     await tester.tap(key('swarm-instructions-save'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Ship on Fridays.'), findsOneWidget);
-    expect(asked, ['agent_instructions_read', 'agent_instructions_write']);
+    // Saved on the computer, over the version it read.
+    expect(pc.files['session-pip/Pip'], contains('Ship on Fridays.'));
+    expect(
+      [for (final (_, type, _) in pc.requests) type],
+      ['agent_instructions_read', 'agent_instructions_write'],
+    );
   });
 
   testWidgets('no file yet', (tester) async {
@@ -107,17 +95,19 @@ void main() {
     await look(tester, 'large-edit');
   });
 
-  for (final code in const [
-    'OFFLINE',
-    'UNSUPPORTED',
-    'TIMEOUT',
-    'AGENT_NOT_FOUND',
-    'FAILED',
-    'TOO_LARGE',
+  for (final (code, words) in const [
+    ('OFFLINE', 'Mac Studio is offline.'),
+    ('UNSUPPORTED', 'Update Harness on Mac Studio.'),
+    ('TIMEOUT', "Mac Studio didn't answer. Try again."),
+    ('AGENT_NOT_FOUND', "Pip isn't running on Mac Studio."),
+    ('FAILED', "Couldn't read it. Try again."),
+    ('TOO_LARGE', 'Too long to open here.'),
   ]) {
-    testWidgets('$code on a read says so and offers Try again', (tester) async {
+    testWidgets('$code on a read says what to do and offers Try again', (
+      tester,
+    ) async {
       await open(tester, computer(error: code));
-      expect(key('swarm-instructions-error'), findsOneWidget);
+      expect(tester.widget<Text>(key('swarm-instructions-error')).data, words);
       expect(key('swarm-instructions-retry'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await look(tester, 'error-$code');
