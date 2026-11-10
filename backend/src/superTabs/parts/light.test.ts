@@ -28,7 +28,6 @@ const assignment: Required<Assignment> = {
 }
 const conversation: Required<Conversation> = {
   agentIds: [],
-  answered: [],
   archived: false,
   assignment,
   audience: { people: [] },
@@ -40,7 +39,6 @@ const conversation: Required<Conversation> = {
   buddyName: 'Sparky',
   buddySessions: [],
   cards: {},
-  chatLimits: { asks: [] },
   checks: [],
   codePullRequestUrls: [],
   dormant: false,

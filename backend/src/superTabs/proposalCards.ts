@@ -1,4 +1,3 @@
-import { reopenTaskApproval, stageTaskApproval } from './taskApproval.js'
 import { steers } from './boardRights.js'
 import { expireProposalQuestion } from './proposalClock.js'
 export { proposalDueAt } from './proposalClock.js'
@@ -73,7 +72,6 @@ export function createProposalCard(state: SuperTabState, project: SwarmProject, 
     requesterId: member.id, priority, codePullRequestUrls: [],
     proposal: { version: 1, text: parsed.text, goal: parsed.goal, why: parsed.why, doneWhen: parsed.doneWhen,
       evidence: parsed.evidence, priority, createdAt: now, senders: [sender], questions: [] } }
-  stageTaskApproval(state, card, now)
   state.conversations.push(card)
   return card
 }
@@ -180,8 +178,6 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
       card.checks = command.checks.map((check, i) => ({ id: stableId(operationId, 'check', String(i)), description: check.description, independent: check.independent ?? false, evidence: null, passedBy: null }))
       stampLane(card)
       recordAsked(card, card.requesterId, now)
-      // The person approves the task the PM shaped: an approval stored before this decision never carries over.
-      reopenTaskApproval(card)
     }
     card.proposal.decision = { kind: command.decision, reason: command.reason, at: now, by: sender.id,
       ...(command.decision === 'later' ? { revisitAt: command.revisitAt } : {}) }

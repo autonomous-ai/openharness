@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
+import { createSuperTab, type Actor, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
-import { canChat, steers, switched } from './boardRights.js'
+import { canChat, steers } from './boardRights.js'
 
 // Task #3819 (Phase 2 of docs/plans/2026-11-06-buddy-board-final-spec.md, Ken and anh Dee 11-06): a project's owner switches
 // it to the Board way of working; in a switched project writing in its chat is a per-project Can chat right, and priority and
@@ -36,62 +36,9 @@ export function boardFixture() {
   return { run, app, pm, worker, project, asAgent, posted, get state(): SuperTabState { return state } }
 }
 
-describe('a project\'s Board settings', () => {
-  it('are set and cleared by the project owner or the Swarm owner, and read by every reader of the project', () => {
-    const f = boardFixture()
-    expect(switched(f.project())).toBe(false)
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true }, swarmOwner)
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'd' })
-    expect(f.project()).toMatchObject({ boardMode: true, canChat: ['c'], decider: 'd' })
-    expect(switched(f.project())).toBe(true)
-    const seen = visibleState(f.state, member).projects!.find(p => p.id === f.app.projectId)!
-    expect(seen).toMatchObject({ boardMode: true, canChat: ['c'], decider: 'd' })
-
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: false })
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: null }, swarmOwner)
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: false }, swarmOwner)
-    const project = f.project()
-    expect(project.boardMode).toBeUndefined()
-    expect(project.canChat).toBeUndefined()
-    expect(project.decider).toBeUndefined()
-  })
-
-  it('refuse a member, the PM and any other agent', () => {
-    const f = boardFixture()
-    const commands: Command[] = [
-      { type: 'project.boardMode', projectId: f.app.projectId, on: true },
-      { type: 'project.canChat', projectId: f.app.projectId, personId: 'd', granted: true },
-      { type: 'project.decider', projectId: f.app.projectId, personId: 'd' },
-    ]
-    for (const command of commands) {
-      for (const actor of [member, granted, f.asAgent(f.pm), f.asAgent(f.worker)]) {
-        expect(() => f.run(command, actor), `${command.type} by ${JSON.stringify(actor)}`).toThrow(expect.objectContaining({ status: 403 }))
-      }
-    }
-    expect(f.project().boardMode).toBeUndefined()
-  })
-
-  it('grant and name only people who read the project', () => {
-    const f = boardFixture()
-    expect(() => f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'stranger', granted: true }))
-      .toThrow(expect.objectContaining({ code: 'PERSON_UNKNOWN' }))
-    expect(() => f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'stranger' }))
-      .toThrow(expect.objectContaining({ code: 'PERSON_UNKNOWN' }))
-  })
-
-  it('give Can chat to the owners and the granted, and steering to the owners and the decider', () => {
-    const f = boardFixture()
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'd' })
-    const project = f.project()
-    expect(['owner', 'p', 'c', 'd'].map(id => canChat(f.state, project, id))).toEqual([true, true, true, false])
-    expect(['owner', 'p', 'c', 'd'].map(id => steers(f.state, project, id))).toEqual([true, true, false, true])
-    // A person who left the Swarm keeps nothing.
-    f.state.people.splice(f.state.people.findIndex(person => person.id === 'c'), 1)
-    expect(canChat(f.state, project, 'c')).toBe(false)
-  })
-})
+/** [f]'s project with Board settings stored as an owner set them before Swarm v4 retired the commands (2026-11-10). */
+const board = (f: ReturnType<typeof boardFixture>, settings: { boardMode?: true; canChat?: string[]; decider?: string }) =>
+  Object.assign(projectOf(f.state, f.app.projectId), settings)
 
 describe('Board rights after a person leaves', () => {
   // Task #4216: owning a project and being listed in it end with the membership (#3073); Can chat and the decider's seat end too.
@@ -103,9 +50,9 @@ describe('Board rights after a person leaves', () => {
 
   it('gives a person who left and was invited back no Can chat and no decider seat', () => {
     const f = boardFixture()
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'd' })
+    board(f, { boardMode: true })
+    board(f, { canChat: ['c'] })
+    board(f, { decider: 'd' })
     leaveAndReturn(f, granted as Actor & { kind: 'person' })
     leaveAndReturn(f, member as Actor & { kind: 'person' })
     expect(f.project().canChat).toBeUndefined()
@@ -118,8 +65,8 @@ describe('Board rights after a person leaves', () => {
 
   it('clears a right kept from before this fix when its person comes back', () => {
     const f = boardFixture()
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    board(f, { canChat: ['c'] })
+    board(f, { decider: 'c' })
     // Stored as a Swarm that lost them before the fix shipped: gone from the people, still named in the project.
     f.state.people.splice(f.state.people.findIndex(person => person.id === 'c'), 1)
     const invited = f.run({ type: 'invite.create', email: 'c@example.com', role: 'collaborator', conversationId: f.app.conversationId }, swarmOwner)
@@ -130,8 +77,8 @@ describe('Board rights after a person leaves', () => {
 
   it('keeps the rights of those who stay', () => {
     const f = boardFixture()
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    board(f, { canChat: ['c'] })
+    board(f, { decider: 'c' })
     leaveAndReturn(f, member as Actor & { kind: 'person' })
     expect(f.project()).toMatchObject({ canChat: ['c'], decider: 'c' })
   })
@@ -141,8 +88,8 @@ describe('Can chat in a switched project', () => {
   const say = (conversationId: string, text = 'Hello') => ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] }) as Command
   const switchedFixture = () => {
     const f = boardFixture()
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
+    board(f, { boardMode: true })
+    board(f, { canChat: ['c'] })
     return f
   }
 
@@ -151,9 +98,9 @@ describe('Can chat in a switched project', () => {
     for (const actor of [projectOwner, swarmOwner, granted]) f.run(say(f.app.conversationId), actor)
     expect(() => f.run(say(f.app.conversationId), member)).toThrow(expect.objectContaining({ code: 'CHAT_NOT_ALLOWED', status: 403 }))
     // An edit writes too: a member's message from before the switch stays as it was.
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: false })
+    board(f, { boardMode: undefined })
     const before = f.run(say(f.app.conversationId, 'Before'), member).messageId as string
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    board(f, { boardMode: true })
     expect(() => f.run({ type: 'message.edit', conversationId: f.app.conversationId, messageId: before, text: 'After' }, member))
       .toThrow(expect.objectContaining({ code: 'CHAT_NOT_ALLOWED' }))
     expect(() => f.run({ type: 'agent.add', conversationId: f.app.conversationId, harnessId: 'h2', machineId: 'machine', name: 'h2', lead: false,
@@ -183,8 +130,8 @@ describe('priority by role in a switched project', () => {
       task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }, actor).conversationId as string
   const switchedFixture = () => {
     const f = boardFixture()
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    board(f, { boardMode: true })
+    board(f, { decider: 'c' })
     return f
   }
 

@@ -1,4 +1,3 @@
-import { personalTasksFor, personalTasksPage, type PersonalTasks } from './personalTasks.js'
 /**
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
@@ -82,10 +81,6 @@ function stamped(derived: Derived, held?: string) {
   return held === etag ? { derived: marksOf(derived), derivedEtag: etag, derivedUnchanged: true as const } : { derived, derivedEtag: etag }
 }
 
-/** Tasks feed reads (parts/load.ts loadFeed) held at the Swarm's main stamp, which every conversation write moves: a first load of a
- *  Swarm that did not change asks Mongo for nothing. The rows are shared; each reader's own checks run on every read. */
-const feedRead = (tx: PrismaClient, cached: CacheView, tabId: string): Parameters<typeof personalTasksPage>[0] => (ids, projects, before) =>
-  cached.get(tabId, `feed:${JSON.stringify([ids, projects, before ?? null])}`, 'main', () => parts.loadFeed(tx, tabId, ids, projects, before))
 
 /** A change poll's light base (parts/light.ts): the same for every reader of a Swarm, so one load per stamp serves them all. */
 const LIGHT = { groups: 'working' } as const
@@ -131,7 +126,6 @@ export class SwarmReads {
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         steps: true as const, ...view.parts,
         // The feed's newest page (task #4203): its history is read by its own index, not from the loaded working set.
-        ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -215,26 +209,10 @@ export class SwarmReads {
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
-        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor) } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
 
-  /** The person's Tasks feed page older than `before`, a first load's or an earlier page's `olderCursor` (task #4203). A person's
-   *  read only: an agent has no feed. */
-  async personalTasks(user: AuthUser, tabId: string, before?: string): Promise<PersonalTasks> {
-    const t0 = this.now()
-    return this.read(user, tabId, async (tx, cached) => {
-      const loaded = await readParts(tx, cached, tabId)
-      const state = parts.reassemble(loaded, { share: true })
-      const actor = await this.store.actor(tx, user, state)
-      author(state, actor)
-      const machineVersions = await this.machineLookups(state)
-      const view = readerView(loaded, actor, t0, { machineVersions })
-      return await personalTasksPage(feedRead(tx, cached, tabId), view, actor, before)
-        ?? fail('NOT_FOUND', 'Only a member has a Tasks feed.', 404)
-    })
-  }
 
   async dormant(user: AuthUser, tabId: string, page: { projectId?: string; before?: string }, asAgentId?: string): Promise<DormantGroups> {
     return this.read(user, tabId, async (tx, cached) => {

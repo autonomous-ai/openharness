@@ -10,7 +10,6 @@ export default defineConfig({ test: {
     'integration/superTabGithub.test.ts',
     'integration/superTabTeam.test.ts',
     'integration/superTabRead.test.ts',
-    'integration/superTabPersonalTasksFeed.test.ts',
     'integration/superTabOneGroup.test.ts',
     'integration/superTabReadMarks.test.ts',
     'integration/superTabMessageEdits.test.ts',

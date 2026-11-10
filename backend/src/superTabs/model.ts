@@ -14,9 +14,14 @@ import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
+/** A requester's approval of a task, until Swarm v4 retired task approval (2026-11-10): still stored, and read where a Member
+ *  took only what its person accepted (members.ts). Goes with the old Swarm data's one-time drop. */
+interface TaskApproval { personId: string; generation: string; state: 'proposal' | 'approved' | 'rejected'; createdAt: number
+  decidedAt?: number; suggestedAgentId?: string; reason?: string }
+
 export interface Person {
-  /** Own future task decisions; absent keeps Auto approve. */
-  approvalMode?: import('./taskApproval.js').ApprovalMode
+  /** Own task decisions until Swarm v4 retired task approval (2026-11-10); absent kept Auto approve. Still stored and read (TaskApproval). */
+  approvalMode?: 'autoApprove' | 'review'
   id: string
   email: string
   role: Role
@@ -393,8 +398,8 @@ export function renderWorkTask(task: WorkTask): string {
 }
 
 export interface Conversation {
-  /** Person decision, separate from execution status for old clients. */
-  taskApproval?: import('./taskApproval.js').TaskApproval
+  /** Person decision, separate from execution status for old clients; never sent since Swarm v4 (read/views.ts). */
+  taskApproval?: TaskApproval
   id: string
   /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), a person's Buddy chat in a
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
@@ -532,11 +537,6 @@ export interface Conversation {
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
-  /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
-   *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
-  answered?: import('./answers.js').AnsweredAsk[]
-  /** Project-chat post limits: at most 50 asks, no text; bookkeeping hidden from readers (chatLimits.ts). */
-  chatLimits?: import('./chatLimits.js').ChatLimits
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -1179,7 +1179,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
-  for (const group of visible.conversations) { delete group.chatLimits; delete group.talkedAt }
+  // The project-chat post limits stored before Swarm v4 (read/views.ts Unwritten) are bookkeeping no reader gets.
+  for (const group of visible.conversations as Array<Conversation & { chatLimits?: unknown }>) { delete group.chatLimits; delete group.talkedAt }
   numberConversations(visible)
   delete visible.retiredConversationNumber
   delete visible.groupCounter

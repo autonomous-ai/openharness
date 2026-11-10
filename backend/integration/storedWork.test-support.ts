@@ -36,3 +36,8 @@ export function storeStatus(db: PrismaClient, tab: string, conversationId: strin
     ENDED.has(status) ? tx.superTabRun.deleteMany({ where: { tabId: tab, assignmentId: assignment.id } }) : Promise.resolve())
 }
 const ENDED: ReadonlySet<WorkStatus> = new Set(['done', 'stopped', 'cancelled', 'lost'])
+
+/** [projectId] of [tab] with Board settings as its owner set them before Swarm v4 retired the commands (2026-11-10). */
+export function storeBoardSettings(db: PrismaClient, tab: string, projectId: string, settings: { boardMode?: true | undefined; canChat?: string[]; decider?: string }): Promise<void> {
+  return rewrite(db, tab, state => { Object.assign(state.projects!.find(p => p.id === projectId)!, settings) })
+}

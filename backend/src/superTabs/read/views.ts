@@ -50,14 +50,15 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
  *  leaderboard's (the leaderboard read sums it), except when it shipped. The `releasing` list of the release watch Swarm v4
  *  removed is still stored on old tasks and never sent: nothing would ever clear it, so an older app would show them waiting. */
 /** What a group stored before Swarm v4 that nothing writes now (2026-11-10): its pull requests' heads, events and check states as
- *  the PR watch read them, and its steps' listings; on a project chat, its pulse and the asks its PM owed; on a task, its line on
- *  the status card. Left stored and never sent, so no reader shows a state frozen at the release; they go with the old Swarm
+ *  the PR watch read them, and its steps' listings; on a project chat, its pulse, the asks its PM owed, its answers and its post
+ *  limits; on a task, its line on the status card and its requester's approval. Left stored and never sent, so no reader shows a state frozen at the release; they go with the old Swarm
  *  data's one-time drop (migration/dropCollections.ts), on the owner's go. */
 type Unwritten = { releasing?: unknown; pullRequestHeads?: unknown; pullRequestEvents?: unknown; pullRequestChecks?: unknown; stepIds?: unknown
-  waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown; owed?: unknown; pulse?: unknown; statusLine?: unknown }
+  waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown; owed?: unknown; pulse?: unknown; statusLine?: unknown
+  answered?: unknown; chatLimits?: unknown }
 
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing,
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, taskApproval: _approval, pulse: _pulse, statusLine: _statusLine, releasing: _releasing,
     pullRequestHeads: _heads, pullRequestEvents: _events, pullRequestChecks: _checks, stepIds: _steps, waitingLinuxStep: _linux, waitingWindowsStep: _windows, openedBy: _opened,
     dormant, audience, ...rest }: Conversation & Unwritten = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader

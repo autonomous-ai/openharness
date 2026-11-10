@@ -20,7 +20,7 @@ import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
-import { storeAssignment, storeStatus } from './storedWork.test-support.js'
+import { storeAssignment, storeStatus, storeBoardSettings } from './storedWork.test-support.js'
 import { profiled, reads, plan } from './plans.test-support.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
@@ -479,7 +479,7 @@ describe('a Buddy through the store', () => {
   it('persists approved files on a proposal card for the PM to open after the switch', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
-    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    await storeBoardSettings(db, f.tab, 'lead', { boardMode: true })
     const upload = async (name: string, asBuddy: boolean) =>
       (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
     const plan = await upload('plan.txt', true), log = await upload('sync.log', false)
@@ -1210,7 +1210,7 @@ describe('idle Buddy sleep (#3824)', () => {
   it('sleeps only after an idle hour and no open delivery, using the agent status index', async () => {
     let now = Date.now()
     const f = await swarm(() => now)
-    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    await storeBoardSettings(db, f.tab, 'lead', { boardMode: true })
     const { main, swarmChat, pool } = await swarmBuddy(f)
     const agent = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     const sent = await f.execute({ type: 'message.send', conversationId: swarmChat, text: 'Remember this', replyTo: null, recipientIds: [] }, peer)
@@ -1247,7 +1247,7 @@ describe('Buddy input and sleep race (#3824)', () => {
   it('wakes only the authorized recipient and retries sleep when input commits first', async () => {
     let now = Date.now()
     const f = await swarm(() => now)
-    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    await storeBoardSettings(db, f.tab, 'lead', { boardMode: true })
     const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
     const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
@@ -1287,7 +1287,7 @@ describe('a sleeping proposal sender (#3824)', () => {
   it('wakes no Buddy for a PM question on the card, and writes nothing in either Buddy chat', async () => {
     let now = Date.now()
     const f = await swarm(() => now)
-    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    await storeBoardSettings(db, f.tab, 'lead', { boardMode: true })
     const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
     const approved = await f.execute({ type: 'message.send', conversationId: first.swarmChat, text: 'Preserve drafts', replyTo: null, recipientIds: [] }, peer)
     const proposal = await f.execute(commandSchema.parse({ type: 'buddy.propose', conversationId: first.swarmChat, projectId: 'lead', ownerMessageId: approved.result.messageId,

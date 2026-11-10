@@ -50,7 +50,6 @@ export const GROUP_FIELDS = {
     'title',
   ],
   unread: [
-    'answered',
     'assignment.askedOf',
     'assignment.configuration',
     'assignment.handoffs',
@@ -70,7 +69,6 @@ export const GROUP_FIELDS = {
     'buddyName',
     'buddySessions',
     'cards',
-    'chatLimits',
     'checks',
     'codePullRequestUrls',
     'foldedInto',

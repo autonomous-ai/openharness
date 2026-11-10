@@ -9,6 +9,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { storeBoardSettings } from './storedWork.test-support.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 
@@ -47,10 +48,10 @@ describe('Can chat, through the store', () => {
 
     // Not switched: as today.
     await upload()
-    await execute({ type: 'project.boardMode', projectId: web.projectId, on: true })
+    await storeBoardSettings(db, tab, web.projectId, { boardMode: true })
     await expect(upload()).rejects.toMatchObject({ code: 'CHAT_NOT_ALLOWED', status: 403 })
     await expect(say()).rejects.toMatchObject({ code: 'CHAT_NOT_ALLOWED', status: 403 })
-    await execute({ type: 'project.canChat', projectId: web.projectId, personId: peer.sub, granted: true })
+    await storeBoardSettings(db, tab, web.projectId, { boardMode: true, canChat: [peer.sub] })
     await upload()
     await say()
   })

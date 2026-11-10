@@ -99,7 +99,7 @@ describe('the notices the Swarm writes into a chat', () => {
     // commands (Swarm v4, 11-10: tasks are GitHub issues), the recipients.
     const retired = ['decision-delegated', 'decision-asked', 'decision-answered', 'decision-must-agree', 'idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
       'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice', 'crew-nudge',
-      'review-failed', 'review-capacity', 'auto-archive', 'work-resumed']
+      'review-failed', 'review-capacity', 'auto-archive', 'work-resumed', 'task-approval']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

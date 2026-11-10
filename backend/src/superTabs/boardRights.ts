@@ -19,7 +19,7 @@ export function readsProject(state: SuperTabState, project: SwarmProject, userId
 }
 
 /** Whether [userId] owns [project] or the Swarm: who sets its Board settings. */
-export function ownsBoard(state: SuperTabState, project: SwarmProject, userId: string): boolean {
+function ownsBoard(state: SuperTabState, project: SwarmProject, userId: string): boolean {
   return ownsProject(state, userId, project) || (userId === state.ownerId && state.people.some(p => p.id === userId))
 }
 
