@@ -240,8 +240,8 @@ Future<(SuperTabController, GlobalKey)> _show(
   return (c, picture);
 }
 
-/// [view] under the keymap as the Swarm screen mounts it: its host, then the
-/// quick switcher's Swarm chat region.
+/// [view] under a keymap host and a Swarm chat region, so the keys the view
+/// adds to the region run.
 Widget _keymapped(bool keymap, Widget view) {
   if (!keymap) return view;
   final map = MemoryKeymap();

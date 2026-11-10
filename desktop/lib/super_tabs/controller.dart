@@ -244,6 +244,9 @@ class SuperTabController extends ChangeNotifier {
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       yourMachinesGroupOpen =
           initial['yourMachinesGroupOpen'] as bool? ?? false;
+      // Saved before the choice was kept apart: a group left open was chosen so; one saved folded is the default.
+      yourMachinesGroupChosen =
+          initial['yourMachinesGroupChosen'] as bool? ?? yourMachinesGroupOpen;
       topTeamsGroupOpen = initial['topTeamsGroupOpen'] as bool? ?? false;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
@@ -1133,6 +1136,9 @@ class SuperTabController extends ChangeNotifier {
   bool agentsGroupOpen = true, projectsGroupOpen = true;
   bool yourMachinesGroupOpen = false, topTeamsGroupOpen = false;
 
+  /// Whether its person opened or folded Your Machines: until they have, it is open while a computer is off and folded else.
+  bool yourMachinesGroupChosen = false;
+
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
 
   void toggleMachineExpanded(String id) {
@@ -1203,8 +1209,9 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  void toggleYourMachinesGroup() {
-    yourMachinesGroupOpen = !yourMachinesGroupOpen;
+  void setYourMachinesGroup(bool open) {
+    yourMachinesGroupOpen = open;
+    yourMachinesGroupChosen = true;
     _saveSoon();
     _changed();
   }
@@ -2567,6 +2574,7 @@ class SuperTabController extends ChangeNotifier {
     'agentsGroupOpen': agentsGroupOpen,
     'projectsGroupOpen': projectsGroupOpen,
     'yourMachinesGroupOpen': yourMachinesGroupOpen,
+    'yourMachinesGroupChosen': yourMachinesGroupChosen,
     'topTeamsGroupOpen': topTeamsGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
@@ -3273,12 +3281,6 @@ class SuperTabController extends ChangeNotifier {
     id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
-    final group = snapshot!.conversation(id)!;
-    // A task's project's closed tasks, read once: the quick switcher finds an
-    // archived one by its number (#N). A Buddy chat reads none.
-    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
-      unawaited(loadDormant(group.projectId));
-    }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
     if (_messages[id]?.isNotEmpty ?? false) {

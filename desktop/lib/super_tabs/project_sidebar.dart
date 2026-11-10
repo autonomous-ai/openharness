@@ -6,6 +6,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
@@ -52,8 +53,12 @@ class ProjectSidebar extends StatelessWidget {
     this.boardProjectId,
     this.onOpenAgentTerminal,
     this.leaderboard,
+    this.agentStates,
   });
   final SuperTabController controller;
+
+  /// What each agent of Your Team is doing, its row's one line; without it a row says only that its agent is offline.
+  final SwarmAgentStates? agentStates;
 
   /// The board Humans lists on the Desktop (task #4466): the view's, which the right pane reads too. Without it, or
   /// before it is read, Humans is its heading alone.
@@ -398,8 +403,9 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, folded until it is opened, each opening
-  /// Manage where it is managed. What the machine list says is up is up. A person with none sees no heading.
+  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, each opening Manage where it is managed.
+  /// What the machine list says is up is up. A person with none sees no heading. Folded until it is opened, but open by itself
+  /// while a computer is off, so why an agent is silent is in sight; what its person chose stands.
   List<Widget> _yourMachines() {
     final machines =
         [
@@ -411,14 +417,17 @@ class ProjectSidebar extends StatelessWidget {
           ),
         );
     if (machines.isEmpty) return const [];
+    final open = controller.yourMachinesGroupChosen
+        ? controller.yourMachinesGroupOpen
+        : machines.any((m) => m.reportedOnline == false);
     return [
       SuperTabQuietHeading(
         'Your Machines',
         key: const ValueKey('project-sidebar-machines'),
-        collapsed: !controller.yourMachinesGroupOpen,
-        onTap: controller.toggleYourMachinesGroup,
+        collapsed: !open,
+        onTap: () => controller.setYourMachinesGroup(!open),
       ),
-      if (controller.yourMachinesGroupOpen)
+      if (open)
         for (final machine in machines)
           _iconRow(
             key: 'super-machine-${machine.machineId}',
@@ -535,6 +544,7 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
+      detail: agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -640,7 +650,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?leaderboard]) {
+    child: switch ([?attention, ?leaderboard, ?agentStates]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),

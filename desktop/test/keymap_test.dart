@@ -97,6 +97,7 @@ void main() {
       {"keys":"cmd+i","command":"picker.preview","when":"picker"},
       {"keys":"cmd+o","command":"navigation.quick_open"},
       {"keys":"cmd+shift+y","command":"team.open"},
+      {"keys":"cmd+g","command":"swarm.quick_switcher","when":"swarmChat"},
       {"keys":"cmd+ctrl+h","command":"pane.focus_left"}
     ]}''', commands: commands);
     expect(config.bindings.single.command, 'pane.focus_left');

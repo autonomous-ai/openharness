@@ -10,8 +10,8 @@ import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'keymap_host_test.dart' show key;
-import 'super_tab_quick_switcher_test.dart' show close, setup;
 import 'support/super_tab_fixture.dart';
+import 'support/swarm_chat_screen.dart';
 
 /// Find in the open chat (task #2826, Tony): matches in what is loaded,
 /// stepping, older pages read on demand up to 50, accents folded.
@@ -94,7 +94,7 @@ void main() {
   });
 
   testWidgets('Cmd+F opens find in the open chat', (tester) async {
-    final (f, c) = await setup(tester);
+    final (f, c) = await mountSwarmChat(tester);
     await key(tester, LogicalKeyboardKey.keyF, cmd: true);
     await tester.pumpAndSettle();
     expect(field, findsOneWidget);
@@ -102,7 +102,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(field, findsNothing);
-    await close(tester, f, c);
+    await leaveSwarmChat(tester, f, c);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('matches in loaded messages are lit and counted, accents '

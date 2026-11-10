@@ -29,14 +29,11 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
-    // The Swarm chat's own letters are Cmd's on a Mac and Ctrl's elsewhere,
+    // The Swarm chat's own letter is Cmd's on a Mac and Ctrl's elsewhere,
     // as in a browser: no terminal is there to take Ctrl.
-    if (const {'swarm.quick_switcher': 'k', 'swarm.find_in_chat': 'f'}[id]
-        case final letter?) {
+    if (id == 'swarm.find_in_chat') {
       return [
-        defaultTargetPlatform == TargetPlatform.macOS
-            ? 'cmd+$letter'
-            : 'ctrl+$letter',
+        defaultTargetPlatform == TargetPlatform.macOS ? 'cmd+f' : 'ctrl+f',
       ];
     }
     // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
@@ -228,13 +225,6 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.showAttention,
     nativeAction: 'notifications',
-  ),
-  const HarnessCommand(
-    'swarm.quick_switcher',
-    'Switch conversation',
-    ShortcutGroup.navigate,
-    context: KeymapContext.swarmChat,
-    keywords: ['Swarm', 'chat', 'people', 'agents'],
   ),
   // Slack's next and previous unread chat, in the sidebar's order. Only the
   // Swarm chat has them: in a pane, Alt+Shift+arrows still move it where Alt

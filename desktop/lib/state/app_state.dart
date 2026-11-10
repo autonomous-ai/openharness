@@ -23691,6 +23691,16 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
     unawaited(_superTabClosures.close());
+    // Its sockets redial on timers of their own: one that outlived the app kept redialling and reported to a notifier that was
+    // gone. The sessions above were told to close first, while their sockets are open.
+    unawaited(
+      _pool?.closeAll().catchError((Object error) {
+        appLog.warn(
+          'app',
+          'A socket did not close with the app: ${error.runtimeType}',
+        );
+      }),
+    );
     super.dispose();
   }
 }

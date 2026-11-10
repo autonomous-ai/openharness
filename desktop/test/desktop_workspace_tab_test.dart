@@ -539,6 +539,9 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       for (final row in rows) {
+        expect(find.text(row), findsNothing, reason: 'Escape closed the menu');
+      }
+      for (final row in rows) {
         calls.clear();
         await openMenu();
         await tester.tap(find.text(row));

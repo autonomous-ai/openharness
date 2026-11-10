@@ -87,7 +87,6 @@ import '../super_tabs/new_agent.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/workspace.dart';
-import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
 import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
 import '../super_tabs/notifications.dart' show SuperTabMentions;
@@ -2516,13 +2515,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _actOnNative(MethodCall call) async {
-    if (mounted && call.method == 'keymapCommand') {
-      final command = (call.arguments as Map?)?['command'];
-      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) {
-        return;
-      }
-    }
-
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -7297,8 +7289,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
-  /// What Attach's picker lists and allows: a Claude Code or Codex session running on one of this person's own computers
-  /// (the server takes no other, backend agent.add), and none already on the team, which it does not list.
+  /// What Attach's picker lists and allows: a Claude Code or Codex session on one of this person's own computers, running
+  /// or stopped and resumable (the server takes no other, backend agent.add), and none already on the team, which it does
+  /// not list.
   HarnessPickerContext _attachContext(String tabId) {
     bool inSwarm(SwarmDestination row) =>
         app.superTabs
@@ -7331,7 +7324,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (engine != 'claude' && engine != 'codex') {
           return 'Only Claude Code or Codex can join this Swarm.';
         }
-        return native != null && native.terminalAvailable && !native.isStopped
+        // A stopped session is resumed as it joins (anh Dee 2026-11-10).
+        if (native != null && native.isStopped) {
+          return native.canPauseAndResume
+              ? null
+              : 'This session cannot resume.';
+        }
+        return native != null && native.terminalAvailable
             ? null
             : 'Choose a running agent.';
       },
@@ -8361,8 +8360,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               for (final id in _commands.keys) id: () => _runShortcut(id),
             },
             onPending: (keys) => setState(() => _pendingKeys = keys),
-            child: SuperTabQuickSwitcherScope(
-              app: app,
+            child: Focus(
               focusNode: _shellFocus,
               autofocus: app.panes.isNotEmpty,
               child: Scaffold(
