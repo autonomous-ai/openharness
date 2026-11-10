@@ -593,7 +593,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Line, New task · #13), its first line or a review's verdict, and Read for
   the rest and Open in GitHub.
 - **Long messages.** Every message shows whole: nothing folds behind More
-  (anh Dee, 2026-11-09).
+  (anh Dee, 2026-11-09). So does a code block in it: every line, a line wider
+  than the column wrapped, never a scroll inside the chat, with its language
+  and Copy over it; a clipboard that refuses says `Couldn't copy it.`
 - **No reactions.** A message has no reaction chips under it and no reaction
   button in its actions, whatever the server sends with it (anh Dee,
   2026-11-09).
