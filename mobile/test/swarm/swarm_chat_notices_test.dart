@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
+import 'package:harness_mobile/swarm/swarm_notices.dart' show SwarmTold;
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
@@ -24,12 +25,18 @@ void main() {
     backend = _Backend();
   });
 
-  Future<SwarmSession> start({bool disposeAtEnd = true}) async {
+  Future<SwarmSession> start({
+    bool disposeAtEnd = true,
+    SwarmTold? told,
+    DateTime Function()? now,
+  }) async {
     final session = SwarmSession(
       accountId: me,
       request: backend.fake.request,
       notices: notices,
       readMarks: MemoryKeyValueStore(),
+      told: told,
+      now: now,
     );
     if (disposeAtEnd) addTearDown(session.dispose);
     await session.inbox.refresh();
@@ -180,6 +187,97 @@ void main() {
     expect([for (final n in notices.shown) n.quiet], [false, true, false]);
   });
 
+  test('an agent\'s 1:1 chat tells of its agent\'s words in Mentions only, in '
+      'its push\'s words; never of the person\'s own, never muted (anh Dee, '
+      '#3811)', () async {
+    backend
+      ..agentChat('ac')
+      ..agentChat('muted')
+      ..settings = {'muted': 'muted'};
+    final session = await start();
+
+    backend
+      ..move('ac', 4)
+      ..move('muted', 4)
+      ..move('g1', 4);
+    await poll(session);
+    expect(told(), ['chat:$tab:ac']);
+    final notice = notices.shown.single;
+    expect(notice.title, 'Nova wrote to you');
+    expect(notice.subtitle, '');
+    expect(notice.body, 'Open Harness to read it.');
+    expect(notice.target.conversationId, 'ac');
+    expect(notice.quiet, isFalse);
+
+    // The person's own words in the chat are not news.
+    session.inbox.reader(tab)!.readMarks!.markRead('ac', 4);
+    backend.personSequences['ac'] = 5;
+    backend.move('ac', 5);
+    await poll(session);
+    expect(told(), ['chat:$tab:ac']);
+  });
+
+  test('an agent\'s chat sounds once in five minutes, read or not, as its '
+      'push does (Tony, 2026-11-10); then it sounds again', () async {
+    var at = DateTime(2026, 11, 10, 15);
+    backend.agentChat('ac');
+    final session = await start(now: () => at);
+    final marks = session.inbox.reader(tab)!.readMarks!;
+
+    backend.move('ac', 4);
+    await poll(session);
+    marks.markRead('ac', 4);
+    backend.version++;
+    await poll(session);
+    expect(notices.cancelled, ['chat:$tab:ac'], reason: 'read: it goes');
+
+    at = at.add(const Duration(minutes: 4, seconds: 59));
+    backend.move('ac', 5);
+    await poll(session);
+    marks.markRead('ac', 5);
+    backend.version++;
+    await poll(session);
+
+    at = at.add(const Duration(seconds: 1));
+    backend.move('ac', 6);
+    await poll(session);
+    expect([for (final n in notices.shown) n.quiet], [false, true, false]);
+  });
+
+  test('a push of an agent\'s chat left in the notification centre goes once '
+      'the chat is read; while it shows, the chat\'s next words only replace '
+      'it (anh Dee\'s finding 14)', () async {
+    final pushes = SwarmTold();
+    backend.agentChat('ac');
+    final session = await start(told: pushes);
+    // The app came back with the chat's push in the notification centre.
+    pushes.pushesShown(['chat:$tab:ac']);
+
+    backend.move('ac', 4);
+    await poll(session);
+    expect([for (final n in notices.shown) n.quiet], [true]);
+
+    session.inbox.reader(tab)!.readMarks!.markRead('ac', 4);
+    backend.version++;
+    await poll(session);
+    expect(notices.cancelled, ['chat:$tab:ac']);
+    expect(pushes.pushed('chat:$tab:ac'), isFalse);
+  });
+
+  test('a push of an agent\'s chat goes once the chat is read elsewhere, with '
+      'nothing new written', () async {
+    final pushes = SwarmTold();
+    backend.agentChat('ac');
+    final session = await start(told: pushes);
+    pushes.pushesShown(['chat:$tab:ac']);
+
+    session.inbox.reader(tab)!.readMarks!.markRead('ac', 3);
+    backend.version++;
+    await poll(session);
+    expect(notices.shown, isEmpty);
+    expect(notices.cancelled, ['chat:$tab:ac']);
+  });
+
   test('signed out or Swarm turned off: every chat notice goes', () async {
     backend.settings = {'g1': 'all'};
     final session = await start(disposeAtEnd: false);
@@ -222,6 +320,11 @@ class _Backend {
   final fake = FakeSwarm();
   var settings = <String, String>{};
   final sequences = <String, int>{'g1': 3, 'g2': 3};
+
+  /// The person's 1:1 chats with Nova (agent-builder), by [agentChat]; and
+  /// in each, the newest message that is the person's own.
+  final agentChats = <String>{};
+  final personSequences = <String, int>{};
   final mentions = <Map<String, dynamic>>[];
   var version = 2;
   var reload = false;
@@ -231,11 +334,21 @@ class _Backend {
 
   List<Map<String, dynamic>> get groups => [
     for (final MapEntry(:key, :value) in sequences.entries)
-      groupData(
-        key,
-        title: key == 'g1' ? 'Fix login' : 'Ship it',
-        lastMessageSequence: value,
-      ),
+      agentChats.contains(key)
+          ? groupData(
+              key,
+              title: 'Nova',
+              kind: 'agent-chat',
+              agentIds: ['agent-builder'],
+              audience: [me],
+              lastMessageSequence: value,
+              lastPersonSequence: personSequences[key],
+            )
+          : groupData(
+              key,
+              title: key == 'g1' ? 'Fix login' : 'Ship it',
+              lastMessageSequence: value,
+            ),
   ];
 
   Map<String, dynamic> get derived => {
@@ -285,6 +398,15 @@ class _Backend {
   void move(String id, int sequence) {
     sequences[id] = sequence;
     version++;
+  }
+
+  /// Chat [id] is the person's 1:1 chat with Nova, its newest message 3.
+  /// The first load numbers each group's part by its place ([firstLoad]):
+  /// the change reads after it start past them.
+  void agentChat(String id) {
+    agentChats.add(id);
+    sequences[id] = 3;
+    version = 2 + sequences.length;
   }
 
   void mention(String id, String conversationId) => mentions.add({

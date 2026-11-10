@@ -1949,6 +1949,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopHeartbeat,
     retainExitedSession,
     stoppedAgents,
+    send: frame => backend.send(frame),
     restoreDegraded: (agentId) => restoreFailed || restoreUnsurveyed.has(agentId),
     terminals,
   })
