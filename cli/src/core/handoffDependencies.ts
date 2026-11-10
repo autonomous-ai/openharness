@@ -10,11 +10,11 @@ export function createHandoffDependencies(wiring: HandoffWiring, directory: stri
       stoppedIds: () => wiring.stopped.ids(), stopped: id => wiring.stopped.get(id) }, sessionId, agentId),
     isRecentlyDeleted: wiring.isRecentlyDeleted,
   })
-  return { ...handoffProviderDeps({ ...wiring, publish, observed: publish.observed,
+  return handoffProviderDeps({ ...wiring, publish, observed: publish.observed,
     findResumedTranscript: async (engine, id, options) => {
       const path = await wiring.findResumedTranscript(engine, id, options)
       publish.selected(engine, id, options.codexHome, path)
       return path
     },
-  }), deadlineMs }
+  })
 }

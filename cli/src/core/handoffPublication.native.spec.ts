@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
+import { LOADED_HANDOFF_LIMITS, LOADED_HANDOFF_MS, LOADED_HANDOFF_TEST_MS } from '../testing/handoffLimits.js'
 
 const fixtureGit = vi.hoisted(() => ({ enabled: false }))
 vi.mock('node:child_process', () => {
@@ -26,13 +27,8 @@ vi.mock('../lib/compactSummary.js', async original => {
 })
 vi.mock('node:fs/promises', async original => ({ ...await original<object>() }))
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
-// Every case runs real file reads, fsyncs and the publication's checks: about 1 s alone, 5-8 s at load 30 (the
-// release gates, 2026-11-10), past both vitest's 5 s and the handoff's own 5 s deadline. The deadlines are the
-// product's to keep (lib/agentHandoff.spec.ts, services/handoff.spec.ts, core/handoffPublication.spec.ts); here
-// they are long enough for a loaded machine, so each case shows only what it is about.
-const LOADED_MS = 60_000
-vi.setConfig({ testTimeout: 2 * LOADED_MS })
-const LIMITS = { deadlineMs: LOADED_MS, gitTimeoutMs: LOADED_MS, discoverMs: LOADED_MS }
+// Every case runs real file reads, fsyncs and the publication's checks: limits long enough for a loaded machine.
+vi.setConfig({ testTimeout: LOADED_HANDOFF_TEST_MS })
 const ID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', OTHER = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 const CHANGE = '1'.repeat(32), AT = Date.parse('2026-10-10T08:00:00Z')
 let root: string, cwd: string, path: string, catalog: string, row: RegisteredSession
@@ -86,8 +82,8 @@ async function setup(rows = [row], found = true) {
     mirror: { recentAsks: () => ['A mirror must not bypass unknown native identity'], lastFullText: () => undefined, recent: () => [] },
     databaseHistory: () => undefined, findLiveSession: async () => found ? ({ sessionId: ID, transcriptPath: path }) : null,
     processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
-  }, join(root, 'ADAPTER_DATA_DIR'), LOADED_MS)
-  Object.assign(deps, { gitTimeoutMs: LOADED_MS, discoverMs: LOADED_MS })
+  }, join(root, 'ADAPTER_DATA_DIR'), LOADED_HANDOFF_MS)
+  Object.assign(deps, LOADED_HANDOFF_LIMITS)
   return { current, saved, deps, prepare: () => prepareAgentHandoff(deps, { agentId: row.agentId, targetEngine: 'claude', changeId: CHANGE }) }
 }
 
@@ -428,12 +424,12 @@ async function processPrepare(ctx: Awaited<ReturnType<typeof setup>>,
   let clock = 0, next = 0
   const owner = { local: true, owner: true, connection: 'private-fixture-owner' }
   const links = createServiceLinks({ token: 'fixture-token', owned: { handoff: ['agent_handoff_prepare'] }, log: () => {}, now: () => clock,
-    waits: { handoff: { agent_handoff_prepare: LOADED_MS } },
+    waits: { handoff: { agent_handoff_prepare: LOADED_HANDOFF_MS } },
     answer: async (_service, query, payload, authority) => {
       const wire = clone(payload)
       if (query === 'publish') await beforePublish?.(wire.prepared as never, why => {
         if (why === 'closed') links.closeConnection(owner.connection)
-        if (why === 'expired') clock = LOADED_MS + 1
+        if (why === 'expired') clock = LOADED_HANDOFF_MS + 1
         if (why === 'replaced') links.accept('handoff', 'fixture-token', { sendFrame: () => true }, () => {})
       })
       return answerConversationQuery(core, query, wire, authority)
@@ -442,7 +438,7 @@ async function processPrepare(ctx: Awaited<ReturnType<typeof setup>>,
     const requestId = `query-${++next}`; replies.set(requestId, resolve)
     link.receive(clone({ type: 'service_query', payload: { ...payload, query, requestId } }))
   }))
-  const service = startHandoff(processCore, undefined, undefined, undefined, LIMITS)
+  const service = startHandoff(processCore, undefined, undefined, undefined, LOADED_HANDOFF_LIMITS)
   const link = links.accept('handoff', 'fixture-token', { sendFrame: frame => {
     const wire = clone(frame)
     if (wire.type === 'service_query_result') replies.get(String(wire.payload!.requestId))!(wire.payload!)

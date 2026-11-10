@@ -88,8 +88,8 @@ describe('the change-agent handoff service', () => {
   })
 })
 
-// A test on a loaded machine raises the limits; as shipped the request's permit, the preparation's deadline
-// and each git command keep theirs (5 s, 5 s and 2 s in lib/agentHandoff.ts).
+// A test on a loaded machine raises the limits; as shipped the request's permit and the preparation share
+// HANDOFF_DEADLINE_MS (5 s, lib/handoffAuthority.ts), and git and discovery keep lib/agentHandoff.ts's.
 it('holds its request to the preparation deadline, 5 s as shipped and the limits it is given', async () => {
   const result = { file: null, cwd: '/work', gitRepo: false, degraded: [] }
   const now = vi.spyOn(performance, 'now').mockReturnValue(1_000)

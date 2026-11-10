@@ -11,7 +11,8 @@ export { HANDOFF_REQUESTS }
 
 /** `replacements`: a Super Tab member's replacement, recorded for its host (superTabs/replacements.ts, through
  *  superTabs/inServices.ts). Absent while the Swarm is off (`HARNESS_SWARM`), when a completed change records nothing.
- *  `limits`: longer ones for a test on a loaded machine; as shipped, lib/agentHandoff.ts's. */
+ *  `limits`: longer ones for a test on a loaded machine (testing/handoffLimits.ts); as shipped, HANDOFF_DEADLINE_MS and
+ *  lib/agentHandoff.ts's git and discovery limits. */
 export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff, replacements?: typeof recordReplacement,
   limits: Pick<HandoffDeps, 'deadlineMs' | 'gitTimeoutMs' | 'discoverMs'> = {}): ServiceRequests {
   const reads = core.conversations

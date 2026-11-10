@@ -403,6 +403,9 @@ it('bounds discovery and by-ID selection witnesses without evicting a fresh sele
   patient.observed(row, null)
   now += 60_000
   expect(await patient(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)
+  // As shipped, a fresh observation after an expired one is honored again.
+  publish.observed(row, null)
+  expect(await publish(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)
 })
 
 it('holds an unserializable inline preparation without filesystem effects', async () => {
