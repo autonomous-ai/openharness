@@ -15,6 +15,7 @@
 import { performance } from 'node:perf_hooks'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Asker } from './api.js'
+import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 
 export interface ServiceFrame {
   type: string
@@ -167,7 +168,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   /** How long an answer from `service` to `type` is waited for: its own wait when it has one. */
   const waitFor = (service: string, type: string): number => {
     const waits = options.waits?.[service]
-    return waits && Object.hasOwn(waits, type) ? waits[type] : type === 'agent_handoff_prepare' ? Math.min(timeoutMs, 5_000) : timeoutMs
+    return waits && Object.hasOwn(waits, type) ? waits[type] : type === 'agent_handoff_prepare' ? Math.min(timeoutMs, HANDOFF_DEADLINE_MS) : timeoutMs
   }
 
   /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. An experiment that is

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, RESTART_HELD_MAX, type ServiceFrame } from './serviceLinks.js'
+import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 
 const TOKEN = 'a'.repeat(48)
 const ASKER = { local: false, owner: true }
@@ -382,6 +383,25 @@ describe('service links', () => {
     // A type the waits only inherit from Object's prototype waits as any other does.
     links.route('session_search', {}, ASKER, vi.fn())
     expect(links.call('models', 'toString', {})).toBeInstanceOf(Promise)
+  })
+
+  // The change-agent handoff's preparation gives up at HANDOFF_DEADLINE_MS (lib/handoffAuthority.ts): the core waits
+  // no longer for its answer, whatever the usual wait.
+  it('waits for a handoff preparation its deadline, unless the waits say otherwise', () => {
+    const links = make({ owned: { handoff: ['agent_handoff_prepare'] }, timeoutMs: 30_000 })
+    links.accept('handoff', TOKEN, sink(), vi.fn())
+    const prepared = vi.fn()
+    links.route('agent_handoff_prepare', {}, ASKER, prepared)
+    vi.advanceTimersByTime(HANDOFF_DEADLINE_MS - 1)
+    expect(prepared).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(prepared).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'handoff', retryable: true })
+    const patient = make({ owned: { handoff: ['agent_handoff_prepare'] }, waits: { handoff: { agent_handoff_prepare: 30_000 } } })
+    patient.accept('handoff', TOKEN, sink(), vi.fn())
+    const later = vi.fn()
+    patient.route('agent_handoff_prepare', {}, ASKER, later)
+    vi.advanceTimersByTime(HANDOFF_DEADLINE_MS)
+    expect(later).not.toHaveBeenCalled()
   })
 
   it('answers what was waiting on a service that goes, and lets a newer connection replace an older one', () => {
