@@ -271,9 +271,9 @@ describe('while a Swarm is deleted', () => {
     expect((await w.store.invitations(late)).map(i => i.tabId)).not.toContain(f.tab)
   })
 
-  it('keeps everyone\'s thread follows and chat settings through the hourly sweeps, and a restore brings them back', async () => {
+  it('keeps everyone\'s thread marks and chat settings through the hourly sweeps, and a restore brings them back', async () => {
     const w = world(), f = await swarm(w)
-    await w.reads.followThread(member, f.tab, 'lead', f.hello, true)
+    await w.reads.markThreadRead(member, f.tab, 'lead', f.hello, 1)
     await w.reads.setChatNotify(member, f.tab, 'lead', 'all')
     const kept = async () => [await db.superTabThreadMark.count({ where: { tabId: f.tab } }), await db.superTabChatSetting.count({ where: { tabId: f.tab } })]
     expect(await kept()).toEqual([1, 1])

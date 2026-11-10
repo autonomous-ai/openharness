@@ -49,7 +49,7 @@ describe('ordinary task messages and progress replies', () => {
       expect(f.task(id).cards?.line).toBeUndefined()
       const builder = f.add('Kai', id)
       const moves = [f.run({ type: 'work.assign', conversationId: id, agentId: builder }), f.status(id, builder, 'review', `Ready: ${PR}`),
-        f.status(id, builder, 'done', `Checks passed: ${PR}`), f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })]
+        f.status(id, builder, 'done', `Checks passed: ${PR}`)]
       expect(moves.flatMap(m => m.messages).filter(m => m.conversationId === 'lead')).toEqual([])
     }
   })
@@ -86,24 +86,6 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(f.status(id, builder, 'review', `Fixed: ${PR}`), root)).toEqual(['Ready for review: PR #7'])
     const done = f.status(id, builder, 'done', `Checks passed: ${PR}`)
     expect(thread(done, root)).toEqual([])
-    const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
-    expect(thread(merged, root)).toEqual(['Merged: PR #7. Ships in the next release.'])
-    expect(thread(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }), root)).toEqual([])
-  })
-
-  // Task #4410, River's ruling 11-07: an owed Windows check does not hold the merge, and is never silent. The merge reply says
-  // it, and the task keeps it after the merge.
-  it('says at the merge that a Windows check is owed while its Windows test step waits, and keeps it owed', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    f.status(id, builder, 'review', `Ready: ${PR}`)
-    f.task(id).waitingWindowsStep = { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' },
-      pulls: [{ url: PR, head: 'a'.repeat(40) }] }
-    f.status(id, builder, 'done', `Checks passed: ${PR}`)
-    const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
-    expect(thread(merged, root)).toEqual(['Merged: PR #7. Ships in the next release. Windows check owed: no Windows machine took its test step.'])
-    expect(f.task(id).waitingWindowsStep).toBeDefined()
   })
 
   it('keeps agents\' posts in the task\'s own conversation and repeats no unchanged status', () => {
@@ -122,7 +104,7 @@ describe('ordinary task messages and progress replies', () => {
     const marks = (effects: CommandEffects, root: string) => effects.messages.filter(m => m.thread === root)
       .map(m => (m.source as { ask?: string } | undefined)?.ask)
 
-    it('is on it from the brief to the merge, then shipped', () => {
+    it('is on it from the brief to its Done', () => {
       const f = fixture(), first = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
         f.as(f.pm), { request: f.request() } as Partial<CommandContext>)
       const id = first.result.conversationId as string, root = f.task(id).cards!.line!.messageId
@@ -131,7 +113,6 @@ describe('ordinary task messages and progress replies', () => {
       expect(marks(f.run({ type: 'work.assign', conversationId: id, agentId: builder }), root)).toEqual([])
       expect(marks(f.status(id, builder, 'review', `Ready: ${PR}`), root)).toEqual(['on-it'])
       expect(marks(f.status(id, builder, 'done', `Checks passed: ${PR}`), root)).toEqual([])
-      expect(marks(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }), root)).toEqual(['shipped'])
     })
 
     it('closes on a cancel, and on a task finished with no pull request', () => {
@@ -154,26 +135,6 @@ describe('ordinary task messages and progress replies', () => {
       expect(marks(f.status(id, (f.run({ type: 'work.assign', conversationId: id, agentId: builder }), builder), 'review', 'Ready.'), 'ask')).toEqual(['on-it'])
     })
 
-    it('says shipped for a merge recorded with no card, which otherwise leaves the row on it', () => {
-      const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId, builder = f.add('Kai', id)
-      f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-      f.status(id, builder, 'done', `Checks passed: ${PR}`)
-      delete f.task(id).cards!.pullRequests
-      const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
-      expect(thread(merged, root)).toEqual(['Merged: PR #7. Ships in the next release.'])
-      expect(marks(merged, root)).toEqual(['shipped'])
-    })
-  })
-
-  it('reports each newly merged pull request once, including a second pull request for the same task', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const second = 'https://github.com/example/app/pull/8'
-    for (const [url, n] of [[PR, 7], [second, 8]] as const) {
-      const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url })
-      expect(merged.messages.filter(m => m.thread === root)).toEqual([expect.objectContaining({ text: `Merged: PR #${n}. Ships in the next release.`,
-        source: { kind: 'system', ask: 'shipped' } })])
-      expect(thread(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url }), root)).toEqual([])
-    }
   })
 
   it('says what is stuck and what happens next', () => {
@@ -210,17 +171,18 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(asked, root)).toEqual([expect.stringMatching(/^Needs a decision: Keep drafts for a week\? Next: .+ is on it\.$/)])
   })
 
-  // Review of #3223, Minor 1: the line follows the decision, so the PM's own question on a builder's task still tags.
-  it('tags the person the PM asks on a builder\'s task, with its default', () => {
+  // Review of #3223, Minor 1: the line follows who asked, so the PM's own question on a builder's task still tags. No default:
+  // Swarm v4 opens no decision that could take one (2026-11-10).
+  it('tags the person the PM asks on a builder\'s task', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     const asked = f.status(id, f.pm, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
       unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week? Default: A month.'])
+    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week?'])
   })
 
-  it('tags the person a decision waits on, with its default, in a project with no PM', () => {
+  it('tags the person the work waits on, in a project with no PM', () => {
     const f = fixture()
     const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
     const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
@@ -231,7 +193,7 @@ describe('ordinary task messages and progress replies', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     const asked = f.status(id, builder, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
       unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week? Default: A month.'])
+    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week?'])
   })
 
   it('says it is not building a cancelled task, with the reason', () => {
@@ -268,12 +230,10 @@ describe('ordinary task messages and progress replies', () => {
 
   // The server reacts for no agent any more (anh Dee, 2026-11-09: the 👀 on every message): a task's start and its merge leave
   // the message that asked for it as it was, and move nothing a reader polls.
-  it('reacts nowhere as the task\'s agent: not when its work starts, not when its pull request merges', () => {
+  it('reacts nowhere as the task\'s agent when its work starts', () => {
     const f = fixture(), id = f.group(), builder = f.add('Kai', id)
     const seq = () => f.state.conversations.find(c => c.id === 'lead')!.reactionSeq ?? 0, before = seq()
     expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder })).not.toHaveProperty('reactions')
-    f.status(id, builder, 'done', `Checks passed: ${PR}`)
-    expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })).not.toHaveProperty('reactions')
     expect(seq()).toBe(before)
   })
 
@@ -301,15 +261,13 @@ describe('ordinary task messages and progress replies', () => {
     expect(effects.messages.filter(m => m.thread === 'old-root')).toHaveLength(1)
   })
 
-  it('puts a private project\'s task only in its own project chat, and nothing for its steps', () => {
+  it('puts a private project\'s task only in its own project chat', () => {
     const f = fixture()
     const project = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result.projectId as string
     const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
     const parent = f.run({ type: 'conversation.create', projectId: project, title: 'Hidden work', brief: 'Hidden.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'secret-ask' } as Command,
       owner, { request: f.request('secret-ask', chat) } as Partial<CommandContext>).result.conversationId as string
     expect(f.task(parent).cards?.line).toEqual({ messageId: 'secret-ask', conversationId: chat })
-    const step = f.run({ type: 'conversation.create', projectId: project, title: 'Review', step: 'Review', reviewOf: parent, brief: 'Review.', checks: [] })
-    expect(step.messages.filter(m => m.conversationId === chat || m.conversationId === 'lead')).toEqual([])
   })
 
   it('never creates a root for a task that has none, on unrelated chat activity or when it moves', () => {
