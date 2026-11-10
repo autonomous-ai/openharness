@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from '../commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
+import { PERSONAL_SWARM_OPERATION } from '../deletion.js'
+import { createSuperTab, stableId, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
 import { MAX_UNBLOCKS } from './record.js'
-import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from '../storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const checks = [{ description: 'Works', independent: false }]
 
-function fixture() {
-  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
+/** [personal]: the owner's Personal Swarm, the one place a person still posts in a project's chat (agentsOnly.test.ts). */
+function fixture(personal = false) {
+  let state = createSuperTab(personal ? stableId('super-tab', 'prod', 'owner', PERSONAL_SWARM_OPERATION) : 'tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0, now = 1_000
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
     const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
@@ -24,8 +26,8 @@ function fixture() {
   const add = (harnessId: string, group = 'lead', lead = false) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
     name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
-  const create = (actor: Actor = owner, extra: Record<string, unknown> = {}) =>
-    run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, priority: 'P2', ...actor.kind === 'agent' ? { requesterId: 'owner' } : {}, ...extra }), actor).result.conversationId as string
+  /** A task the owner asked for, as one stored before Swarm v4 (storedTask). */
+  const create = (extra: { checks?: typeof checks } = {}) => storedTask(state, { brief: 'Save edits.', checks, requesterId: 'owner', ...extra })
   const group = (id: string): Conversation => state.conversations.find(c => c.id === id)!
   /** The owner's 1:1 chat with an agent of theirs: a private chat. */
   const privateChat = () => {
@@ -51,42 +53,10 @@ function fixture() {
 }
 
 describe('who asked for a group', () => {
-  it('records the person who opens a group as its requester, with when they asked', () => {
-    const f = fixture()
-    f.at(5_000)
-    const id = f.create()
-    expect(f.group(id).requesterId).toBe('owner')
-    expect(f.group(id).ledger).toEqual({ askedAt: 5_000 })
-  })
-
-  it('records the person a Lead names when it opens a group for them', () => {
-    const f = fixture()
-    f.invitePeer()
-    const lead = f.add('lead', 'lead', true)
-    const id = f.create(f.asAgent(lead), { requesterId: 'peer' })
-    expect(f.group(id).requesterId).toBe('peer')
-  })
-
-  it('refuses a Lead that names nobody, rather than guessing, and asks nobody of a person (task #3389)', () => {
-    const f = fixture(), lead = f.add('lead', 'lead', true)
-    f.invitePeer()
-    expect(() => f.create(f.asAgent(lead), { requesterId: undefined })).toThrow(expect.objectContaining({ code: 'TASK_CONTRACT_MISSING' }))
-    // A person opens it for themselves: it names nobody and is not refused.
-    const open = (actor: Actor, extra: Record<string, unknown> = {}) =>
-      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, priority: 'P2', ...extra }), actor).result
-    const named = open(f.asAgent(lead), { requesterId: 'peer' })
-    for (const result of [named, open(owner)]) expect(result.warnings).toBeUndefined()
-  })
-
-  it('refuses a requester who is not a member of the Swarm', () => {
-    const f = fixture(), lead = f.add('lead', 'lead', true)
-    expect(() => f.create(f.asAgent(lead), { requesterId: 'stranger' })).toThrow('no longer have access')
-  })
-
   it('lets the Lead set or clear the requester of a group already open', () => {
     const f = fixture()
     f.invitePeer()
-    const lead = f.add('lead', 'lead', true), id = f.create(f.asAgent(lead))
+    const lead = f.add('lead', 'lead', true), id = f.create()
     f.run(commandSchema.parse({ type: 'conversation.requester', conversationId: id, personId: 'peer' }), f.asAgent(lead))
     expect(f.group(id).requesterId).toBe('peer')
     f.run(commandSchema.parse({ type: 'conversation.requester', conversationId: id, personId: null }), f.asAgent(lead))
@@ -109,6 +79,8 @@ describe('who asked for a group', () => {
   })
 })
 
+// A person's GO in a project's chat: only in a Personal Swarm while agents only exempts it (agentsOnly.test.ts); the credit is
+// kept for the leaderboard ledger until the v4 leaderboard is built, and these go with that exemption.
 describe('how a person unblocks work: approvals', () => {
   const HOUR = 3_600_000
   /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
@@ -123,7 +95,7 @@ describe('how a person unblocks work: approvals', () => {
 
   for (const word of ['GO', 'go ahead', 'Approve', 'approved, thanks', 'Duyệt', 'duyet nhe', 'DUYỆT nhé', '  Go!']) {
     it(`counts "${word}" in reply to the Lead's ask as an approval, with how long the ask waited`, () => {
-      const f = fixture(), { reply } = leadAsk(f, HOUR)
+      const f = fixture(true), { reply } = leadAsk(f, HOUR)
       f.at(4 * HOUR)
       f.say('lead', owner, word, reply.id, reply)
       expect(f.group('lead').ledger?.unblocks).toEqual([{ personId: 'owner', at: 4 * HOUR, waitedMs: 3 * HOUR, kind: 'approval', item: reply.id }])
@@ -132,21 +104,21 @@ describe('how a person unblocks work: approvals', () => {
 
   for (const word of ['ok', 'OK, go', 'goal: ship Friday', 'approves nothing yet', 'no, not GO']) {
     it(`does not count "${word}" as an approval`, () => {
-      const f = fixture(), { reply } = leadAsk(f)
+      const f = fixture(true), { reply } = leadAsk(f)
       f.say('lead', owner, word, reply.id, reply)
       expect(f.group('lead').ledger?.unblocks).toBeUndefined()
     })
   }
 
   it('counts an approval only in reply to the project\'s Lead, never to another agent', () => {
-    const f = fixture(), id = f.create(), worker = f.add('worker', id)
+    const f = fixture(true), id = f.create(), worker = f.add('worker', id)
     const said = f.say(id, f.asAgent(worker), 'Shall I start?').messages[0]!
     f.say(id, owner, 'GO', said.id, { id: said.id, conversationId: id, author: said.author, createdAt: 1_000 })
     expect(f.group(id).ledger?.unblocks).toBeUndefined()
   })
 
   it('counts one approval per ask, however many people or times reply GO', () => {
-    const f = fixture()
+    const f = fixture(true)
     f.invitePeer()
     const { reply } = leadAsk(f)
     f.say('lead', owner, 'GO', reply.id, reply)
@@ -156,14 +128,14 @@ describe('how a person unblocks work: approvals', () => {
   })
 
   it('never credits a private conversation', () => {
-    const f = fixture()
+    const f = fixture(true)
     const chat = f.privateChat()
     posted(f, chat, 'GO')
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
 
   it(`keeps at most ${MAX_UNBLOCKS} credits on one conversation, the newest`, () => {
-    const f = fixture(), { lead } = leadAsk(f)
+    const f = fixture(true), { lead } = leadAsk(f)
     for (let i = 0; i <= MAX_UNBLOCKS; i++) {
       f.at(10_000 + 2 * i)
       const ask = f.say('lead', f.asAgent(lead), `Plan ${i}. Reply GO.`).messages[0]!
@@ -180,7 +152,7 @@ describe('the model an agent reports for its stored attempts (roadmap, Dec: abou
 
   it('names the model an agent reports after its task began, when it had reported none: never "Codex" alone (Dee, 2026-10-30)', () => {
     const f = fixture()
-    const id = f.create(owner, { checks: independent }), done = f.create(owner, { checks: independent })
+    const id = f.create({ checks: independent }), done = f.create({ checks: independent })
     const worker = f.add('codex-worker', id), earlier = f.add('codex-earlier', done)
     for (const agentId of [worker, earlier]) f.state.agents.find(a => a.id === agentId)!.configuration = { ...config, engine: 'codex', model: null }
     const { assignmentId } = f.stored(id, worker)
@@ -203,7 +175,7 @@ describe('the model an agent reports for its stored attempts (roadmap, Dec: abou
 
   /** [count] Codex workers on their own groups, launched on Codex's own model, which they have not reported yet. */
   const codexTasks = (f: ReturnType<typeof fixture>, count: number) => Array.from({ length: count }, (_, i) => {
-    const id = f.create(owner, { checks: independent }), worker = f.add(`codex-${i}`, id)
+    const id = f.create({ checks: independent }), worker = f.add(`codex-${i}`, id)
     f.state.agents.find(a => a.id === worker)!.configuration = { ...config, engine: 'codex', model: null }
     return { id, ...f.stored(id, worker) }
   })

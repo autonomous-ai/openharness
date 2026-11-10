@@ -4,6 +4,7 @@ import { superTabRoutes } from '../../src/routes/superTabs.js'
 import { SuperTabStore } from '../../src/superTabs/store.js'
 import type { CommandResult, Reader, Snapshot, SwarmDriver } from './driver.js'
 import { benchApp, caller, type Call } from './http.js'
+import { storeCreate } from '../storedWork.test-support.js'
 
 const base = '/api/super-tabs'
 
@@ -26,6 +27,7 @@ export async function legacyDriver(db: PrismaClient, users: () => readonly AuthU
     name: 'legacy',
     close,
     createSwarm: (owner, operationId, name) => call(owner, 'POST', base, { operationId, name }),
+    storeTask: async (tabId, owner, task) => String((await storeCreate(db, tabId, { type: 'conversation.create', ...task }, owner)).result.conversationId),
     execute: (tabId, user, operationId, command, asAgentId) =>
       call<CommandResult>(user, 'POST', `${base}/${tabId}/commands`, { operationId, command, ...(asAgentId ? { asAgentId } : {}) }),
     async snapshot(tabId, user) {

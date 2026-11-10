@@ -4,6 +4,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
 import { createSuperTab, type Actor } from './model.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -28,40 +29,37 @@ function fixture() {
     configuration }).result.agentId as string
   const worker = run({ type: 'agent.add', conversationId: app.conversationId, harnessId: 'worker', machineId: 'machine', name: 'Worker', lead: false,
     configuration }).result.agentId as string
-  const group = run({ type: 'conversation.create', projectId: app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
+  const group = storedTask(state, { projectId: app.projectId as string, title: 'Copy', brief: '', requesterId: 'owner' })
   // A conversation only `peer` reads: their chat with their own agent.
   const pmChat = run({ type: 'agent.new', kind: 'regular', machineId: 'peer-mac', engine: 'claude', local: true }, peer,
     { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }).result.conversationId as string
-  const send = (conversationId: string, mentions: string[], actor: Actor = owner) => run({ type: 'message.send', conversationId,
+  // Only agents post in a project's channel and its tasks' chats (agentsOnly.test.ts): there an agent tags people.
+  const asWorker: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'owner' }
+  const send = (conversationId: string, mentions: string[], actor: Actor = asWorker) => run({ type: 'message.send', conversationId,
     text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.find(m => !m.source)!
   /** A post that tags only by what its text says, as people type in chat. */
-  const say = (conversationId: string, text: string, actor: Actor = owner, mentions?: string[]) => run({ type: 'message.send', conversationId,
+  const say = (conversationId: string, text: string, actor: Actor = asWorker, mentions?: string[]) => run({ type: 'message.send', conversationId,
     text, replyTo: null, recipientIds: [], ...(mentions ? { mentions } : {}) }, actor).messages.find(m => !m.source)!
-  return { run, send, say, app, lead, worker, group, pmChat, get state() { return state } }
+  return { run, send, say, app, lead, worker, asWorker, group, pmChat, get state() { return state } }
 }
 
-describe('people tagging people', () => {
-  it('tags a person who can read the conversation', () => {
-    const f = fixture()
-    expect(f.send(f.group, ['peer', 'third']).mentions).toEqual(['peer', 'third'])
-    expect(f.send(f.group, ['owner'], peer).mentions).toEqual(['owner'])
-  })
-
+describe('tags of people', () => {
   it('a thread reply carries its tags and agents as a chat message does (Desktop thread @, 10-31)', () => {
     const f = fixture()
     f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false })
     const root = f.say(f.group, 'Should we ship the copy?')
     const reply = f.run({ type: 'message.send', conversationId: f.group, text: 'Please check @peer', replyTo: root.id,
-      recipientIds: [f.worker], mentions: ['peer'] }, owner,
+      recipientIds: [f.worker], mentions: ['peer'] }, { kind: 'agent', agentId: f.lead, machineOwnerId: 'owner' },
     { reply: { id: root.id, conversationId: f.group, author: root.author, createdAt: 1000, thread: root.thread ?? root.id } }).messages.at(-1)!
     expect(reply.thread).toBe(root.thread ?? root.id)
     expect(reply.mentions).toEqual(['peer'])
     expect(reply.recipients).toEqual([f.worker])
   })
 
+  // A person posts in their own chat with their agent, where they alone read.
   it('drops the author’s own tag', () => {
     const f = fixture()
-    expect(f.send(f.group, ['owner', 'peer']).mentions).toEqual(['peer'])
+    expect(f.send(f.pmChat, ['peer'], peer).mentions ?? []).toEqual([])
   })
 
   it('refuses a tag of someone who cannot read the conversation, or is not in the Swarm', () => {
@@ -136,11 +134,6 @@ describe('tags in the text', () => {
     expect(outsider.text).toBe('@third and @nobody, look')
   })
 
-  it('drops the author naming themselves', () => {
-    const f = fixture()
-    expect(f.say(f.group, '@owner and @peer').mentions).toEqual(['peer'])
-  })
-
   it('tags from the text of the PM and of any other agent', () => {
     const f = fixture()
     const lead = { kind: 'agent' as const, agentId: f.lead, machineOwnerId: 'owner' }
@@ -164,7 +157,7 @@ describe('tags in the text', () => {
       const invited = f.run({ type: 'invite.create', email: `${name}@example.com`, role: 'collaborator', conversationId: 'lead' })
       f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, { kind: 'person', userId: name, email: `${name}@example.com` })
     }
-    const many = f.say(f.group, '@p4 @p5 @p6 @p7 @third', owner, ['peer'])
+    const many = f.say(f.group, '@p4 @p5 @p6 @p7 @third', f.asWorker, ['peer'])
     expect(many.mentions).toEqual(['peer', 'p4', 'p5', 'p6', 'p7'].slice(0, MAX_MENTIONS))
   })
 })
@@ -179,43 +172,43 @@ describe('a picked tag the text does not say', () => {
 
   it('gets a line of its own when the text opens with a block', () => {
     const f = fixture()
-    expect(f.say(f.group, '- one\n- two', owner, ['peer']).text).toBe('@peer\n\n- one\n- two')
-    expect(f.say(f.group, '\n\nShipped:\n- Desktop', owner, ['peer']).text).toBe('@peer Shipped:\n- Desktop')
+    expect(f.say(f.group, '- one\n- two', f.asWorker, ['peer']).text).toBe('@peer\n\n- one\n- two')
+    expect(f.say(f.group, '\n\nShipped:\n- Desktop', f.asWorker, ['peer']).text).toBe('@peer Shipped:\n- Desktop')
   })
 
   it('is not added again when the text already names them, in any case, with a dot or by address', () => {
     const f = fixture()
     for (const text of ['Ask @Peer.', 'cc @peer@example.com', '@peer: done']) {
-      expect(f.say(f.group, text, owner, ['peer']).text).toBe(text)
+      expect(f.say(f.group, text, f.asWorker, ['peer']).text).toBe(text)
     }
     // A name inside code is not a tag, so the tag still opens the line.
-    expect(f.say(f.group, 'run `@peer`', owner, ['peer']).text).toBe('@peer run `@peer`')
+    expect(f.say(f.group, 'run `@peer`', f.asWorker, ['peer']).text).toBe('@peer run `@peer`')
   })
 
   it('is not added again for a stored name ending in a dot that the text says', () => {
     const f = fixture()
     // Chosen before such names were refused (usernames.ts).
     f.state.people.find(p => p.id === 'peer')!.username = 'peer.'
-    const sent = f.say(f.group, 'Ask @peer. today', owner, ['peer'])
+    const sent = f.say(f.group, 'Ask @peer. today', f.asWorker, ['peer'])
     expect(sent.text).toBe('Ask @peer. today')
     expect(sent.mentions).toEqual(['peer'])
     // Said only inside code, it still opens the line.
-    expect(f.say(f.group, 'run `@peer.`', owner, ['peer']).text).toBe('@peer. run `@peer.`')
+    expect(f.say(f.group, 'run `@peer.`', f.asWorker, ['peer']).text).toBe('@peer. run `@peer.`')
   })
 
   it('is written the same way when the command is retried', () => {
     const command = { type: 'message.send' as const, conversationId: '', text: 'Please look.', replyTo: null, recipientIds: [], mentions: ['peer'] }
     const first = fixture(), again = fixture()
-    expect(first.run({ ...command, conversationId: first.group }).messages.at(-1)!.text)
-      .toBe(again.run({ ...command, conversationId: again.group }).messages.at(-1)!.text)
+    expect(first.run({ ...command, conversationId: first.group }, first.asWorker).messages.at(-1)!.text)
+      .toBe(again.run({ ...command, conversationId: again.group }, again.asWorker).messages.at(-1)!.text)
     // A client that sends back the text the server wrote does not get the tag twice.
-    expect(first.say(first.group, '@peer Please look.', owner, ['peer']).text).toBe('@peer Please look.')
+    expect(first.say(first.group, '@peer Please look.', first.asWorker, ['peer']).text).toBe('@peer Please look.')
   })
 
   it('is the whole text of a post that is only files', () => {
     const f = fixture()
     const sent = f.run({ type: 'message.send', conversationId: f.group, text: '', replyTo: null, recipientIds: [], mentions: ['peer'],
-      attachmentIds: ['file'] }, owner, { attachments: [{ id: 'file', name: 'a.png', url: 'https://cdn.example.com/a.png', size: 1, mime: 'image/png' }] }).messages.at(-1)!
+      attachmentIds: ['file'] }, f.asWorker, { attachments: [{ id: 'file', name: 'a.png', url: 'https://cdn.example.com/a.png', size: 1, mime: 'image/png' }] }).messages.find(m => !m.source)!
     expect(sent.text).toBe('@peer')
   })
 })

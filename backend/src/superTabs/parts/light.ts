@@ -86,10 +86,7 @@ export const GROUP_FIELDS = {
     'requesterId',
     'reviewStamp',
     'step',
-    'stepUp',
-    'stuck',
     'talkedAt',
-    'writers',
   ],
 } as const
 const LIGHT_GROUP = {

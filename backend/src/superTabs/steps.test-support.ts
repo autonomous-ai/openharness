@@ -1,22 +1,39 @@
 /**
- * A task with its PM and Engineer, opened through commands as a Swarm opens one: shared by the tests that run commands and
- * sweeps on it (liveness.test.ts), so importing it never runs another file's tests. And the steps a Swarm from before Swarm v4
+ * A task with its PM and Engineer, as a Swarm from before Swarm v4 stores one: shared by the tests that run commands and
+ * sweeps on it (liveness.test.ts), so importing it never runs another file's tests. And the tasks and steps such a Swarm
  * still stores, which v4 no longer opens.
  */
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, nextConversationNumber, type Actor, type AgentConfiguration, type CommandEffects, type SuperTabState } from './model.js'
-import { groupProject } from './projects.js'
-import { storedAssignment } from './storedWork.test-support.js'
+import { agentProjectId, groupProject } from './projects.js'
+import { storedAssignment, storedTask, type StoredTask } from './storedWork.test-support.js'
 
 export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
-/** A step or linked task as an agent or person opened it before Swarm v4: conversation.create naming the task it is on. */
-export type StepCommand = Extract<Command, { type: 'conversation.create' }> & { reviewOf: string; step?: string }
+/** A task, or a step or linked task naming the task it is on (`reviewOf`), as an agent or person opened it with
+ *  conversation.create before Swarm v4 removed that command (slice S18): tasks are GitHub issues now. */
+export interface StoredCreate extends Omit<StoredTask, 'requesterId' | 'creatorId'> {
+  type: 'conversation.create'
+  title: string
+  checks: Array<{ description: string; independent?: boolean }>
+  requesterId?: string
+  reviewOf?: string
+  step?: string
+}
 
-/** [command], a step or linked task opened before Swarm v4, stored in [state] as conversation.create stored it then: in its
- *  task's project, its opener in it and, for a named step, in its task too. Its answer as that command's was: the new step's id. */
-export function storedStep(state: SuperTabState, command: StepCommand, actor: Actor): CommandEffects {
+/** [command], opened before Swarm v4, stored in [state] as conversation.create stored it then. A task is asked by the person
+ *  who opened it, unless it names who asked; an agent opens it in its own project, and is in it. A step is in its task's project, its opener in it
+ *  and, for a named step, in its task too. Its answer as that command's was: the new conversation's id. */
+export function storedCreate(state: SuperTabState, command: StoredCreate, actor: Actor): CommandEffects {
+  if (!command.reviewOf) {
+    const { type: _type, reviewOf: _reviewOf, step: _step, ...fields } = command
+    // An agent's opens in its own project, as the command did when it named none.
+    const opener = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+    const id = storedTask(state, { ...fields, projectId: command.projectId ?? (opener ? agentProjectId(state, opener) : undefined),
+      requesterId: command.requesterId ?? (actor.kind === 'person' ? actor.userId : undefined), ...(opener ? { creatorId: opener.id } : {}) })
+    return { state, result: { conversationId: id, number: state.groupCounter }, messages: [] } as unknown as CommandEffects
+  }
   const task = state.conversations.find(c => c.id === command.reviewOf)!
   const project = groupProject(state, task)
   const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId ?? null
@@ -33,15 +50,14 @@ export function storedStep(state: SuperTabState, command: StepCommand, actor: Ac
   return { state, result: { conversationId: id, number }, messages: [] } as unknown as CommandEffects
 }
 
-/** Whether [command] opens a step, which a test stores as a Swarm from before Swarm v4 did (storedStep). */
-export const opensStep = (command: Command | StepCommand): command is StepCommand =>
-  command.type === 'conversation.create' && 'reviewOf' in command && !!command.reviewOf
+/** Whether [command] opens a task or step, which a test stores as a Swarm from before Swarm v4 did (storedCreate). */
+export const opensStored = (command: Command | StoredCreate): command is StoredCreate => command.type === 'conversation.create'
 
 export function stepsFixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0, now = 1000
-  const run = (command: Command | StepCommand, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    if (opensStep(command)) return storedStep(state, command, actor)
+  const run = (command: Command | StoredCreate, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStored(command)) return storedCreate(state, command, actor)
     const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
     state = effects.state
     return effects
@@ -50,8 +66,8 @@ export function stepsFixture() {
     name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const lead = add('pm', 'lead', true)
-  const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.',
-    checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
+  const task = storedTask(state, { title: 'Fix login', brief: 'Sign in works offline.', checks: [{ description: 'Signs in offline', independent: true }],
+    requesterId: 'owner', creatorId: lead })
   const dev = add('dev', task)
   storedAssignment(state, task, dev, now)
   const step = (name: string, actor: Actor = as(dev), on = task, checks: Array<{ description: string; independent: boolean }> = []) =>

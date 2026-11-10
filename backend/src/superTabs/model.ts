@@ -2,14 +2,13 @@ import { createHash } from 'node:crypto'
 import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
-import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { personView, withAvatarView } from './profile.js'
+import { personView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { processOf, projectColumns } from './process.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, projectsOf, sharedWithLeads, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 type Role = 'owner' | 'collaborator' | 'viewer'
 
@@ -18,8 +17,6 @@ export interface Person {
   email: string
   role: Role
   generation: string
-  /** Their own avatar (profile.ts); only Swarm members read it. */
-  avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Nothing sets a chosen one any
    *  more (2026-11-09): those chosen before stay. Only members read it. */
   username?: string
@@ -56,15 +53,9 @@ export interface Agent {
   displayName?: string
   /** A PM's own chat with its person (Swarm v4), kept here so a light read finds it by key (parts/light.ts). */
   chatId?: string
-  /** The kind an older client started or added it as, kept for older readers. Absent reads as builder (agentRole); the Lead
-   *  is derived from leadId. It decides nothing (project instructions, phase 4): roleNameOf names an agent without a role
-   *  name by it. */
+  /** The kind an older client started it as, kept for older readers. Absent reads as builder (agentRole); the Lead is derived
+   *  from leadId. It decides nothing (project instructions, phase 4). */
   role?: AgentRole
-  /** The custom role an older client started, added or assigned it in, kept for older readers (projects.ts agentSetRole). */
-  roleId?: string | null
-  /** The role it was started in, free text from the project's instructions (project instructions, phase 2). The server checks
-   *  nothing against them. Absent on agents from before: reads name one by what it is (instructions.ts roleNameOf). */
-  roleName?: string
   /** `awaiting`: its task's work ended (finishWorker), shown and read by no command; `keep` and `stop`: asked for
    *  (agent.release, tidy.ts). Kept when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
@@ -94,9 +85,6 @@ export interface Agent {
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
    *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
   gridModel?: string
-  /** Its start named no model, so it runs its engine's own: rated by the policy's `default` row for life (rules.ts
-   *  agentTarget). Kept here for the same reason as [gridModel]: a command never sees the finished start (live bug 10-29). */
-  launchedDefault?: true
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -116,8 +104,6 @@ export interface Agent {
   /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
    *  machine's person watches it (projects.ts canWatchAgent). */
   confidential?: true
-  /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
-  avatar?: import('./profile.js').Avatar
   /** A Regular agent (agent.new, task #4116): in no project but its active task's (projects.ts agentProjectId). */
   regular?: true
   /** The one project this Member belongs to (task #4540; spec 2026-11-07-members-and-leads): picked in Cmd-N or when its person
@@ -137,9 +123,6 @@ export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?
 export interface AgentStartRequest {
   conversationId: string
   role?: AgentRole
-  roleId?: string
-  /** The agent's role name (Agent.roleName), kept on it once it starts. */
-  roleName?: string
   machineId: string
   engine: string
   model?: string
@@ -180,7 +163,6 @@ export interface AgentStartRequest {
 export interface AgentStart {
   poolGeneration?: string
   poolSettled?: boolean
-  routeDecisionId?: string
   id: string
   creationId: string
   actorKey: string
@@ -265,16 +247,14 @@ export interface WorkTask {
   /** `strong`: big, hard or risky work, which the crew's dispatch hands only to a member on a strong model (dispatch.ts, #3576); a task
    *  that wants two reviews counts as strong unless this says `standard`. */
   strength?: 'standard' | 'strong'
-  /** What its reviews check first, and how many independent reviews it wants: written into its brief (renderWorkTask), which
-   *  whoever opens its review reads. The server opens and counts no review (project instructions, phase 4). */
+  /** What its reviews check first, and how many independent reviews it wants. The server opens and counts no review (project
+   *  instructions, phase 4). */
   review?: ReviewPlan
 }
 /** A task's review plan (#2382; nightly reflection 10-30: the Lead hand-sent a focus to 20+ reviews that day). `focus` and
  *  `reviews: 2` are said in its brief, so the agent opening its review passes them on (project instructions, phase 4). */
 export interface ReviewPlan { focus?: string; reviews?: 1 | 2 }
 
-/** How many independent reviews [task] wants: 2 only when its review plan says so. */
-const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
 /** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
  *  machine by policy order). `machines`: it runs only there. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
@@ -294,13 +274,6 @@ export function withSeenRequirement<T extends Pick<Conversation, 'task'>>(group:
   const machines = requires.machines.filter(id => seen.has(id))
   return { ...group, task: { ...group.task!, requires: { ...requires, machines,
     unseenMachines: (requires.unseenMachines ?? 0) + requires.machines.length - machines.length } } }
-}
-
-export const TWO_REVIEWS = 'Two independent reviews, each by a different Reviewer.'
-export function renderWorkTask(task: WorkTask): string {
-  const review = [...task.review?.focus ? [task.review.focus] : [], ...reviewsWanted(task) === 2 ? [TWO_REVIEWS] : []]
-  return `Goal:\n${task.goal}\n\nChanges:\n${task.changes}\n\nConstraints:\n${task.constraints}\n\nOwns:\n${task.owns.map(area => `- ${area}`).join('\n')}`
-    + (review.length ? `\n\nReview:\n${review.join('\n')}` : '')
 }
 
 export interface Conversation {
@@ -342,20 +315,15 @@ export interface Conversation {
   talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
+  /** When its brief was last set, by a command before Swarm v4: a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
   briefAt?: number
-  /** The people who posted here, newest last, at most four (stuck.ts noteWriter, task #3915): whom a stuck line tags. */
-  writers?: string[]
-  /** The stuck line this task's people were told, until it is fixed (stuck.ts, task #3915): its reason's key, the line, whom it
-   *  tagged and what its fix says. */
-  stuck?: { key: string; messageId: string; tagged: string[]; fixed: string }
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
   messageSeq?: number
-  /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
+  /** The sequence of its last message that counted toward its project's reports before Swarm v4. */
   reportSeq?: number
   /** Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it. */
   dormant?: boolean
@@ -381,28 +349,19 @@ export interface Conversation {
   released?: { at: number; tags: string[] }
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
-   *  piece 4; before project instructions also by the server's step up). Nothing is cancelled: the route reads it to leave the
-   *  grid out of the next attempt, route records carry it for the costs report, and the leaderboard reads it. */
-  stepUp?: StepUp
-  /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
-  leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+  /** The last start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
+  leadAction?: { kind: 'assign' | 'start' | 'post'; at: number }
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
-  /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
+  /** How urgent its task is, as a task stored before Swarm v4 said: P0 to P3 (task #3117). Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
-  priority?: import('./taskPriority.js').TaskPriority
+  priority?: 'P0' | 'P1' | 'P2' | 'P3'
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
 }
-/** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
- *  the next one's brief; the failed start that caused it, if one did. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string
-  /** A route record carries it already (commands.ts route.record): later routes of the task do not, so it counts once. */
-  recorded?: true }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes
@@ -458,8 +417,6 @@ export interface RemovedSession {
 export interface SuperTabState {
   version: 1
   id: string
-  /** Swarm v4: the stops the v3 rules asked for were withdrawn once (agentStops.ts). */
-  v4StopsWithdrawn?: true
   name: string
   project?: { machineId: string; cwd: string; repositoryUrl: string | null }
   projects?: SwarmProject[]
@@ -475,8 +432,6 @@ export interface SuperTabState {
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   environment: string
-  /** The owner's routing rules (rules.ts); absent until the first is set. */
-  rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
@@ -570,7 +525,7 @@ export interface MessageDraft {
   /** Explicit answer in main chat, without a thread. */
   answers?: string
   recipients: string[]
-  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by its routing, removed 2026-11-11. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
@@ -594,74 +549,21 @@ export const AGENT_ONLY = { kind: 'agent-only' }
  *  read can still be one row's recipients' alone (forRecipients): a cancel told to its worker, a routing line in the project
  *  chat. A kind no code here knows, stored by a newer server, reads as `people`. */
 export const NOTICE_READERS = {
-  // Only its agent: a skill update (cli host.ts), a decision answered (until Swarm v4's 2026-11-10).
+  // Only its agent: a skill update (cli host.ts).
   'agent-only': 'agent',
   // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
   github: 'people',
-  // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts); two
-  // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
-  'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
-  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock): written until Swarm v4, read still.
-  // Delete it with the notice readers of v1-v3 (slice S18).
-  'crew-nudge': 'recipients',
-  // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
-  // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
-  idle: 'recipients', 'review-failed': 'recipients',
-  'update-request': 'recipients', overlap: 'recipients',
-  // The Lead's built-in schedule wake, its daily tidy and its morning digest, gone in Swarm v4 (anh Dee, 11-09): the rows already
-  // stored stay hidden from people.
-  'schedule-request': 'recipients', 'tidy-request': 'recipients', 'digest-request': 'recipients',
+  // A worker's lost task, to its Lead (liveness.ts).
+  'work-lost': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
-  // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (task #3462), written until 2026-11-10:
-  // read by nobody.
-  'crew-timing': 'agent',
-  // A person's decision wakes the task's PM; people read the decision in Tasks.
-  'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
-  'project-report': 'people', route: 'people', 'route-override': 'people',
-  // Proposal history, written until proposals went (2026-11-10), and the private Buddy notices stored before task #4558, are visible
-  // to the people who can read their card/chat. Delete them with the notice readers of v1-v3 (slice S18).
-  'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
-  // Decisions, written until Swarm v4 removed them (2026-11-10), read still: an agent's question to a person in a switched
-  // project, in their default Buddy chat; a Buddy's question settled, in its owner's Buddy chat; a decision its person must
-  // agree to that reached its time, told to the PM alone. Delete them with the notice readers of v1-v3 (slice S18).
-  'decision-asked': 'people',
-  'decision-answered': 'people',
-  'decision-must-agree': 'recipients',
-  // A computer signed in as another account now, told to its old owner in their Buddy chat until Buddies went (2026-11-10).
-  'computer-moved': 'people',
-  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
-  // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
-  'machine-left': 'agent',
-  // A task's one line in its project chat, where people read its state; no longer written (Swarm v4, 2026-11-10).
-  'task-line': 'people',
-  // A project PM's private line in a person's one Buddy chat, no longer written (task #4558: only the person and their own agent
-  // post there): its person reads the rows stored before.
-  'pm-line': 'people',
-  // A decider's override of a person's rule, told to them by their own Buddy until Buddies went (2026-11-10).
-  'rule-approved': 'people',
-  'auto-archive': 'people', native: 'people',
-  // A release step the Swarm opened for the Integrator, and its verified release's line (the release watch Swarm v4 removed, task #3405).
-  release: 'people',
-  // The nightly routing reflection, for the project's people.
-  'routing-reflection': 'people',
-  // No new agent can start, or soon none will, told to the coordinator before Swarm v4, which writes none; with none in the chat,
-  // people read it, tagging who could fix it. Older rows, written for no one, still read as people's. Older rows of kinds no
-  // longer written (the automatic review's `auto-review`, a routing rule's `rule`) read as people's, as any kind not listed does.
-  'review-capacity': 'recipients',
-  // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
+  'machine-removed': 'people',
+  // #2177's ruling: a failed start stays the people's to see.
   // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
   switch: 'people',
-  // The machine owner's one line when another person moved a PM onto one of their non-default accounts: written until a PM ran on
-  // its machine's default account alone (pmAccount.ts), read still. Delete it with the notice readers of v1-v3 (slice S18).
-  'pm-switch-notice': 'people',
-  // The machine owner's line, once a week, when someone else's work started on their machine: written until Swarm v4, read still.
-  // Delete it with the notice readers of v1-v3 (slice S18).
-  'others-work-notice': 'people',
-  'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
+  'start-timeout': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
   typeof kind === 'string' && Object.hasOwn(NOTICE_READERS, kind) ? NOTICE_READERS[kind as keyof typeof NOTICE_READERS] : 'people'
@@ -678,7 +580,6 @@ export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
   cancelledAgents: string[]
-  routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
   messageEdit?: { messageId: string; text: string }
@@ -686,11 +587,6 @@ export interface CommandEffects {
   terminal?: import('./terminal.js').TerminalEffect
   /** Deliveries of messages already stored. `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
-  /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
-   *  attempt row as a builder's own done does. */
-  closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
-  /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
-  projectRules?: import('./policy.js').RulesWrite
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -855,7 +751,6 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     agents: [], invitations: [],
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
-  // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
   state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
@@ -922,8 +817,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.retiredConversationNumber
   delete visible.groupCounter
   delete visible.sequenceBase
-  placeRules(visible)
-  if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
@@ -946,7 +839,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
-      // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
+      // A reading stored before its tokens were ignored (machines.ts harnessTokens) still holds them: never a reader's. Goes once
+      // every machine has reported since, on or after 2026-12-11.
       delete pool.observation.harnessTokens
       // What the server refused this machine's host is for the sweep alone (liveness.ts failRefusedStarts), never a reader.
       delete pool.observation.refusedStarts
@@ -960,20 +854,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const workers = workerIndex(visible)
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id, workers)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) {
-    project.skillSet = skillSetOf(project)
     Object.assign(project, { process: processOf(project), columns: projectColumns(project) })
   }
-  // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
-  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) })) as Person[]
-  visible.agents = visible.agents.map(withAvatarView) as Agent[]
-  // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
-  for (const target of visible.agents) {
-    const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
-    if (home && skillSetOf(home) === 'custom') target.roleId = agentSetRole(state, home, target)?.id ?? null
-    else delete target.roleId
-  }
+  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) }))
+  visible.agents = visible.agents.map(personView)
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {
     const raw = readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))

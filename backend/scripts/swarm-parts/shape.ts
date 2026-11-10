@@ -6,6 +6,7 @@
 import { applyCommand, type Command, type CommandContext } from '../../src/superTabs/commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Assignment, type Author, type SuperTabState } from '../../src/superTabs/model.js'
 import { setLegacyProgress, type LegacyMessage } from './legacy.js'
+import { storedTask } from '../../src/superTabs/storedWork.test-support.js'
 
 export interface SwarmSpec { name: string; groups: number; agents: number; machines: number; projects: number; messages: number; targetBytes?: number; withoutProjects?: true }
 export const PRODUCTION_SHAPED: SwarmSpec[] = [
@@ -48,9 +49,10 @@ export function buildSwarm(spec: SwarmSpec, index: number, now: number): SeededS
   const leads = state.projects!.map((p, i) => run({ type: 'agent.add', conversationId: p.leadConversationId, machineId: machines[i % machines.length]!,
     harnessId: `lead-${index}-${i}`, name: `Lead ${i}`, configuration: config, lead: true }, owner, own).agentId as string)
   // `groups` counts every conversation, as the issue's sizes do: the work groups, each project's Lead conversation, the Leads one.
-  const groups = Array.from({ length: spec.groups - spec.projects - 1 }, (_, g) => run({ type: 'conversation.create', projectId: projects[g % projects.length]!, title: `Task ${g}: ${prose(rng, 30)}`,
+  // Tasks as a Swarm from before v4 stored them (no command opens one now).
+  const groups = Array.from({ length: spec.groups - spec.projects - 1 }, (_, g) => storedTask(state, { projectId: projects[g % projects.length]!, title: `Task ${g}: ${prose(rng, 30)}`,
     task: { goal: prose(rng, 300), changes: prose(rng, 500), constraints: prose(rng, 400), owns: [`backend/src/area${g}`, `cli/src/area${g}`] },
-    checks: Array.from({ length: 1 + Math.floor(rng() * 3) }, () => ({ description: prose(rng, 80), independent: rng() < 0.3 })) }).conversationId as string)
+    checks: Array.from({ length: 1 + Math.floor(rng() * 3) }, () => ({ description: prose(rng, 80), independent: rng() < 0.3 })), requesterId: owner.userId }))
   const workers = Array.from({ length: Math.max(1, spec.agents - leads.length) }, (_, w) => run({ type: 'agent.add', conversationId: groups[w % groups.length]!,
     machineId: machines[w % machines.length]!, harnessId: `worker-${index}-${w}`, name: `Builder ${w}`, configuration: config, lead: false }, owner, own).agentId as string)
   const finishedBefore = new Map<string, number>()
@@ -108,7 +110,7 @@ function history(state: SuperTabState, rng: () => number, tabId: string, finishe
   return { messages, revision: sequence + 7 }
 }
 
-/** What only the store writes: starts in every state, slot ledgers, observations, rules, invitations, report progress. */
+/** What only the store writes: starts in every state, slot ledgers, observations, invitations, report progress. */
 function ledger(state: SuperTabState, rng: () => number, machines: string[], workers: string[], groups: string[], now: number) {
   const pool = state.machines![0]!
   const request = (conversationId: string) => ({ conversationId, machineId: pool.machineId, engine: 'claude', name: 'Builder', cwd: '/work', worktree: true,
@@ -127,8 +129,6 @@ function ledger(state: SuperTabState, rng: () => number, machines: string[], wor
   state.closingSessions = [{ agentId: 'removed-agent', machineId: machines[0]!, harnessId: 'closing-h', machineOwnerId: owner }]
   state.machineCleanups = [{ machineId: 'removed-machine', removalId: 'removal-1', machineOwnerId: owner }]
   state.overlapAlerts = groups.length > 3 ? [`${groups[0]}:${groups[1]}`] : []
-  state.rules = (state.projects ?? []).map((p, r) => ({ id: `rule-${r}`, projectId: p.id, rule: { kind: 'preferEngine' as const, taskKind: 'ui', engine: 'codex' as const },
-    text: 'Codex for UI work.', askedBy: owner, askedIn: null, addedBy: owner, createdAt: new Date(now - 30 * DAY).toISOString() }))
   state.invitations.push({ id: 'pending-invite', email: 'later@example.com', role: 'viewer', conversationId: 'lead', expiresAt: now + 7 * DAY })
   for (const project of state.projects ?? []) {
     const reports = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind).map(c => c.lastMessageSequence)

@@ -118,7 +118,7 @@ describe('a terminal observer of a Swarm agent', () => {
 
   it('stays open through a change that leaves its viewer allowed, the watched agent becoming its project’s Lead included', async () => {
     const { tab, ws, builder } = await watching(false)
-    await run(tab, { type: 'conversation.create', title: 'Another task', brief: '', checks: [] })
+    await run(tab, { type: 'tab.rename', name: 'Another name' })
     await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [host.sub, peer.sub] })
     // Every member watches the current Lead, view only (Ken, 2026-10-28).
     await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })

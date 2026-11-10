@@ -2133,7 +2133,8 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.releaseEngine(pending.agentId, true)?.swarmSkill).toBeUndefined()
   })
 
-  // Project instructions, phase 4 (decision 1): a row an older CLI saved names its Swarm role in the wire's values.
+  // Project instructions, phase 4 (decision 1): a row an older CLI saved names its Swarm role in the wire's values, and
+  // the skill mode it kept is read as nothing (the modes are gone, PM 2026-11-11).
   it('reads a Swarm role an older CLI saved as this release keeps it, on load and from a stopped harness\'s row', async () => {
     const { registry, strictPersistedRow } = await loadRegistryModule()
     registry.load()
@@ -2143,13 +2144,13 @@ describe('registry across a reboot and pane loss', () => {
     const row = (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>).find(r => r.agentId === pending.agentId)!
     expect(row.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
     const older = { ...row, swarmSkill: { role: 'review', key: 'reviewer', mode: 'default' } }
-    expect(strictPersistedRow(older)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer', mode: 'default' })
+    expect(strictPersistedRow(older)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
     expect(strictPersistedRow({ ...row, swarmSkill: { role: 'lead', key: 'pm' } })?.swarmSkill).toEqual({ role: 'coordinator', key: 'pm' })
     expect(strictPersistedRow({ ...row, swarmSkill: { role: 'pm', key: 'pm' } })).not.toHaveProperty('swarmSkill')
     writeFileSync(file, JSON.stringify([older]), { mode: 0o600 })
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
-    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer', mode: 'default' })
+    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
   })
 
   it('keeps strict conversation resume after the engine binds and the daemon reloads', async () => {

@@ -79,15 +79,15 @@ it('accepts what a machine is ready for, and a reading from before it', () => {
   expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines: [{ engine: 'claude', installed: 'yes', signedIn: null }] } }).success).toBe(false)
 })
 
-it('accepts each running agent’s token counts by model, counts only and bounded, and a reading from before them', () => {
+// Today's CLI sends them on every report: taken unread, at most one entry per agent it could run, and stored by no path
+// (storedObservation).
+it('takes each running agent’s token counts unread, and a reading from before them', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   const opus = { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 }
   expect(machineObservationSchema.safeParse({ ...sent, harnessTokens: { h1: { 'claude-opus-5-5': opus, 'gpt-5.5-codex': opus } } }).success).toBe(true)
-  for (const harnessTokens of [{ h1: { 'two words': opus } }, { h1: { m: { ...opus, prompt: 'text' } } }, { h1: { m: { ...opus, input: -1 } } },
-    { h1: { m: { ...opus, output: 1.5 } } }, { h1: { m: { input: 1 } } }, { h1: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`m${i}`, opus])) },
-    Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`h${i}`, { m: opus }]))]) {
-    expect(machineObservationSchema.safeParse({ ...sent, harnessTokens }).success, JSON.stringify(harnessTokens).slice(0, 80)).toBe(false)
-  }
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  const tooMany = Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [`h${i}`, { m: opus }]))
+  expect(machineObservationSchema.safeParse({ ...sent, harnessTokens: tooMany }).success).toBe(false)
 })
 
 function setup(machine: Partial<ContributedMachine> = {}) {
@@ -260,12 +260,12 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
   const stored = (extra: Partial<MachineObservation> = {}, at = NOW, preparable = (_id: string) => true) =>
     storedObservation(pool(), reading(extra), { now: at, preparable })
 
-  it('keeps what a full report keeps: running sessions\' progress and tokens, its own preparing starts, contributed engines\' quotas', () => {
+  it('keeps what a full report keeps: running sessions\' progress, its own preparing starts, contributed engines\' quotas, and no tokens', () => {
     const kept = storedObservation(pool(), reading({ harnessProgress: { a: 5, b: 6 }, harnessTokens: { a: tokens, b: tokens },
       preparingStartIds: ['s1', 's2'], quotas: [quota('claude'), quota('codex')] }),
     { now: NOW, preparable: id => id === 's1' })
-    expect(kept).toMatchObject({ receivedAt: NOW, harnessProgress: { a: 5 }, harnessTokens: { a: tokens },
-      preparingStartIds: ['s1'], runningHarnessIds: ['a'], stoppedHarnessIds: ['z'] })
+    expect(kept).toMatchObject({ receivedAt: NOW, harnessProgress: { a: 5 }, preparingStartIds: ['s1'], runningHarnessIds: ['a'], stoppedHarnessIds: ['z'] })
+    expect(kept).not.toHaveProperty('harnessTokens')
     expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
   })
 

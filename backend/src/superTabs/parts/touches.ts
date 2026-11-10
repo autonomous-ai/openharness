@@ -10,7 +10,7 @@ import { waitsNow } from '../leaderboard/record.js'
  * changes that part makes one of the two retry against the other's result.
  */
 export function touchesFor(command: Command, actor: Actor, before: SuperTabState, effects: Pick<CommandEffects, 'state' | 'messages'>,
-  context: Pick<CommandContext, 'delivery' | 'routeDecision'> = {}): Touch[] {
+  context: Pick<CommandContext, 'delivery'> = {}): Touch[] {
   const touches: Touch[] = []
   const group = (key: string | undefined) => { if (key) touches.push({ kind: 'group', key }) }
   const agent = (key: string | undefined) => { if (key && before.agents.some(a => a.id === key)) touches.push({ kind: 'agent', key }) }
@@ -34,9 +34,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   // and removing an agent writes every conversation it is in (rule b), so the conversation guards it. Touching them would
   // make every worker's post touch its Lead, and posts in different groups would conflict again (spec goal 1).
   if ('agentId' in command) agent(command.agentId)
-  // D9: a custom role choice reads the role sets on the head.
-  if ('roleId' in command && command.roleId) head()
-  if (command.type === 'agent.start' && command.request.roleId) head()
 
   switch (command.type) {
     // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
@@ -59,12 +56,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'project.answers': case 'project.about':
       leadCheck(command.projectId)
       break
-    // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
-    // project delete and a tab's close write, so a first save never lands on a project being deleted (security review 2 of
-    // #3929). The Lead check above is part of the same touch.
-    case 'rules.set':
-      group(leadGroupOf(command.projectId))
-      break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
       for (const person of before.people) {
@@ -74,13 +65,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         if (project && canReadProject(before, reader, project) && !(after && canReadProject(effects.state, reader, after))) member(person.id)
       }
       break
-    case 'conversation.create': {
-      const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
-      group(leadGroupOf(projectId))
-      member(command.requesterId)
-      for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
-      break
-    }
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)
@@ -136,21 +120,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         agent(context.delivery.agentId)
         group(context.delivery.conversationId)
       }
-      break
-    case 'route.record': {
-      head()
-      const pick = command.decision.candidates.find(c => c.id === command.decision.pick)
-      if (pick?.kind === 'member') agent(pick.agentId)
-      break
-    }
-    case 'route.override': {
-      const chosen = context.routeDecision?.record.candidates.find(c => c.id === command.candidateId)
-      if (chosen?.kind === 'member') agent(chosen.agentId)
-      group(context.routeDecision?.conversationId)
-      break
-    }
-    case 'route.modelResult':
-      group(context.routeDecision?.conversationId)
       break
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))

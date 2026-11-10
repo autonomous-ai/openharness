@@ -316,7 +316,7 @@ describe('agent_create, refused before any pane exists', () => {
 
   it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
     const { ask, create } = setup()
-    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its swarm-review file.
+    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its Reviewer kind.
     const kinds = { lead: { swarmRole: 'coordinator' }, dev: { swarmRole: 'agent' }, review: { swarmRole: 'agent', swarmFallback: 'review' } }
     for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review'] as const) {
       await ask({ engine, cwd: '/w', swarmRole })
@@ -373,20 +373,15 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
-  it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
+  // The Swarm's skill modes are gone (PM, 2026-11-11: agents start as plain Claude Code or Codex): a start that still sends one
+  // (Desktop's Personal Swarm, until its own removal) is not refused, and the mode goes no further.
+  it('takes a start that still sends a skill mode as any other, and passes the mode on to nothing', async () => {
     const { ask, create } = setup()
-    for (const swarmSkillMode of ['default', 'orchestration']) {
+    for (const swarmSkillMode of ['default', 'orchestration', 'light', 7, null]) {
       await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmSkillMode })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent' })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
     }
-    // From a start before modes: the session launches as it did then.
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev' })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
-    const calls = vi.mocked(create!).mock.calls.length
-    for (const swarmSkillMode of ['light', 7, null]) {
-      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
-    }
-    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
 
   // The Harness GitHub App is gone: a start that still sends its flag is not refused, and the flag goes no further.
@@ -405,7 +400,7 @@ describe('agent_create, refused before any pane exists', () => {
   // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
   it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
     const { ask, create } = setup({ swarmLaunch: undefined })
-    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmRole: 'lead', swarmSkillMode: 'orchestration' }]) {
+    for (const payload of [{ swarmRole: 'dev' }, { swarmRole: 'lead', swarmSkillMode: 'orchestration' }]) {
       expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     }
     expect(create).not.toHaveBeenCalled()
