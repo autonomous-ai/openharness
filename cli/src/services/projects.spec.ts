@@ -198,7 +198,7 @@ describe('an agent\'s instructions file', () => {
       { name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], text: 'Agent rules\n', truncated: false },
       { name: 'CLAUDE.md', path: 'CLAUDE.md', loadedBy: ['claude'], text: 'Claude rules\n', truncated: false },
     ]
-    const agentsIs = (why: string) => ({ name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], why })
+    const agentsIs = (why: 'link' | 'not_text' | 'unreadable' | 'not_a_file') => ({ name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex' as const], why })
 
     it('are shown, read only, for an agent with no file of its own, and beside one that has it', async () => {
       const { ask, file, cwd } = await project()
