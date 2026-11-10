@@ -8,7 +8,7 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
 import { buddyEngineChat } from '../buddyEngine.js'
-import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
+import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
@@ -21,9 +21,6 @@ export interface HostLookups {
   confidential: Set<string>
   /** Throws a SuperTabError when the agent's machine grant is gone (store.ts agentGrant). */
   agentGrant(target: Agent): Promise<void>
-  /** This Mac's Harness Team accounts, which join wherever the Mac was added. */
-  teams: Array<{ machineId: string }>
-  githubApp: boolean
 }
 
 /** Removed machines whose host has not yet said it cleaned up (store.ts cleanups). */
@@ -33,21 +30,12 @@ const cleanups = (state: SuperTabState): MachineCleanup[] => [
 
 export async function hostTab(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostTabRows> {
   const rows = { tabId, lastChangedAt, roster: await roster(tabId, state, machineId, user, lastChangedAt, lookups),
-    pool: pool(tabId, state, machineId, user, lookups.githubApp), assignments: assignments(tabId, state, machineId, user) }
+    pool: pool(tabId, state, machineId, user), assignments: assignments(tabId, state, machineId, user) }
   return { ...rows, etag: hostEtag(rows) }
 }
 
 async function roster(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostRosterRow[]> {
   const rows: HostRosterRow[] = []
-  // Where its owner added this Mac and its team account is missing, this host adds that account (cli/src/superTabs/host.ts).
-  const mac = state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal && !m.buddyOnly)
-  // Only as many as machine.contribute would take (machines.ts machineRoom): an old CLI retries any refusal but MACHINES_FULL
-  // for good, and stops only once its row goes (#2637).
-  const missing = (mac ? lookups.teams : []).filter(team => !state.machines?.some(m => m.machineId === team.machineId)
-    && !state.machineCleanups?.some(c => c.machineId === team.machineId))
-  for (const team of missing.slice(0, machineRoom(state, user.sub, { team: true }))) {
-    rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
-  }
   // Once per read: each row asks it for each person (task #4504). The state is this read's own, so nothing changes it meanwhile.
   const sets = confidentialSets(state)
   for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
@@ -121,7 +109,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   }
 }
 
-function pool(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, githubApp: boolean): HostPool | null {
+function pool(tabId: string, state: SuperTabState, machineId: string, user: AuthUser): HostPool | null {
   let contribution
   try { contribution = machineContribution(state, machineId) } catch (error) { if (error instanceof SuperTabError) return null; throw error }
   if (!contribution || contribution.contributorId !== user.sub) return null
@@ -151,7 +139,6 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     ...(removedHere.length ? { removedHarnessIds: removedHere } : {}),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),
       ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])],
-    ...(githubApp ? { githubApp: true as const } : {}),
     // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
     // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
     buddySleepWanted: true as const, capabilitiesWanted: true as const }

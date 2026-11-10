@@ -1,9 +1,8 @@
 /**
  * The Harness Team account's own gh, installed by its own daemon, in its own home.
  *
- * It was for a teammate's agent to open its pull request with, signed in as the Harness GitHub App, which is removed; since
- * Swarm v3 (#4221) a Team account takes no Swarm work either, so this stays only until the rest of its code goes. The
- * team account had only its owner's Homebrew to find gh in, and a Homebrew
+ * A teammate's agent opens its pull request with gh, signed in as the Harness GitHub App for that session alone
+ * (lib/swarmGitHub.ts `GH_CONFIG_DIR`). The team account had only its owner's Homebrew to find gh in, and a Homebrew
  * another account cannot read (/opt/homebrew/bin mode 770 on 2026-10-28) answered "permission denied": the Builder of
  * PR #1934 fell back to GitHub's API by hand. So the team daemon installs gh itself when it has none it can run, as it does
  * tmux (team/tmux.ts): GitHub's own release of it, checked against the checksum pinned here, in its own home. No password.

@@ -1,44 +1,14 @@
 import { z } from 'zod'
 import { agent, fail, person, type Actor, type SuperTabState } from './model.js'
-import { knownTimeZone } from './localTime.js'
 import { agentProjectId, projectAgent } from './projects.js'
-
-/** The emoji a status may wear. Desktop offers each with its words (focus, coffee, lunch, out, away, sick). */
-export const STATUS_EMOJI = ['🎯', '☕', '🍽️', '🌴', '🚶', '🤒'] as const
-export const MAX_STATUS_LENGTH = 80
-
-/** A person's short status, shown beside their avatar until `until` passes; then readers drop it. */
-export interface PersonStatus { text: string; emoji: (typeof STATUS_EMOJI)[number] | null; until: string | null }
+import { PICTURES_RETIRED } from './retired.js'
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: words that hide their real shape.
 export const printable = (value: string) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
-export const statusSchema = z.object({
-  text: z.string().trim().min(1).max(MAX_STATUS_LENGTH).refine(printable, 'Use printable words.'),
-  emoji: z.enum(STATUS_EMOJI).nullable().optional(),
-  until: z.iso.datetime().nullable().optional(),
-}).strict()
 
-/** `member.status`: a person sets or clears their own status. Members read it with the rest of the Swarm, nobody else. */
-export function setStatus(state: SuperTabState, actor: Actor, status: z.infer<typeof statusSchema> | null, now: number): void {
-  if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a status.', 403)
-  const member = person(state, actor.userId)
-  if (!status) return void delete member.status
-  const until = status.until ? new Date(status.until).toISOString() : null
-  if (until && Date.parse(until) <= now) fail('STATUS_EXPIRED', 'Choose a time that has not passed yet.', 400)
-  member.status = { text: status.text, emoji: status.emoji ?? null, until }
-}
-
-/** `member.timeZone`: a person's own app tells the Swarm their time zone, or that it knows none. A viewer may too. */
-export function setTimeZone(state: SuperTabState, actor: Actor, timeZone: string | null): void {
-  if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a time zone.', 403)
-  const member = person(state, actor.userId)
-  if (timeZone === null) return void delete member.timeZone
-  if (!knownTimeZone(timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
-  member.timeZone = timeZone
-}
-
-/** Pictures a person may pick instead of uploading one; Desktop draws each. */
-export const AVATAR_PRESETS = ['fox', 'owl', 'cat', 'panda', 'octopus', 'cactus', 'rocket', 'sun'] as const
+/** The built-in pictures a person or an agent may wear. Nothing sets one any more (2026-11-09), but each that was set is still read,
+ *  and Desktop and the phone draw it. */
+const AVATAR_PRESETS = ['fox', 'owl', 'cat', 'panda', 'octopus', 'cactus', 'rocket', 'sun'] as const
 /** What a member or agent shows: an uploaded picture or a preset. Absent: the default, initials for a person, a pattern from
  *  the name for an agent (Desktop). An upload keeps its object's key on the server; readers never get the key, only a link with
  *  each read (avatarLinks.ts), signed for an hour wherever the picture is kept. */
@@ -50,34 +20,41 @@ export const avatarView = (avatar: Avatar): AvatarView => avatar.kind === 'uploa
 export function withAvatarView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
   return holder.avatar ? { ...holder, avatar: avatarView(holder.avatar) } : holder
 }
+/** A person as readers get them: [withAvatarView], and without the status and time zone that Swarms from before v4 stored for them,
+ *  or the name they chose before their name followed their account (personNames.ts nameFromAccount). Nothing sets a status or a
+ *  zone any more (2026-11-09) and no app draws them, so a status with no end would only haunt an older app for ever. A person with
+ *  none of these stored is read as `withAvatarView` always read them, with no copy. The stored values can go from 2026-12-09. */
+export function personView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
+  if (!('status' in holder) && !('timeZone' in holder) && !('chosenName' in holder) && !('nameFollowsAccount' in holder)) return withAvatarView(holder)
+  const { status: _status, timeZone: _timeZone, chosenName: _chosen, nameFollowsAccount: _follows, ...rest } =
+    holder as T & { status?: unknown; timeZone?: unknown; chosenName?: unknown; nameFollowsAccount?: unknown }
+  return withAvatarView(rest as T)
+}
+/** What an older app sends as a picture: an upload's id, a built-in one, or none. Parsed whole, so a picture is refused in words
+ *  (PICTURES_RETIRED) rather than as a malformed command. */
 export const avatarChoice = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('upload'), id: z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/) }).strict(),
   z.object({ kind: z.literal('preset'), key: z.enum(AVATAR_PRESETS) }).strict(),
 ]).nullable()
 type AvatarChoice = z.infer<typeof avatarChoice>
-/** The avatar upload a command names, found by the store: this actor's, an avatar, and not used yet. */
-export interface AvatarUpload { id: string; key: string }
 
-function chosen(choice: NonNullable<AvatarChoice>, upload: AvatarUpload | undefined): Avatar {
-  if (choice.kind === 'preset') return choice
-  if (upload?.id !== choice.id) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
-  return { kind: 'upload', key: upload.key }
+/** Clearing is all a picture command still does (2026-11-09): a new picture is refused in words. */
+function clearOnly(holder: { avatar?: Avatar }, choice: AvatarChoice): void {
+  if (choice) fail(PICTURES_RETIRED.code, PICTURES_RETIRED.message, PICTURES_RETIRED.status)
+  delete holder.avatar
 }
 
-/** `member.avatar`: a person sets or clears their own avatar. */
-export function setMemberAvatar(state: SuperTabState, actor: Actor, choice: AvatarChoice, upload: AvatarUpload | undefined): void {
+/** `member.avatar`: a person clears their own picture. */
+export function setMemberAvatar(state: SuperTabState, actor: Actor, choice: AvatarChoice): void {
   if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Set an agent\'s avatar with its own command.', 403)
-  const member = person(state, actor.userId)
-  if (!choice) return void delete member.avatar
-  member.avatar = chosen(choice, upload)
+  clearOnly(person(state, actor.userId), choice)
 }
 
-/** `agent.avatar`: the person who contributed the agent, or any agent of its project (project instructions, phase 4), sets or
- *  clears its avatar. */
-export function setAgentAvatar(state: SuperTabState, actor: Actor, agentId: string, choice: AvatarChoice, upload: AvatarUpload | undefined): void {
+/** `agent.avatar`: the person who contributed the agent, or any agent of its project (project instructions, phase 4), clears its
+ *  picture. */
+export function setAgentAvatar(state: SuperTabState, actor: Actor, agentId: string, choice: AvatarChoice): void {
   const target = agent(state, agentId)
   const allowed = actor.kind === 'person' ? actor.userId === target.contributorId : projectAgent(state, actor, agentProjectId(state, target))
   if (!allowed) fail('FORBIDDEN', 'Only the agent\'s contributor or an agent of its project can change its avatar.', 403)
-  if (!choice) return void delete target.avatar
-  target.avatar = chosen(choice, upload)
+  clearOnly(target, choice)
 }

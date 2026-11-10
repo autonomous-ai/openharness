@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { builderLabel, GitHubMentions, githubReader, namesAgent, repositorySlug, signedBy, watchedAgents, type GitHubGet, type WatchedAgent } from './githubMentions.js'
+import { builderLabel, GitHubMentions, namesAgent, repositorySlug, signedBy, watchedAgents, type WatchedAgent } from './githubMentions.js'
+import type { GitHubGet } from './githubRest.js'
+import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 const root = mkdtempSync(join(tmpdir(), 'super-tab-github-mentions-'))
@@ -18,12 +20,23 @@ const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', chat: 'chat-pip', name
 function fakeGitHub() {
   const comments: Json[] = [], lineComments: Json[] = [], issues: Json[] = [], reviews = new Map<number, Json[]>()
   const calls: string[] = []
-  const state = { signedOut: false, missing: new Set<string>() }
+  const state = { signedOut: false, down: false, status: 0, odd: new Map<string, number>(), missing: new Set<string>(), files: new Map<string, string>(), labels: [] as Json[] }
   const get: GitHubGet = async (path, etag) => {
     calls.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
+    if (state.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
+    if (state.status) return { status: state.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     if (state.missing.has(url.pathname.split('/').slice(2, 4).join('/'))) return { status: 404, etag: null, body: null, resetAt: null }
+    const odd = state.odd.get(url.pathname.split('/').slice(2, 4).join('/'))
+    if (odd) return { status: odd, etag: null, body: null, resetAt: null }
+    const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
+    if (file) {
+      const text = state.files.get(decodeURIComponent(file[1]!))
+      return text === undefined ? { status: 404, etag: null, body: null, resetAt: null }
+        : { status: 200, etag: null, body: { encoding: 'base64', content: Buffer.from(text).toString('base64') }, resetAt: null }
+    }
+    if (url.pathname === '/repos/acme/app/labels') return { status: 200, etag: null, body: state.labels, resetAt: null }
     const since = url.searchParams.get('since') ?? ''
     const labels = url.searchParams.get('labels'), wanted = url.searchParams.get('state')
     const body = url.pathname.endsWith('/issues/comments') ? comments.filter(c => String(c.updated_at) >= since)
@@ -42,14 +55,21 @@ const issue = (number: number, seconds: number, labels: string[], extra: Json = 
   updated_at: at(seconds), labels: labels.map(name => ({ name })), user: { login: 'deehw' }, author_association: 'MEMBER',
   html_url: `https://github.com/acme/app/issues/${number}`, ...extra })
 
+const review = (id: number, seconds: number, state: string, body: string, pull = 4) => ({ id, state, body, submitted_at: at(seconds), author_association: 'MEMBER',
+  user: { login: 'deehw' }, html_url: `https://github.com/acme/app/pull/${pull}#pullrequestreview-${id}` })
+const line = (id: number, seconds: number, body: string, at_line: number, extra: Json = {}, pull = 4) => ({ id, body, path: 'sandbox/quotes.py', line: at_line,
+  created_at: at(seconds), updated_at: at(seconds), author_association: 'MEMBER', user: { login: 'deehw' },
+  pull_request_url: `https://api.github.com/repos/acme/app/pulls/${pull}`, html_url: `https://github.com/acme/app/pull/${pull}#discussion_r${id}`, ...extra })
+
 function setup(agents: WatchedAgent[] = [PIP], file = join(root, `memory-${files++}.json`)) {
   const github = fakeGitHub()
   const clock = { now: START }
   const relay = vi.fn(async (_tabId: string, _operationId: string, _command: Json) => ({}))
   const log = vi.fn()
   const watched = vi.fn(async () => agents)
-  const make = () => new GitHubMentions({ watched, get: github.get, relay, file, now: () => clock.now, log })
-  return { github, clock, relay, log, watched, file, make, mentions: make(), relayed: () => relay.mock.calls.map(([, , command]) => command) }
+  const tell = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
+  const make = () => new GitHubMentions({ watched, get: github.get, relay, tell, file, now: () => clock.now, log })
+  return { github, clock, relay, tell, log, watched, file, make, mentions: make(), relayed: () => relay.mock.calls.map(([, , command]) => command) }
 }
 
 describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () => {
@@ -68,6 +88,14 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(operationId).toMatch(/^github-[0-9a-f]{40}$/)
     expect(command).toEqual({ type: 'github.relay', conversationId: 'chat-pip', agentId: 'pip', repository: 'acme/app', event: 'comment', on: 'pull', number: 4,
       url: 'https://github.com/acme/app/pull/4#issuecomment-2', login: 'deehw', association: 'MEMBER', text: 'Juno, 12:00, to **Pip**: READ-OK f6edb44' })
+  })
+
+  it('relays, on its first read, an ask made in the minutes before it, as its agent starts, and nothing older', async () => {
+    const f = setup()
+    f.github.comments.push(comment(1, -20 * 60, 'Harness, 11:40, to **Pip**: please read this pull request, an older ask.'),
+      comment(2, -2 * 60, 'Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'))
+    await f.mentions.tick()
+    expect(f.relayed().map(command => command.text)).toEqual(['Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'])
   })
 
   it('relays nothing a stranger wrote, nor the agent\'s own signed post, nor a word that only looks like its name', async () => {
@@ -109,6 +137,62 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.relay).toHaveBeenCalledTimes(3)
   })
 
+  it('hands a review and its line comments to the agent as one message, so a review of many lines wakes it once', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Two things.')])
+    f.github.lineComments.push(line(9, 11, 'Off by one here.', 12, { pull_request_review_id: 7 }), line(10, 11, 'And here.', 30, { pull_request_review_id: 7 }))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([{ type: 'github.relay', conversationId: 'chat-pip', agentId: 'pip', repository: 'acme/app', event: 'review', on: 'pull', number: 4,
+      url: 'https://github.com/acme/app/pull/4#pullrequestreview-7', login: 'deehw', association: 'MEMBER', verdict: 'CHANGES_REQUESTED',
+      text: 'Two things.\n\nsandbox/quotes.py line 12:\nOff by one here.\n\nsandbox/quotes.py line 30:\nAnd here.' }])
+  })
+
+  it('hands a lone line comment on as itself: GitHub makes it a review of its own, which relayed it twice', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(11, 11, 'COMMENTED', '')])
+    f.github.lineComments.push(line(12, 11, 'Off by one here.', 12, { pull_request_review_id: 11 }))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([expect.objectContaining({ event: 'review-comment', number: 4, path: 'sandbox/quotes.py', line: 12, text: 'Off by one here.',
+      url: 'https://github.com/acme/app/pull/4#discussion_r12' })])
+  })
+
+  it('hands an agent named in someone else\'s review only what names it, and nothing of a review it signed', async () => {
+    const f = setup()
+    f.github.issues.push(issue(5, -100, ['builder:juno'], { pull_request: {} }), issue(6, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.issues[1]!.updated_at = at(12)
+    f.github.reviews.set(5, [review(20, 11, 'COMMENTED', '', 5)])
+    f.github.reviews.set(6, [review(30, 11, 'APPROVED', 'Pip, 12:00: READ-OK f6edb44', 6)])
+    f.github.lineComments.push(line(21, 11, 'Fine by me.', 3, { pull_request_review_id: 20 }, 5), line(22, 11, '@Pip has the same bug in its parser.', 8, { pull_request_review_id: 20 }, 5),
+      line(31, 11, 'Pip, 12:00: one nit.', 4, { pull_request_review_id: 30 }, 6))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([{ type: 'github.relay', conversationId: 'chat-pip', agentId: 'pip', repository: 'acme/app', event: 'review-comment', on: 'pull',
+      number: 5, url: 'https://github.com/acme/app/pull/5#discussion_r22', login: 'deehw', association: 'MEMBER', path: 'sandbox/quotes.py', line: 8,
+      text: '@Pip has the same bug in its parser.' }])
+  })
+
+  it('hands on a line comment alone when its review was handed on before', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Two things.')])
+    await f.mentions.tick()
+    f.clock.now += 20_000
+    f.github.issues[0]!.updated_at = at(32)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Two things.'), review(8, 31, 'COMMENTED', 'And a third.')])
+    f.github.lineComments.push(line(9, 31, 'Late, but here.', 12, { pull_request_review_id: 7 }))
+    await f.mentions.tick()
+    expect(f.relayed().map(c => [c.event, c.text])).toEqual([['review', 'Two things.'], ['review', 'And a third.'], ['review-comment', 'Late, but here.']])
+  })
+
   it('tells the agent of an issue newly labelled for it, not one it already had, nor its own pull request\'s label', async () => {
     const f = setup()
     f.github.issues.push(issue(2, -100, ['builder:pip']))
@@ -117,6 +201,205 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     f.github.issues[0]!.updated_at = at(12)
     await f.mentions.tick()
     expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', on: 'issue', number: 13, text: 'Task 13', url: 'https://github.com/acme/app/issues/13' })])
+  })
+
+  it('with its first task in a repository, has the agent ask its person what to focus on there, once', async () => {
+    const f = setup()
+    f.github.state.labels = [{ name: 'part:mobile' }, { name: 'bug' }, { name: 'part:api' }]
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', number: 13 })])
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    const [agent, operationId, text] = f.tell.mock.calls[0]!
+    expect(agent).toMatchObject({ agentId: 'pip', chat: 'chat-pip' })
+    expect(operationId).toMatch(/^works-on-[0-9a-f]{40}$/)
+    expect(text).toContain('which area of acme/app you should focus on (its areas so far: api, mobile; or anything)')
+    expect(text).toContain('make "Works on: <their answer>" the first line of agents/Pip.md in acme/app, in a pull request of its own on a branch '
+      + 'pip/works-on, labelled builder:pip')
+    // A second task asks nothing more, after a restart too.
+    f.clock.now += 20_000
+    f.github.issues.push(issue(14, 30, ['builder:pip']))
+    await f.mentions.tick()
+    await f.make().tick()
+    expect(f.tell).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks nothing when the agent\'s instructions already say what it works on', async () => {
+    const f = setup()
+    f.github.state.files.set('agents/Pip.md', 'Works on: anything\n')
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']))
+    await f.mentions.tick()
+    expect(f.relayed()).toHaveLength(1)
+    expect(f.tell).not.toHaveBeenCalled()
+  })
+
+  // GitHub names a repository as it is now (its case, its name after a rename); the server refuses a link outside the repository a row
+  // names, so a project written the old way stopped every relay of it, for good (the Harness repository is openharness, a clone's origin
+  // says autonomous-harness).
+  it('names the repository as GitHub does, so a project written in another case or before a rename is still heard', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'to **Pip**: READ-OK f6edb44', { html_url: 'https://github.com/Acme/App/pull/4#issuecomment-2' }))
+    f.github.issues.push(issue(13, 11, ['builder:pip'], { html_url: 'https://github.com/acme/renamed/issues/13' }))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', repository: 'acme/renamed' }),
+      expect.objectContaining({ event: 'comment', repository: 'Acme/App', url: 'https://github.com/Acme/App/pull/4#issuecomment-2' })])
+  })
+
+  it.each([[400, 'VALIDATION_ERROR'], [403, 'REQUEST_BLOCKED'], [403, 'FORBIDDEN'], [404, 'NOT_FOUND'], [409, 'OPERATION_REUSED']])(
+    'passes over an item the server refuses for good (%s %s), says so once, and still relays the rest', async (status, code) => {
+      const f = setup()
+      await f.mentions.tick()
+      f.github.comments.push(comment(2, 10, 'to **Pip**: not this one'), comment(3, 11, 'to **Pip**: this one'))
+      f.relay.mockRejectedValueOnce(new SuperTabHostError(code, 'The server will not take it.', status))
+      await f.mentions.tick()
+      expect(f.relayed().map(c => c.text)).toEqual(['to **Pip**: not this one', 'to **Pip**: this one'])
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`RELAY_REFUSED acme/app#4 \\(${code}\\)`)))
+      // Never tried again, however many passes follow, nor after a restart.
+      for (let i = 0; i < 3; i++) { f.clock.now += 20_000; await f.mentions.tick() }
+      await f.make().tick()
+      expect(f.relay).toHaveBeenCalledTimes(2)
+      expect(f.log.mock.calls.filter(([line]) => String(line).includes('RELAY_REFUSED'))).toHaveLength(1)
+    })
+
+  it('waits before it hands an item on again that the server could not take now, 30 seconds and longer each time, to 15 minutes', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'to **Pip**: later'))
+    f.relay.mockRejectedValue(new SuperTabHostError('BACKEND_UNAVAILABLE', 'Try again.', 503))
+    const tries = [] as number[]
+    for (let seconds = 20; seconds <= 1_900; seconds += 20) {
+      f.clock.now = START + seconds * 1000
+      const before = f.relay.mock.calls.length
+      await f.mentions.tick()
+      if (f.relay.mock.calls.length > before) tries.push(seconds)
+    }
+    expect(tries).toEqual([20, 60, 120, 240, 480, 960, 1_860])
+    // Each try is the same operation, which the server writes once.
+    expect(new Set(f.relay.mock.calls.map(([, operationId]) => operationId)).size).toBe(1)
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_FAILED acme/app: Try again. (again in 30 s)'))
+  })
+
+  it.each([[401, 'UNAUTHORIZED'], [403, 'HOST_UNAVAILABLE'], [408, 'TIMEOUT'], [426, 'UPDATE_REQUIRED'], [429, 'RATE_LIMITED'], [500, 'INTERNAL']] as const)(
+    'does not hand an item on again for 30 seconds when the server could not take it now (%s %s)', async (status, code) => {
+      const f = setup()
+      await f.mentions.tick()
+      f.github.comments.push(comment(2, 10, 'to **Pip**: later'))
+      f.relay.mockRejectedValueOnce(new SuperTabHostError(code, 'Try again.', status))
+      await f.mentions.tick()
+      f.clock.now += 20_000
+      await f.mentions.tick()
+      expect(f.relay).toHaveBeenCalledTimes(1)
+      f.clock.now += 20_000
+      await f.mentions.tick()
+      expect(f.relay).toHaveBeenCalledTimes(2)
+    })
+
+  it('backs off 5 minutes when GitHub refuses this computer\'s login, and says so once, and reads again when it can', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.state.status = 401
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('GH_SIGNED_OUT'))
+    const asked = f.github.calls.length
+    for (let seconds = 40; seconds < 300; seconds += 20) { f.clock.now = START + seconds * 1000; await f.mentions.tick() }
+    expect(f.github.calls.length).toBe(asked)
+    f.github.state.status = 0
+    f.clock.now = START + 330_000
+    await f.mentions.tick()
+    expect(f.github.calls.length).toBeGreaterThan(asked)
+    expect(f.log).toHaveBeenLastCalledWith('[super-tab] GitHub news for agents reads again')
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('GH_SIGNED_OUT'))).toHaveLength(1)
+  })
+
+  it('waits longer after each pass GitHub did not answer, to 15 minutes, and starts again once it answers', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.state.down = true
+    const asked = [] as number[]
+    for (let seconds = 20; seconds <= 1_900; seconds += 20) {
+      f.clock.now = START + seconds * 1000
+      const before = f.github.calls.length
+      await f.mentions.tick()
+      if (f.github.calls.length > before) asked.push(seconds)
+    }
+    expect(asked).toEqual([20, 60, 120, 240, 480, 960, 1_860])
+    f.github.state.down = false
+    f.clock.now += 16 * 60_000
+    await f.mentions.tick()
+    expect(f.log).toHaveBeenLastCalledWith('[super-tab] GitHub news for agents reads again')
+    f.github.state.down = true
+    const again = f.github.calls.length
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    // The first miss after an answer waits 30 s, not the 15 minutes the last run of misses had reached.
+    expect(f.github.calls.length - again).toBe(1)
+  })
+
+  it('says a repository it cannot read once, for as long as it cannot, and not that it reads again meanwhile', async () => {
+    const f = setup([{ ...PIP, repos: ['acme/secret', 'acme/app'] }])
+    f.github.state.missing.add('acme/secret')
+    for (let i = 0; i < 5; i++) { f.clock.now += 20_000; await f.mentions.tick() }
+    expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining('UNREADABLE acme/secret')])
+  })
+
+  // What the server refuses of one item is not its state: an older backend, or a firewall in front of this computer, refuses all of them,
+  // and dropping those would lose the news for good. Only when something else of the repository went through is an item the server's
+  // refusal of it.
+  it('holds the repository, and drops nothing, when the server refuses everything it is handed', async () => {
+    for (const refusal of [new SuperTabHostError('REQUEST_BLOCKED', 'The server\'s firewall refused this.', 403),
+      new SuperTabHostError('VALIDATION_ERROR', 'command: Invalid discriminator value. Expected \'message.send\'', 400)]) {
+      const f = setup()
+      await f.mentions.tick()
+      f.github.comments.push(comment(2, 10, 'to **Pip**: one'), comment(3, 11, 'to **Pip**: two'))
+      f.relay.mockRejectedValue(refusal)
+      await f.mentions.tick()
+      expect(f.log).not.toHaveBeenCalledWith(expect.stringContaining('RELAY_REFUSED'))
+      expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_FAILED acme/app'))
+      // The server takes them later: both go, in order, and none was lost.
+      f.relay.mockReset()
+      f.relay.mockResolvedValue({})
+      f.clock.now += 30_000
+      await f.mentions.tick()
+      expect(f.relayed().map(c => c.text)).toEqual(['to **Pip**: one', 'to **Pip**: two'])
+    }
+  })
+
+  it('asks an agent which area to focus on for a task it was handed, not for one the server refused', async () => {
+    const f = setup()
+    f.github.state.labels = [{ name: 'part:api' }]
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']))
+    f.github.comments.push(comment(2, 11, 'to **Pip**: READ-OK f6edb44'))
+    f.relay.mockImplementation(async (_tab, _operationId, command) => {
+      if (command.event === 'task') throw new SuperTabHostError('VALIDATION_ERROR', 'url: Link to the comment or issue on GitHub.', 400)
+      return {}
+    })
+    await f.mentions.tick()
+    expect(f.relayed().map(c => c.event)).toEqual(['task', 'comment'])
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_REFUSED acme/app#13 (VALIDATION_ERROR)'))
+    expect(f.tell).not.toHaveBeenCalled()
+  })
+
+  it('leaves out a repository GitHub answers oddly, and reads the others; GitHub failing on its own side stops them all', async () => {
+    const f = setup([{ ...PIP, repos: ['acme/odd', 'acme/app'] }])
+    f.github.state.odd.set('acme/odd', 409)
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'to **Pip**: READ-OK f6edb44'))
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('GH_FAILED acme/odd'))
+    expect(f.relay).toHaveBeenCalledTimes(1)
+    const down = setup([{ ...PIP, repos: ['acme/odd', 'acme/app'] }])
+    down.github.state.odd.set('acme/odd', 503)
+    await down.mentions.tick()
+    expect(down.log).toHaveBeenCalledWith(expect.stringContaining('GH_FAILED GitHub answered 503'))
+    expect(down.github.calls.every(path => path.includes('acme/odd'))).toBe(true)
   })
 
   it('asks again with ETags, and a restart relays nothing twice', async () => {
@@ -168,8 +451,24 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     f.github.comments.push(comment(2, 10, 'to **Pip**: READ-OK f6edb44'))
     f.relay.mockRejectedValueOnce(new Error('Could not reach this Super Tab.'))
     await f.mentions.tick()
+    f.clock.now += 30_000
     await f.mentions.tick()
     expect(f.relay).toHaveBeenCalledTimes(2)
+    expect(f.relay.mock.calls[1]![1]).toBe(f.relay.mock.calls[0]![1])
+  })
+
+  it('hands a review on again after the backend failed it, though a newer pull request moved the feed past its own', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }), issue(6, -100, [], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(11)
+    f.github.issues[1]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Fix the count.')])
+    f.relay.mockRejectedValueOnce(new Error('Could not reach this Super Tab.'))
+    await f.mentions.tick()
+    f.clock.now += 30_000
+    await f.mentions.tick()
+    expect(f.relayed().map(c => [c.event, c.text])).toEqual([['review', 'Fix the count.'], ['review', 'Fix the count.']])
     expect(f.relay.mock.calls[1]![1]).toBe(f.relay.mock.calls[0]![1])
   })
 
@@ -202,33 +501,14 @@ describe('whom it reads for (watchedAgents)', () => {
     expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
   })
 
+  // The assigner and Desktop name an agent by the name people see; a stored name can be its engine's ("Claude Code").
+  it('watches the label of the name people see, and still hears its stored name', async () => {
+    const watched = await watchedAgents({ me: 'dee', live: () => true, read, roster: async () => [row({ name: 'Claude Code', displayName: 'Faye' })] })
+    expect(watched).toEqual([expect.objectContaining({ names: ['Faye', 'Claude Code'], label: 'builder:faye' })])
+  })
+
   it('reads for nobody while no one is signed in here', async () => {
     expect(await watchedAgents({ me: null, live: () => true, read, roster: async () => [row({})] })).toEqual([])
-  })
-})
-
-describe('reading GitHub as this computer\'s gh login (githubReader)', () => {
-  it('reads the token from gh once, asks with the ETag, and reads the token again after GitHub refuses it', async () => {
-    const run = vi.fn(async () => ({ stdout: 'gho_token\n' }))
-    const request = vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify([]), {
-      status: (init?.headers as Record<string, string>)['If-None-Match'] ? 401 : 200, headers: { etag: '"v1"' } }))
-    const get = githubReader(run, request as unknown as typeof fetch)
-    expect(await get('/repos/acme/app/issues', null)).toMatchObject({ status: 200, etag: '"v1"', body: [] })
-    expect(await get('/repos/acme/app/issues', '"v1"')).toMatchObject({ status: 401 })
-    await get('/repos/acme/app/issues', null)
-    expect(run).toHaveBeenCalledTimes(2)
-    expect(request.mock.calls[0]![0]).toBe('https://api.github.com/repos/acme/app/issues')
-    expect((request.mock.calls[1]![1]!.headers as Record<string, string>)['If-None-Match']).toBe('"v1"')
-  })
-
-  it('names a rate limit with when it ends, and a missing or signed-out gh by its code', async () => {
-    const limited = githubReader(async () => ({ stdout: 'gho_token' }), (async () => new Response('', { status: 403,
-      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1800000000' } })) as unknown as typeof fetch)
-    expect((await limited('/repos/acme/app/issues', null)).resetAt).toBe(1_800_000_000_000)
-    const missing = githubReader(async () => { throw Object.assign(new Error('gh was not found'), { code: 'ENOENT', stderr: '' }) })
-    await expect(missing('/repos/acme/app/issues', null)).rejects.toMatchObject({ code: 'GH_MISSING' })
-    const out = githubReader(async () => ({ stdout: '' }))
-    await expect(out('/repos/acme/app/issues', null)).rejects.toMatchObject({ code: 'GH_SIGNED_OUT' })
   })
 })
 
@@ -247,6 +527,8 @@ describe('names, labels and repositories', () => {
     expect(builderLabel('Big Pip')).toBe('builder:big-pip')
     expect(repositorySlug('https://github.com/acme/app.git')).toBe('acme/app')
     expect(repositorySlug('git@github.com:acme/app.git')).toBe('acme/app')
+    // GitHub reads a repository in any case, and two spellings of one are one repository here.
+    expect(repositorySlug('https://github.com/Acme/App.git')).toBe('acme/app')
     expect(repositorySlug('https://github.com/acme/app/')).toBe('acme/app')
     expect(repositorySlug('https://gitlab.com/acme/app')).toBeNull()
     expect(repositorySlug('https://github.com/acme')).toBeNull()

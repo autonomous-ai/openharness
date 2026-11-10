@@ -11,6 +11,7 @@ export interface PartsStore {
   cursor: string
   epoch: number
   lastChangedAt: number | null
+  githubApp: boolean
   /** The backend opens a task's steps (task steps design): said by its first load, kept across changes. */
   steps?: boolean
   head: PartEnvelope | null
@@ -28,7 +29,7 @@ const LISTS: Array<[keyof PartsPayload, ListedKind]> = [
 export function storeOf(first: FirstLoad): PartsStore {
   const parts = new Map<ListedKind, Map<string, PartEnvelope>>(LISTS.map(([field, kind]) =>
     [kind, new Map((first[field] as PartEnvelope[]).map(part => [part.key, part]))]))
-  return { cursor: first.cursor, epoch: first.epoch, lastChangedAt: first.lastChangedAt, steps: first.steps === true,
+  return { cursor: first.cursor, epoch: first.epoch, lastChangedAt: first.lastChangedAt, githubApp: first.githubApp === true, steps: first.steps === true,
     head: first.head, parts, dormant: new Map(), derived: first.derived }
 }
 
@@ -49,6 +50,6 @@ export function mergeChanges(store: PartsStore, changes: ChangedParts): PartsSto
     }
   }
   const head = changes.head && (!store.head || changes.head.version > store.head.version) ? changes.head : store.head
-  return { cursor: changes.cursor, epoch: changes.epoch, lastChangedAt: changes.lastChangedAt, steps: store.steps,
+  return { cursor: changes.cursor, epoch: changes.epoch, lastChangedAt: changes.lastChangedAt, githubApp: store.githubApp, steps: store.steps,
     head, parts, dormant, derived: changes.derived }
 }

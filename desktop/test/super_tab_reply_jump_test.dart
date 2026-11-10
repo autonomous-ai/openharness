@@ -39,7 +39,7 @@ void main() {
 
   /// [count] notes in the Lead chat; the last one replies to [replyTo].
   ConversationServer chat(int count, {required String replyTo}) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= count; i++) {
       server.append('Note $i');
     }
@@ -259,7 +259,7 @@ void main() {
   /// [count] notes in the Lead chat; the first is a [kind] row the chat
   /// hides, and the last replies to it.
   ConversationServer hiddenOriginal(int count, String kind) {
-    final server = ConversationServer()..append('Hidden $kind');
+    final server = ConversationServer.chat()..append('Hidden $kind');
     server.messages.last['source'] = {'kind': kind};
     for (var i = 2; i <= count; i++) {
       server.append('Note $i');

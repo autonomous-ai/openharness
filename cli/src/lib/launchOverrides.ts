@@ -117,10 +117,12 @@ export interface LaunchOverridesDeps {
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
   /** What the Swarm prepares on every relaunch of a session it started: its skill file and instructions
-   *  (lib/swarmSkills.ts), handed in by the core from superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
+   *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+   *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
     prepare(workspace: string, saved: SwarmSkill): { instructions: string }
+    github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
   }
 }
@@ -298,6 +300,12 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
+    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    if (source.swarmSkill?.github) {
+      let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
+      try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+      if (github) overrides = { ...overrides, env: { ...overrides.env, ...github.env }, clearEnv: [...overrides.clearEnv, ...github.clearEnv] }
+    }
     // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
     // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
     // so the guard is for a row edited by hand — it relaunches as a general session rather than

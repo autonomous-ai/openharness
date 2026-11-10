@@ -62,9 +62,6 @@ export interface SwarmProject {
    *  it hung (task #3385). Swarm v4 writes none and its time checks clear what is left (store.ts runTimeChecks); kept to read and
    *  clear old Swarms. Readers never get it: it may name a message in a person's private chat with the PM. */
   owed?: { messageId: string; since: number }
-  /** Its release list (releases.ts, task #3405): merged tasks waiting for a release, each component's last verified release
-   *  and its open release step. Written by the server alone; readers never get it. */
-  releases?: import('./releases.js').ReleaseLedger
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
@@ -245,7 +242,7 @@ export function settleOwners(state: SuperTabState): Array<{ projectId: string; f
   return changed
 }
 
-/** Adds [member] to the Swarm by any way in (invitation, link, domain or Workspace join): its projects are settled first, so
+/** Adds [member] to the Swarm by any way in (invitation, link or domain): its projects are settled first, so
  *  a project from before ownerGeneration whose owner left is never matched to them again (security reviews of #3082). */
 export function admitPerson(state: SuperTabState, member: Person): void {
   settleOwners(state)
@@ -253,8 +250,7 @@ export function admitPerson(state: SuperTabState, member: Person): void {
   state.people.push(member)
 }
 
-/** Takes the people [leaving] out of the Swarm (a removal, a leave, a restore that keeps out those the Workspace lost), and
- *  passes their projects on (settleOwners). */
+/** Takes the people [leaving] out of the Swarm (a removal or a leave), and passes their projects on (settleOwners). */
 export function dismissPeople(state: SuperTabState, leaving: ReadonlySet<string>): void {
   state.people = state.people.filter(p => !leaving.has(p.id))
   settleOwners(state)
@@ -298,8 +294,17 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     return home === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
-  return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||
-    project.members.some(p => p.id === member.id && p.generation === member.generation))
+  return !!member && personReadsProject(member, project)
+}
+
+/** Whether a person in the Swarm, at membership [member], reads [project]: a public one; one they own at this membership (a
+ *  project from before the owner's generation was stored matches by id, as ownsProject); one they are listed in at it. Never by a
+ *  listing or an ownership from an earlier membership. canReadProject asks it with the Swarm's state; a read that has only the
+ *  project and the member row (shipping/service.ts) asks it alone. */
+export function personReadsProject(member: Pick<Person, 'id' | 'generation'>,
+  project: Pick<SwarmProject, 'visibility' | 'ownerId' | 'ownerGeneration' | 'members'>): boolean {
+  return project.visibility === 'public' || (!!member.id && project.ownerId === member.id && (project.ownerGeneration === undefined || project.ownerGeneration === member.generation))
+    || (project.members ?? []).some(p => p.id === member.id && p.generation === member.generation)
 }
 
 /** Whether [target] is an agent of [project]'s channel (Swarm v4, anh Dee 2026-11-08): one that reads the project as an agent
@@ -614,8 +619,10 @@ export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Ag
 /** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
  *  watches: machine, harness and machine owner): a person left, the agent left, its project stopped being shared with them,
  *  or the session turned confidential, by whatever command. Each such agent, with the people who lost it. Its observer
- *  sockets then check again (store.ts accessChanged), and those people's terminals on it are revoked (native.ts). */
+ *  sockets then check again (store.ts accessChanged). Most commands change no access input and read nothing here: rebuilding
+ *  every viewer on each one cost a 480-group Swarm about 5 ms of every command (item 7, 2026-10-28). */
 export function watchersLost(before: SuperTabState, after: SuperTabState): Array<{ agentId: string; personIds: string[] }> {
+  if (accessInputs(before) === accessInputs(after)) return []
   const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
   const now = new Map(after.agents.map(a => [session(a), a]))
   // canWatchAgent per person, with the confidential sets built once per state, not once per person per agent (task #4504).
@@ -632,11 +639,11 @@ export function watchersLost(before: SuperTabState, after: SuperTabState): Array
   })
 }
 
-/** Everything that decides who reads a conversation and who watches a terminal (canReadGroup, canWatchAgent and the
- *  terminals native.ts revokes): when two states give the same text, no access changed between them. Messages, statuses and
+/** Everything that decides who reads a conversation and who watches a terminal (canReadGroup, canWatchAgent): when two states
+ *  give the same text, no access changed between them. Messages, statuses and
  *  checks, most commands, change none of it. The Swarm's owner counts only once PRIVATE_VISIBLE_TO_OWNERS is true; it is
  *  kept so that turning it on cannot skip a revocation. */
-export const accessInputs = (state: SuperTabState): string => JSON.stringify([state.ownerId,
+const accessInputs = (state: SuperTabState): string => JSON.stringify([state.ownerId,
   state.people.map(p => [p.id, p.generation, p.role]),
   projectsOf(state).map(p => [p.id, p.visibility, p.ownerId, p.members, p.leadConversationId]),
   state.agents.map(a => [a.id, a.machineId, a.harnessId, a.machineOwnerId, a.projectId, a.confidential]),

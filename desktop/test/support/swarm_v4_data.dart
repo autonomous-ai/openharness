@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import '../super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_fixture.dart';
@@ -249,6 +251,58 @@ SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
         },
       });
     }
+    // One open pull request, for 5759: green, with a READ-OK on its head from a reader other than its builder.
+    if (query.contains('pullRequests(')) {
+      return answer({
+        'repository': {
+          'defaultBranchRef': {'name': 'main'},
+          'pullRequests': {
+            'nodes': [
+              {
+                'number': 5770,
+                'title': 'Score the update rows again',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5770',
+                'isDraft': false,
+                'headRefName': 'first-builder/5759',
+                'headRefOid': 'f6edb44a1b2c3d4e5f60718293a4b5c6d7e8f901',
+                'baseRefName': 'main',
+                'body': 'Closes #5759',
+                'mergeable': 'MERGEABLE',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:first builder'},
+                  ],
+                },
+                'closingIssuesReferences': {
+                  'nodes': [
+                    {'number': 5759},
+                  ],
+                },
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'SUCCESS'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {
+                  'nodes': [
+                    {
+                      'body': 'Migrate, 10:05 GMT+7: READ-OK f6edb44',
+                      'createdAt': '2026-11-09T03:05:00Z',
+                      'authorAssociation': 'MEMBER',
+                      'author': {'login': '69tc'},
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      });
+    }
     if (query.contains(r'before:$before')) {
       return answer({
         'repository': {
@@ -316,3 +370,71 @@ SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
     );
   },
 );
+
+/// An agent's computer, as it answers the instructions link in these tests (Swarm v4): the files it holds, by agent
+/// id and name, and every request it was sent. A computer changes a file by itself (`files[...] = ...`), as its agent does.
+class SwarmV4Computer {
+  SwarmV4Computer({Map<String, String>? files}) : files = files ?? {};
+
+  /// `harnessId/name` -> the file's text.
+  final Map<String, String> files;
+  final requests =
+      <(String machineId, String type, Map<String, Object?> payload)>[];
+
+  /// A code to refuse every request with (`UNSUPPORTED`, `OFFLINE`, ...) until it is null again.
+  String? refuse;
+
+  /// A code the app's own gate refuses with before anything is sent (`UPDATE_HERE`), until it is null again.
+  String? gate;
+
+  /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
+  bool loseNextReply = false;
+
+  /// What else instructs the agent in its folder, as a read's answer carries it (`shared`, `skipped`), and beside the
+  /// code of a refused read. Null is a computer that sends none (an older one). Objects, so a test can send what the
+  /// app does not understand.
+  Object? shared, skipped;
+
+  /// Called as a read arrives, and the read is not answered until what it returns completes: a computer slow to answer.
+  Future<void> Function()? hold;
+
+  static String versionOf(String? text) =>
+      text == null ? '' : 'v${text.hashCode}';
+
+  late final link = SwarmInstructionsLink(gate: (_) => gate, (
+    machineId,
+    type,
+    payload,
+  ) async {
+    requests.add((machineId, type, payload));
+    final around = {
+      if (type == 'agent_instructions_read') ...{
+        'shared': ?shared,
+        'skipped': ?skipped,
+      },
+    };
+    if (type == 'agent_instructions_read') await hold?.call();
+    if (refuse case final code?) {
+      throw WsRequestFailure(
+        responseType: '${type}_result',
+        code: code,
+        payload: {'error': code, ...around},
+      );
+    }
+    final key = '${payload['agentId']}/${payload['name']}';
+    final text = files[key];
+    if (type == 'agent_instructions_read') {
+      return {'text': text, 'version': versionOf(text), ...around};
+    }
+    if (payload['version'] != versionOf(text)) {
+      throw WsRequestFailure(responseType: '${type}_result', code: 'CHANGED');
+    }
+    final next = payload['text'] as String;
+    files[key] = next;
+    if (loseNextReply) {
+      loseNextReply = false;
+      throw const WsRequestTimeout('agent_instructions_write');
+    }
+    return {'version': versionOf(next)};
+  });
+}

@@ -53,7 +53,7 @@ void main() {
   testWidgets('a project\'s header is its name, its menu and the terminal', (
     tester,
   ) async {
-    await showView(tester, swarm());
+    await showView(tester, swarm(), board: false);
     expect(find.text('# openharness'), findsOneWidget);
     expect(
       find.descendant(of: menu, matching: find.byIcon(AppIcons.chevronDown)),
@@ -69,7 +69,7 @@ void main() {
   testWidgets('the menu says what the design draws, in its order', (
     tester,
   ) async {
-    await showView(tester, swarm());
+    await showView(tester, swarm(), board: false);
     await open(tester);
     final labels = [
       'Status',
@@ -105,7 +105,7 @@ void main() {
   testWidgets('Status opens the report with its time, and closes', (
     tester,
   ) async {
-    await showView(tester, swarm());
+    await showView(tester, swarm(), board: false);
     await open(tester);
     await tester.tap(item('Status'));
     await tester.pumpAndSettle();
@@ -152,7 +152,7 @@ void main() {
   testWidgets('with no report, Status is there and opens nothing', (
     tester,
   ) async {
-    await showView(tester, swarm(status: false));
+    await showView(tester, swarm(status: false), board: false);
     await open(tester);
     expect(tester.widget<AppMenuItem>(item('Status')).onPressed, isNull);
   });
@@ -160,7 +160,7 @@ void main() {
   testWidgets('Pull requests opens the view, and the chat button comes back', (
     tester,
   ) async {
-    await showView(tester, swarm());
+    await showView(tester, swarm(), board: false);
     await open(tester);
     await tester.tap(item('Pull requests'));
     await tester.pumpAndSettle();
@@ -180,7 +180,7 @@ void main() {
       'archived': true,
       'projectId': 'lead',
     });
-    await showView(tester, server);
+    await showView(tester, server, board: false);
     await openSettings(tester);
     for (final label in [
       'Rename project',
@@ -202,7 +202,7 @@ void main() {
 
     testWidgets('the title names the project and its Swarm; Rename shows the '
         'name and Project details Not set', (tester) async {
-      final c = await showView(tester, swarm());
+      final c = await showView(tester, swarm(), board: false);
       await openSettings(tester);
       expect(find.text('openharness · ${c.snapshot!.name}'), findsOneWidget);
       expect(valueOf('Rename project', 'openharness'), findsOneWidget);
@@ -218,7 +218,7 @@ void main() {
         'repositoryUrl': 'https://github.com/acme/openharness',
         'cwd': '/w/openharness',
       };
-      await showView(tester, server);
+      await showView(tester, server, board: false);
       await openSettings(tester);
       expect(
         valueOf('Project details', 'https://github.com/acme/openharness'),
@@ -232,7 +232,7 @@ void main() {
       ((folder.state['projects'] as List).first as Map)['repository'] = {
         'cwd': '/w/openharness',
       };
-      await showView(tester, folder);
+      await showView(tester, folder, board: false);
       await openSettings(tester);
       expect(valueOf('Project details', '/w/openharness'), findsOneWidget);
     });
@@ -252,7 +252,7 @@ void main() {
           'projectId': 'lead',
         },
       ]);
-      final c = await showView(tester, server);
+      final c = await showView(tester, server, board: false);
       await openSettings(tester);
       expect(row('Archived conversations'), findsOneWidget);
       expect(
@@ -276,7 +276,7 @@ void main() {
     });
 
     testWidgets('a row not offered shows no value', (tester) async {
-      await showView(tester, swarm(owner: 'someone-else'));
+      await showView(tester, swarm(owner: 'someone-else'), board: false);
       await openSettings(tester);
       expect(row('Rename project'), findsNothing);
       expect(row('Delete Project'), findsNothing);
@@ -286,7 +286,7 @@ void main() {
     testWidgets(
       'Delete Project is drawn in the destructive ink, below a rule',
       (tester) async {
-        await showView(tester, swarm());
+        await showView(tester, swarm(), board: false);
         await openSettings(tester);
         final context = tester.element(row('Delete Project'));
         final label = tester.widget<Text>(
@@ -329,7 +329,7 @@ void main() {
   testWidgets('a settings row closes the dialog and does its work', (
     tester,
   ) async {
-    await showView(tester, swarm());
+    await showView(tester, swarm(), board: false);
     await openSettings(tester);
     await tester.tap(find.text('Delete Project'));
     await tester.pumpAndSettle();
@@ -340,7 +340,7 @@ void main() {
   testWidgets('someone else\'s project offers them no owner\'s rows', (
     tester,
   ) async {
-    await showView(tester, swarm(owner: 'someone-else'));
+    await showView(tester, swarm(owner: 'someone-else'), board: false);
     await open(tester);
     expect(find.text('Sharing'), findsNothing);
     await tester.tap(item('Project settings…'));
@@ -355,7 +355,7 @@ void main() {
     (server.state['conversations'] as List).add(
       conversationFixture('group-1', 'Offline drafts'),
     );
-    final c = await showView(tester, server);
+    final c = await showView(tester, server, board: false);
     await c.select('group-1');
     await tester.pumpAndSettle();
     expect(c.selectedId, 'group-1');

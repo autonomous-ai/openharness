@@ -92,7 +92,7 @@ describe('ordinary task messages and progress replies', () => {
   })
 
   // Task #4410, River's ruling 11-07: an owed Windows check does not hold the merge, and is never silent. The merge reply says
-  // it, and the task keeps it after the merge, for the release that ships it to list (releases.ts).
+  // it, and the task keeps it after the merge.
   it('says at the merge that a Windows check is owed while its Windows test step waits, and keeps it owed', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
@@ -266,56 +266,15 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(f.run({ type: 'work.assign', conversationId: id, agentId: builder }), 'ask')).toEqual([])
   })
 
-  // In place of the On it / Shipped label (anh Dee, 11-04, 'bot messages'): the agent doing the work reacts on the message that
-  // asked, as a teammate would, once per task.
-  describe('reacts as the task\'s agent on the message that asked for it', () => {
-    const chatSeq = (f: ReturnType<typeof fixture>) => f.state.conversations.find(c => c.id === 'lead')!.reactionSeq ?? 0
-
-    it('👀 when its work starts and ✅ once when its pull request merges', () => {
-      const f = fixture(), id = f.group(), builder = f.add('Kai', id)
-      const seq = chatSeq(f)
-      expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder }).reactions)
-        .toEqual([{ conversationId: 'lead', messageId: 'ask', agentId: builder, emoji: 'eyes' }])
-      expect(chatSeq(f)).toBe(seq + 1)
-      expect(f.status(id, builder, 'review', `Ready: ${PR}`).reactions ?? []).toEqual([])
-      expect(f.status(id, builder, 'done', `Checks passed: ${PR}`).reactions ?? []).toEqual([])
-      expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }).reactions)
-        .toEqual([{ conversationId: 'lead', messageId: 'ask', agentId: builder, emoji: 'check' }])
-      expect(chatSeq(f)).toBe(seq + 2)
-      expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }).reactions ?? []).toEqual([])
-      expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/example/app/pull/8' }).reactions ?? []).toEqual([])
-    })
-
-    it('once per task: a second agent taking it over reacts no second 👀; each task under one message reacts for itself', () => {
-      const f = fixture(), first = f.group('Phone shows who answered'), second = f.group('Desktop shows who answered')
-      const kai = f.add('Kai', first), lee = f.add('Lee', first), mo = f.add('Mo', second)
-      f.run({ type: 'work.assign', conversationId: first, agentId: kai })
-      f.run({ type: 'work.status', conversationId: first, assignmentId: f.task(first).assignment!.id, status: 'stopped', result: 'Handing it on.' } as Command,
-        f.as(kai), { confirmedStopped: true })
-      expect(f.run({ type: 'work.assign', conversationId: first, agentId: lee }).reactions ?? []).toEqual([])
-      expect(f.run({ type: 'work.assign', conversationId: second, agentId: mo }).reactions)
-        .toEqual([{ conversationId: 'lead', messageId: 'ask', agentId: mo, emoji: 'eyes' }])
-    })
-
-    it('reacts on a Buddy\'s proposal that a task was opened from', () => {
-      const f = fixture()
-      const id = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', proposalMessageId: 'proposal' }, f.as(f.pm),
-        { proposal: { id: 'proposal', conversationId: 'lead', author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation },
-          source: { kind: 'buddy-proposal', personId: 'owner', buddyId: 'former-buddy' } } }).result.conversationId as string
-      const builder = f.add('Kai', id)
-      expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder }).reactions)
-        .toEqual([{ conversationId: 'lead', messageId: 'proposal', agentId: builder, emoji: 'eyes' }])
-    })
-
-    it('reacts nowhere for a task no message asked for', () => {
-      const f = fixture()
-      const id = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2' }).result.conversationId as string
-      const builder = f.add('Kai', id), seq = chatSeq(f)
-      expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder }).reactions ?? []).toEqual([])
-      f.status(id, builder, 'done', `Checks passed: ${PR}`)
-      expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }).reactions ?? []).toEqual([])
-      expect(chatSeq(f)).toBe(seq)
-    })
+  // The server reacts for no agent any more (anh Dee, 2026-11-09: the 👀 on every message): a task's start and its merge leave
+  // the message that asked for it as it was, and move nothing a reader polls.
+  it('reacts nowhere as the task\'s agent: not when its work starts, not when its pull request merges', () => {
+    const f = fixture(), id = f.group(), builder = f.add('Kai', id)
+    const seq = () => f.state.conversations.find(c => c.id === 'lead')!.reactionSeq ?? 0, before = seq()
+    expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder })).not.toHaveProperty('reactions')
+    f.status(id, builder, 'done', `Checks passed: ${PR}`)
+    expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })).not.toHaveProperty('reactions')
+    expect(seq()).toBe(before)
   })
 
   it('refuses a request message that is not a person\'s own top-level message in the project chat', () => {

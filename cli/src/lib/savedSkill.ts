@@ -13,14 +13,15 @@ export type WireRole = 'lead' | 'dev' | 'review' | 'buddy'
 /** A Swarm project's skill set, which its owner chooses (2026-10-23): Default is the team process alone, Harness orchestration
  * adds Harness practices. A session saved without one launched before modes, on the orchestration text. */
 export type SwarmSkillMode = 'default' | 'orchestration'
-/** `fallback`: an agent started as a Reviewer, which keeps its swarm-review file and text for a Swarm with no project
- *  instructions. A row saved while sessions could use the Harness GitHub App also holds `github`, which is read as nothing. */
-export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode; fallback?: 'review' }
+/** `github`: git and gh in this session use the Harness GitHub App's token for its task (lib/swarmGitHub.ts), set when a
+ *  start does another person's project work (superTabs/start.ts) and kept for every relaunch. `fallback`: an agent
+ *  started as a Reviewer, which keeps its swarm-review file and text for a Swarm with no project instructions. */
+export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode; github?: true; fallback?: 'review' }
 /** A row as any release saved it: one from before role kinds names its role in the wire's values. parseSwarmSkill reads
  *  both; this release writes the kinds. */
 export type SavedSwarmSkill = SwarmSkill | (Omit<SwarmSkill, 'role' | 'fallback'> & { role: WireRole })
 /** What a session's current Swarm membership grants it, before it has a key. */
-export type SwarmSkillGrant = Omit<SwarmSkill, 'key'>
+export type SwarmSkillGrant = Omit<SwarmSkill, 'key' | 'github'>
 export const isSwarmRole = (value: unknown): value is SwarmRole => value === 'coordinator' || value === 'agent' || value === 'buddy'
 export const isSwarmSkillMode = (value: unknown): value is SwarmSkillMode => value === 'default' || value === 'orchestration'
 
@@ -42,10 +43,10 @@ export const fallbackSkillName = (skill: Pick<SwarmSkill, 'role' | 'fallback'>) 
 
 export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { role, key, mode, fallback } = value as Record<string, unknown>
+  const { role, key, mode, github, fallback } = value as Record<string, unknown>
   const read = roleFromWire(role)
   if (!read || typeof key !== 'string' || key.length === 0) return undefined
   // A fallback is an agent's alone: an older row's `review` says it, a newer row's field keeps it.
   const kept = read.fallback ?? (read.role === 'agent' && fallback === 'review' ? 'review' : undefined)
-  return { role: read.role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}), ...(kept ? { fallback: kept } : {}) }
+  return { role: read.role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}), ...(github === true ? { github } : {}), ...(kept ? { fallback: kept } : {}) }
 }

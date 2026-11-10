@@ -30,6 +30,7 @@ export class GitScmProject implements ScmProject {
     const cwd = await prepareGitProject(source, {
       root: options.root, worktree: true, ref: options.base,
       ...(options.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
+      ...(options.offline ? { offline: true } : {}),
       ...(options.name !== undefined ? {
         branchName: options.name, existingBranch: options.existing === true, placeholder: options.placeholder === true,
       } : {}),

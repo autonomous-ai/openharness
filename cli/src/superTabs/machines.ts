@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { availableParallelism, homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CoreApi } from '../core/api.js'
@@ -17,7 +17,7 @@ import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './
 import { startAgent, type ScopedRequest } from './start.js'
 import { copySetup } from './memberSetup.js'
 import { settleHiddenScreen } from './startScreen.js'
-import { prepareSwarmStart } from './projectFolder.js'
+import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
@@ -141,8 +141,9 @@ const folderGone = (path: string) => realpath(path).then(() => false, (error: No
 export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
   log?: (message: string) => void; env?: NodeJS.ProcessEnv
-  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`). */
-  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<void>
+  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
+   *  work is for when it uses the Harness GitHub App, else null. */
+  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
   team?: () => boolean
   /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
@@ -282,6 +283,8 @@ export class ContributedMachines {
   private readingsRefusedUntil = 0
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
+  /** Until when this machine's cores are left out of its resources: a backend before them refused them (sendAlone). */
+  private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
   private tokensRefusedUntil = 0
@@ -716,7 +719,9 @@ export class ContributedMachines {
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
-          resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
+          // Its logical cores, which the PM's Harness plans this machine's work against (assign/crew.ts).
+          resources: { cpuPercent: finite(resources.cpuPercent), ...(began >= this.coresRefusedUntil ? { cpuCores: availableParallelism() } : {}),
+            memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
@@ -784,11 +789,22 @@ export class ContributedMachines {
                     error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can remove it: \`harness team remove\`.` } })
                 continue
               }
-              // The project's checkout is made here before the start launches, with this machine's own GitHub login
-              // (superTabs/projectFolder.ts); one that cannot be made fails the start.
+              // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
+              // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
+              let github: { requester: string } | null = null
               if (!start.dispatched) {
-                try { await (this.deps.prepare ?? prepareSwarmStart)(this.core, row, start) }
-                catch (error) {
+                try {
+                  github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
+                    { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
+                } catch (error) {
+                  // A token call that got no answer is tried again on the next passes, on the clock of a refused start, and
+                  // fails it with the last reason once that runs out (Diego's Mac, 2026-10-30: one timeout failed a start).
+                  if (error instanceof PrepareRetryError) {
+                    const since = this.refusedSince.get(start.id) ?? began
+                    this.refusedSince.set(start.id, since)
+                    this.noteWaiting(start.id, error.message)
+                    if (began - since < START_REFUSED_MS) continue
+                  }
                   await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                     command: { type: 'agent.startFailed', startId: start.id,
                       error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
@@ -801,10 +817,7 @@ export class ContributedMachines {
               const helperOf = object(object(start.request).helperOf)
               const helperRequest = object(start.request)
               const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId, helperRequest) : null
-              // Its Member's commands reach a helper only from a Member this machine's Swarm started here (security review 1 of #3579),
-              // and only in a worktree of its own.
-              const memberHere = beforeJoin ? helperRequest.worktree === true && !!this.worktreeOf(String(row.tabId), String(helperOf.harnessId)) : null
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(beforeJoin ? { beforeJoin, memberHere } : {}) },
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin } : {}) },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
@@ -1005,18 +1018,37 @@ export class ContributedMachines {
       else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
       else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
     }
-    // The batch sent the newest form, which is the first attempt: it is not sent again.
-    if (refused) {
+    // The machine's cores sit inside its resources, whose schema refuses a key it does not know, and a backend before them
+    // names them in its refusal ('Unrecognized key: "cpuCores"'): that form goes again without them, and they are left out
+    // for a while, as any refused field is. Every other field falls back as before.
+    const coresRefused = (error: unknown) => fieldRefused(error) && /\bcpuCores\b/.test(error instanceof Error ? error.message : '')
+    let coreless = false
+    const formOf = (attempt: Record<string, unknown>): Record<string, unknown> => {
+      if (!coreless || !('cpuCores' in object(attempt.resources))) return attempt
+      const { cpuCores: _cores, ...resources } = object(attempt.resources)
+      return { ...attempt, resources }
+    }
+    // The batch sent the newest form, which is the first attempt: it is not sent again, unless only its cores were refused.
+    if (refused && coresRefused(refused)) {
+      this.coresRefusedUntil = began + FIELD_REFUSED_MS
+      coreless = true
+    } else if (refused) {
       if (attempts.length === 1) throw refused
       refuse(attempts[0]!)
     }
-    for (const [index, attempt] of attempts.entries()) {
-      if (refused && index === 0) continue
+    for (let index = refused && !coreless ? 1 : 0; index < attempts.length; index++) {
+      const attempt = formOf(attempts[index]!)
       try {
         await this.deps.backend(this.core, 'POST', path, attempt)
         this.taken(tab, attempt)
         return
       } catch (error) {
+        if (!coreless && 'cpuCores' in object(attempt.resources) && coresRefused(error)) {
+          this.coresRefusedUntil = began + FIELD_REFUSED_MS
+          coreless = true
+          index--
+          continue
+        }
         if (!fieldRefused(error) || index === attempts.length - 1) throw error
         refuse(attempt)
       }

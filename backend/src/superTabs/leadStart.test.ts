@@ -29,8 +29,7 @@ function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const teamMachines = (state.machines ?? []).filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
-    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines, ...context })
+    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, ...context })
     state = effects.state
     return effects
   }
@@ -69,11 +68,9 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(f.project().repository).toEqual({ machineId: 'owner-mac', cwd: `/swarm/${f.app.projectId}`, repositoryUrl: REPO })
   })
 
-  it('named in a Team account\'s entry, is refused, whatever its Mac\'s owner chose, and records nothing', () => {
+  it('named in a Team account\'s entry, is refused, and records nothing', () => {
     const f = swarm()
     expect(refusal(() => f.lead('mate-team'))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED', status: 403 })
-    f.run({ type: 'machine.ownAccountWork', machineId: 'mate-mac', allowed: true } as Command, mate)
-    expect(refusal(() => f.lead('mate-team'))?.code).toBe('TEAM_ACCOUNTS_REMOVED')
     expect(f.state.starts ?? []).toEqual([])
     expect(f.project().lead).toBeUndefined()
   })
@@ -81,8 +78,7 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
   it('on a teammate\'s Mac, is refused: it starts only on its person\'s own computer, and records nothing', () => {
     const f = swarm()
     expect(refusal(() => f.lead('mate-mac'))).toMatchObject({ code: 'NOT_YOUR_COMPUTER', status: 403 })
-    // Whatever that Mac's owner chose, and with no Team account there either.
-    f.run({ type: 'machine.ownAccountWork', machineId: 'mate-mac', allowed: true } as Command, mate)
+    // With no Team account there either.
     f.state.machines = f.state.machines!.filter(m => m.machineId !== 'mate-team')
     expect(refusal(() => f.lead('mate-mac'))?.code).toBe('NOT_YOUR_COMPUTER')
     expect(f.state.starts ?? []).toEqual([])
@@ -354,21 +350,6 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     expect(said.map(m => [m.conversationId, m.source])).toEqual([[f.app.conversationId, { kind: 'system' }]])
     expect(said[0]!.text).toBe('Could not start Product Manager: its machine did not start it. Harness there may need an update.')
     expect(sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + 2 * MINUTE)).toEqual([])
-  })
-})
-
-// New Project reads where a Product Manager would run on each teammate's machine (security review 1 of #2228): with Swarm v3,
-// nowhere, since it starts only on its person's own computer (task #4120).
-describe('where a Product Manager on a teammate\'s Mac runs, for its engine', () => {
-  it('New Project reads the same refusal for each engine before the project exists, naming no other project', async () => {
-    const { leadChoices } = await import('./leadStart.js')
-    const f = swarm()
-    const choices = leadChoices(f.state, 'owner', { now: NOW, teamMachines: ['mate-team'] })
-    expect(Object.keys(choices)).not.toContain('owner-mac')
-    for (const byEngine of Object.values(choices)) {
-      for (const choice of Object.values(byEngine)) expect(choice).toMatchObject({ refused: expect.any(String) })
-    }
-    expect(JSON.stringify(choices)).not.toContain('App')
   })
 })
 

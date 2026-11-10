@@ -42,11 +42,12 @@ export function hostForm(rows: unknown, options: { tabs?: string[]; pools?: unkn
 }
 
 /** A first load of a Swarm whose state (in the old shape) is `state`: every record a part, nothing derived. */
-export function partsOf(state: Json, options: { lastChangedAt?: number } = {}): Json {
+export function partsOf(state: Json, options: { githubApp?: boolean; lastChangedAt?: number } = {}): Json {
   const v = ++version
   const part = (key: unknown, data: Json) => ({ key: String(key), version: v, changedAt: v, data })
   const { people, agents, conversations, machines, starts, otherProjectsWork, mentionsWaiting, mentionsDigest, decisionsDigest, ...head } = state
   return { format: 2, tabId: String(state.id ?? 'tab'), cursor: `tab-${v}`, serverTime: v, lastChangedAt: options.lastChangedAt ?? v, epoch: 1,
+    ...(options.githubApp ? { githubApp: true } : {}),
     head: part('head', head), members: asList(people).map(p => part(p.id, p)), agents: asList(agents).map(a => part(a.id, a)),
     groups: asList(conversations).map((c, i) => part(c.id ?? `group-${i}`, c)), machines: asList(machines).map(m => part(m.machineId, m)),
     starts: asList(starts).map(s => part(s.id, s)), progress: [],
@@ -55,5 +56,5 @@ export function partsOf(state: Json, options: { lastChangedAt?: number } = {}): 
 
 /** A fake Swarm read: a changes read asks for a reload, so every read is a first load of the state the test holds now (a
  *  fake keeps no history to send tombstones from). */
-export const swarmReply = (path: string, state: Json, options: { lastChangedAt?: number } = {}): Json =>
+export const swarmReply = (path: string, state: Json, options: { githubApp?: boolean; lastChangedAt?: number } = {}): Json =>
   /\/changes\?cursor=/.test(path) && !path.includes('/hosts/') ? { reload: true } : partsOf(state, options)

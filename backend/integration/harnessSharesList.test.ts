@@ -336,14 +336,6 @@ describe('the harness shares list as permissions change', () => {
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
   })
 
-  it('hides the Swarm from a member taken out of its Workspace, and only from them', async () => {
-    const { tab, sees } = await swarmWithShares()
-    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
-    const { workspaceId } = await database.db.superTab.findUniqueOrThrow({ where: { id: tab }, select: { workspaceId: true } })
-    await database.db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${b.sub}` }, data: { removedAt: new Date(), removedBy: owner.sub } })
-    expect([await sees(b), await sees(a)]).toEqual(['', 'XYZ'])
-  })
-
   it('hides an agent its contributor must share again, as when they left and came back', async () => {
     const { tab, agents, sees } = await swarmWithShares()
     // Written before any list of this Swarm, so no read holds the agent as it was.

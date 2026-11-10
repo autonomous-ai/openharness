@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/code_block.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
@@ -100,6 +101,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: controller,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -435,6 +437,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -645,11 +648,16 @@ void main() {
 
   group('code', () {
     late List<String> copied;
+    var refuse = false;
     setUp(() {
       copied = [];
+      refuse = false;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, (call) async {
             if (call.method == 'Clipboard.setData') {
+              if (refuse) {
+                throw PlatformException(code: 'Clipboard unavailable');
+              }
               copied.add((call.arguments as Map)['text'] as String);
             }
             return null;
@@ -683,6 +691,52 @@ void main() {
       await close(tester, c);
     });
 
+    testWidgets('a clipboard that refuses is said, not taken for a copy', (
+      tester,
+    ) async {
+      refuse = true;
+      final c = await show(tester, text: '```\nls -la\n```');
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(find.text('Code copied'), findsNothing);
+      expect(find.text('Couldn\'t copy it.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await close(tester, c);
+    });
+
+    testWidgets(
+      'a line wider than the column wraps inside the block: nothing scrolls sideways',
+      (tester) async {
+        final wide = 'x' * 400;
+        final c = await show(tester, text: '```\n$wide\n```');
+        final code = find.text(wide);
+        expect(code, findsOneWidget);
+        expect(
+          find
+              .ancestor(of: code, matching: find.byType(Scrollable))
+              .evaluate()
+              .where(
+                (e) =>
+                    (e.widget as Scrollable).axisDirection ==
+                    AxisDirection.right,
+              ),
+          isEmpty,
+        );
+        final block = find.ancestor(
+          of: code,
+          matching: find.byType(SuperTabCodeBlock),
+        );
+        expect(
+          tester.getRect(code).right,
+          lessThanOrEqualTo(tester.getRect(block).right),
+        );
+        // Wrapped: more than one line high.
+        expect(tester.getSize(code).height, greaterThan(60));
+        await close(tester, c);
+      },
+    );
+
     testWidgets('a block with no language still has Copy', (tester) async {
       final c = await show(tester, text: '```\nls -la\n```');
 
@@ -694,35 +748,22 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('a long block folds with Show more, and Copy takes it all', (
-      tester,
-    ) async {
-      final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
-      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
+    testWidgets(
+      'a long block shows every line, with nothing to open, and Copy takes it all',
+      (tester) async {
+        final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
+        final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
 
-      expect(find.text(lines.take(12).join('\n')), findsOneWidget);
-      expect(find.textContaining('line 13'), findsNothing);
-      await tester.tap(find.text('Show more'));
-      await tester.pump();
-      expect(find.text(lines.join('\n')), findsOneWidget);
-      await tester.tap(find.text('Show less'));
-      await tester.pump();
-      expect(find.textContaining('line 13'), findsNothing);
+        expect(find.text(lines.join('\n')), findsOneWidget);
+        expect(find.text('Show more'), findsNothing);
+        expect(find.text('Show less'), findsNothing);
 
-      await tester.tap(find.text('Copy'));
-      await tester.pump();
-      expect(copied, [lines.join('\n')]);
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-      await close(tester, c);
-    });
-
-    testWidgets('a short block has no Show more', (tester) async {
-      final lines = [for (var i = 1; i <= 12; i++) 'line $i'];
-      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
-
-      expect(find.text(lines.join('\n')), findsOneWidget);
-      expect(find.text('Show more'), findsNothing);
-      await close(tester, c);
-    });
+        await tester.tap(find.text('Copy'));
+        await tester.pump();
+        expect(copied, [lines.join('\n')]);
+        await tester.pumpAndSettle(const Duration(seconds: 3));
+        await close(tester, c);
+      },
+    );
   });
 }

@@ -150,9 +150,6 @@ describe('Activity: replies to a person\'s messages', () => {
     expect(list.map(i => [i.kind, i.messageId, i.text, i.actor.kind])).toEqual([['reply', agentReply, 'Worker answers', 'agent'], ['reply', reply, 'Peer answers', 'person']])
     expect(list[1]).toMatchObject({ conversationId: s.web, conversationTitle: 'Web', threadId: root, actor: { id: peer.sub, name: expect.any(String) }, read: false, emoji: null })
     expect(list[0].actor.name).toBe('worker-harness')
-    // A person by the name they set (personNames.ts), else their username.
-    await run(s.tabId, { type: 'member.name', name: 'Peer Person' }, peer)
-    expect((await items(s.tabId)).find(i => i.messageId === reply).actor.name).toBe('Peer Person')
     expect(typeof list[0].messageSequence).toBe('number')
     // The person who replied hears of the replies after theirs, never of their own; nothing for a reply in one's own thread.
     expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([agentReply])
@@ -671,29 +668,16 @@ describe('Activity: what one thread reply costs (task #2745)', () => {
   })
 })
 
-describe('Activity: reactions to a person\'s messages', () => {
-  it('lists a reaction by someone else, removes it with the reaction, and never one\'s own', async () => {
+// Reactions are gone (anh Dee, 2026-11-09): nobody's reaction makes a row, and a row one made before is listed to nobody.
+describe('Activity: no reactions', () => {
+  it('lists no reaction, a person\'s or an agent\'s, made now or stored before', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
-    await react(s.tabId, s.web, root, true, owner)
-    expect(await items(s.tabId)).toEqual([])
     await react(s.tabId, s.web, root, true, peer)
     await react(s.tabId, s.web, root, true, owner, 'check', s.worker)
-    const list = await items(s.tabId)
-    expect(list.map(i => [i.kind, i.emoji, i.actor.kind, i.text])).toEqual([['reaction', 'check', 'agent', 'Owner root'], ['reaction', 'thumbs_up', 'person', 'Owner root']])
-    // The same reaction again keeps one row.
-    await react(s.tabId, s.web, root, true, peer)
-    expect((await items(s.tabId)).length).toBe(2)
-    await react(s.tabId, s.web, root, false, peer)
-    expect((await items(s.tabId)).map(i => i.emoji)).toEqual(['check'])
-  })
-
-  it('drops a reaction by someone who left the Swarm', async () => {
-    const s = await scene()
-    const root = await send(s.tabId, s.web, 'Owner root')
-    await react(s.tabId, s.web, root, true, outsider)
-    expect((await items(s.tabId)).length).toBe(1)
-    await run(s.tabId, { type: 'member.remove', userId: outsider.sub })
+    expect(await db.superTabActivity.count({ where: { tabId: s.tabId, kind: 'reaction' } })).toBe(0)
+    await db.superTabActivity.create({ data: { id: `${root}-old`, tabId: s.tabId, personId: owner.sub, kind: 'reaction', conversationId: s.web,
+      messageId: root, threadId: null, actorKind: 'person', actorId: peer.sub, emoji: 'tada', createdAt: new Date(), readAt: null } })
     expect(await items(s.tabId)).toEqual([])
   })
 })
@@ -703,15 +687,14 @@ describe('Activity: only what the person can read now', () => {
     const s = await scene()
     const root = await send(s.tabId, s.openChat, 'Peer root', peer)
     await send(s.tabId, s.openChat, 'Owner answers', owner, root)
-    await react(s.tabId, s.openChat, root, true, outsider)
-    expect((await items(s.tabId, peer)).length).toBe(2)
+    expect((await items(s.tabId, peer)).length).toBe(1)
     // The owner makes the project private to themselves: peer can no longer read the chat, and its rows say nothing.
     await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'private', memberIds: [] })
     const answer = await activity(s.tabId, peer)
     expect(answer.body.data).toEqual({ items: [], more: false })
     expect(JSON.stringify(answer.body)).not.toContain('Open chat')
     await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'public', memberIds: [] })
-    expect((await items(s.tabId, peer)).length).toBe(2)
+    expect((await items(s.tabId, peer)).length).toBe(1)
   })
 
   it('is the reader\'s alone: another member, an outsider of the Swarm and a Team session read none of it', async () => {
@@ -807,7 +790,7 @@ describe('Activity: read state and its digest', () => {
     expect((await items(s.tabId)).map(i => i.read)).toEqual([true, true])
   })
 
-  it('leaves another person\'s rows, other threads\' rows and reactions unread when a thread is read', async () => {
+  it('leaves another person\'s rows and other threads\' rows unread when a thread is read', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
     const other = await send(s.tabId, s.web, 'Owner other root')
@@ -815,11 +798,9 @@ describe('Activity: read state and its digest', () => {
     await send(s.tabId, s.web, 'Answer to peer', owner, peerRoot)
     await send(s.tabId, s.web, 'Answer', owner, root, s.worker)
     await send(s.tabId, s.web, 'Answer elsewhere', owner, other, s.worker)
-    await react(s.tabId, s.web, root, true, peer)
     const newest = await sequenceOf((await db.superTabMessage.findFirstOrThrow({ where: { tabId: s.tabId }, orderBy: { sequence: 'desc' } })).id)
     await markThread(s.tabId, s.web, root, newest)
-    expect((await items(s.tabId)).map(i => [i.text, i.read])).toEqual([[null, false], ['Answer elsewhere', false], ['Answer', true]].map(([text, read]) =>
-      [text ?? 'Owner root', read]))
+    expect((await items(s.tabId)).map(i => [i.text, i.read])).toEqual([['Answer elsewhere', false], ['Answer', true]])
     expect((await items(s.tabId, peer)).map(i => i.read)).toEqual([false])
   })
 

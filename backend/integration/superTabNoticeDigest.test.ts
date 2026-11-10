@@ -12,7 +12,6 @@ import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
-import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { plan, profiled, reads } from './plans.test-support.js'
@@ -584,17 +583,6 @@ describe('a gathered row never outlives its reason', () => {
     expect((await deliveryOf(done.id, f.lead)).status).toBe('cancelled')
   })
 
-  it('a revoked native context cancels it', async () => {
-    const f = await swarm()
-    const id = await f.write({ kind: 'idle' }, f.lead)
-    await db.superTabNativeContext.create({ data: { id: `native-${f.tab}`, tabId: f.tab, conversationId: f.group, agentId: f.worker, userId: owner.sub, binding: {}, revoked: false } })
-    await db.superTabDelivery.update({ where: { id: stableId(id, f.lead) }, data: { nativeContextId: `native-${f.tab}` } })
-    const { state } = await f.timed.read(owner, f.tab)
-    const after = { ...state, agents: state.agents.filter(a => a.id !== f.worker) }
-    await transaction(db, tx => revokeNativeContexts(tx, state, after))
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: `native-${f.tab}` } })).revoked).toBe(true)
-    expect((await deliveryOf(id, f.lead)).status).toBe('cancelled')
-  })
 })
 
 describe('the settle pass, when the coordinator stopped polling', () => {
@@ -945,27 +933,21 @@ describe('the PM\'s inbox at its turn\'s end', () => {
   })
 })
 
-// #3609: receipt means the native session accepted input; listing, claiming and uncertain input do not.
+// #3609 put the PM's 👀 on a person's message once its session accepted it; anh Dee, 2026-11-09: no 👀 on every message. The
+// receipt is still recorded, and the ask stays owed until the PM answers.
 describe('PM person receipt eyes', () => {
-  it('adds eyes only on confirmed receipt, once, without answering or hiding the owed ask', async () => {
+  it('adds no eyes on a confirmed receipt, and neither answers nor hides the owed ask', async () => {
     const f = await swarm({ capable: true })
     await f.report()
     const message = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Is it out?', replyTo: null, recipientIds: [] })).result.messageId)
     const id = stableId(message, f.lead)
-    const eyes = () => db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message, emoji: 'eyes' } })
     await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'receipt' })
-    expect(await eyes()).toEqual([])
-    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'unknown', uncertain: true })
-    expect(await eyes()).toEqual([])
     const before = await f.timed.messages(owner, f.tab, 'lead', {})
     await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'native input', uncertain: false })
-    expect(await eyes()).toEqual([expect.objectContaining({ actorKind: 'agent', actorId: f.lead })])
+    expect(await db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message } })).toEqual([])
     const after = await f.timed.messages(owner, f.tab, 'lead', {})
-    expect(after.reactionSeq).toBe(before.reactionSeq + 1)
-    expect(after.messages.find(m => m.id === message)?.reactions).toContainEqual({ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: f.lead }] })
-    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'native input', uncertain: false })
-    expect(await eyes()).toHaveLength(1)
-    expect((await f.timed.messages(owner, f.tab, 'lead', {})).reactionSeq).toBe(after.reactionSeq)
+    expect(after.reactionSeq).toBe(before.reactionSeq)
+    expect(after.messages.find(m => m.id === message)?.reactions).toEqual([])
     expect((await deliveryOf(message, f.lead)).status).toBe('delivered')
     expect((await deliveryOf(message, f.lead)).answeredAt).toBeNull()
     const state = await f.timed.read(owner, f.tab)

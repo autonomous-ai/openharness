@@ -18,8 +18,8 @@ import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
-import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
+import { startAccountNames } from './superTabs/migration/accountNamesJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -75,6 +75,7 @@ async function start(): Promise<void> {
 
   let stopSweeps = (): void => {}
   let stopLegacyDrop = (): void => {}
+  let stopAccountNames = (): void => {}
   let stopTimeChecks = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
@@ -93,6 +94,7 @@ async function start(): Promise<void> {
     productUsagePeopleRollupService.stop()
     stopSweeps()
     stopLegacyDrop()
+    stopAccountNames()
     stopTimeChecks()
     stopDeliveries()
     stopRepush()
@@ -126,20 +128,18 @@ async function start(): Promise<void> {
   stopAttachmentSweep = startAttachmentSweepFrom(prisma, () => attachmentsFromEnv(env))
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
-  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
-  // groups they changed.
+  // What the worker's store writes reaches messages too: their recipients' hosts hear of them at once, and of the groups
+  // they changed.
   // Their tags reach the tagged person's phones too (push/send.ts, task #2905).
   const phones = phoneSendersFromEnv(env)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
-  // Agent tombstones compacted for good before #2150 get a purge time, so the sweeps purge them (superTabs/agentTombstones.ts).
-  // Remove in the release after the one that runs it.
-  // A failure leaves them compacted, as before, and never stops the worker starting.
-  await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
-    error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
-  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
-  // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
+  stopSweeps = startSwarmSweeps(prisma)
+  // The collections of what Swarm v4 removed, and the dead old state of migrated Swarms, go by themselves, a few rows at a time
+  // (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
+  // Once after this release: each Swarm's people take their accounts' names (superTabs/migration/accountNamesJob.ts).
+  stopAccountNames = startAccountNames(prisma, swarms)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
   // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)

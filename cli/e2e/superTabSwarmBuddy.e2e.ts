@@ -1,6 +1,6 @@
 /** A person's one Buddy started on their own machine in the Swarm, on the real native protocol: a private daemon, tmux and
- * data dir, a fake Claude engine and the fake backend. It has no project, so nothing is cloned, and the folder its start
- * names is never made: 2026-11-02, each of those failed every such start while unit tests,
+ * data dir, a fake Claude engine and the fake backend. It has no project, so nothing is cloned and no GitHub token is asked
+ * for, and the folder its start names is never made: 2026-11-02, each of those failed every such start while unit tests,
  * which faked the steps either side, passed. */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -42,12 +42,13 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
     request: { conversationId: 'buddy-chat', machineId: ME.machineId, engine: 'claude', name: "person's Buddy", cwd: `${cwd}/.buddy-person`, worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
       buddyOf: { personId: 'person', generation: 'g' }, buddyScope: 'swarm', buddyProjects: [{ id: 'p1', name: 'API', cwd: project }] } }
-  const agents: Array<Record<string, any>> = []
+  const agents: Array<Record<string, any>> = [], asked: string[] = []
   const outcomes: Record<string, any>[] = []
   let rebinds = 0, claims = 0
   backend.superTabs = overOldRoutes(async (method, raw, body) => {
     const path = new URL(raw, backend.httpUrl).pathname
-    if (path.endsWith('/pools')) return { data: [{ tabId: TAB, machine: pool, projects: [], starts: [], buddyStarts: start.harnessId && start.poolSettled ? [] : [start], harnessIds: agents.map(a => a.harnessId) }] }
+    if (path.endsWith('/github-token')) { asked.push(path); throw Object.assign(new Error('This start has no project folder to prepare.'), { status: 404, code: 'NOT_FOUND' }) }
+    if (path.endsWith('/pools')) return { data: [{ tabId: TAB, machine: pool, projects: [], starts: [], buddyStarts: start.harnessId && start.poolSettled ? [] : [start], githubApp: true, harnessIds: agents.map(a => a.harnessId) }] }
     if (path.includes('/hosts/') && path.includes('/starts/')) {
       if (method === 'GET') return { data: start }
       const c = body.command
@@ -88,6 +89,7 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
     expect(start.error).toBeNull()
     return start.harnessId
   }, 90000, 250)
+  expect(asked).toEqual([])
   expect((await client.request('agents_list')).agents.map((a: Record<string, any>) => a.id)).toContain(start.harnessId)
   const homes = join(d.env.HOME!, 'harnesses', 'worktrees', 'buddy-home'), folders = readdirSync(homes)
   expect(folders).toHaveLength(1)
@@ -126,6 +128,7 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   expect(launches.some(({ engine, args }) => engine === 'codex' && args.some(prompt =>
     prompt.includes('Your chat with your owner is conversation buddy-chat') && prompt.includes('Context handoff:')))).toBe(true)
   expect(agents[0]).toMatchObject({ id: 'buddy', buddyOf: { personId: 'person', generation: 'g' } })
+  expect(asked).toEqual([])
 })
 
 // A Buddy is forbidden on a Team OS account even in an isolated daemon; this native flow needs an owner's account.
@@ -145,12 +148,13 @@ it.skipIf(isTeamDaemon())('releases an idle Buddy session and wakes the same con
     request: { conversationId: 'buddy-chat', machineId: ME.machineId, engine: 'claude', name: "person's Buddy", cwd: `${cwd}/.buddy-person`, worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
       buddyOf: { personId: 'person', generation: 'g' }, buddyScope: 'swarm', buddyProjects: [{ id: 'p1', name: 'API', cwd: project }] } }
-  const agents: Array<Record<string, any>> = [], idleReports: string[][] = []
+  const agents: Array<Record<string, any>> = [], asked: string[] = [], idleReports: string[][] = []
   let pending: { id: string; conversationId: string; status: string; claimId: string | null; message: Record<string, any> } | undefined
   let managed = false
   backend.superTabs = overOldRoutes(async (method, raw, body) => {
     const path = new URL(raw, backend.httpUrl).pathname
-    if (path.endsWith('/pools')) return { data: [{ tabId: TAB, machine: pool, projects: [], starts: [], buddyStarts: start.harnessId && start.poolSettled ? [] : [start], buddySleepWanted: managed, harnessIds: agents.map(a => a.harnessId) }] }
+    if (path.endsWith('/github-token')) { asked.push(path); throw Object.assign(new Error('This start has no project folder to prepare.'), { status: 404, code: 'NOT_FOUND' }) }
+    if (path.endsWith('/pools')) return { data: [{ tabId: TAB, machine: pool, projects: [], starts: [], buddyStarts: start.harnessId && start.poolSettled ? [] : [start], githubApp: true, buddySleepWanted: managed, harnessIds: agents.map(a => a.harnessId) }] }
     if (path.includes('/hosts/') && path.includes('/starts/')) {
       if (method === 'GET') return { data: start }
       const c = body.command
@@ -205,6 +209,7 @@ it.skipIf(isTeamDaemon())('releases an idle Buddy session and wakes the same con
     expect(start.error).toBeNull()
     return start.harnessId
   }, 90000, 250)
+  expect(asked).toEqual([])
   expect((await client.request('agents_list')).agents.map((a: Record<string, any>) => a.id)).toContain(start.harnessId)
   const homes = join(d.env.HOME!, 'harnesses', 'worktrees', 'buddy-home'), folders = readdirSync(homes)
   expect(folders).toHaveLength(1)

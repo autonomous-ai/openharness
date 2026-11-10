@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, tasksNamedIn, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
-import { sweepLiveness } from './liveness.js'
+import { loseTasks, sweepLiveness } from './liveness.js'
 import { REOPEN_OWNER_MS } from './handed.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -540,10 +539,10 @@ describe('Super Tab collaboration policy', () => {
       const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.group()
       const before = [...f.state.conversations.find(c => c.id === other)!.agentIds]
       const react = (conversationId: string) => f.run({ type: 'message.react', conversationId, messageId: 'm1', emoji: 'tada', on: true },
-        as(engineer), { reaction: { messageId: 'm1', reacted: false } })
+        as(engineer), { reaction: { messageId: 'm1' } })
       expect(() => react(other)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
       expect(f.state.conversations.find(c => c.id === other)!.agentIds).toEqual(before)
-      expect(react(build).result).toMatchObject({ changed: true })
+      expect(react(build).settles).toEqual({ messageId: 'm1', agentId: engineer })
     })
 
     it('keeps a person\'s message from adding agents', () => {
@@ -2233,7 +2232,7 @@ describe('any agent of the project', () => {
       for (const [agentId, code] of refusals) {
         expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
         expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
-          { reaction: { messageId: 'm1', reacted: false } }))
+          { reaction: { messageId: 'm1' } }))
           .toThrow(expect.objectContaining({ code }))
       }
       // Adding one by hand is refused as before (#2207).
@@ -2268,14 +2267,14 @@ describe('any agent of the project', () => {
       expect(effects.messages).toHaveLength(1)
     })
 
-    // River, 2026-11-04 (#2924): an agent with work in the project reacts there (👀 on an ask it takes), with no other right.
+    // River, 2026-11-04 (#2924): an agent with work in the project acknowledges there with a reaction, with no other right.
     it('lets it react there without joining', () => {
       const { f, engineer, reviewer, chat } = working()
       const asked = f.run(post('Can someone check the login bug?')).messages[0]!
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
         expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId),
-          { reaction: { messageId: asked.id, reacted: false } }).result.changed).toBe(true)
+          { reaction: { messageId: asked.id } }).settles).toEqual({ messageId: asked.id, agentId })
       }
       expect(chat().agentIds).toEqual(members)
     })
@@ -2735,7 +2734,7 @@ describe('cancelling work', () => {
     f.run(cancel, workerActor)
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('cancelled')
   })
-  it('marks its cancel row with the status, so the scorecard sees the task close (#3386)', () => {
+  it('marks its cancel row with the status, so a task\'s timeline shows it closed (#3386)', () => {
     const { f, group, leadActor, cancel } = active()
     const row = f.run(cancel, leadActor).messages.find(m => m.conversationId === group)!
     expect(row.source).toMatchObject({ kind: 'system', status: 'cancelled' })
@@ -3101,7 +3100,7 @@ describe('Reviewer role', () => {
         evidence: passed ? 'Passed at abc1234' : 'Two findings at abc1234' }, reviewerActor, { now })
       const task = () => f.state.conversations.find(c => c.id === group)!.assignment!
       /** The task's status after the time checks ran at `now`, on a copy. */
-      const swept = (now: number) => { const copy = structuredClone(f.state); sweepLiveness(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
+      const swept = (now: number) => { const copy = structuredClone(f.state); loseTasks(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
       return { ...setup, built, builderActor, verdict, task, swept }
     }
 
@@ -4600,7 +4599,7 @@ describe('credentials in every command', () => {
     ['decision.ask', 'questions[].question'], ['decision.ask', 'questions[].options[]'], ['decision.ask', 'questions[].unblocks'],
     ['decision.answer', 'note'], ['work.status', 'ask.options[]'], ['work.status', 'ask.unblocks'], ['work.pause', 'reason'],
     ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
-    ['member.name', 'name'], ['member.username', 'username'], ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
+    ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
     ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'], ['work.lane', 'lane'],
     ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
     ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'], ['conversation.create', 'step'],
@@ -4644,17 +4643,15 @@ describe('credentials in every command', () => {
       'conversation.create task.requires.devices[]', 'work.define task.requires.devices[]', 'proposal.decide task.requires.devices[]',
       'conversation.merged pullRequestUrl', 'conversation.merged fixes', 'conversation.unlink pullRequestUrl', 'work.check head', 'work.check base']],
     ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
-      'machine.access entryId', 'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
+      'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
       'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
       'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account', 'work.assign roleId',
       'work.queue hold.personId', 'work.status hold.personId', 'rules.set rules.instructionApprovals.topDeciderId',
-      'rules.set rules.instructionApprovals.people[].accountIds[]', 'member.timeZone timeZone', 
+      'rules.set rules.instructionApprovals.people[].accountIds[]',
       'work.queue notBefore', 'rules.set rules.releaseWindow.start', 'rules.set rules.releaseWindow.end', 'rules.set rules.releaseWindow.timeZone',
       'rules.set rules.releasePace.backendPause.start', 'rules.set rules.releasePace.backendPause.end', 'rules.set rules.machines[].away.windows[][]',
       'rules.set rules.machines[].away.timeZone']],
     ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
-    // Redacting first would hide the token from that refusal and store the marker instead.
-    ['Refused outright when it looks like a secret (machineAccess.ts ACCESS_SECRET)', ['machine.access name', 'machine.access note', 'machine.access check']],
     ['Written by the server; the command\'s value is dropped (route.record)', ['route.record decision.stepUp.reason', 'route.record decision.sameEngine']],
   ]
 
@@ -5232,18 +5229,6 @@ describe('linked tasks', () => {
     f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: 'https://github.com/example/app/pull/9' }, E)
     expect(task(R).pullRequestUrls).toEqual(['https://github.com/example/app/pull/9'])
     expect(task(R).ledger?.shippedAt).toEqual(expect.any(Number))
-  })
-
-  // Task #3405: the merge record puts the task on its project's release list, once, for the next verified release.
-  it('puts a recorded merge on the project\'s release list once', () => {
-    const { f, T, E, create } = linked()
-    const R = create('Fix the flaky test', T), url = 'https://github.com/example/app/pull/9'
-    const list = () => groupProject(f.state, f.state.conversations.find(c => c.id === R)!).releases?.pending
-    f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
-    expect(list()).toEqual([{ groupId: R, url, mergedAt: 900 }])
-    expect(f.state.conversations.find(c => c.id === R)!.releasing).toEqual([])
-    f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
-    expect(list()).toHaveLength(1)
   })
 
   it('archives a linked task without a verdict', () => {

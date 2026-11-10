@@ -24,6 +24,8 @@ import '../widgets/new_harness_paste.dart';
 import '../widgets/terminal_name_prompt.dart';
 import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
+import '../core/models.dart' show sameMachineId;
+import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
@@ -38,6 +40,7 @@ import 'unread_line.dart';
 import 'roster.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_agents.dart';
 import 'personal_lead.dart';
 import 'personal_lead_card.dart';
 import 'personal_projects.dart';
@@ -54,6 +57,7 @@ import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
 import 'places.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -94,13 +98,13 @@ import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
 import 'github_row.dart';
+import 'instructions_link.dart';
 import 'issue_panel.dart';
 import 'task_board.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
-import 'projects_page.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -121,6 +125,7 @@ import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
+import 'chat/column.dart';
 import 'chat/composer_pill.dart';
 import 'chat/send_button.dart';
 import 'voice_length.dart';
@@ -147,23 +152,24 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onNewAgent,
-    this.rightPane,
+    this.onAttachAgent,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
     this.voiceRecorder,
     this.paneStore,
     this.github,
-    this.board = false,
+    this.instructions,
+    this.board = true,
   });
   final SuperTabController controller;
 
   /// Where pane widths are remembered; the app's local store when null.
   final LocalKeyValueStore? paneStore;
 
-  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
-  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
-  /// reply quoting its message). The web keeps today's layout for now.
+  /// Swarm v4's layout (anh Dee, 2026-11-08), the default: a project's channel that only agents post in, the person's
+  /// own agents in the left pane, their chats and a task's thread beside it. Only the browser still passes false, for
+  /// the v3 layout, until the web moves to v4 (anh Dee, 2026-11-09).
   final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;
@@ -183,10 +189,9 @@ class SuperTabView extends StatefulWidget {
   /// Lead. Null shows no + New agent.
   final VoidCallback? onNewAgent;
 
-  /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
-  /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
-  /// chat as before.
-  final Widget Function(BuildContext context)? rightPane;
+  /// Attach beside + New agent (Swarm v4): the picker of agents already running on its person's own computers. Null shows
+  /// no Attach.
+  final VoidCallback? onAttachAgent;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -203,6 +208,9 @@ class SuperTabView extends StatefulWidget {
 
   /// Reads a project's tasks, its GitHub issues, with `gh` on this computer; tests give their own.
   final SwarmGitHub? github;
+
+  /// How an agent's instructions file is asked of its computer; the app's own link unless a test brings one.
+  final SwarmInstructionsLink? instructions;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -276,6 +284,32 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm: the tab they last had it focused in
+  /// (else the first that holds it) comes forward with the pane focused.
+  void _openPane(PersonalAgent row) {
+    final app = widget.app;
+    if (app == null) return;
+    final holders = [
+      for (final entry in ownPanes(app))
+        if (entry.pane.agentId == row.agent.id &&
+            sameMachineId(entry.pane.machineId, row.machineId))
+          entry,
+    ];
+    final held =
+        holders.where((e) => e.tab.focusedPaneId == e.pane.id).firstOrNull ??
+        holders.firstOrNull;
+    if (held == null) {
+      // Closed since the list was drawn, which the next draw shows.
+      appLog.info(
+        'super-tabs',
+        'A pane in Your Team was opened after it closed',
+      );
+      return;
+    }
+    app.selectSwarm(held.tab.id);
+    app.focusPane(held.pane.id, reveal: true);
+  }
+
   /// Keeps the Board of the project [group] belongs to in the middle, for a
   /// task or project chat opened by a card, a link or a notice; the Buddy's
   /// own chat names no project of its own.
@@ -299,8 +333,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
 
-  /// The Swarm's page holding the main pane, if one does: the Leaderboard or
-  /// Projects.
+  /// The Swarm's page holding the main pane, if one does: the Leaderboard.
   SwarmPage? _page;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
@@ -373,6 +406,19 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
+  /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is and the Swarm is laid
+  /// out as v4.
+  SwarmAgentStates? _states;
+
+  SwarmAgentStates? _agentStates() => widget.app == null || !widget.board
+      ? null
+      : SwarmAgentStates(
+          controller: c,
+          github: _github,
+          // A test never waits for the next read of a board.
+          boardEvery: kUnderTest ? null : const Duration(minutes: 1),
+        );
+
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
     widget.app?.readPullRequestsStatus,
@@ -439,6 +485,7 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
+    _states = _agentStates();
     _changed();
   }
 
@@ -528,6 +575,8 @@ class _SuperTabViewState extends State<SuperTabView>
       _registerDial();
       _facts.dispose();
       _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
+      _states?.dispose();
+      _states = _agentStates();
     }
     if (oldWidget.controller != c) {
       _board.dispose();
@@ -1071,9 +1120,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return KeyEventResult.ignored;
   }
 
-  /// The region the view sits in (the quick switcher's) with the unread chat
-  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
-  /// Move pane only while the chat has focus.
+  /// The region the view sits in, if any, with the unread chat keys added, so
+  /// the keymap runs them: listed, rebindable, and ahead of Move pane only
+  /// while the chat has focus.
   Widget _unreadKeys(Widget child) {
     final region = KeymapRegion.of(context);
     return KeymapRegion(
@@ -1185,6 +1234,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _states?.dispose();
     _facts.dispose();
     _tasksLayout.dispose();
     c.removeListener(_changed);
@@ -2077,14 +2127,17 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
     leaderboard: _board,
+    agentStates: _states,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: widget.onNewAgent,
+    onAttachAgent: widget.board ? widget.onAttachAgent : null,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
+    onOpenPane: _openPane,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -3013,7 +3066,6 @@ class _SuperTabViewState extends State<SuperTabView>
         : _pageShown != null
         ? switch (_pageShown!) {
             SwarmPage.leaderboard => 'Leaderboard',
-            SwarmPage.projects => 'Projects',
           }
         : group == null
         ? c.snapshot?.projects.isEmpty == true
@@ -3814,6 +3866,14 @@ class _SuperTabViewState extends State<SuperTabView>
   ({String channel, String repository, int number})? _issue;
 
   late final SwarmGitHub _github = widget.github ?? SwarmGitHub();
+  late final SwarmInstructionsLink? _instructions =
+      widget.instructions ??
+      (widget.app == null
+          ? null
+          : SwarmInstructionsLink(
+              widget.app!.askMachine,
+              gate: widget.app!.instructionsGate,
+            ));
 
   /// An agent's instructions file, open beside its chat (Swarm v4).
   bool _instructionsOpen = false;
@@ -4174,26 +4234,31 @@ class _SuperTabViewState extends State<SuperTabView>
       consumeOutsideTap: false,
       alignmentOffset: Offset.zero,
       children: [
-        item(
-          'Status',
-          project.status == null
-              ? null
-              : () => unawaited(
-                  showSuperTabProjectStatus(context, c, project.id),
-                ),
-          trailing: const Icon(AppIcons.chevronRight, size: 14),
-        ),
-        item('Pull requests', _openPullRequests),
-        // Every member reads the project's instructions; a backend without
-        // them sends no coordinatorName.
-        if (project.hasInstructions)
-          item('Instructions', () => _groupAction('instructions', group)),
-        // The crew the Swarm keeps alive (task #3397): every member reads it.
-        item('Crew', () => _groupAction('crew', group)),
-        if (editable && owner)
-          item('Sharing', () => _groupAction('sharing', group)),
-        _notifyMenu(group),
-        const AppMenuDivider(),
+        // Swarm v4 (anh Dee, 2026-11-09): a project has its settings and nothing else; its status, pull requests,
+        // instructions document, crew, sharing and notifications (agents talk to agents) are v3. The browser still draws
+        // the v3 layout, so it keeps them.
+        if (!widget.board) ...[
+          item(
+            'Status',
+            project.status == null
+                ? null
+                : () => unawaited(
+                    showSuperTabProjectStatus(context, c, project.id),
+                  ),
+            trailing: const Icon(AppIcons.chevronRight, size: 14),
+          ),
+          item('Pull requests', _openPullRequests),
+          // Every member reads the project's instructions; a backend without
+          // them sends no coordinatorName.
+          if (project.hasInstructions)
+            item('Instructions', () => _groupAction('instructions', group)),
+          // The crew the Swarm keeps alive (task #3397): every member reads it.
+          item('Crew', () => _groupAction('crew', group)),
+          if (editable && owner)
+            item('Sharing', () => _groupAction('sharing', group)),
+          _notifyMenu(group),
+          const AppMenuDivider(),
+        ],
         item(
           'Project settings…',
           () => unawaited(_projectSettings(group, project)),
@@ -4272,9 +4337,9 @@ class _SuperTabViewState extends State<SuperTabView>
             'Not set',
       ),
       // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
-      row('Project rules', 'rules'),
-      // Who may write in its chat, once it works from the Board (#3820).
-      if (project.boardMode)
+      if (!widget.board) row('Project rules', 'rules'),
+      // Who may write in its chat, once it works from the Board (#3820). In v4 only agents post in a project's channel.
+      if (!widget.board && project.boardMode)
         row(
           'People',
           'people',
@@ -4293,7 +4358,7 @@ class _SuperTabViewState extends State<SuperTabView>
           'switch-pm',
           value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
         ),
-      if (_mayHaveArchived(group.projectId))
+      if (!widget.board && _mayHaveArchived(group.projectId))
         row(
           'Archived conversations',
           'archived',
@@ -4435,16 +4500,6 @@ class _SuperTabViewState extends State<SuperTabView>
       'deliveryId': delivery.id,
       'resolution': resolution,
     });
-  }
-
-  Future<void> _react(
-    SuperTabMessage message,
-    SuperTabReactionEmoji emoji,
-  ) async {
-    final failure = await c.react(message, emoji);
-    if (failure == null || !mounted) return;
-    ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(failure)));
   }
 
   /// More ▸ Edit message, saved: a refusal says why, and the row keeps the
@@ -4802,19 +4857,6 @@ class _SuperTabViewState extends State<SuperTabView>
           : null,
       onReturnToComposer: _focus.requestFocus,
       readerId: c.accountId,
-      reactorName: (kind, id) => kind == 'agent'
-          ? c.snapshot?.agentName(id) ?? 'Agent'
-          : switch (_people[id]) {
-              final person? => person.shownName,
-              null => 'Someone',
-            },
-      // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
-      onReact:
-          c.canWrite &&
-              c.selected?.archived == false &&
-              !c.isEarlierBuddyChat(c.selected)
-          ? (emoji) => unawaited(_react(message, emoji))
-          : null,
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)
@@ -5106,6 +5148,13 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
+  /// A v4 chat's rows, composer and the notes around them sit in one centred column ([SwarmChatColumn], anh Dee
+  /// 2026-11-09); the browser keeps its full width until it moves to v4. Everything the chat draws between its list and the
+  /// window's edge, a note under the list included, goes through here; the bars over the list and the buttons floating on it
+  /// stay the pane's width.
+  Widget _inColumn(Widget child) =>
+      widget.board ? SwarmChatColumn(child: child) : child;
+
   /// [underHeader]: the chat is under the middle's one-row header, which carries the Buddy's pickers.
   Widget _conversation(bool narrow, {bool underHeader = false}) {
     // The Desktop keeps an agent's chat open in a Swarm with no projects; with none open, there is nothing to load and
@@ -5245,50 +5294,53 @@ class _SuperTabViewState extends State<SuperTabView>
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
         time: time,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (time != null &&
-                !DateUtils.isSameDay(
-                  time.toLocal(),
-                  previous?.createdAt?.toLocal(),
-                ))
-              _date(time),
-            if (time != null && SwarmChatTime.after(previous?.createdAt, time))
-              SwarmChatTime(
-                time,
-                key: ValueKey('swarm-chat-time-${message.id}'),
-              ),
-            if (message.id == _unread.lineAt(c.selectedId))
-              SuperTabNewMessagesLine(key: _unread.key),
-            // The message itself is kept in place: its
-            // date moves above earlier ones as they come.
-            _BuiltRow(
-              id: message.id,
-              rows: _built,
-              child: KeyedSubtree(
-                key: message.id == _target ? _targetKey : null,
-                child: SuperTabMessageHighlight(
-                  on: message.id == _lit || message.id == search?.current,
-                  match: search?.matching.contains(message.id) ?? false,
-                  child: pendingById.containsKey(message.id)
-                      ? _outgoingRow(
-                          pendingById[message.id]!,
-                          byId,
-                          grouped: joined,
-                          joinsBelow: joinsBelow,
-                        )
-                      : _message(
-                          message,
-                          joined,
-                          byId,
-                          showReceipt: message.id == latestOwn?.id,
-                          joinsBelow: joinsBelow,
-                        ),
+        child: _inColumn(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (time != null &&
+                  !DateUtils.isSameDay(
+                    time.toLocal(),
+                    previous?.createdAt?.toLocal(),
+                  ))
+                _date(time),
+              if (time != null &&
+                  SwarmChatTime.after(previous?.createdAt, time))
+                SwarmChatTime(
+                  time,
+                  key: ValueKey('swarm-chat-time-${message.id}'),
+                ),
+              if (message.id == _unread.lineAt(c.selectedId))
+                SuperTabNewMessagesLine(key: _unread.key),
+              // The message itself is kept in place: its
+              // date moves above earlier ones as they come.
+              _BuiltRow(
+                id: message.id,
+                rows: _built,
+                child: KeyedSubtree(
+                  key: message.id == _target ? _targetKey : null,
+                  child: SuperTabMessageHighlight(
+                    on: message.id == _lit || message.id == search?.current,
+                    match: search?.matching.contains(message.id) ?? false,
+                    child: pendingById.containsKey(message.id)
+                        ? _outgoingRow(
+                            pendingById[message.id]!,
+                            byId,
+                            grouped: joined,
+                            joinsBelow: joinsBelow,
+                          )
+                        : _message(
+                            message,
+                            joined,
+                            byId,
+                            showReceipt: message.id == latestOwn?.id,
+                            joinsBelow: joinsBelow,
+                          ),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
@@ -5655,51 +5707,57 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
         ),
         if (composerError != null && !errorInRow)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(composerError, style: DesktopChrome.control()),
-                ),
-                if (c.hasPendingAction)
-                  TextButton(
-                    onPressed: c.saving ? null : () => unawaited(c.retry()),
-                    child: const Text('Retry'),
+          _inColumn(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(composerError, style: DesktopChrome.control()),
                   ),
-              ],
+                  if (c.hasPendingAction)
+                    TextButton(
+                      onPressed: c.saving ? null : () => unawaited(c.retry()),
+                      child: const Text('Retry'),
+                    ),
+                ],
+              ),
             ),
           )
         else if (c.operationNotice != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              c.operationNotice!,
-              key: const ValueKey('super-operation-notice'),
-              style: DesktopChrome.control(),
+          _inColumn(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                c.operationNotice!,
+                key: const ValueKey('super-operation-notice'),
+                style: DesktopChrome.control(),
+              ),
             ),
           ),
         if (reply != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 16, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SuperTabReplyPreview(
-                    author: 'Replying to ${_authorName(reply)}',
-                    text: superTabQuoteText(reply),
+          _inColumn(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 16, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SuperTabReplyPreview(
+                      author: 'Replying to ${_authorName(reply)}',
+                      text: superTabQuoteText(reply),
+                    ),
                   ),
-                ),
-                fingerTarget(
-                  enabled: _phone,
-                  AppIconButton(
-                    icon: AppIcons.close,
-                    tooltip: 'Cancel reply',
-                    onPressed: () =>
-                        setState(() => _replies.remove(c.selectedId)),
+                  fingerTarget(
+                    enabled: _phone,
+                    AppIconButton(
+                      icon: AppIcons.close,
+                      tooltip: 'Cancel reply',
+                      onPressed: () =>
+                          setState(() => _replies.remove(c.selectedId)),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         if (group != null)
@@ -5708,26 +5766,28 @@ class _SuperTabViewState extends State<SuperTabView>
             builder: (context, _) => Column(
               children: [
                 for (final agent in _needsHuman(group))
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-                    child: ListTile(
-                      key: ValueKey('super-needs-human-${agent.id}'),
-                      dense: true,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                  _inColumn(
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                      child: ListTile(
+                        key: ValueKey('super-needs-human-${agent.id}'),
+                        dense: true,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                        leading: Icon(
+                          AppIcons.messageCircleQuestionMark,
+                          color: grid.AppPalette.warn,
+                          size: 18,
+                        ),
+                        title: Text(
+                          '${_agentName(agent)} needs you',
+                          style: DesktopChrome.control(medium: true),
+                        ),
+                        trailing: const Icon(AppIcons.arrowRight, size: 16),
+                        onTap: () => _openQuestion(group, agent),
                       ),
-                      tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                      leading: Icon(
-                        AppIcons.messageCircleQuestionMark,
-                        color: grid.AppPalette.warn,
-                        size: 18,
-                      ),
-                      title: Text(
-                        '${_agentName(agent)} needs you',
-                        style: DesktopChrome.control(medium: true),
-                      ),
-                      trailing: const Icon(AppIcons.arrowRight, size: 16),
-                      onTap: () => _openQuestion(group, agent),
                     ),
                   ),
               ],
@@ -5738,13 +5798,15 @@ class _SuperTabViewState extends State<SuperTabView>
           builder: (context, _) {
             final choices = _completionChoices;
             if (choices.isEmpty) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-              child: SuperTabCompletionList(
-                listKey: const ValueKey('super-composer-completions'),
-                choices: choices,
-                index: _mentionIndex.value,
-                rowKeys: _completionKeys,
+            return _inColumn(
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                child: SuperTabCompletionList(
+                  listKey: const ValueKey('super-composer-completions'),
+                  choices: choices,
+                  index: _mentionIndex.value,
+                  rowKeys: _completionKeys,
+                ),
               ),
             );
           },
@@ -5756,23 +5818,25 @@ class _SuperTabViewState extends State<SuperTabView>
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && widget.board && _agentsOnly(group))
-          // It holds the chat's focus in the composer's place, so the chat's keys (find, unread, the switcher) work.
+          // It holds the chat's focus in the composer's place, so the chat's keys (find and unread) work.
           Focus(
             focusNode: _focus,
             child: GestureDetector(
               onTap: _focus.requestFocus,
-              child: Container(
-                key: const ValueKey('super-agents-only'),
-                margin: SwarmLayout.agentsOnlyMargin,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: grid.AppSurface.recess,
-                  borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
-                ),
-                child: Text(
-                  'Only agents post here. To change what happens, talk to your agents.',
-                  style: DesktopChrome.metadata(),
+              child: _inColumn(
+                Container(
+                  key: const ValueKey('super-agents-only'),
+                  margin: SwarmLayout.agentsOnlyMargin,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: grid.AppSurface.recess,
+                    borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
+                  ),
+                  child: Text(
+                    'Only agents post here. To change what happens, talk to your agents.',
+                    style: DesktopChrome.metadata(),
+                  ),
                 ),
               ),
             ),
@@ -5837,43 +5901,45 @@ class _SuperTabViewState extends State<SuperTabView>
             // nowhere.
             key: const ValueKey('super-message-composer-row'),
             listenable: _composer,
-            builder: (context, field) => Padding(
-              // On a phone the box sits against the keyboard, with the width.
-              padding: _phone
-                  ? const EdgeInsets.all(grid.AppDesktop.controlGap)
-                  : EdgeInsets.fromLTRB(
-                      24,
-                      12,
-                      24,
-                      pastedFolders().isEmpty ? ProjectSidebar.footGap : 6,
-                    ),
-              child: _phone
-                  ? Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (c.offersChatSessions &&
-                            _chatSessions.contains(chatId) &&
-                            c.threadSessionBlocked == null)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              bottom: grid.AppDesktop.controlGap,
-                            ),
-                            child: Text(
-                              'Starts its own thread and Buddy session',
-                              key: const ValueKey('super-chat-session-note'),
-                              style: DesktopChrome.metadata(
-                                color: DesktopChrome.muted,
+            builder: (context, field) => _inColumn(
+              Padding(
+                // On a phone the box sits against the keyboard, with the width.
+                padding: _phone
+                    ? const EdgeInsets.all(grid.AppDesktop.controlGap)
+                    : EdgeInsets.fromLTRB(
+                        24,
+                        12,
+                        24,
+                        pastedFolders().isEmpty ? ProjectSidebar.footGap : 6,
+                      ),
+                child: _phone
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (c.offersChatSessions &&
+                              _chatSessions.contains(chatId) &&
+                              c.threadSessionBlocked == null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                bottom: grid.AppDesktop.controlGap,
+                              ),
+                              child: Text(
+                                'Starts its own thread and Buddy session',
+                                key: const ValueKey('super-chat-session-note'),
+                                style: DesktopChrome.metadata(
+                                  color: DesktopChrome.muted,
+                                ),
                               ),
                             ),
+                          KeyedSubtree(
+                            key: const ValueKey('super-message-composer-box'),
+                            child: field!,
                           ),
-                        KeyedSubtree(
-                          key: const ValueKey('super-message-composer-box'),
-                          child: field!,
-                        ),
-                      ],
-                    )
-                  : field,
+                        ],
+                      )
+                    : field,
+              ),
             ),
             child: Focus(
               onKeyEvent: (node, event) {
@@ -6113,33 +6179,37 @@ class _SuperTabViewState extends State<SuperTabView>
             builder: (context, _) {
               final pasted = pastedFolders();
               if (pasted.isEmpty) return const SizedBox.shrink();
-              return Padding(
-                key: const ValueKey('super-folder-path-hint'),
-                padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        pasted.length == 1
-                            ? "This path is on this computer. Agents on other "
-                                  "computers can't open it."
-                            : "These paths are on this computer. Agents on "
-                                  "other computers can't open them.",
-                        style: DesktopChrome.metadata(),
+              return _inColumn(
+                Padding(
+                  key: const ValueKey('super-folder-path-hint'),
+                  padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          pasted.length == 1
+                              ? "This path is on this computer. Agents on other "
+                                    "computers can't open it."
+                              : "These paths are on this computer. Agents on "
+                                    "other computers can't open them.",
+                          style: DesktopChrome.metadata(),
+                        ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: _zipping.contains(chatId) || !writable || busy
-                          ? null
-                          : () =>
-                                unawaited(_attachFoldersAsZip(chatId, pasted)),
-                      child: Text(
-                        _zipping.contains(chatId)
-                            ? 'Zipping…'
-                            : 'Attach as zip',
+                      TextButton(
+                        onPressed:
+                            _zipping.contains(chatId) || !writable || busy
+                            ? null
+                            : () => unawaited(
+                                _attachFoldersAsZip(chatId, pasted),
+                              ),
+                        child: Text(
+                          _zipping.contains(chatId)
+                              ? 'Zipping…'
+                              : 'Attach as zip',
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             },
@@ -6310,7 +6380,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               : instructionsAgent != null
                               ? SwarmAgentInstructions(
                                   agent: instructionsAgent,
-                                  app: widget.app,
+                                  link: _instructions,
                                   machineName: widget.machineName(
                                     instructionsAgent.machineId,
                                   ),
@@ -6378,13 +6448,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           switch (_pageShown) {
                             SwarmPage.leaderboard =>
                               SuperTabWeeklyLeaderboardPage(controller: c),
-                            SwarmPage.projects => SuperTabProjectsPage(
-                              controller: c,
-                              onOpen: _openProject,
-                              onNewProject: c.canWrite
-                                  ? widget.onNewProject
-                                  : null,
-                            ),
                             null => const SizedBox.shrink(),
                           },
                           _manageVisible

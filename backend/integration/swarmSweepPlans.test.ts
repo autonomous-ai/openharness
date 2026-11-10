@@ -60,7 +60,7 @@ beforeAll(async () => {
   // One Swarm has an invitation that has expired, and its row's invitation index names it (parts/commit.ts).
   const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tabs[1]}:head` } })
   await db.swarmHead.update({ where: { id: head.id }, data: { data: { ...head.data as object, invitations: [{ id: 'i1', email: 'late@example.com', role: 'viewer',
-    conversationId: 'lead', invitedBy: maker.sub, expiresAt: NOW - DAY }] } } })
+    conversationId: 'lead', expiresAt: NOW - DAY }] } } })
   await db.superTab.update({ where: { id: tabs[1]! }, data: { invitedEmails: { set: ['late@example.com'] } } })
   entries = await profiled(db, async () => { result = await sweepSwarms(db, NOW) })
 })

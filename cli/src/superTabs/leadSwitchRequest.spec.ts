@@ -8,7 +8,7 @@ import type { Daemon } from '../agentClient/daemon.js'
 import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import { FIXTURE, readFixture } from './fixtures/read/index.js'
+import { readFixture } from './fixtures/read/index.js'
 // Each trust fixture moves the engine homes; do not reuse a login-shell snapshot captured by another fixture.
 vi.mock('../engines/kit/launchExecutable.js', async original => ({ ...await original<object>(),
   launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }))
@@ -18,7 +18,7 @@ import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } f
 afterEach(() => { vi.unstubAllEnvs() })
 
 const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
-const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1', roleName: 'Product Manager',
+const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
 const PM = { agentId: 'h1', sessionId: 'native-old', registeredAt: NOW, engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
@@ -88,27 +88,39 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
   })
 
-  // The PM's row still holds the GitHub App flag it was saved with (PM above): the replacement reads it as nothing.
-  it('recreates the PM as a Swarm PM: its role, skill mode, start prompt, then the handoff, with no GitHub App', async () => {
+  it('recreates the PM as a Swarm PM: its role, skill mode, GitHub token, start prompt, then the handoff', async () => {
     const t = setup()
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', startedBy: 'agent', name: 'PM' })
-    expect(create).not.toHaveProperty('swarmGitHub')
+    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true, startedBy: 'agent', name: 'PM' })
     const prompt = String(create.prompt)
-    expect(prompt.startsWith('You are the Product Manager of the project whose conversation is conv1')).toBe(true)
-    expect(prompt).not.toContain('GitHub App')
-    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(0)
+    // Its name alone, as at its first start: no manual and no command (superTabs/start.ts startNote).
+    expect(prompt.startsWith('You are PM. ')).toBe(true)
+    expect(prompt).not.toContain('super-tab')
+    expect(prompt).toContain('Harness GitHub App token')
+    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(prompt.indexOf('Harness GitHub App token'))
   })
 
-  it('names the role the row gives, and no skill mode for a row without one', async () => {
+  it('starts a PM that has no name to give with the token line and its handoff alone, no line of it opening with a space', async () => {
+    for (const [name, github] of [[undefined, true], ['', true], ['  ', false]] as const) {
+      const t = setup({ old: { defaultName: name, swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github } } })
+      await t.switches.serve(row())
+      const create = t.calls.find(c => c[0] === 'agent_create')![1]
+      const prompt = String(create.prompt)
+      expect(prompt, `${JSON.stringify(name)} ${github}`).toMatch(github ? /^git and gh here use a Harness GitHub App token/ : /^Context handoff:/)
+      expect(prompt).toContain('Context handoff:')
+      expect(prompt).not.toContain('You are')
+    }
+  })
+
+  it('keeps a PM without GitHub off the token', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
-    await t.switches.serve(row({}, { roleName: 'Lead dev' }))
+    await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
     expect(create).toMatchObject({ swarmRole: 'lead' })
     expect(create).not.toHaveProperty('swarmGitHub')
     expect(create).not.toHaveProperty('swarmSkillMode')
-    expect(String(create.prompt)).toContain('as its Lead dev')
+    expect(String(create.prompt)).toContain('You are PM.')
   })
 
   it('refuses before closing a PM that has no Swarm skill or no conversation to rebuild its prompt from', async () => {
@@ -264,11 +276,11 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     })
   })
 
-  it('rebuilds the prompt from the chat the backend\'s own host row names', async () => {
+  it('recreates the PM from the backend\'s own host row, which names the chat it leads', async () => {
     const t = setup()
     const real = readFixture<{ tabs: Array<{ roster: Array<Record<string, unknown>> }> }>('host-full').tabs[0].roster.find(r => r.lead === true)!
     await t.switches.serve({ ...real, tabId: 'tab', agent: { id: 'a1', harnessId: 'h1', switchRequest: request } } as unknown as SwitchRow)
-    expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain(`conversation is ${FIXTURE.leadGroup}`)
+    expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain('You are PM.')
   })
 
   // A Team daemon's default account was signed in through its owner's relay, which this could not read, so it went

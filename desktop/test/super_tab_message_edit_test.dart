@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -138,7 +140,7 @@ void main() {
 
   /// The reader's own message, an agent's and another person's.
   ConversationServer three() {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('My own words')
       ..append('An agent update', agent: true)
       ..append('Someone else');
@@ -173,7 +175,7 @@ void main() {
         brightness = appearance;
         grid.AppTheme.brightness.value = appearance;
         addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        final server = ConversationServer()..append('Please fix the menu');
+        final server = ConversationServer.chat()..append('Please fix the menu');
         server.messages.single['source'] = {
           'kind': 'buddy-proposal',
           'personId': 'owner',
@@ -194,7 +196,7 @@ void main() {
     testWidgets('${entry.key} cannot delete an owner Buddy proposal', (
       tester,
     ) async {
-      final server = ConversationServer()..append('Please fix the menu');
+      final server = ConversationServer.chat()..append('Please fix the menu');
       server.messages.single
         ..['author'] = entry.value
         ..['source'] = {'kind': 'buddy-proposal', 'personId': 'owner'};
@@ -213,7 +215,7 @@ void main() {
     testWidgets('a source that does not authorize owner deletion: $source', (
       tester,
     ) async {
-      final server = ConversationServer()..append('Please fix the menu');
+      final server = ConversationServer.chat()..append('Please fix the menu');
       server.messages.single['source'] = source;
       await show(tester, server);
       await openMore(tester, 'message-1');
@@ -395,7 +397,7 @@ void main() {
 
   testWidgets('a deleted message with replies shows the deleted line, no '
       'actions, and keeps its thread line', (tester) async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Root to delete');
     server.append('A reply');
     server.messages[1]['thread'] = 'message-1';
@@ -417,7 +419,7 @@ void main() {
     expect(
       find.descendant(
         of: row('message-1'),
-        matching: find.byTooltip('Add reaction'),
+        matching: find.byTooltip('Copy message'),
       ),
       findsNothing,
     );
@@ -429,7 +431,7 @@ void main() {
 
   test('a page read again drops a message deleted elsewhere and takes an '
       'edited text', () async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('One')
       ..append('Two')
       ..append('Three');
@@ -460,7 +462,7 @@ void main() {
   });
 
   test('a tombstone read again replaces the message it was', () async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Root');
     server.append('Reply');
     server.messages[1]['thread'] = 'message-1';
@@ -475,12 +477,88 @@ void main() {
     expect(root.text, 'This message was deleted.');
   });
 
+  // What the web build reads with: full reads only now and then once quiet.
+  const web = SuperTabReading(quietPoll: Duration(seconds: 15));
+
+  test('an edit made elsewhere shows within one quiet poll', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Shipped');
+      final paths = <String>[];
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          if (method == 'GET') paths.add(path);
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        reading: web,
+      )..start();
+      // Quiet: the polls between full reads ask only for new messages.
+      async.elapse(const Duration(seconds: 61));
+      expect(c.messages('lead').single.editedAt, isNull);
+      server.editMessage('message-1', 'Shipped, and merged');
+      paths.clear();
+      async.elapse(const Duration(seconds: 3));
+      expect(paths.where((p) => p.contains('/changes')), isEmpty);
+      // The counter's move sent the poll to read the page shown again: that
+      // is how the edit arrived.
+      expect(paths.where((p) => p.contains('messages?before=')), hasLength(1));
+      expect(c.messages('lead').single.text, 'Shipped, and merged');
+      // Nothing moved since: the next poll reads only what is new.
+      paths.clear();
+      async.elapse(const Duration(seconds: 3));
+      expect(paths.where((p) => p.contains('messages?before=')), isEmpty);
+      c.dispose();
+    });
+  });
+
+  test('an edit and a new message in the same quiet poll both show', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Shipped');
+      var failPage = false;
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          final page =
+              path.endsWith('/messages') || path.contains('messages?before=');
+          if (failPage && method == 'GET' && page) {
+            failPage = false;
+            return Future.error(
+              const SuperTabFailure('UNAVAILABLE', 'Try again.'),
+            );
+          }
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        reading: web,
+      )..start();
+      async.elapse(const Duration(seconds: 61));
+      server.editMessage('message-1', 'Shipped, and merged');
+      server.append('And the docs');
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').map((m) => m.text), [
+        'Shipped, and merged',
+        'And the docs',
+      ]);
+      // A refresh that fails leaves the change to the next poll.
+      server.editMessage('message-1', 'Shipped, merged and released');
+      failPage = true;
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').first.text, 'Shipped, and merged');
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').first.text, 'Shipped, merged and released');
+      c.dispose();
+    });
+  });
+
   // A voice message plays only, and its words are never handed over (anh
   // Dee, 2026-11-04): no Copy message, no ⌘C and no Edit message on one.
   // Delete stays (#3335 review).
   group('a voice message of your own', () {
     const words = 'Ship the login fix today.';
-    ConversationServer voice() => ConversationServer()
+    ConversationServer voice() => ConversationServer.chat()
       ..append(
         words,
         attachments: [

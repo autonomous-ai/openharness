@@ -2,6 +2,7 @@
  "ok": true,
  "value": {
   "revision": 214033,
+  "githubApp": true,
   "state": {
    "version": 1,
    "id": "f1a5c0de0000000000000001",

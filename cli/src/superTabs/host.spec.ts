@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { prepareSwarmSkill } from '../lib/swarmSkills.js'
+import { noteSwarmBasics, PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import { buddyAccountFile, buddyLaunchFile, buddyReadsOf, forgetBuddyReads, grantBuddyWide } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
@@ -27,7 +27,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
   // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
   return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads), buddyOwnerOf: () => 'peer' }
 })
-import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -54,9 +54,10 @@ afterEach(() => { team.value = false; for (const host of hosts.splice(0)) host.s
 function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
+  const endListeners = new Set<(e: TurnEnd) => void>()
   const notices = new Set<(notice: BackendNotice) => void>()
-  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean; leadsConversationId?: string } =
-    { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, leadsConversationId: 'leads' }
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string; chatId?: string; displayName?: string }; lead?: boolean } =
+    { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
   /** The conversation the delivery comes from. */
   let from = 'lead'
   let removed = false, revoked = false, status = 'queued', claimId: string | null = null
@@ -83,15 +84,18 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   const core = fakeCore({ dataDir: dir,
     agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
     account: { backend: call, onNotice: vi.fn(fn => { notices.add(fn); return () => { notices.delete(fn) } }) },
-    turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
+    turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }),
+      onEnd: vi.fn(fn => { endListeners.add(fn); return () => { endListeners.delete(fn) } }) },
   })
   const log = vi.fn()
   const open = (options: SuperTabHostOptions = {}) => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, ...options }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
+  /** The agent's turn ends, as the core tells it. */
+  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, ...turn }) }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
+  return { core, call, open, event, end, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
     /** What the server's daemon socket tells this machine (backend lib/adapterWs.ts). */
     push: (notice: BackendNotice) => { for (const fn of notices) fn(notice) },
     /** Nothing waits for the agent until `send`, which queues a new delivery. */
@@ -325,29 +329,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.saved().entries.delivery.stage).toBe('uncertain')
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
-  // Dee, 10-31: the Leads conversation is removed. The server takes no post there; a delivery still queued for it, from
-  // before, is typed into nobody, a Lead included, and said once.
-  it('never types a Leads conversation message into an agent, a Lead included, and says so once', async () => {
-    const t = setup(), host = t.open()
-    t.from('leads')
-    for (let i = 0; i < 3; i++) await host.tick()
-    expect(t.core.turns.deliver).not.toHaveBeenCalled()
-    expect(t.call).not.toHaveBeenCalledWith('POST', expect.stringContaining('/deliveries/delivery'), expect.anything())
-    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
-    t.row.lead = true
-    for (let i = 0; i < 3; i++) await host.tick()
-    expect(t.core.turns.deliver).not.toHaveBeenCalled()
-    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
-  })
-  // A newer server names no Leads conversation in the roster: every other conversation is delivered as before.
-  it('delivers as before when the roster names no Leads conversation', async () => {
-    const t = setup(), host = t.open()
-    delete (t.row as { leadsConversationId?: string }).leadsConversationId
-    t.from('leads')
-    await host.tick()
-    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-  })
-  // The design of #1726 (section 5.3): the roster names the Leads conversation, so no delivery costs a read of the Swarm.
   // Agent context design, section 2: a delivery reads the Swarm once, for the lines that say where it is (by what changed
   // since the last read); judging the delivery itself still reads none, and a delivery tried again reads nothing more.
   it('reads the Swarm once per delivery, for its context lines, and not again when it is tried again', async () => {
@@ -1966,7 +1947,7 @@ describe('Super Tab attachments in delivered input', () => {
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
       let data: unknown
       if (path.endsWith('/readings')) return { status: 404, body: { message: 'not found', error: 'Not Found', statusCode: 404 } }
-      if (path.includes('/hosts/')) data = hostForm([t.row, { tabId: 'tab', agent: second, leadsConversationId: 'leads' }], { tabs: ['tab'] })
+      if (path.includes('/hosts/')) data = hostForm([t.row, { tabId: 'tab', agent: second }], { tabs: ['tab'] })
       else if (path.includes('asAgentId=')) data = swarmReply(path, { conversations: [{ id: 'lead' }] })
       else {
         const id = path.includes('/agents/agent-2/') ? 'plain' : 'big'
@@ -2014,19 +1995,21 @@ describe('Super Tab attachments in delivered input', () => {
       : answer(method, path, body))
     const attachedFiles = vi.fn((_message: Record<string, unknown>, _options?: { signal?: AbortSignal }) => new Promise<typeof DOWNLOADED>(() => {}))
     const host = t.open({ attachedFiles: attachedFiles as never, downloadWaitMs: 10 })
+    // Each step waits for what it checks, not for `pass`: a pass gives up after 500 ms, and on a loaded CI runner the host's
+    // pass took longer, so the abort was checked before it happened (PR #3633's cli-tests, 2026-11-09).
     await pass(host)
-    expect(attachedFiles).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(attachedFiles).toHaveBeenCalledTimes(1), { timeout: 10_000 })
     // Answered elsewhere while it downloads: the delivery leaves this host, and its download with it.
     resolved = true
     t.wait(5_000)
     await pass(host)
     // No other delivery wanted it: the download stopped (and with it, its part file: attachments.ts).
-    expect(attachedFiles.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+    await vi.waitFor(() => expect(attachedFiles.mock.calls[0]?.[1]?.signal?.aborted).toBe(true), { timeout: 10_000 })
     resolved = false
     t.send()
     t.wait(5_000)
     await pass(host)
-    expect(attachedFiles).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(attachedFiles).toHaveBeenCalledTimes(2), { timeout: 10_000 })
     const signal = attachedFiles.mock.calls[1]?.[1]?.signal
     expect(signal?.aborted).toBe(false)
     host.stop()
@@ -2040,7 +2023,7 @@ describe('Super Tab attachments in delivered input', () => {
       let data: unknown
       if (path.endsWith('/readings')) return { status: 404, body: { message: 'not found', error: 'Not Found', statusCode: 404 } }
       if (path.includes('/hosts/')) {
-        data = hostForm(agents.map(a => ({ tabId: 'tab', agent: { id: a.id, harnessId: `harness-${a.id}`, machineId: 'machine-1' }, leadsConversationId: 'leads' })), { tabs: ['tab'] })
+        data = hostForm(agents.map(a => ({ tabId: 'tab', agent: { id: a.id, harnessId: `harness-${a.id}`, machineId: 'machine-1' } })), { tabs: ['tab'] })
       } else if (path.includes('asAgentId=')) data = swarmReply(path, { conversations: [{ id: 'lead' }] })
       else {
         const agent = agents.find(a => path.includes(`/agents/${a.id}/`))!
@@ -3347,7 +3330,7 @@ describe('the beat a host keeps', () => {
     const start = vi.fn(() => new Promise(() => {}))
     let clock = 0
     const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never,
-      prepare: async () => {}, start: start as never, now: () => clock } })
+      prepare: async () => null, start: start as never, now: () => clock } })
     const readings = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/super-tabs/tab/machines/machine-1')
     host.start()
     await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
@@ -3649,6 +3632,118 @@ describe('plain agents: the host tells a Swarm agent nothing, and keeps only a B
 
 })
 
+// Swarm v4: Desktop's Attach brings a session its person started outside the Swarm into their team. The Swarm starts every
+// other agent with the team's basics (lib/swarmSkills.ts); this one is told them once, as only it reads, in its own chat.
+describe('an agent its person attached', () => {
+  function attached(session: Record<string, unknown>, rowFields: Record<string, unknown> = {}) {
+    const t = setup()
+    // Nothing waits for it: only the notice reads or writes here.
+    t.idle()
+    Object.assign(t.row, rowFields)
+    t.row.agent.chatId = 'chat-a'
+    t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', cwd: '/work/app', ...session }) as never)
+    const told: Record<string, any>[] = []
+    const call = t.call
+    t.core.account.backend = vi.fn(async (method: string, path: string, body?: unknown) => {
+      if (path.includes('asAgentId=')) {
+        return { status: 200, body: { success: true, data: swarmReply(path, { conversations: [
+          { id: 'channel', kind: 'channel', agentIds: ['agent'] }, { id: 'chat-a', kind: 'agent-chat', agentIds: ['agent'] }] }) } }
+      }
+      if ((body as any)?.command?.type === 'message.send') { told.push(body as any); return { status: 200, body: { success: true, data: {} } } }
+      return call(method, path, body)
+    }) as never
+    return { ...t, told }
+  }
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)) }
+
+  it('is told the team\'s basics once, as only it reads, in its own chat', async () => {
+    const t = attached({ engine: 'claude' })
+    const host = t.open()
+    await host.tick(); await settle()
+    // Its roster row names its chat: nothing of the Swarm is read to find it.
+    expect(vi.mocked(t.core.account.backend).mock.calls.filter(([, path]) => String(path).includes('asAgentId='))).toEqual([])
+    expect(t.told).toEqual([{ operationId: expect.stringMatching(/^skill-agent-[0-9a-f]{32}$/), asAgentId: 'agent',
+      command: { type: 'message.send', conversationId: 'chat-a', replyTo: null, recipientIds: ['agent'], text: SWARM_BASICS,
+        agentOnly: true, notice: 'skills' } }])
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    expect(t.told).toHaveLength(1)
+    // A restart asks again under the same operation id, which the backend writes once.
+    const again = t.open()
+    await again.tick(); await settle()
+    expect(t.told.map(c => c.operationId)).toEqual([t.told[0]!.operationId, t.told[0]!.operationId])
+  })
+
+  it('as its project\'s PM, is told the PM\'s part too', async () => {
+    const t = attached({ engine: 'codex' }, { lead: true })
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told.map(c => c.command.text)).toEqual([`${SWARM_BASICS}\n${PM_BASICS}`])
+  })
+
+  it('is told nothing when the Swarm started it with the basics, nor when it is a plain shell', async () => {
+    for (const session of [{ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' } }, { engine: 'terminal' }]) {
+      const t = attached(session)
+      const host = t.open()
+      await host.tick(); await settle()
+      expect(t.told).toEqual([])
+    }
+  })
+
+  it('when the Swarm started it before the basics changed, is told the new ones once; one started since, nothing', async () => {
+    // Bound at 1, before this computer first ran these basics (now, in the host's clock).
+    const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1 })
+    t.wait(1_000)
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told.map(c => c.command.text)).toEqual([`The team's ways have changed since you started. From now on:\n${SWARM_BASICS}`])
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    await t.open().tick(); await settle()
+    expect(new Set(t.told.map(c => c.operationId)).size).toBe(1)
+    // A session bound after this computer first ran them was launched with them.
+    const fresh = attached({ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 10_000_000_000_000 })
+    await fresh.open().tick(); await settle()
+    expect(fresh.told).toEqual([])
+  })
+
+  it('is told nothing when this daemon launched it with the basics, though it looks only later', async () => {
+    // The daemon starts at 1 s, launches the agent at 2 s and first looks at it at 3 s, with no record of these basics yet.
+    const t = attached({ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 2_000 })
+    t.wait(1_000)
+    const host = t.open()
+    t.wait(2_000)
+    await host.tick(); await settle()
+    expect(t.told).toEqual([])
+  })
+
+  it('is told nothing when its core launched it with the basics before the Swarm\'s service started', async () => {
+    // The core launches the agent at 0.5 s, noting the basics, and it binds at 1 s; the Swarm's service starts on demand at 3 s.
+    const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1_000 })
+    noteSwarmBasics(t.dir, 500)
+    t.wait(3_000)
+    await t.open().tick(); await settle()
+    expect(t.told).toEqual([])
+  })
+
+  it('is told again later when the Swarm could not be read, by a backend whose roster row names no chat', async () => {
+    const t = attached({ engine: 'claude' })
+    delete t.row.agent.chatId
+    let down = true
+    const backend = t.core.account.backend
+    t.core.account.backend = vi.fn(async (method: string, path: string, body?: unknown) => {
+      if (down && path.includes('asAgentId=')) return { status: 503, body: { success: false, error: { code: 'UNAVAILABLE', message: 'Try again' } } }
+      return backend(method, path, body as never)
+    }) as never
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told).toEqual([])
+    down = false
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    expect(t.told).toHaveLength(1)
+  })
+})
+/** Past the host's wait before a notice that could not go is tried again (host.ts SKILL_RETRY_MS). */
+const SKILL_WAIT = 61_000
+
 /** A host on this machine whose roster is [rows] (changeable), with the core's keep-alive and member close mocked. */
 function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptions = {}) {
   const t = setup(), host = t.open(options)
@@ -3940,18 +4035,6 @@ describe('ending a Buddy\'s thread sessions', () => {
     expect(ends(t)).toHaveLength(1)
   })
 
-  // Security review 1 of #2345: a delivery this host has settled (withheld) kept the session from ever going idle.
-  it('ends one idle with only a settled delivery listed', async () => {
-    const t = lifeFixture([sessionRow({ leadsConversationId: 'leads' })])
-    t.live(true)
-    const backendOf = t.core.account.backend
-    t.core.account.backend = async (method, path, body) => method === 'GET' && path.includes('/agents/agent/deliveries')
-      ? { status: 200, body: { data: [{ id: 'withheld', conversationId: 'leads', status: 'queued' }] } } : backendOf(method, path, body)
-    await t.poll()
-    await awake(t, BUDDY_SESSION_IDLE_MS + 60_000)
-    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
-    expect((ends(t)[0]!.command as Record<string, unknown>).reason).toBe('idle')
-  })
 })
 
 // Task #3397: the host keeps a project's crew alive as it keeps the PM. A crashed crew session is reopened in place, on its own
@@ -5492,125 +5575,32 @@ describe('a delivery that waits for the agent\'s turn to end', () => {
   })
 })
 
-// Task #3385 (anh Dee, 11-05): a PM that hung in one turn left five people's asks unanswered for 3 to 10 hours, as the keep-alive
-// reopened only a PM whose session was gone. Its host now restarts it in place once it owes a person an answer past the time the
-// server gives and it has been in one turn that long, or its screen has not changed that long. Never a second PM.
-describe('a PM that stops answering', () => {
-  const MIN = 60_000
-  /** A PM row here that owes the message `m1`, sent at [since]. */
-  const owing = (since: number, restartAfterMs = 20 * MIN) => leadRow({ owed: { messageId: 'm1', since, restartAfterMs } })
-  function stuckFixture(rows: Record<string, unknown>[], activity: 'working' | 'idle' | 'unknown' = 'working') {
-    let release: (() => void) | null = null
-    const restartLead = vi.fn(async (_harnessId: string) => {
-      // The restart relaunches it in its own pane: its session reads as gone until the relaunch is up.
-      t.live(false)
-      await new Promise<void>(resolve => { release = resolve })
-      t.live(true)
-      return { ok: true as const }
-    })
-    const t = lifeFixture(rows, { restartLead })
+// Swarm v4: the backend sends no owed ask and no Leads conversation (backend read/hostRows.ts: `owed: null`,
+// `leadsConversationId: null`). A server from before still names them, and this host reads neither.
+describe('a roster row from a server that still names an owed ask and a Leads conversation', () => {
+  it('does not restart a PM for the ask it owes, however long it has been in one turn', async () => {
+    const MIN = 60_000
+    const t = lifeFixture([leadRow({ owed: { messageId: 'm1', since: 0, restartAfterMs: 20 * MIN } })])
     t.live(true)
-    const turns = { activity }
-    t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, turns.activity])))
-    return { ...t, restartLead, turns, finish: () => release?.() }
-  }
-
-  it('restarts a PM stuck in one turn while it owes an ask, once, in place, and never opens a second PM meanwhile', async () => {
-    // The host's clock starts at 0: the ask was sent then, and the PM's turn began.
-    const t = stuckFixture([owing(0)])
+    t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
     await t.poll()
     await t.poll(19 * MIN)
-    expect(t.restartLead).not.toHaveBeenCalled()
-    await t.poll(MIN)
-    expect(t.restartLead).toHaveBeenCalledTimes(1)
-    expect(t.restartLead).toHaveBeenCalledWith('harness')
-    // Its session reads as gone while it relaunches: the keep-alive must not reopen another one beside it.
-    for (let i = 0; i < 6; i++) await t.poll(10_000)
+    await t.poll(25 * MIN)
+    await t.poll(60 * MIN)
+    expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
+    expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('Could not restart the Product Manager'))
+    // Its session runs throughout: nothing reopens or closes it.
     expect(t.keepLeadAlive).not.toHaveBeenCalled()
-    t.finish()
-    await t.poll(1_000)
-    // Still in one turn, still owing: once is enough. People see it from here, not a restart loop.
-    for (let i = 0; i < 6; i++) await t.poll(10 * MIN)
-    expect(t.restartLead).toHaveBeenCalledTimes(1)
-    expect(t.keepLeadAlive).not.toHaveBeenCalled()
-    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
+    expect(t.closeMember).not.toHaveBeenCalled()
   })
 
-  // SecAlder's security review of #3213, Important 1: a relaunched PM reads idle at its prompt before the owed ask is typed
-  // into it, so a guard that reset on idle restarted it every 21 minutes on the same ask until that ask aged out.
-  it('restarts once per owed ask: the same ask hanging it again after its restart is left to people, a new one is not', async () => {
-    const t = stuckFixture([owing(0)])
-    await t.poll()
-    await t.poll(21 * MIN)
-    expect(t.restartLead).toHaveBeenCalledTimes(1)
-    t.finish()
-    await t.poll(2 * MIN)
-    // Back at its prompt, then the same ask is typed into it and it hangs again.
-    t.turns.activity = 'idle'
-    await t.poll(MIN)
-    t.turns.activity = 'working'
-    for (let i = 0; i < 8; i++) await t.poll(10 * MIN)
-    expect(t.restartLead).toHaveBeenCalledTimes(1)
-    // That ask was answered; a newer one is owed past its time while the PM is still in that turn.
-    t.rows[0] = owing(60 * MIN)
-    t.rows[0]!.owed = { messageId: 'm2', since: 60 * MIN, restartAfterMs: 20 * MIN }
-    await t.poll(MIN)
-    expect(t.restartLead).toHaveBeenCalledTimes(2)
-  })
-
-  // Same review, Minor 2: a reopen that started while the turn was being read must hold the restart.
-  it('does not restart a PM whose reopen began while its turn was being read', async () => {
-    const t = stuckFixture([owing(0)])
-    await t.poll()
-    let read: ((value: Record<string, 'working'>) => void) | null = null
-    t.core.agents.activity = vi.fn(() => new Promise<Record<string, 'working'>>(resolve => { read = resolve }))
-    t.keepLeadAlive.mockImplementation(() => new Promise(() => {}))
-    await t.poll(21 * MIN)
-    expect(read).not.toBeNull()
-    // Its session reads as gone meanwhile: the keep-alive starts reopening it.
-    t.live(false)
-    await t.poll(1_000)
-    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
-    t.live(true)
-    read!({ harness: 'working' })
-    await t.poll(0)
-    expect(t.restartLead).not.toHaveBeenCalled()
-  })
-
-  it('restarts a PM whose screen has not changed while it owes an ask, whatever its turn reads', async () => {
-    const t = stuckFixture([owing(0)], 'unknown')
-    // Its terminal shows the same screen on every read.
-    ;(t.core as { superTabs?: unknown }).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true, text: 'Thinking about the batch', hold: null })) }
-    await t.poll()
-    await t.poll(19 * MIN)
-    expect(t.restartLead).not.toHaveBeenCalled()
-    await t.poll(2 * MIN)
-    expect(t.restartLead).toHaveBeenCalledTimes(1)
-  })
-
-  it('leaves alone an idle PM, a PM that owes nothing or not for long, and one that keeps ending its turns', async () => {
-    const idle = stuckFixture([owing(0)], 'idle')
-    await idle.poll()
-    await idle.poll(60 * MIN)
-    const none = stuckFixture([leadRow({ owed: null })])
-    await none.poll()
-    await none.poll(60 * MIN)
-    // Asked a minute ago: a PM deep in a long turn has not let anyone wait yet.
-    const fresh = stuckFixture([])
-    await fresh.poll()
-    await fresh.poll(30 * MIN)
-    fresh.rows.push(owing(29 * MIN))
-    await fresh.poll(MIN)
-    const busy = stuckFixture([owing(0)])
-    await busy.poll()
-    for (let i = 0; i < 6; i++) {
-      await busy.poll(10 * MIN)
-      busy.turns.activity = 'idle'
-      await busy.poll(MIN)
-      busy.turns.activity = 'working'
-    }
-    for (const t of [idle, none, fresh, busy]) expect(t.restartLead).not.toHaveBeenCalled()
+  it('types a delivery for the conversation that server called the Leads one, like any other, and says nothing of it', async () => {
+    const t = setup(), host = t.open()
+    ;(t.row as Record<string, unknown>).leadsConversationId = 'leads'
+    t.from('leads')
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toEqual([])
   })
 })
 
@@ -5814,5 +5804,367 @@ describe('a managed main Buddy sleeps and wakes (#3824)', () => {
     finish({ harness: 'idle' })
     await new Promise(resolve => setImmediate(resolve))
     expect(t.closeMember).not.toHaveBeenCalled()
+  })
+})
+
+// Swarm v4 (anh Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"): in an agent's own chat its
+// person's words reach it as they typed them, and the agent's answer is posted there by the host when its turn ends.
+describe('a person\'s message in an agent\'s own 1:1 chat', () => {
+  const KEN = { kind: 'person', id: 'ken', name: 'Ken' }
+  /** A person's message in the agent's own chat, whose id its roster row names. */
+  function inChat(fields: Record<string, unknown> = {}, claim: Record<string, unknown> = {}) {
+    const t = setup({ conversationId: 'chat', author: KEN, text: 'ok, ship it', ...fields }, claim)
+    t.row.agent.chatId = 'chat'
+    t.from('chat')
+    return t
+  }
+  /** What the host asked of the Swarm to build this delivery (its reads as the agent). */
+  const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.includes('asAgentId=')).map(([, path]) => path)
+  const typed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.turns.deliver).mock.calls.map(([, text]) => text)
+  /** The posts the host makes, answered as the backend answers one, or with a refusal for those [refuse] names. */
+  function posting(t: ReturnType<typeof setup>, refuse: (post: Record<string, any>) => boolean = () => false, code = 'FORBIDDEN') {
+    const original = vi.mocked(t.call).getMockImplementation()!
+    const posts: Array<Record<string, any>> = []
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if (method === 'POST' && path.endsWith('/commands')) {
+        const post = { path, ...(body as Record<string, unknown>) }
+        posts.push(post)
+        return refuse(post) ? { status: 403, body: { success: false, error: { code, message: 'Not yours.' } } } : { status: 200, body: { success: true, data: { result: {} } } }
+      }
+      return original(method, path, body)
+    })
+    return posts
+  }
+  const answered = (t: ReturnType<typeof setup>, userMessage = 'ok, ship it', assistantText = 'Shipped.') =>
+    vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage, assistantText })
+  /** What the host started at a turn's end is promises with nothing to wait for in these specs: one turn of the event loop finishes it. */
+  const flush = () => new Promise(resolve => setImmediate(resolve))
+
+  it('is typed as the person typed it: no place, context, quote, header or Answer line, and no read of the Swarm', async () => {
+    const t = inChat({ replyTo: 'question-2', thread: 'root', sequence: 5 })
+    await t.open().tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls).toEqual([['harness', 'ok, ship it', 'team:service:superTabs:delivery']])
+    expect(reads(t)).toEqual([])
+    // Every other conversation reads the Swarm for its lines, and the reply it quotes, as before.
+    const channel = setup({ author: KEN, text: 'ok, ship it', replyTo: 'question-2' })
+    channel.row.agent.chatId = 'chat'
+    await channel.open().tick()
+    expect(reads(channel).length).toBeGreaterThan(0)
+  })
+
+  it('is typed with the text of the files it carries after a blank line, and nothing else', async () => {
+    const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
+    const t = inChat({ attachments: [file] })
+    const attachedFiles = vi.fn(async () => ({ text: 'Attached files:\n- /drops/1-screen.png (screen.png, 5 B)', complete: true, paths: ['/drops/1-screen.png'] }))
+    await t.open({ attachedFiles }).tick()
+    expect(typed(t)).toEqual(['ok, ship it\n\nAttached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
+    const alone = inChat({ text: '', attachments: [file] })
+    await alone.open({ attachedFiles }).tick()
+    expect(typed(alone)).toEqual(['Attached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
+  })
+
+  it('still closes the question its person\'s message answers, as any person\'s Swarm message does', async () => {
+    const t = inChat({ createdAt: '2026-11-09T08:00:00.000Z' })
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'ken', email: 'ken@example.test' })
+    await t.open().tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'ok, ship it', 'team:service:superTabs:delivery',
+      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z') })
+  })
+
+  it('is typed again, as typed, when the pane held it, with nothing read for it and one reply owed', async () => {
+    const t = inChat({ replyTo: 'question-2' })
+    const host = t.open()
+    await host.tick()
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(typed(t)).toEqual(['ok, ship it', 'ok, ship it'])
+    expect(reads(t)).toEqual([])
+    expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+  })
+
+  // Everything but a person's own words in their agent's own chat keeps its wrapper, its lines and its Answer line.
+  describe('a delivery that is not one', () => {
+    const wrapped = async (fields: Record<string, unknown>, from = 'chat') => {
+      const t = setup({ conversationId: from, text: 'ok, ship it', ...fields })
+      t.row.agent.chatId = 'chat'
+      t.from(from)
+      await t.open().tick()
+      return { t, text: String(typed(t)[0]) }
+    }
+    it('keeps a message in any other conversation as it was, golden', async () => {
+      const { text, t } = await wrapped({ author: KEN }, 'lead')
+      expect(text).toBe('In "" (conversation lead).\n\n@Ken, to you:\nok, ship it\n\n'
+        + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' --agent \'agent\' post \'lead\' \'your message\' UNIQUE_OPERATION_ID --answers \'message\'')
+      expect(reads(t).length).toBeGreaterThan(0)
+    })
+    it('keeps an agent\'s message in its chat, a system row and a native or agent-only notice as they were', async () => {
+      const agent = await wrapped({ author: { kind: 'agent', id: 'other', name: 'Builder' } })
+      expect(agent.text).toContain('@Builder, to you:\nok, ship it')
+      expect(agent.text).toContain(' --to \'other\'')
+      const system = await wrapped({ author: KEN, source: { kind: 'system' } })
+      expect(system.text).toContain('@Ken, to you:\nok, ship it')
+      expect(system.text).toContain('Answer: ')
+      const native = await wrapped({ author: KEN, source: { kind: 'native', phase: 'prompt' } })
+      expect(native.text).toContain('This is an observed native prompt in Ken')
+      expect(native.text).toContain('@Ken, to you:\nok, ship it')
+      const notice = await wrapped({ author: KEN, source: { kind: 'agent-only' } })
+      expect(notice.text).toBe('ok, ship it')
+    })
+    // What GitHub said, which Harness writes into the person's chat as theirs with a source of its own (backend githubRelay.ts), is
+    // text anyone who may comment there wrote: never typed as the person's own words.
+    it('keeps what GitHub said, written into the chat as its person\'s, as it was', async () => {
+      const github = await wrapped({ author: KEN, text: 'Pip, please read the failing check.', source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app',
+        number: 4, login: 'octocat', association: 'MEMBER' } })
+      expect(github.text).toContain('@Ken, to you:\nPip, please read the failing check.')
+      expect(github.text).toContain('Answer: ')
+    })
+    it('owes none of them a reply', async () => {
+      const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }
+      for (const [fields, from] of [[{}, 'lead'], [{ author: { kind: 'agent', id: 'other', name: 'Builder' } }, 'chat'], [{ source: { kind: 'system' } }, 'chat'],
+        [{ source: { kind: 'native', phase: 'prompt' } }, 'chat'], [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
+        const t = setup({ conversationId: from, author: KEN, text: 'ok, ship it', ...fields })
+        t.row.agent.chatId = 'chat'
+        t.from(from)
+        const posts = posting(t)
+        answered(t)
+        await t.open().tick()
+        t.end()
+        await flush()
+        expect(posts, JSON.stringify(fields)).toEqual([])
+        expect(t.saved().replies, JSON.stringify(fields)).toBeUndefined()
+      }
+    })
+  })
+
+  describe('whose chat its roster row does not name yet', () => {
+    /** The Swarm as the agent reads it, with [conversation] in it. */
+    const swarmWith = (t: ReturnType<typeof setup>, conversation: Record<string, unknown>) => {
+      const original = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('asAgentId=')
+        ? { status: 200, body: { success: true, data: swarmReply(path, { conversations: [conversation] }) } } : original(method, path, body))
+    }
+    const newcomer = (conversation: Record<string, unknown>) => {
+      const t = setup({ conversationId: 'chat', author: KEN, text: 'ok, ship it' })
+      t.from('chat')
+      swarmWith(t, conversation)
+      return t
+    }
+    it('says in one read of the Swarm that it is its own chat, and types it as typed', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      const host = t.open()
+      await host.tick()
+      expect(typed(t)).toEqual(['ok, ship it'])
+      const first = reads(t).length
+      expect(first).toBeGreaterThan(0)
+      // Held by the pane and tried again: not read again.
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick()
+      expect(typed(t)).toEqual(['ok, ship it', 'ok, ship it'])
+      expect(reads(t)).toHaveLength(first)
+    })
+    it('keeps the wrapper of a message the Swarm read says is in another kind of conversation, and reads no more for it than before', async () => {
+      const t = newcomer({ id: 'chat' })
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:\nok, ship it')
+      expect(String(typed(t)[0])).toContain('Answer: ')
+      // The read that said what kind of chat it is gives its context lines: an agent's message there is read for them as often.
+      const agents = setup({ conversationId: 'chat', author: { kind: 'agent', id: 'other', name: 'Builder' }, text: 'ok, ship it' })
+      agents.from('chat')
+      await agents.open().tick()
+      expect(reads(t).length).toBeGreaterThan(0)
+      expect(reads(t)).toEqual(reads(agents))
+    })
+    it('reads nothing of the Swarm for a Buddy, which has no such chat', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:')
+      expect(reads(t)).toEqual([])
+    })
+    it('keeps it too when the read fails or is slow, and the person\'s message still goes', async () => {
+      const failing = newcomer({ id: 'chat', kind: 'agent-chat' })
+      const original = vi.mocked(failing.call).getMockImplementation()!
+      vi.mocked(failing.call).mockImplementation(async (method, path, body) => { if (path.includes('asAgentId=')) throw new Error('backend down'); return original(method, path, body) })
+      await failing.open().tick()
+      expect(String(typed(failing)[0])).toContain('@Ken, to you:\nok, ship it')
+      const slow = newcomer({ id: 'chat', kind: 'agent-chat' })
+      const first = vi.mocked(slow.call).getMockImplementation()!
+      vi.mocked(slow.call).mockImplementation((method, path, body) => path.includes('asAgentId=') ? new Promise(() => {}) : first(method, path, body))
+      await slow.open({ contextWaitMs: 5 }).tick()
+      expect(String(typed(slow)[0])).toContain('@Ken, to you:\nok, ship it')
+    })
+    it('names its chat by the id its roster row gives, once it has one, never by a read', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      t.row.agent.chatId = 'another-chat'
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:\nok, ship it')
+    })
+  })
+
+  describe('its reply', () => {
+    it('is posted by the host as the agent, right below the message, when its turn ends, once', async () => {
+      const t = inChat(), posts = posting(t)
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      t.event('started')
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+      expect(posts[0]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'reply-delivery', asAgentId: 'agent',
+        command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'message', recipientIds: [] } })
+      expect(t.core.transcripts.lastTurn).toHaveBeenCalledWith('session')
+      t.end(); t.end()
+      await flush()
+      expect(posts).toHaveLength(1)
+      expect(t.saved().replies).toBeUndefined()
+    })
+    it('is posted in the thread its message is in', async () => {
+      const t = inChat({ thread: 'root', replyTo: 'root' }), posts = posting(t)
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+      expect(posts[0]!.command).toMatchObject({ replyTo: 'message', recipientIds: [] })
+      expect(posts[0]!.command).not.toHaveProperty('answers')
+    })
+    it('is told to its person in the chat, by the name they know the agent by, when the server turns the reply away for good', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
+      t.row.agent.displayName = 'Mia'
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(2))
+      expect(posts[1]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'dropped-reply-delivery', asAgentId: 'agent',
+        command: { type: 'message.send', conversationId: 'chat', text: 'Mia\'s answer could not be posted.', replyTo: null, answers: 'message', recipientIds: [] } })
+      expect(t.log).toHaveBeenCalledWith('Dropped the reply to delivery delivery of agent agent: FORBIDDEN; no later try changes it.')
+      // Said once: nothing owed is left, and the line itself is not answered.
+      t.end()
+      await flush()
+      expect(posts).toHaveLength(2)
+      expect(t.saved().replies).toBeUndefined()
+    })
+    // A host whose billing lapsed is refused as HOST_UNAVAILABLE (403) until it returns: not final, as its receipts are not.
+    it('is tried again, not dropped as refused for good, when the server says its host is unavailable', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery', 'HOST_UNAVAILABLE')
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      t.end()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not post the reply to delivery delivery of agent agent: HOST_UNAVAILABLE (try 1 of 5)')))
+      // Nothing is told to its person yet: the reply is not dropped, it waits for its next try.
+      expect(posts.map(post => post.operationId)).toEqual(['reply-delivery'])
+      host.stop()
+      expect(t.log).toHaveBeenCalledWith('Dropped the reply to delivery delivery of agent agent: the host stopped.')
+    })
+    it('is told by the agent\'s place-holder name when its roster row gives none', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(2))
+      expect(posts[1]!.command.text).toBe('The agent\'s answer could not be posted.')
+    })
+    it('is owed from the delivery that typed it: the journal keeps ids and a hash, never the words, and the entry may go', async () => {
+      const t = inChat({ text: 'a private plan' })
+      const host = t.open()
+      await host.tick()
+      expect(t.saved().replies.delivery).toMatchObject({ tabId: 'tab', agentId: 'agent', harnessId: 'harness', conversationId: 'chat', messageId: 'message', thread: false,
+        name: 'The agent', asked: expect.stringMatching(/^[0-9a-f]{32}$/), at: expect.any(Number) })
+      t.event('started')
+      await host.tick()
+      expect(t.saved().entries).toEqual({})
+      expect(JSON.stringify(t.saved())).not.toContain('a private plan')
+      expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+    })
+    it('survives a restart of the host: the new one posts it once, and one after that owes nothing', async () => {
+      const t = inChat(), posts = posting(t)
+      answered(t)
+      const first = t.open()
+      await first.tick()
+      t.event('started')
+      await first.tick()
+      first.stop()
+      const second = t.open()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+      await flush()
+      expect(t.saved().replies).toBeUndefined()
+      second.stop()
+      const third = t.open()
+      t.end()
+      await flush()
+      expect(posts).toHaveLength(1)
+      third.stop()
+    })
+    it('is not posted by a host that stopped', async () => {
+      const t = inChat(), posts = posting(t)
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      host.stop()
+      t.end()
+      await flush()
+      expect(posts).toEqual([])
+    })
+    it('is not posted for a turn that was asked something else, or ended with no answer; it stays owed for its own', async () => {
+      const t = inChat(), posts = posting(t)
+      await t.open().tick()
+      answered(t, 'Something typed in the terminal.', 'Done.')
+      t.end()
+      vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue(null)
+      t.end()
+      await flush()
+      expect(posts).toEqual([])
+      expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+      answered(t)
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+    })
+    it('is not owed for a delivery the core refused for good, and is for one it may have typed', async () => {
+      const refused = inChat()
+      await refused.open().tick()
+      refused.event('rejected', 'agent_gone')
+      expect(refused.saved().replies).toBeUndefined()
+      const unsure = inChat()
+      await unsure.open().tick()
+      unsure.event('unknown', 'The core did not confirm this delivery.')
+      expect(Object.keys(unsure.saved().replies)).toEqual(['delivery'])
+    })
+    it('is not owed for a delivery whose hand-over could not be saved, and is once the next try is', async () => {
+      const t = inChat()
+      let failOnce = true
+      const write = (file: string, journal: { entries: Record<string, { stage: string }> }) => {
+        if (failOnce && Object.values(journal.entries).some(e => e.stage === 'submitting')) { failOnce = false; throw new Error('Disk full') }
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, JSON.stringify(journal))
+      }
+      const host = t.open({ write: write as never })
+      await host.tick()
+      expect(t.core.turns.deliver).not.toHaveBeenCalled()
+      t.wait(1_500)
+      await host.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+    })
+    it('is owed from a journal an older host wrote with none, and a journal that holds only nonsense in its place is read, saying so', () => {
+      const t = inChat()
+      const file = hostJournalFile(t.dir, 'machine-1')
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify({ version: 1, machineId: 'machine-1', entries: {} }))
+      expect(() => t.open()).not.toThrow()
+      writeFileSync(file, JSON.stringify({ version: 1, machineId: 'machine-1', entries: {}, replies: { odd: { tabId: 4 } } }))
+      expect(() => t.open()).not.toThrow()
+      expect(t.log).toHaveBeenCalledWith('Dropped 1 saved replies owed that this host could not use.')
+      expect(t.saved().replies).toBeUndefined()
+    })
+    it('is read from the end of each turn only of an agent that is owed one', async () => {
+      const t = inChat()
+      const host = t.open()
+      await host.tick()
+      t.end({ agentId: 'another-harness' })
+      expect(t.core.transcripts.lastTurn).not.toHaveBeenCalled()
+      host.stop()
+      expect(t.core.turns.onEnd).toHaveBeenCalledTimes(1)
+    })
   })
 })

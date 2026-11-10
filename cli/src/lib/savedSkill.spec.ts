@@ -6,8 +6,7 @@ describe('Swarm role kinds (project instructions, phase 4)', () => {
     // An older CLI saved the wire's values.
     expect(parseSwarmSkill({ role: 'lead', key: 'k' })).toEqual({ role: 'coordinator', key: 'k' })
     expect(parseSwarmSkill({ role: 'dev', key: 'k', mode: 'default' })).toEqual({ role: 'agent', key: 'k', mode: 'default' })
-    // A row saved while sessions could use the Harness GitHub App holds its flag: read as nothing.
-    expect(parseSwarmSkill({ role: 'review', key: 'k', github: true })).toEqual({ role: 'agent', fallback: 'review', key: 'k' })
+    expect(parseSwarmSkill({ role: 'review', key: 'k', github: true })).toEqual({ role: 'agent', fallback: 'review', key: 'k', github: true })
     expect(parseSwarmSkill({ role: 'buddy', key: 'k' })).toEqual({ role: 'buddy', key: 'k' })
     // This one saves the kinds.
     expect(parseSwarmSkill({ role: 'agent', key: 'k' })).toEqual({ role: 'agent', key: 'k' })

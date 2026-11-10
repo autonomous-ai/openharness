@@ -71,7 +71,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('a Lead driving a worker\
     const worker = (await run({ type: 'agent.add', conversationId: group, machineId: W.machineId, harnessId: workerHarness.id, name: 'Worker', configuration: CONFIG, lead: false })).agentId as string
     const rows = async () => ((await backend.api(owner, `/api/super-tabs/${tab}/conversations/${group}/messages`)).body.data.messages as Array<Record<string, any>>)
     // Each joins as a launched agent does, which starts its machine's host.
-    for (const [s, id] of [[L, lead], [W, worker]] as const) expect((await superTab(s, tab, id, ['status'])).code).toBe(0)
+    for (const [s, id] of [[L, lead], [W, worker]] as const) expect((await superTab(s, tab, id, ['messages', group])).code).toBe(0)
 
     // The worker asks permission to run a command, and waits on it.
     W.client.send('message', { agentId: workerHarness.id, content: '!permit printf terminal-check' })

@@ -62,7 +62,7 @@
 
 **Files:** `cli/src/superTabs/host.ts`, `cli/src/superTabs/host.spec.ts`.
 
-**Interfaces:** `SuperTabHostOptions.restartLead?(harnessId)`, default the daemon's `agent_restart`.
+**Interfaces:** `SuperTabHostOptions.restartLead?(harnessId)`, default the daemon's `agent_restart`. Removed in Swarm v4 (#3679): the server sends no owed ask (`owed: null`), so nothing triggered it.
 
 - [x] Spec: owed ask past its time and the PM in one turn that long: restarted once, in place; more polls, still once; `keepLeadAlive` never called while the restart runs or settles, even when the session briefly reads as gone.
 - [x] Spec: a frozen screen counts the same; an idle PM, an ask not yet due, or a PM that ended a turn recently is never restarted.
