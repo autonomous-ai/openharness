@@ -19,7 +19,7 @@ const buddyPhoto = 'https://storage.googleapis.com/avatars/wren.png?sig=1';
 
 /// The faces people and agents chose, on the screens that showed only
 /// initials: the Buddy chat, the project's tasks and team, and the chat's
-/// messages — with a person's status emoji beside their own.
+/// messages. A status an older server still sends is drawn on none.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const buddyMessages = '/api/super-tabs/$tab/conversations/buddy-me/messages';
