@@ -176,8 +176,7 @@ describe('the event funnel', () => {
       const ends = fakeEnds()
       setup(engine, { ends }).funnel('s1', [started('Ship it.')])
       expect(ends.started.mock.calls, engine).toEqual([['s1', 'Ship it.', partial]])
-    }
-  })
+    }  })
 
   it('tells them after the input has settled the turn, and carries on past one that throws', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -289,14 +288,18 @@ describe('the event funnel', () => {
   it('finishes a batch whose session was forgotten while it was being delivered', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     let lookups = 0
+    const ends = fakeEnds()
     const run = setup('codex', {
       // Active when the batch arrives; gone from the next lookup on, as when a collaborator forgets it.
       bySession: () => lookups++ === 0 ? ({ agentId: 'a1', sessionId: 's1', engine: 'codex', active: true } as RegisteredSession) : undefined,
+      ends,
     })
     expect(() => run.funnel('s1', [ended(), started()])).not.toThrow()
     // Without its engine, a native turn boundary is not recognised, so the device hears the turn end.
     expect(run.calls).toContain('device ended')
     expect(String(log.mock.calls[1][0])).toContain('engine=claude')
+    // Nor can its texts be vouched for as whole: its turn's answer is read from its transcript.
+    expect(ends.started.mock.calls).toEqual([['s1', 'go', true]])
   })
 
   it('ignores an empty batch and a session that is not active', () => {

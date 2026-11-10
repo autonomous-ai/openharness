@@ -194,6 +194,10 @@ describe('the answer of a turn that ended, kept as it was said', () => {
     expect(await answer(turn('Ship it.', ['a'.repeat(ANSWER_KEEP_MAX), 'b'.repeat(500)]))).toBe('a'.repeat(ANSWER_KEEP_MAX))
     const narrated = setup()
     expect(await narrated.answer(narrated.turn('Ship it.', ['c'.repeat(ANSWER_KEEP_MAX), 'd'.repeat(500), null]))).toBe('c'.repeat(ANSWER_KEEP_MAX))
+    // A long text after a short one is cut to what is left.
+    const after = setup()
+    const answered = await after.answer(after.turn('Ship it.', ['Short.', 'e'.repeat(ANSWER_KEEP_MAX)]))
+    expect(answered).toBe(`Short.\n\n${'e'.repeat(ANSWER_KEEP_MAX - 'Short.'.length)}`.slice(0, ANSWER_KEEP_MAX))
   })
 
   it('keeps no more of one huge text than that, and no more than that of the many that follow it', async () => {
