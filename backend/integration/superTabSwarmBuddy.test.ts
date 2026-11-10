@@ -280,16 +280,7 @@ describe('a project session', () => {
   })
 })
 
-describe('the PM\'s lines and losing a project', () => {
-  // Only the person and their own agent post in their private chat (anh Dee, 11-07, task #4558).
-  it('refuses a PM\'s private line, and writes it nowhere', async () => {
-    const f = await swarm()
-    await buddy(f)
-    await expect(f.execute({ type: 'person.tell', personId: peer.sub, text: 'WEB PM LINE' }, owner, f.pms.web))
-      .rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, text: 'WEB PM LINE' } })).toBe(0)
-  })
-
+describe('losing a project', () => {
   it('takes a lost project out of the Buddy: its sessions end, its lines hide, and the main Buddy reads it no more', async () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)

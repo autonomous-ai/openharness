@@ -45,8 +45,6 @@ export interface AgentConfiguration {
   contextWindow: number | null
   engineVersion: string | null
 }
-/** Why a crew member must leave its machine (crewKeep.ts). */
-export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk' | 'quota-low' | 'unstable'
 
 export interface Agent {
   id: string
@@ -83,9 +81,6 @@ export interface Agent {
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
-  /** Set while it is one of its project's crew (crew.ts): its host keeps it alive, and no idle path closes or removes it.
-   *  `by` is the person's or PM agent's id that marked it. */
-  crew?: { role: string; lane?: string; at: number; by: string }
   /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
@@ -137,18 +132,9 @@ export interface Agent {
    *  work.assign clears it and the host reopens it in place. `folderDropped` once a cleanup rule removed its folder, so a
    *  wake starts it fresh. Set only by the server. */
   asleep?: { since: number; folderDropped?: boolean }
-  /** When a reading first showed its session gone, in the last hour, at most five (machines.ts recordAgentPresence): a crew member
-   *  that stops three times in an hour is moved, not reopened in place (crewKeep.ts, task #3662). */
-  stops?: number[]
-  /** A crew member being moved off a failing machine (crewKeep.ts): its start on [machineId] takes over under the same name;
-   *  until then nothing is assigned to it and its old host closes the session. Set only by the server. */
-  movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
-  /** The agent this crew member took over from on a move, so its history reads as one member. */
-  movedFrom?: { agentId: string; machineId: string; reason: CrewTrouble; at: number }
-  /** The machine whose start of this member's move failed, and when: not picked again for MOVE_REFUSED_WAIT_MS (crewKeep.ts). */
-  crewMoveRefused?: { machineId: string; at: number }
-  /** A move needed but no machine could take it: said once in the project chat until the trouble changes. */
-  crewStuck?: CrewTrouble
+  /** A crew member's move off a failing machine, from before Swarm v4 (2026-11-10), which has no crew: written no more. A Buddy
+   *  so marked does not sleep (buddySleep.ts); the field goes with Buddies (S17). */
+  movedTo?: { machineId: string; startId: string; reason: string; at: number }
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
@@ -174,9 +160,6 @@ export interface Agent {
    *  its host reads them in the agent's row to reopen a woken one in its folder (#4698). */
   member?: { projectId: string }
   helperOf?: { agentId: string; harnessId: string }
-  /** Its project set up on its computer, as its own host reported (agent.setUp, #4698): the commands it ran, or why it failed.
-   *  A Member on a host that reports it takes no task until it is set up (members.ts setUpReady). */
-  setUp?: { projectId: string; at: number; steps?: string[]; failed?: string }
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string
@@ -250,8 +233,6 @@ export interface AgentStartRequest {
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** The offered account selected for a destination PM switch. */
   profileId?: string
-  /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */
-  crewMoveOf?: string
   /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
   handoffNote?: string
   handoffSourceAgentId?: string
@@ -322,8 +303,6 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
-  /** When its crew member was told it had been 2 hours without progress (dispatch.ts crewClock): once per quiet spell. */
-  nudgedAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
   /** While it is blocked or needs a human: why it waits (heldReason.ts). Absent on a hold from before reasons. */
@@ -516,8 +495,6 @@ export interface Conversation {
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
-  /** Its place in its project's Next up (taskQueue.ts), set by work.queue. Absent: it sorts by its number. */
-  queueRank?: number
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
@@ -528,12 +505,6 @@ export interface Conversation {
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
-  /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
-   *  owned paths choose. */
-  lane?: string
-  /** Its lane as the dispatch hands it out (dispatch.ts laneOf), stored when its paths or lane change (stampLane), so reads
-   *  only copy it. Absent on a chat, a step, and a task from before; null when no lane owns its paths. */
-  handOutLane?: string | null
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }

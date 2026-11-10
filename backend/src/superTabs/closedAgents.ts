@@ -1,5 +1,4 @@
 import { isBuddy } from './buddies.js'
-import { isCrew } from './crew.js'
 import { MACHINE_FRESH_MS, teamWorkCheck, type MachineObservation } from './machines.js'
 import { activeWork, type Agent, type RemovedSession, type SuperTabState } from './model.js'
 import { agentProjectId, canReadProject, isConfidential, ledProject, projectsOf } from './projects.js'
@@ -18,11 +17,10 @@ export const REMOVED_KEEP_MS = 30 * 24 * 60 * 60_000
  *  one stopped for a moment before it is back (security reviews of #2569). */
 export const STOPPED_REMOVE_MS = 30_000
 
-/** Whether [target] could ever leave this way: not a coordinator, a Buddy, a Regular agent, crew (its host reopens it in place,
- *  crew.ts), one kept or being stopped. A Regular agent is its person's, as a Buddy is: removed, it never came back, since its own
+/** Whether [target] could ever leave this way: not a coordinator, a Buddy, a Regular agent, one kept or being stopped. A Regular agent is its person's, as a Buddy is: removed, it never came back, since its own
  *  chat made it confidential and it has no project to restore into (task #4218). Its person stops it. */
 const removable = (state: SuperTabState, target: Agent): boolean =>
-  !isBuddy(target) && !target.regular && !isCrew(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
+  !isBuddy(target) && !target.regular && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
 
 /** Whether [report] proves [target]'s session stopped: listed stopped and, for a reservation a resume renewed, stopped in that
  *  very generation, since an older host lists the earlier run stopped and cannot say which. */

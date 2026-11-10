@@ -1,15 +1,13 @@
-// Task #3462 (docs/plans/2026-11-06-crew-wake-move-times-plan.md): the design promises a crew member "wakes in seconds" and is
-// "moved and running again within 5 minutes". Each wake and each move is recorded when it finishes: its start, the moment the
-// agent runs again, and its reason, as one row in its project's chat that only the server reads (NOTICE_READERS
-// `crew-timing`). The daily scorecard that read the day's rows is gone with Swarm v4: nothing reads them now. The crew keeper
-// (crewKeep.ts) calls startWake when new work wakes an asleep member,
-// and moveTimingRow when a move's new session takes the member over; the sweep on machine reports calls finishedWakes.
+// Task #3462 (docs/plans/2026-11-06-crew-wake-move-times-plan.md): each wake of an asleep agent is recorded when it finishes: its
+// start, the moment the agent runs again, and its reason, as one row in its project's chat that only the server reads
+// (NOTICE_READERS `crew-timing`). Only a Buddy wakes now (buddySleep.ts, buddyEngine.ts call startWake); the sweep on machine
+// reports calls finishedWakes. Goes with Buddies (S17).
 import { agentDisplayName } from './agentNames.js'
 import { stableId, type Agent, type Author, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, projectsOf } from './projects.js'
 
 export const CREW_TIMING_KIND = 'crew-timing'
-export interface CrewTiming { what: 'wake' | 'move'; agentId: string; startedAt: number; runningAt: number; reason: string }
+export interface CrewTiming { what: 'wake'; agentId: string; startedAt: number; runningAt: number; reason: string }
 
 /** New work in [conversationId] woke [agent] at [now]: its wake is timed from here. */
 export function startWake(agent: Agent, conversationId: string, now: number): void {
@@ -37,9 +35,8 @@ function timingRow(state: SuperTabState, timing: CrewTiming): MessageDraft | nul
   const place = placeFor(state, timing.agentId)
   if (!place) return null
   const name = agentDisplayName(state.agents, timing.agentId) ?? timing.agentId
-  const verb = timing.what === 'wake' ? 'woke' : 'moved and ran again'
   return { id: stableId('crew-timing', timing.what, timing.agentId, String(timing.startedAt)), conversationId: place.conversationId, author: place.author,
-    replyTo: null, recipients: [], text: `${name} ${verb} in ${seconds(timing.runningAt - timing.startedAt)} s (${timing.reason}).`,
+    replyTo: null, recipients: [], text: `${name} woke in ${seconds(timing.runningAt - timing.startedAt)} s (${timing.reason}).`,
     source: { kind: CREW_TIMING_KIND, ...timing } }
 }
 
@@ -67,16 +64,10 @@ export function finishedWakes(state: SuperTabState, _now: number): MessageDraft[
   return rows
 }
 
-/** The row recording a move of the member now [agentId]: from when the keeper picked its machine ([startedAt]) to [now], when
- *  its new session took the member over, for [reason] (the trouble that moved it). */
-export function moveTimingRow(state: SuperTabState, agentId: string, startedAt: number, reason: string, now: number): MessageDraft | null {
-  return timingRow(state, { what: 'move', agentId, startedAt, runningAt: now, reason })
-}
-
 /** A timing row's record, or null for any other row or one that does not hold together. */
 export function crewTimingOf(source: unknown): CrewTiming | null {
   const s = source as Partial<CrewTiming> & { kind?: unknown } | null | undefined
-  if (!s || s.kind !== CREW_TIMING_KIND || (s.what !== 'wake' && s.what !== 'move') || typeof s.agentId !== 'string' || typeof s.reason !== 'string'
+  if (!s || s.kind !== CREW_TIMING_KIND || s.what !== 'wake' || typeof s.agentId !== 'string' || typeof s.reason !== 'string'
     || typeof s.startedAt !== 'number' || typeof s.runningAt !== 'number' || s.runningAt < s.startedAt) return null
   return { what: s.what, agentId: s.agentId, startedAt: s.startedAt, runningAt: s.runningAt, reason: s.reason }
 }

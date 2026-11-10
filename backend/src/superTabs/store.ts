@@ -1514,12 +1514,6 @@ export class SuperTabStore {
         const group = original.conversations.find(c => c.id === command.request.conversationId)
         if (group) context.projectRules = { revision: 0, rules: { ...SEED_RULES, machines: await machineRulesOf(tx, tabId, groupProject(original, group).id) } }
       }
-      if (command.type === 'crew.add' || (command.type === 'conversation.create' && !command.reviewOf && !command.audience)) {
-        authorizeCommandAccess(original, actor, command)
-        const projectId = command.type === 'crew.add' ? agentProjectId(original, agent(original, command.agentId))!
-          : readProject(original, actor, command.projectId ?? (actor.kind === 'agent' ? agentProjectId(original, agent(original, actor.agentId))! : 'lead')).id
-        context.projectRules = await currentRules(tx, tabId, projectId)
-      }
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
         || command.type === 'machine.engineResume' || command.type === 'rules.set') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })

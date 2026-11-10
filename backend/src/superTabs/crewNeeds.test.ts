@@ -102,16 +102,3 @@ describe('an agent’s tag of a person goes to the PM', () => {
     expect(own(below, f.group).recipients).toContain(f.worker)
   })
 })
-
-describe('an agent’s line to a person goes to the PM', () => {
-  it('turns a worker’s line to a person into a crew need in the project chat, and refuses the PM’s private line (task #4558)', () => {
-    const f = fixture()
-    const byWorker = f.run({ type: 'person.tell', personId: 'peer', text: 'Look at the mockup in #12' }, asAgent(f.worker))
-    // Nothing lands in the person's Buddy chats: the crew need is the command's only message.
-    expect(byWorker.messages.filter(m => !crewNeedOf(m.source))).toEqual([])
-    expect(needs(byWorker).map(m => [m.conversationId, m.recipients, crewNeedOf(m.source)!.personIds])).toEqual([[f.app.conversationId, [f.pm], ['peer']]])
-    expect(byWorker.result.routedToPm).toMatch(/PM/)
-    expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Look at the mockup in #12' }, asAgent(f.pm)))
-      .toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
-  })
-})
