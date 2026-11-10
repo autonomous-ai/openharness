@@ -202,8 +202,9 @@ describe('the retired scorecard read', () => {
   })
 })
 
-// Decisions are gone with Swarm v4 (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat. An older Desktop, phone or
-// host still reads its list: it gets an empty one, whoever asks, whichever Swarm and list it names, and nothing is read.
+// Decisions, tags, Activity, reminders, followed threads, the inbox and catch-up are gone with Swarm v4 (anh Dee, 2026-11-10): an agent
+// reaches its person in their 1:1 chat. An older Desktop, phone or host still reads them: each gets its empty answer, whoever asks,
+// whichever Swarm and query it names, and nothing is read.
 describe('the retired reads', () => {
   let app: FastifyInstance
   beforeEach(async () => {
@@ -215,6 +216,35 @@ describe('the retired reads', () => {
     await app.ready()
   })
   afterEach(async () => { await app.close() })
+
+  // Tags, Activity, reminders, followed threads, the inbox and catch-up go too (S11): each answers its empty answer.
+  it('answers an older client\'s tags, Activity, reminders, threads, inbox and catch-up reads with none, and reads nothing', async () => {
+    const none = { total: 0, items: [] }
+    for (const [url, data] of [
+      ['/api/super-tabs/tab-1/mentions?state=waiting', { mentions: [] }], ['/api/super-tabs/tab-2/mentions?state=earlier', { mentions: [] }],
+      ['/api/super-tabs/tab-1/activity', { items: [], more: false }], ['/api/super-tabs/tab-1/reminders', { due: [], next: null }],
+      ['/api/super-tabs/tab-1/threads?read=50', { unread: [], read: [], more: false }], ['/api/super-tabs/tab-1/inbox', { threads: [], latest: [], more: false }],
+      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=4', { after: 0, through: 0, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
+        needsYou: none }],
+    ] as const) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data } })
+    }
+  })
+
+  it('answers an older client\'s Activity read mark, thread follow and cleared reminder as done, refuses a new reminder in words, and reads nothing', async () => {
+    for (const [url, payload, data] of [
+      ['/api/super-tabs/tab-1/activity/read', { through: '2026-11-01T00:00:00.000Z' }, { marked: 0 }],
+      ['/api/super-tabs/tab-1/conversations/c1/threads/m1/follow', { follow: true }, { follow: null }],
+      ['/api/super-tabs/tab-1/conversations/c1/messages/m1/reminder', { at: null }, { cleared: false }],
+    ] as const) {
+      const res = await app.inject({ method: 'POST', url, payload })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data } })
+    }
+    const set = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/conversations/c1/messages/m1/reminder', payload: { at: '2026-11-11T09:00:00.000Z' } })
+    expect({ status: set.statusCode, body: set.json() }).toEqual({ status: 410,
+      body: { success: false, error: { code: 'REMINDERS_RETIRED', message: 'Reminders are gone. Nothing was set.' } } })
+  })
 
   it('answers an older client\'s decisions read with none, with each query it sent, and reads nothing', async () => {
     for (const url of ['/api/super-tabs/tab-1/decisions?state=open', '/api/super-tabs/tab-1/decisions?state=answered&asAgentId=agent-1',
