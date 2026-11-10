@@ -2,12 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { noteSwarmBasics, prepareSwarmSkill, parseSwarmSkill, PM_BASICS, SWARM_BASICS, swarmBasics, swarmBasicsSince } from './swarmSkills.js'
+import { noteSwarmBasics, parseSwarmSkill, PM_BASICS, SWARM_BASICS, swarmBasics, swarmBasicsSince } from './swarmSkills.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
-const SWARM = { prepare: prepareSwarmSkill, github: () => null, args: () => [] }
+const SWARM = { basics: (lead: boolean) => swarmBasics(lead).text, github: () => null, args: () => [] }
 
 const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')); roots.push(root); return root }
@@ -17,7 +17,7 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // Swarm v4 (anh Dee, 2026-11-09): the team's basics are the product's, told at launch, never written into the project.
   it('tells an agent or a Reviewer the team\'s basics at launch, and the PM its part too', () => {
     for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
-      expect(prepareSwarmSkill(saved).instructions).toBe(saved.role === 'coordinator' ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS)
+      expect(swarmBasics(saved.role === 'coordinator').text).toBe(saved.role === 'coordinator' ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS)
     }
   })
 
@@ -25,13 +25,11 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // the PM announces it once in the project's channel, as "@Pip #12 is yours", and the rest of that task's record stays on its
   // issue (the basics' own rule). No other agent is told to.
   it('tells the PM to announce each hand-off once in the project\'s channel, and no other agent', () => {
-    const lead = prepareSwarmSkill({ role: 'coordinator', key: 'lead' }).instructions
+    const lead = swarmBasics(true).text
     expect(lead.split('\n').filter(row => row.includes('hand-off'))).toHaveLength(1)
     expect(lead).toMatch(/announce that hand-off once in your project's channel, as "@Pip #12 is yours"/)
     expect(lead).toContain('the rest of that task\'s record stays on its issue')
-    for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
-      expect(prepareSwarmSkill(saved).instructions).not.toMatch(/hand-off|is yours"/)
-    }
+    expect(swarmBasics(false).text).not.toMatch(/hand-off|is yours"/)
   })
 
   // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
@@ -39,7 +37,7 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // when); a task's own record stays on GitHub, where Harness shows it in the task's chat.
   it('tells every agent the channel is the team\'s group chat, each post opening with @Name and unsigned', () => {
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
-      const rules = prepareSwarmSkill(saved).instructions
+      const rules = swarmBasics(saved.role === 'coordinator').text
       expect(rules).toContain('Your project\'s channel is the team\'s group chat')
       expect(rules).toContain('Start each post with @Name for whom it is for')
       expect(rules).toContain('do not sign it')
@@ -52,7 +50,7 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
   it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
     for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
-      const rows = prepareSwarmSkill(saved).instructions.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
+      const rows = swarmBasics(saved.role === 'coordinator').text.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
       expect(rows, saved.key).toHaveLength(1)
       // By id, never by name; no privilege; a template a Mac's mktemp honours, and Windows' own folder; no other agent's worktree.
       for (const part of ['by the process id you recorded, never by name (pkill, killall, taskkill /IM)', 'no sudo or system-wide installs',
@@ -70,22 +68,18 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   it('validates persisted role metadata and refuses an empty key', () => {
     for (const value of [null, undefined, {}, { role: 'builder', key: 'x' }, { role: 'dev', key: '' }, { role: 'lead', key: 7 }]) expect(parseSwarmSkill(value)).toBeUndefined()
     expect(parseSwarmSkill({ role: 'dev', key: 'x' })).toEqual({ role: 'agent', key: 'x' })
-    // An unknown mode is dropped, not refused: the session keeps its role and launches as before modes.
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'agent', key: 'x' })
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'agent', key: 'x', mode: 'orchestration' })
+    // A skill mode an older release saved is dropped (the modes are gone, PM 2026-11-11): the session keeps its role.
+    for (const mode of ['light', 'default', 'orchestration']) expect(parseSwarmSkill({ role: 'dev', key: 'x', mode })).toEqual({ role: 'agent', key: 'x' })
     // The Harness GitHub App's flag is kept for relaunches, and only as true.
     expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'agent', key: 'x', github: true })
     expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'agent', key: 'x' })
-    expect(() => prepareSwarmSkill({ role: 'lead', key: '' })).toThrow()
   })
 
-  it.each(['claude', 'codex'] as const)('restores %s skill on relaunch without overwriting the saved content', async engine => {
+  it.each(['claude', 'codex'] as const)('tells a %s agent the team\'s basics again on relaunch', async engine => {
     const cwd = fixture(), swarmSkill = { role: 'agent' as const, key: 'original' }
-    const first = prepareSwarmSkill(swarmSkill)
     const result = await buildLaunchOverrides({ capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async () => '/unused', readCodexConfig: () => null, readAttribution: () => null, swarm: SWARM }, engine, { cwd, swarmSkill }, 'new-registry-id')
     expect(result.ok).toBe(true)
-    expect(first.instructions).toBe(SWARM_BASICS)
     // A relaunch is told the same basics again, as the engine starts from nothing.
     if (result.ok) expect(result.overrides?.extraArgs.join(' ')).toContain('Never watch GitHub yourself')
   })

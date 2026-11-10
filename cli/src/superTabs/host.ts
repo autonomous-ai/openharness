@@ -34,16 +34,9 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string) =>
 export { backend, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
-import { parseSwarmSkill, swarmBasics, swarmBasicsSince, wireRole, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { parseSwarmSkill, swarmBasics, swarmBasicsSince, wireRole, type SwarmSkillGrant } from '../lib/swarmSkills.js'
 import { authorName } from './personName.js'
 import { adoptReplies, AgentReplies, type Owed } from './agentReplies.js'
-
-/** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
- *  modes, or a Swarm from before projects, is orchestration. */
-function groupSkillMode(state: Record<string, unknown>, group: Record<string, unknown> | undefined): SwarmSkillMode {
-  const project = group && (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === (group.projectId ?? 'lead'))
-  return project?.skillMode === 'default' ? 'default' : 'orchestration'
-}
 
 /** Where a machine reads its Swarms: the host form of its rosters, and each Swarm by parts (design 2026-10-26 section 5.3). */
 export interface SwarmSources { feed: HostFeed; reads: SwarmReads }
@@ -68,10 +61,10 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
       && agent.harnessId === harnessId && agent.machineId === machineId && agent.workDecision !== 'stop')
     if (!agent) return null
     const led = groups.find(group => group.leadId === target.id)
-    if (led) return { role: 'coordinator' as const, mode: groupSkillMode(state, led) }
+    if (led) return { role: 'coordinator' as const }
     // Every other member is an agent, whatever its role's name (project instructions, phase 4); one an older client started
     // as a Reviewer (`role: 'reviewer'`) keeps that kind on its saved row.
-    return member ? { role: 'agent' as const, ...(agent.role === 'reviewer' ? { fallback: 'review' as const } : {}), mode: groupSkillMode(state, member) } : null
+    return member ? { role: 'agent' as const, ...(agent.role === 'reviewer' ? { fallback: 'review' as const } : {}) } : null
   }))
   // The coordinator first, then an agent, and last an agent that was a Reviewer.
   return (['lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant && wireRole(grant) === role)).find(Boolean) ?? null

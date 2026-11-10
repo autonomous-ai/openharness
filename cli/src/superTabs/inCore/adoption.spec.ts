@@ -29,17 +29,12 @@ function setup(saved = row(), live: RegisteredSession | null = saved) {
 
 describe('old Swarm role adoption', () => {
   it.each(['claude', 'codex'] as const)('adopts each role for old %s sessions and persists it before launch', async engine => {
-    // A Reviewer's grant keeps its swarm-review file (project instructions, phase 4).
+    // A Reviewer's grant keeps its Reviewer kind (project instructions, phase 4).
     for (const grant of [{ role: 'coordinator' }, { role: 'agent' }, { role: 'agent', fallback: 'review' }] as const) {
       const t = setup(row({ engine })); t.role.mockResolvedValue(grant)
       expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { ...grant, key: 'old-session' } })
       expect(t.saved.swarmSkill).toEqual({ ...grant, key: 'old-session' })
     }
-  })
-  it('adopts the role with its project\'s skill mode, so the restarted session launches on that text', async () => {
-    const t = setup(); t.role.mockResolvedValue({ role: 'coordinator', mode: 'default' })
-    expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'coordinator', key: 'old-session', mode: 'default' } })
-    expect(t.saved.swarmSkill).toEqual({ role: 'coordinator', key: 'old-session', mode: 'default' })
   })
   it('carries metadata into a stopped resume without requiring a live registry row', async () => {
     const t = setup(row(), null)

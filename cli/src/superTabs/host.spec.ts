@@ -101,7 +101,7 @@ describe('whether a Swarm lists a session on this machine', () => {
 
 describe('current Swarm role lookup', () => {
   // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator or
-  // an agent, and an older client's Reviewer keeps its swarm-review file.
+  // an agent, and an older client's Reviewer keeps its Reviewer kind.
   it('reads a session\'s role without its kind', async () => {
     const t = setup()
     let agent: Record<string, unknown> = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
@@ -109,13 +109,13 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator' })
     groups = [{ leadId: 'other', agentIds: ['agent'] }]
     agent = { ...agent, role: 'reviewer' }
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review' })
     for (const role of ['builder', 'Tester', undefined]) {
       agent = { ...agent, role }
-      expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
+      expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent' })
     }
   })
   it('derives a Reviewer from its stored role while it is in a current group', async () => {
@@ -125,7 +125,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review' })
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
   })
@@ -159,23 +159,8 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [group] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'coordinator' : 'agent', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'coordinator' : 'agent' })
     expect(await swarmRoleFor(sources, 'personal')).toBeNull()
-  })
-  it('gives the mode of the project whose group made the role, Lead first', async () => {
-    const t = setup()
-    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
-    const projects = [{ id: 'lead', skillMode: 'default' }, { id: 'p2', skillMode: 'orchestration' }, { id: 'p3', skillMode: 'default' }]
-    let conversations: unknown[] = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }, { projectId: 'p3', leadId: 'agent', agentIds: [] }]
-    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
-      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations, projects }) } }))
-    const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'default' })
-    conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
-    // A group from before projects is in the first project.
-    conversations = [{ leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
@@ -195,7 +180,7 @@ describe('current Swarm role lookup', () => {
       ? hostForm(present ? [{ tabId: 'tab', agent }] : [], { tabs: ['tab'] })
       : swarmReply(path, { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator' })
     present = false
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
