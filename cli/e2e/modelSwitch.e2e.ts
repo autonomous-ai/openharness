@@ -2,7 +2,7 @@
  * A model switch on the real daemon (task #2354): onto a grid model and back keeps the conversation, as the same agent. The
  * fake Claude Code (e2e/harness/fakeEngine.mjs) resumes the session `--resume` names, as the real one does.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -48,7 +48,12 @@ it('moves onto a grid model and back in the same conversation, whatever an older
   expect((await settled(agentId, id => id === s1, 'the same conversation at home')).sessionId).toBe(s1)
 
   // A fresh move served only the v3 Buddy's model switch (#3901): a request that still asks for one resumes the conversation.
+  // The fake engine records every launch's argv (e2e/harness/fakeEngine.mjs): the move's relaunch resumes s1.
+  const launches = (): Array<{ engine: string; args: string[] }> => readFileSync(join(d.root, 'launch-argv'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const before = launches().length
   expect(await client.request('agent_retarget', { agentId, grid: GRID, fresh: true }, 60_000)).toMatchObject({ retargeted: true })
+  await until('the move\'s relaunch', () => launches().length > before || null, 60_000, 200)
+  expect(launches().at(-1)!.args).toEqual(expect.arrayContaining(['--resume', s1]))
   const onGrid = await settled(agentId, id => id === s1, 'the same conversation on the grid')
   await turn(agentId, 'A question for the shared model')
   expect(await client.request('agent_retarget', { agentId, clearGrid: true }, 60_000)).toMatchObject({ retargeted: true })
