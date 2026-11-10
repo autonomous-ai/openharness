@@ -251,7 +251,7 @@ extension _ManageMachines on _SuperTabMachinesState {
                 padding: MachinesStyle.side,
                 children: [
                   if (_ids.isEmpty)
-                    _stateNote(MachinesStyle.headerInset)!
+                    _stateNote()!
                   else if (machines.isEmpty)
                     Padding(
                       padding: MachinesStyle.headerInset,
@@ -272,7 +272,7 @@ extension _ManageMachines on _SuperTabMachinesState {
   }
 }
 
-/// Fixed columns in Manage; the compact sidebar keeps its separate row anatomy.
+/// One machine's line in Manage, in fixed columns.
 class _ManageMachineLine extends StatelessWidget {
   const _ManageMachineLine({
     required this.view,

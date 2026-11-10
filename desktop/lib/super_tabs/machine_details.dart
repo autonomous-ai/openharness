@@ -5,7 +5,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/engine_identity.dart';
 import 'detail_dialog.dart';
 
-/// Full machine context behind the sidebar's compact, live readings.
+/// A machine's Details: its owner, status, available capacity and hardware.
 class SuperTabMachineDetails extends StatelessWidget {
   const SuperTabMachineDetails({
     super.key,

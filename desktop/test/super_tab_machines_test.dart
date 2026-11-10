@@ -1,6 +1,9 @@
 import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
+
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -1344,6 +1347,108 @@ void main() {
         c.dispose();
       },
     );
+
+    group('the ⋯ on a machine row', () {
+      final more = find.byKey(const ValueKey('super-machine-more-studio'));
+      final rowKey = find.byKey(const ValueKey('super-machine-studio'));
+
+      Future<dynamic> show(WidgetTester tester, {String owner = 'owner'}) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine(owner)];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        return c;
+      }
+
+      Future<void> hover(WidgetTester tester) async {
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(0, 590));
+        await mouse.moveTo(tester.getCenter(rowKey));
+        await tester.pump();
+      }
+
+      Future<void> done(WidgetTester tester, dynamic c) async {
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+        debugDefaultTargetPlatformOverride = null;
+      }
+
+      // Huy, 2026-11-02: a touch screen has nothing to hover, so the ⋯ stays.
+      testWidgets('on a phone\'s browser a tap opens the menu, with no hover', (
+        tester,
+      ) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (_) async {};
+        addTearDown(BrowserMenuGuard.debugReset);
+        final c = await show(tester);
+        await tester.tap(more);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(c.isMachineExpanded('studio'), isFalse);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('pointed at, a click opens the menu and not the row', (
+        tester,
+      ) async {
+        final c = await show(tester);
+        await hover(tester);
+        await tester.tap(more);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+          findsOneWidget,
+        );
+        expect(c.isMachineExpanded('studio'), isFalse);
+        await tester.tap(find.text('Details'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('super-machine-remove')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byTooltip('Close').last);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('another person\'s machine has Details alone', (
+        tester,
+      ) async {
+        final c = await show(tester, owner: 'someone-else');
+        await hover(tester);
+        await tester.tap(more);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(find.text('Remove from Swarm'), findsNothing);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('the menu key on the row opens the menu', (tester) async {
+        final c = await show(tester);
+        Focus.of(
+          tester.element(
+            find.byKey(const ValueKey('super-machine-name-studio')),
+          ),
+        ).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.contextMenu);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+    });
 
     testWidgets(
       'an expanded machine: a right-click on its readings opens the same menu, with the browser menu off',

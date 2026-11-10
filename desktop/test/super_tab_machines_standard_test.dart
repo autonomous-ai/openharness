@@ -219,6 +219,40 @@ void main() {
     await _end(tester, c);
   });
 
+  testWidgets('an offline row\'s last seen moves on with the clock', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    server.state['machines'] = [
+      _machine('c', 'Charlie', 'peer', seen: const Duration(minutes: 2)),
+    ];
+    final c = server.controller();
+    await c.refresh();
+    var now = DateTime.now();
+    await tester.binding.setSurfaceSize(const Size(900, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(
+            controller: c,
+            onAddAgent: (_) {},
+            ticks: true,
+            now: () => now,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    Finder seen(String age) =>
+        find.textContaining('last seen $age', findRichText: true);
+    expect(seen('2 min ago'), findsOneWidget);
+    now = now.add(const Duration(minutes: 1));
+    await tester.pump(const Duration(seconds: 1));
+    expect(seen('3 min ago'), findsOneWidget);
+    await _end(tester, c);
+  });
+
   testWidgets('a Swarm read empty, then unreachable, says so with Retry, not '
       'Add a machine', (tester) async {
     final server = ConversationServer();

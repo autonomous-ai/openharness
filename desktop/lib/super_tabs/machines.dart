@@ -85,8 +85,8 @@ class SuperTabMachines extends StatefulWidget {
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
 }
 
-/// The engines whose allowance a machine row shows, in this order.
-const _chipEngines = ['claude', 'codex'];
+/// The engines a machine offers the Swarm; a retired one (OpenCode) is left out.
+const _swarmEngines = ['claude', 'codex'];
 
 /// Sets [machineId]'s project up for the Swarm and asks what it offers
 /// (`prepareContribution`), a second apart for up to five minutes. Null when
@@ -132,7 +132,7 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
   final engines =
       (prepared['engines'] as List?)
           ?.whereType<String>()
-          .where((engine) => _chipEngines.contains(engine))
+          .where((engine) => _swarmEngines.contains(engine))
           .toSet()
           .toList() ??
       <String>[];
@@ -182,8 +182,7 @@ Future<String?> contributeComputer(
       if (!alive()) return null;
       throw SuperTabFailure(
         c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
-        c.operationError ??
-            'The earlier attempt is still not confirmed. Try again to check it.',
+        c.operationError ?? 'The earlier attempt is still not confirmed. Try again to check it.',
       );
     }
     if (!alive() || !c.canWrite) return null;
@@ -343,8 +342,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (final (key, _, group) in _groups(views))
         for (final v in group) '$key/${v.id}',
     ];
-    if (c.backendUnreachable ||
-        _manageLayoutDrawn != _machineLayout(views) ||
+    if (_manageLayoutDrawn != _machineLayout(views) ||
         !listEquals(_groupsDrawn, groups)) {
       _changed();
       return;
@@ -361,7 +359,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     view.name,
     view.status,
     view.readingAt,
-    view.arrived,
+    // A line not online says when it was last seen, an age the one-second tick moves.
+    if (view.readingAt case final at?
+        when _machineStatusGroup(view) != 'online')
+      superTabAgo(widget.now().difference(at)),
     view.paused,
     view.cleaning,
     view.dim,
@@ -617,14 +618,16 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       agents: agents,
       status: status,
       readingAt: readingAt,
-      arrived: age != null && age < const Duration(milliseconds: 1200),
       paused: paused,
       cleaning: cleaning,
       dim: dim,
       details: details,
       resources: value,
       // The engines it was added with, as Add machine sent them.
-      engines: (shared?['engines'] as List?)?.whereType<String>().toList(),
+      engines: (shared?['engines'] as List?)
+          ?.whereType<String>()
+          .where(_swarmEngines.contains)
+          .toList(),
       // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
@@ -1078,8 +1081,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   child: _ManageMachineLine(
                     view: view,
                     name:
-                        _manageNames[view.id] ??
-                        superTabMachineName(view.name),
+                        _manageNames[view.id] ?? superTabMachineName(view.name),
                     own: view.owner?.id == c.accountId,
                     local: widget.app?.stateOf(view.id)?.isLocalMachine == true,
                     now: widget.now(),
@@ -1111,9 +1113,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               superTabMachineName(view.name),
               view.cleaning
                   ? 'Cleaning up'
-                  : _machineStatusGroup(
-                      view,
-                    ).replaceAll('unknown', 'status unknown'),
+                  : _machineStatusGroup(view)
+                        .replaceAll('unknown', 'status unknown'),
               if (view.tip.isNotEmpty) view.tip,
             ].join(', '),
             child: Tooltip(
@@ -1506,13 +1507,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// Before the Swarm is read, a loading list; a Swarm that cannot be read and holds no machine says so with Retry,
   /// even when an earlier read found none; a read Swarm with none, the empty note (task #3801). Null when there are
   /// machines to list.
-  Widget? _stateNote(EdgeInsets emptyPadding) {
+  Widget? _stateNote() {
     if (_ids.isNotEmpty) return null;
     if (c.backendUnreachable) {
       return Padding(
         key: const ValueKey('super-machines-error'),
-        padding: emptyPadding,
-        // Wraps: in a narrow sidebar with large text, Retry goes under the sentence rather than squeezing it.
+        padding: MachinesStyle.headerInset,
+        // Wraps: in a narrow window with large text, Retry goes under the sentence rather than squeezing it.
         child: Wrap(
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
@@ -1544,7 +1545,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       );
     }
     return Padding(
-      padding: emptyPadding,
+      padding: MachinesStyle.headerInset,
       child: Text(
         "Add a machine for this Swarm's agents to use.",
         style: DesktopChrome.metadata(),
@@ -1588,9 +1589,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   Widget build(BuildContext context) {
     final add = c.canWrite && widget.app != null
-        ? () => unawaited(
-            showAddComputers(context, c, widget.app!),
-          )
+        ? () => unawaited(showAddComputers(context, c, widget.app!))
         : null;
     return _manageScreen(add);
   }
@@ -1699,7 +1698,6 @@ class _MachineView {
     required this.agents,
     required this.status,
     required this.readingAt,
-    required this.arrived,
     required this.paused,
     required this.cleaning,
     required this.dim,
@@ -1721,7 +1719,7 @@ class _MachineView {
 
   /// When the reading shown was taken, and whether that is just now (the dot pings once).
   final DateTime? readingAt;
-  final bool arrived, paused, cleaning;
+  final bool paused, cleaning;
 
   /// Offline, unknown or refreshing: its numbers are old.
   final bool dim;

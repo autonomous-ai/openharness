@@ -800,7 +800,6 @@
   "test/tab_settings_test.dart": 2.1,
   "test/task_history_test.dart": 2.3,
   "test/task_step_test.dart": 2.1,
-  "test/team_account_offer_test.dart": 6.2,
   "test/terminal_alt_buffer_scroll_test.dart": 2.9,
   "test/terminal_binary_test.dart": 9.2,
   "test/terminal_block_glyph_test.dart": 1.9,
