@@ -19,9 +19,9 @@
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { RUN_DIR } from './src/__fixtures__/vitestRun.js'
+import { inject } from 'vitest'
 
-const root = process.env[RUN_DIR]
+const root = inject('runFolder')
 // Without its run's folder, every run would share one folder again.
 if (!root) throw new Error('vitest.tmpdir.ts needs src/__fixtures__/vitestRun.ts as the run\'s globalSetup, which makes the run\'s folder')
 const folder = join(root, `${process.env.VITEST_POOL_ID ?? process.pid}`)
