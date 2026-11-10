@@ -20,6 +20,7 @@ import 'package:harness/widgets/pane_grid.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the PR's pictures there.
 final _shots = Platform.environment['PERSONAL_PROJECTS_SHOTS'];
@@ -1064,10 +1065,11 @@ void main() {
       final projects = PersonalProjects.of(f.app);
       await projects.sync(c);
       final api = named(c, 'api');
-      expect(projects.hiddenIn(c), isEmpty);
+      // The Swarm's own first project names no repository: it hides throughout.
+      expect(projects.hiddenIn(c), {'lead'});
       f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
       f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
-      expect(projects.hiddenIn(c), {api.id});
+      expect(projects.hiddenIn(c), {'lead', api.id});
       for (final project in c.snapshot!.projects) {
         expect(
           projects.hidden(c, project.id),
@@ -1075,11 +1077,11 @@ void main() {
           reason: project.name,
         );
       }
-      // A machine with one of the panes not listed yet: nothing hides.
+      // A machine with one of the panes not listed yet: no repo's project hides.
       f.app.machineStates['m']!
         ..agentsListedOnce = false
         ..agentLoadStatus = AgentLoadStatus.loading;
-      expect(projects.hiddenIn(c), isEmpty);
+      expect(projects.hiddenIn(c), {'lead'});
     });
 
     test('nothing hides while a machine with one of the panes has not listed '
@@ -1111,20 +1113,25 @@ void main() {
         'hides', () async {
       final f = SuperTabLaunchFixture();
       _desk(f);
+      final server = f.connection.server.state;
+      (server['projects'] ??= [
+        projectFixture('lead', 'Personal', 'lead'),
+      ]).add(projectFixture('by-hand', 'Notes', 'chat-by-hand'));
+      (server['conversations'] as List).add({
+        ...conversationFixture('chat-by-hand', 'Lead'),
+        'projectId': 'by-hand',
+      });
       final c = await _personal(f);
       final projects = PersonalProjects.of(f.app);
       await projects.sync(c);
       f.app.swarms.removeWhere((s) => s.id == 'one' || s.id == 'two');
       expect(projects.hidden(c, named(c, 'api').id), isTrue);
-      final byHand = c.snapshot!.projects
-          .firstWhere((p) => p.leadConversationId == 'lead')
-          .id;
-      expect(projects.hidden(c, byHand), isFalse);
+      expect(projects.hidden(c, 'by-hand'), isFalse);
 
       final team = SuperTabLaunchFixture();
       _desk(team);
       final tc = await _personal(team, people: const ['owner', 'kim']);
-      expect(PersonalProjects.of(team.app).hidden(tc, byHand), isFalse);
+      expect(PersonalProjects.of(team.app).hidden(tc, 'lead'), isFalse);
     });
 
     testWidgets('the list leaves it out, but keeps it while its chat is open', (

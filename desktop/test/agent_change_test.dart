@@ -33,7 +33,7 @@ class SwitchConnection extends MonitorConnection {
   final events = <String>[];
   String? closeError;
 
-  /// The machine's whole refusal, as a daemon sends it (a Swarm Buddy's, say).
+  /// The machine's whole refusal, as a daemon sends it (a PM's, say).
   Map<String, dynamic>? closeRefusal;
   Completer<void>? holdClose;
   Completer<void>? holdHandoff;
@@ -1489,26 +1489,23 @@ void main() {
       expect(connection.creations.single, isNot(contains('codexHome')));
     });
 
-    test(
-      'using another account runs this pane on it',
-      () async {
-        final connection = ProfileConnection();
-        final app = fixture(connection, sourceEngine: 'codex');
-        app.stateOf('m')!.localOnly = true;
-        addTearDown(app.dispose);
-        await app.addAgentToSwarm('m', 'a0');
-        final rows = await app.agentProfiles('m', 'claude');
-        expect(
-          await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
-          isNull,
-        );
-        expect(connection.links, isEmpty);
-        expect(
-          connection.creations.single,
-          containsPair('claudeHome', '/home/me/.claude-work'),
-        );
-      },
-    );
+    test('using another account runs this pane on it', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      final rows = await app.agentProfiles('m', 'claude');
+      expect(
+        await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
+        isNull,
+      );
+      expect(connection.links, isEmpty);
+      expect(
+        connection.creations.single,
+        containsPair('claudeHome', '/home/me/.claude-work'),
+      );
+    });
 
     test('picking the current engine and account does nothing', () async {
       final connection = ProfileConnection();
