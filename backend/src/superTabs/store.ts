@@ -56,7 +56,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
@@ -111,7 +111,6 @@ import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentPost, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { agentDisplayName } from './agentNames.js'
-import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
@@ -395,12 +394,6 @@ export interface SuperTabStoreHooks {
   /** The client for reads that tolerate a few seconds of lag (lib/prisma.ts prismaSecondary, task #2970): older history
    *  pages and the costs report. Without it they read the store's own client. */
   replica?: PrismaClient
-  /** Tasks that stopped being in an agent's hands with this write (github/holds.ts): done, cancelled, stopped, given to
-   *  another attempt, or their agent removed. Called after the write commits; it must not throw. */
-  workEnded?: (tabId: string, ended: WorkHold[]) => void
-  /** Tasks newly in progress, or in progress again under the same id (resumed after a usage limit): GitHub tokens forget
-   *  that such a task ended (github/tokens.ts resume). */
-  workStarted?: (tabId: string, started: WorkHold[]) => void
   /** Who pushed these pull requests of a project's repository (github/pushOrigin.ts): the worst of their answers. Absent with no GitHub App. */
   pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
   /** The files a handed task's pull requests change and their head (pullRequestFiles.ts), read before its Engineer's Ready so
@@ -1614,13 +1607,9 @@ export class SuperTabStore {
       timedPhase('read:pullRequestFiles', () => this.pullRequestFilesFor(user, tabId, command)),
       timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command)),
       timedPhase('read:verdictHead', () => this.verdictHeadRead(user, tabId, command))])
-    let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
     const done = await transaction(this.db, async tx => {
-      // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
-      ended = []
-      started = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type))
       const named = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
@@ -2110,8 +2099,6 @@ export class SuperTabStore {
           } })
         }
       }
-      ended = endedHolds(original, effects.state)
-      started = startedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
       // An attempt finished by its own agent ends with the totals its host read as it finished; finished by anyone else, or
       // without them, its end is unknown (costs/attempts.ts endRun).
@@ -2268,8 +2255,6 @@ export class SuperTabStore {
         revision: 0, parts: json(receiptParts(committed.written, stamp)), result: json(effects.result) } })
       return { result: effects.result, parts: committed.written, lastChangedAt: stamp }
     })
-    this.endWork(tabId, ended)
-    this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
     // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
@@ -2530,77 +2515,6 @@ export class SuperTabStore {
       logger.info('[swarm-dispatch] pass', { tabId, ...out, lanes: load, ms: Math.round(performance.now() - started) })
     }
     return out
-  }
-
-  private startWork(tabId: string, started: WorkHold[]): void {
-    if (!started.length || !this.hooks.workStarted) return
-    try { this.hooks.workStarted(tabId, started) } catch (error) {
-      logger.warn('[super-tab] work-started hook failed', { tabId, error: error instanceof Error ? error.message : String(error) })
-    }
-  }
-
-  private endWork(tabId: string, ended: WorkHold[]): void {
-    if (!ended.length || !this.hooks.workEnded) return
-    try { this.hooks.workEnded(tabId, ended) } catch (error) {
-      logger.warn('[super-tab] work-ended hook failed', { tabId, error: error instanceof Error ? error.message : String(error) })
-    }
-  }
-
-  /** What the Harness GitHub App may mint a token for (routes/superTabs.ts `github-token`): the calling host's own agent, on
-   *  the machine its host names, with a task in its hands. Who the work is for, and the agent's and machine's names, go
-   *  into its commits (github/attribution.ts). The caller checks that the repository is on GitHub. */
-  async githubAssignment(user: AuthUser, tabId: string, asAgentId: string | undefined, machineId: string) {
-    if (!asAgentId) fail('AGENT_REQUIRED', 'Ask for a GitHub token as the agent doing the work (asAgentId).', 400)
-    return transaction(this.db, async tx => {
-      const { state } = await this.load(tx, user, tabId)
-      const actor = await this.actor(tx, user, state, asAgentId)
-      // A read-only contribution reads; it does not push.
-      author(state, actor, true)
-      const target = agent(state, asAgentId)
-      if (target.machineId !== machineId) fail('FORBIDDEN', 'Only the machine running this agent can ask for its GitHub token.', 403)
-      const group = tokenTask(state, target)
-        ?? fail('NO_ASSIGNMENT', 'This agent has no task in progress. A GitHub token is only for an agent working on a task.')
-      const project = groupProject(state, group)
-      const owner = await ownerAccount(tx.user, project)
-      const requester = owner ?? { name: null, email: state.people.find(p => p.id === project.ownerId)?.email ?? '' }
-      if (!requester.email) fail('NOT_FOUND', 'This project\'s owner is unavailable.', 404)
-      const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
-      const machineName = contributed ?? await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId },
-        select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null)
-      return { tabId, projectId: project.id, approvalRequired: teamAccountRequired(), agentId: target.id, assignmentId: group.assignment!.id,
-        repositoryUrl: project.repository?.repositoryUrl ?? null,
-        requester: { name: requester.name?.trim() || null, email: requester.email },
-        agentName: agentDisplayName(state.agents, target.id) ?? target.displayName ?? target.name, machineName: machineName?.trim() || null }
-    })
-  }
-
-  /**
-   * What a contributed machine's host needs to prepare a queued start's folder before the agent exists (routes/superTabs.ts,
-   * a start's `github-token`): the start's project repository, whom the work is for, and whether it is the machine owner's
-   * own project. Only the host of that start, while nothing has started or failed yet, as `start()` reads it.
-   */
-  async githubStart(user: AuthUser, tabId: string, startId: string, machineId: string) {
-    return transaction(this.db, async tx => {
-      const { state } = await this.loadStart(tx, user, tabId, startId)
-      const actor = await this.poolHostActor(tx, user, state, machineId, startId)
-      const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
-      if (start.harnessId || start.error) fail('START_SETTLED', 'This start has already started or failed; its folder is not prepared again.', 409)
-      if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
-      // Its host acts as the agent that made the start (poolHostActor), which may carry it on whatever its role.
-      const group = readConversation(state, actor, start.request.conversationId)
-      if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
-      const grant = await this.contribution(tx, state, actor, start.request, true)
-      if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
-        fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
-      }
-      // A Swarm-wide Buddy's folder is made of checkouts already on its machine: there is no repository to fetch for it.
-      const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
-      const owner = await ownerAccount(tx.user, project)
-      const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
-      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(),
-        startId, own: ownsProject(state, start.machineOwnerId, project),
-        requester: { name: owner?.name?.trim() || null, email } }
-    })
   }
 
   /** Streams one file into the bucket for a later `message.send` by the same actor in the same conversation. Access is
@@ -3899,9 +3813,9 @@ export class SuperTabStore {
       others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
   }
 
-  /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
-   *  project, as any read of the project: another project's, or one this reader cannot see, is unavailable alike. A Buddy
-   *  routes nothing, so it reads none. */
+  /** Who may read a project's CI load (routes/superTabs.ts `ci-load`, retired with Swarm v4, slice S6, and answered
+   *  "unavailable"): a person or an agent of the project, as any read of the project: another project's, or one this reader
+   *  cannot see, is unavailable alike. A Buddy routes nothing, so it reads none. */
   async ciRepository(user: AuthUser, tabId: string, projectId: string, asAgentId?: string): Promise<{ repositoryUrl: string | null }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
@@ -5313,9 +5227,7 @@ export class SuperTabStore {
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */
   async stopped(user: AuthUser, tabId: string, assignmentId: string, receipt: string) {
-    let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
-      ended = []
       let loaded = await this.load(tx, user, tabId)
       // The stop says Not building this in its task's project-chat thread (below): that chat is read when the load left it out.
       const lines = taskLineChats(loaded.state)
@@ -5369,10 +5281,8 @@ export class SuperTabStore {
       await this.writeMessages(tx, tabId, state, notices, sequences)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, machineId: execution.machineId, harnessId: execution.harnessId,
         machineOwnerId: execution.machineOwnerId, receipt } })
-      ended = endedHolds(before, state)
       return { confirmed: true }
     })
-    this.endWork(tabId, ended)
     return done
   }
 }

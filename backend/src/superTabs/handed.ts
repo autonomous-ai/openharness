@@ -1,6 +1,6 @@
 // A task whose pull request is ready for review is handed over (task #3399, docs/plans/2026-11-05-handed-on-ready-plan.md).
-// Its Engineer is free for new work (model.ts occupiesAgent: every "is this agent busy" check reads it) and keeps its GitHub
-// push access (github/holds.ts HOLDING keeps `review`). A No verdict, red CI or a merge conflict brings the same attempt back
+// Its Engineer is free for new work (model.ts occupiesAgent: every "is this agent busy" check reads it) and keeps its pull
+// request. A No verdict, red CI or a merge conflict brings the same attempt back
 // to that Engineer; if it is down, or has not picked it up within REOPEN_OWNER_MS, the task is lost, so anyone free in the
 // lane takes it (liveness.ts). A dispatcher looking for a free agent reads occupiesAgent from here.
 import { handed, type Assignment, type Conversation } from './model.js'

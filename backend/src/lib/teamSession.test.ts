@@ -83,13 +83,7 @@ function recorder() {
   const methods = (): Record<string, unknown> => new Proxy({}, { get: (_t, name: string) => name === 'then' ? undefined
     : async (...args: unknown[]) => {
       calls.push({ method: name, args })
-      // What the GitHub token route goes on to use from a grant (routes/superTabs.ts `github-token`).
-      return name === 'githubAssignment'
-        ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
-          requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
-        : name === 'githubStart'
-          ? { tabId: 'tab-1', startId: 'start-1', repositoryUrl: 'https://github.com/example/project', own: true, requester: { name: 'Owner', email: 'owner@example.com' } }
-          : { ok: true }
+      return { ok: true }
     } })
   return { store: methods() as unknown as SuperTabStore, calls }
 }
@@ -113,13 +107,8 @@ beforeEach(async () => {
   app = Fastify()
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticate as never)
-  // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment). Its config is
-  // what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`), and a team session's commits
-  // carry the app's bot identity (github/app.ts `commitIdentity`).
-  const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null },
-    commitIdentity: vi.fn(() => ({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })) },
-    issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
-    prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
+  // A GitHub App whose config is what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`).
+  const github = { config: { appId: '424242', privateKey: appKey, slug: null } }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
   await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never })
   await app.register(harnessShareRoutes)
@@ -217,17 +206,19 @@ describe('a team session on its own machine', () => {
     })
   }
 
-  it('asks for its own agent\'s GitHub token, naming its own machine', async () => {
+  // Swarm v4 (slice S6): the server gives no GitHub App token; the retired routes answer as a server without the app.
+  it('hears there is no GitHub App token for its own agent, and nothing reaches the store', async () => {
     const res = await call('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'team-mac' })
-    expect(res.statusCode, res.body).toBe(200)
-    expect(store.calls).toEqual([{ method: 'githubAssignment', args: [expect.objectContaining({ harnessSessionKind: 'team' }), 'tab-1', 'agent-1', 'team-mac'] }])
+    expect(res.statusCode, res.body).toBe(503)
+    expect(res.json().error.code).toBe('GITHUB_APP_NOT_CONFIGURED')
+    expect(store.calls).toEqual([])
   })
 
-  it('asks for a queued start\'s read-only token on its own machine, always: it has no git login of its own', async () => {
+  it('hears a queued start on its own machine uses no GitHub App token, and nothing reaches the store', async () => {
     const res = await call('POST', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1/github-token', { always: true })
     expect(res.statusCode, res.body).toBe(200)
-    expect(res.json().data).toMatchObject({ github: true, token: 'fixture-read-token', repository: 'example/project' })
-    expect(store.calls).toEqual([{ method: 'githubStart', args: [expect.objectContaining({ harnessSessionKind: 'team' }), 'tab-1', 'start-1', 'team-mac'] }])
+    expect(res.json().data).toEqual({ github: false })
+    expect(store.calls).toEqual([])
   })
 
   it('registers its own computer, as a team machine', async () => {
@@ -401,9 +392,9 @@ describe('the owner, unchanged', () => {
     expect((await call('GET', '/api/super-tabs/tab-1/parts', undefined, 'owner-token')).statusCode).toBe(200)
     expect((await call('GET', '/api/super-tabs/hosts/owner-mac/changes', undefined, 'owner-token')).statusCode).toBe(200)
     expect((await call('GET', '/api/super-tabs/hosts/team-mac/changes', undefined, 'owner-token')).statusCode).toBe(200)
-    // A computer's GitHub token request is the store's to judge, whatever machine its body names.
-    expect((await call('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'owner-mac' }, 'owner-token')).statusCode).toBe(200)
-    expect(store.calls.map(c => c.args[0])).toEqual([owner, owner, owner, owner])
+    // A GitHub token request gets what a server without the app answers (slice S6), and reaches no store.
+    expect((await call('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'owner-mac' }, 'owner-token')).statusCode).toBe(503)
+    expect(store.calls.map(c => c.args[0])).toEqual([owner, owner, owner])
   })
 })
 

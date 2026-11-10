@@ -1,12 +1,11 @@
 // Task #3399: a task whose pull request is ready for review is handed over. Its Engineer is free for new work and keeps
-// its push access; a No verdict, red CI or a conflict brings the task back to it (docs/plans/2026-11-05-handed-on-ready-plan.md).
+// its pull request; a No verdict, red CI or a conflict brings the task back to it (docs/plans/2026-11-05-handed-on-ready-plan.md).
 import { describe, expect, it } from 'vitest'
 import { awaitingWorkers, workerIndex, type SuperTabState } from './model.js'
 import type { Command } from './commands.js'
 import { loseTasks } from './liveness.js'
 import { REOPEN_OWNER_MS, reopenOnEvents } from './handed.js'
 import { currentGroup } from './terminal.js'
-import { workHolds, startedHolds, endedHolds, tokenTask } from '../github/holds.js'
 import { stepsFixture } from './steps.test-support.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -42,15 +41,6 @@ describe('a ready pull request frees its Engineer (#3399)', () => {
     expect(awaitingWorkers(f.state, 'lead').map(a => a.id)).toContain(f.dev)
   })
 
-  it('keeps the handed task\'s GitHub hold, adds the new task\'s, and ends neither', () => {
-    const f = handedFixture()
-    const handedAt = structuredClone(f.state)
-    expect(workHolds(handedAt)).toEqual([{ agentId: f.dev, assignmentId: f.group(f.task).assignment!.id }])
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
-    expect(endedHolds(handedAt, f.state)).toEqual([])
-    expect(startedHolds(handedAt, f.state)).toEqual([{ agentId: f.dev, assignmentId: f.group(f.next).assignment!.id }])
-  })
-
   it('does not mark the Engineer finished when its handed task is done while it works on the next', () => {
     const f = handedFixture()
     f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
@@ -58,18 +48,6 @@ describe('a ready pull request frees its Engineer (#3399)', () => {
     expect(f.state.agents.find(a => a.id === f.dev)!.workDecision).toBeUndefined()
   })
 
-  it('gives the GitHub token for the task in the Engineer\'s hands first, then the handed one, and none without either', () => {
-    const f = handedFixture()
-    const dev = f.state.agents.find(a => a.id === f.dev)!
-    // Only the handed task: it still gets a token, to push fixes.
-    expect(tokenTask(f.state, dev)?.id).toBe(f.task)
-    // A new task listed after it in the Swarm is still the one it pushes for now.
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
-    expect(tokenTask(f.state, dev)?.id).toBe(f.next)
-    f.run({ type: 'work.status', conversationId: f.next, assignmentId: f.group(f.next).assignment!.id, status: 'done', result: 'Merged' }, f.as(f.dev))
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: `Merged ${PR}` }, f.as(f.dev))
-    expect(tokenTask(f.state, dev)).toBeUndefined()
-  })
 })
 
 const MINUTE = 60_000
@@ -121,8 +99,6 @@ describe('No, red CI or a conflict reopens the task pinned to its owner (#3399)'
     expect(builtBy(after.ledger?.runs)).toEqual(builtBy(f.before.ledger?.runs))
     expect(builtBy(after.ledger?.runs)).toEqual([[f.before.assignment!.id, f.dev]])
     expect(effects.messages).toContainEqual(expect.objectContaining({ conversationId: f.task, recipients: [f.dev], text: expect.stringContaining('back with you') }))
-    // The hold is the same assignment's: none starts or ends.
-    expect(workHolds(f.state)).toEqual([{ agentId: f.dev, assignmentId: f.before.assignment!.id }])
   })
 
   it('the Engineer\'s own failed check does not reopen it', () => {

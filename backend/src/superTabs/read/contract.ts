@@ -172,6 +172,7 @@ export interface FirstLoad extends ReadMeta {
   /** Own active Tasks; absent for agent readers and older servers. */
   personalTasks?: import('./personalTasks.js').PersonalTasks
   tabId: string
+  /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App; never now. */
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
   steps?: true
@@ -359,6 +360,7 @@ export interface HostPool {
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   removedHarnessIds?: string[]
+  /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App, for a host to ask for a start's token; never now. */
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
