@@ -29,8 +29,8 @@ type Json = Record<string, unknown>
 const TRAIN_BRANCH = 'harness-train/'
 /** The most pull requests one train carries: the one of twenty that breaks it is found in five runs more. */
 const TRAIN_MAX = 20
-/** A train whose checks have not finished in this long is closed and built again: while it is open nothing else lands, and a
- *  check that never reports would hold the repository for good. */
+/** A train whose checks have not finished in this long, or whose member still waits, is closed and built again: while it is
+ *  open nothing else lands, and a check that never reports would hold the repository for good. */
 const TRAIN_WAIT_MS = 90 * 60_000
 const TITLE = 'Train: ', RED_TITLE = 'Train, red: '
 const SHA = /^[0-9a-f]{40}$/
@@ -155,12 +155,13 @@ export class GitHubTrain<T extends TrainPull> {
   }
 
   /** One step for the repository's train with the [ready] pull requests: the open one waits, lands or is closed; with none
-   *  open, the next is built. Returns the ones to merge directly, as before the train: nothing was built then. */
-  async carry(ready: readonly T[]): Promise<T[]> {
+   *  open, the next is built. [waiting]: each pull request, as `<number>@<head>`, that is read and may yet be ready at this
+   *  head. Returns the ones to merge directly, as before the train: nothing was built then. */
+  async carry(ready: readonly T[], waiting: ReadonlySet<string>): Promise<T[]> {
     const [train, ...others] = this.pulls.map(pull => this.trainOf(pull)).filter(found => found !== null).sort((a, b) => a.number - b.number)
     // One train at a time: a second would be tested on a base the first is about to move.
     for (const other of others) await this.close(other, false, `#${train!.number} is open`)
-    if (train) { await this.attend(train, ready); return [] }
+    if (train) { await this.attend(train, ready, waiting); return [] }
     // A fork's pull request is not carried: its head is no commit of this repository, so the merges API cannot merge it into
     // the train's branch. It merges on its own checks, as before the train, and only while no train is open to be moved under.
     const forks = ready.filter(pull => pull.fork)
@@ -177,7 +178,7 @@ export class GitHubTrain<T extends TrainPull> {
 
   /** The open [train]: its checks running, it waits; failed, it is closed as red; passed, it lands if every member is still
    *  ready at its head and what the base gained since changes nothing it tested. */
-  private async attend(train: Train, ready: readonly T[]): Promise<void> {
+  private async attend(train: Train, ready: readonly T[], waiting: ReadonlySet<string>): Promise<void> {
     // Its branch is not at the tip its body says the train built: someone pushed to it, or wrote the body.
     if (train.head !== train.tip) return this.close(train, false, 'its branch is not at the tip the train built')
     const checks = await this.host.checks(train.number, train.head)
@@ -188,7 +189,13 @@ export class GitHubTrain<T extends TrainPull> {
     }
     // Read again right before landing: a HOLD since, a new head or a closed one, and the train is built again without it.
     const riders = train.members.map(member => ready.find(pull => pull.number === member.number && pull.head === member.head))
-    if (!riders.every(pull => pull !== undefined)) return this.close(train, false, 'a pull request it carries is no longer ready at its head')
+    if (!riders.every(pull => pull !== undefined)) {
+      // One that only waits at its head (its own check runs again, GitHub has not yet said whether it merges, a daemon just
+      // started has not seen its checks hold still) keeps the train's green run, for as long as a train may wait.
+      const waits = train.members.every((member, at) => riders[at] || waiting.has(`${member.number}@${member.head}`))
+      if (waits && this.deps.now() - train.openedAt < TRAIN_WAIT_MS) return
+      return this.close(train, false, 'a pull request it carries is no longer ready at its head')
+    }
     if (!await this.tested(train)) return this.close(train, false, `${this.base} moved under it`)
     // Squashed where the repository allows it, as each pull request was; else a merge commit, else a rebase, which takes no message.
     const settings = await this.deps.reads.one(this.repo, `/repos/${this.repo}`)

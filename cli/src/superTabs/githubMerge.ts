@@ -373,6 +373,8 @@ export class GitHubMerge {
     // What a merged train carried is closed by it and read no more: to GitHub it now conflicts with the base that holds it.
     const landed = await train.landed()
     const ready: Ready[] = []
+    // Read, and not ready only for now: a train that carries one keeps its green run (githubTrain.ts attend).
+    const waiting = new Set<string>()
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head) || landed.has(number)) continue
@@ -398,14 +400,14 @@ export class GitHubMerge {
         continue
       }
       const checks = await this.checks(repo, at, head)
-      if (checks.state === 'running') continue
+      if (checks.state === 'running') { waiting.add(`${number}@${head}`); continue }
       if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
       if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
       if (state === 'dirty') { await conflicts({ number, head, author, comments }); continue }
       if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
-      if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
+      if (!['clean', 'has_hooks', 'unstable'].includes(state)) { waiting.add(`${number}@${head}`); continue }
       const carried = await this.carriedPull(repo, number, head, listed)
       if (carried) {
         await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}'s commits (its head ${carried.head.slice(0, 7)}), so merging it would `
@@ -418,7 +420,7 @@ export class GitHubMerge {
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
         fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), author, comments })
     }
-    for (const pull of await train.carry(ready)) await this.mergeAlone(repo, pull)
+    for (const pull of await train.carry(ready, waiting)) await this.mergeAlone(repo, pull)
     this.forgetHeads(repo, open)
   }
 
