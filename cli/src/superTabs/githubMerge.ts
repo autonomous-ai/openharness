@@ -7,10 +7,11 @@
  *
  * A pull request into the default branch is merged, squashed, when
  * - it is not a draft;
- * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` in a comment's first line, the reader the name
- *   the comment is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned; two from two
- *   readers when its text or a comment's first line says TWO READS. A comment signed by one of its writers (writersOf), in any
- *   spelling, is that writer's, and an unsigned READ-OK from the login that opened it counts for nothing (verdicts);
+ * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` as a comment's or a review's own, in its first
+ *   line (pullTalk, ownVerdict), the reader the name it is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its
+ *   GitHub login when unsigned; two from two readers when its text or a comment's first line says TWO READS. A comment signed by
+ *   one of its writers (writersOf), in any spelling, is that writer's, and an unsigned READ-OK from the login that opened it
+ *   counts for nothing (verdicts);
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
  * - and GitHub says it can merge.
@@ -33,8 +34,42 @@ export const PULL_PAGES = 3
 export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
-/** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits. */
-const VERDICT = /(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])/
+/** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits, in bold or
+ *  backticks and with its pull request's `#N` before the sha (markers.py parse_marker). */
+const VERDICT = /(?<![\w-])(READ-OK|HOLD)\*{0,2}\s+(?:#\d+\s+)?`?([0-9a-f]{7,40})(?![0-9a-f])/g
+
+/**
+ * The verdict a comment's first line gives as its own, or null. A verdict talked about is none, as lampOS's markers.py reads
+ * them, each rule from a pull request held or merged wrongly: one on a quoted line or a line opening a code fence (#5068: an
+ * author's "> READ-OK <head>" counted as a second read), named as a noun or as someone's (#3371: "your HOLD 889b694ea",
+ * #5068: "the Reviewer-lead's READ-OK"), in brackets (#3608: "(HOLD 3e741c220)"), right after a backtick or a quotation mark
+ * (#3781: "`HOLD 73aa8b23f`"), or inside quotation marks on the line (swarm-sandbox #24: "as in "Juno, HH:MM: READ-OK
+ * 239a631"", an ask's example).
+ */
+function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } | null {
+  if (/^\s*>/.test(line) || /^ {0,3}(?:`{3,}|~{3,})/.test(line)) return null
+  for (const found of line.matchAll(VERDICT)) {
+    const before = line.slice(0, found.index)
+    if (/(?:\b(?:your|for|the|that|this|their|his|her|its|my|our)|['’]s)\s+\**$/i.test(before)) continue
+    if (/[(\[]\**`?$/.test(before) || /[`"“”'‘]\**$/.test(before)) continue
+    if ((before.match(/["“”]/g) ?? []).length % 2 === 1) continue
+    return { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]! }
+  }
+  return null
+}
+
+/** A pull request's comments and its reviews' bodies, as one list in time order. A review's body reads exactly as a comment's
+ *  (lampOS #5212: El posted its reads as reviews, and four pull requests each counted one read short), its state (APPROVED,
+ *  CHANGES_REQUESTED, ...) is never a read, and a review with no words, not submitted or dismissed counts for nothing
+ *  (markers.py merge_reviews). A list that cannot be read stops the pass, as any read: nothing merges on half of it. */
+export async function pullTalk(reads: GitHubReads, repo: string, number: number): Promise<Json[]> {
+  const comments = await reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
+  const reviews = (await reads.current(repo, `/repos/${repo}/pulls/${number}/reviews?per_page=${PAGE}`, 3))
+    .filter(r => String(r.body ?? '').trim() && typeof r.submitted_at === 'string' && r.submitted_at && !['PENDING', 'DISMISSED'].includes(String(r.state)))
+    .map(r => ({ body: r.body, user: r.user, author_association: r.author_association, created_at: r.submitted_at, review: true }))
+  // Stable: a comment and a review of one time keep the comment first, as markers.py does.
+  return [...comments, ...reviews].sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
+}
 /** A post's signature: its writer's name first, then a comma, colon or bracket ("Juno, 14:20:", "**Faye** (PM):"). */
 const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
@@ -93,7 +128,7 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     if (!TEAM.has(comment.author_association)) continue
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
     if (/\bTWO READS\b/.test(first)) twoReads = true
-    const found = VERDICT.exec(first)
+    const found = ownVerdict(first)
     if (!found) continue
     const login = String(object(comment.user).login ?? '')
     const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
@@ -109,8 +144,8 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     const last = readers.get(key)
     // A HOLD is lifted only by its own kind: a signature's by a signature, a login's (unsigned) by that login. A person whose
     // login reads as an agent's name is not that agent.
-    if (last?.verdict === 'HOLD' && found[1] === 'READ-OK' && last.signed !== !!signature) continue
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, signed: !!signature, at })
+    if (last?.verdict === 'HOLD' && found.verdict === 'READ-OK' && last.signed !== !!signature) continue
+    if (!last || at >= last.at) readers.set(key, { verdict: found.verdict, sha: found.sha, name: reader, ownLogin: !signature && fromOpener, signed: !!signature, at })
   }
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin }])), twoReads }
 }
@@ -255,7 +290,7 @@ export class GitHubMerge {
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
-      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
+      const comments = await pullTalk(this.reads, repo, number)
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue

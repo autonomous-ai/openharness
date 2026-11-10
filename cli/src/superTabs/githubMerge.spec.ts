@@ -13,7 +13,7 @@ const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref
 
 /** One repository as GitHub's REST API answers for it, with ETags, and what was sent to it. */
 function fakeGitHub() {
-  const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]),
+  const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
@@ -28,6 +28,7 @@ function fakeGitHub() {
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
+      : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
       : /\/pulls\/\d+$/.test(p) ? { mergeable_state: repo.state }
@@ -156,6 +157,63 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.clock.now += 60_000
     await f.merger.tick()
     expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, HH:MM: READ-OK f6edb44"\.$/)])
+  })
+
+  // lampOS #5212 (4 Nov): El posted its reads as reviews, and four pull requests each counted one read short. A review's body reads
+  // exactly as a comment's, in time order with them; its state is never a read (markers.py merge_reviews, lib.sh coord_pr_comments).
+  it('reads a review\'s body as a comment: a READ-OK posted as a review merges, and a HOLD posted as one stops the merge', async () => {
+    const review = (body: string, state: string, at = '2026-11-09T12:10:00Z', extra: Json = {}) =>
+      ({ id: 7, body, state, submitted_at: at, author_association: 'MEMBER', user: { login: 'deehw' }, ...extra })
+    const read = setup()
+    read.github.repo.comments.set(4, [])
+    read.github.repo.reviews.set(4, [review('Juno, 14:20, to **Pip**: READ-OK f6edb44', 'APPROVED')])
+    await read.merger.tick()
+    expect(read.merges()).toHaveLength(1)
+    const held = setup()
+    held.github.repo.reviews.set(4, [review('Kai, 14:30: HOLD f6edb44: the day count is off by one.', 'CHANGES_REQUESTED', '2026-11-09T12:30:00Z')])
+    await held.merger.tick()
+    expect(held.merges()).toEqual([])
+    // A review with no words, one not submitted and one dismissed say nothing; its state alone is no read.
+    const none = setup()
+    none.github.repo.comments.set(4, [])
+    none.github.repo.reviews.set(4, [review('', 'APPROVED'), review('Juno, 14:20: READ-OK f6edb44', 'PENDING', ''),
+      review('Juno, 14:20: READ-OK f6edb44', 'DISMISSED')])
+    await none.merger.tick()
+    expect(none.merges()).toEqual([])
+  })
+
+  // A verdict is its comment's own: one talked about is none (lampOS markers.py, each from a pull request held or merged wrongly).
+  it.each([
+    // #3371: "your HOLD `889b694ea` asked for" held its PR under the replier's name.
+    ['a verdict named as someone\'s', 'Pip, 12:31, to **Juno**: fixed your HOLD f6edb44, see the new head.', 1],
+    ['a possessive\'s', 'Kai, 14:30: the Reviewer-lead\'s HOLD f6edb44 was on this head.', 1],
+    // #5068: an author's "> READ-OK <head>" reply counted as a second read.
+    ['a quoted line', '> Kai, 14:10: HOLD f6edb44: off by one', 1],
+    // #3608: "(HOLD 3e741c220)", the HOLD a reply answers.
+    ['one in brackets', 'Kai, 14:30, to Juno (HOLD f6edb44): new head coming.', 1],
+    // #3781: "your 19:34 comment opens with `HOLD 73aa8b23f`".
+    ['one in backticks', 'Kai, 14:30: your comment opens with `HOLD f6edb44`, so it holds.', 1],
+    ['an opening code fence', '```HOLD f6edb44', 1],
+    // swarm-sandbox #24: an ask's example, "as in "Juno, HH:MM: READ-OK 239a631"", read as a READ-OK.
+    ['one inside quotation marks', 'Kai, 14:30: please read again, and start with "Juno, HH:MM: HOLD f6edb44" if it is wrong.', 1],
+  ])('reads no HOLD in %s', async (_case, line, merges) => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment(line, { created_at: '2026-11-09T12:30:00Z' })])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(merges)
+  })
+
+  it('takes no READ-OK from an example inside quotation marks, and takes one in bold, with backticks or naming its pull request', async () => {
+    const example = setup()
+    example.github.repo.comments.set(4, [comment('Kai, 14:30: start with "Kai, HH:MM: READ-OK f6edb44" once you have read it.', { user: { login: 'kenmore' } })])
+    await example.merger.tick()
+    expect(example.merges()).toEqual([])
+    for (const line of ['**READ-OK** `f6edb44`', 'Juno, 14:20: READ-OK #4 f6edb44', 'Juno, 14:20: **READ-OK f6edb44**']) {
+      const f = setup()
+      f.github.repo.comments.set(4, [comment(line, { user: { login: 'kenmore' } })])
+      await f.merger.tick()
+      expect(f.merges(), line).toHaveLength(1)
+    }
   })
 
   // A reader is one however it writes its name: a HOLD as "Kai Lee" stood for good after its READ-OK as "kai-lee".
