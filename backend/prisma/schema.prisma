@@ -1373,9 +1373,6 @@ model SuperTabDelivery {
   // Until when its agent's host holds it while the agent works (turnEnd.ts, task #3403): another agent's post to a crew member.
   // Cleared by the agent's own status change; unset on older rows and on what goes at once.
   waitsUntil            DateTime?
-  // A row gathered for its PM's inbox rather than the notice digest (inbox.ts, task #3545): "people" or "crew". At idle the
-  // inbox goes at once only for these; unset on notices and on older rows.
-  inboxSection          String?
   /// Server-derived proposal priority, 0 first. Absent on rows before proposal cards; retained until existing delivery compaction.
   inputPriority         Int?
   // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by

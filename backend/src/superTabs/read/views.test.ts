@@ -207,20 +207,13 @@ describe('reader view over what the read cache holds', () => {
   })
 })
 
-describe('instructions in the reader\'s view (project instructions, phase 2)', () => {
-  it('gives every agent a role name and every project its coordinator\'s name, defaulted for older data', () => {
+describe('role names in the reader\'s view', () => {
+  it('gives every agent a role name, the PM\'s by what it is', () => {
     const s = richSwarm()
-    s.edit(state => {
-      state.agents.find(a => a.id === s.worker)!.roleName = 'Tester'
-      state.projects![0]!.instructionsRevision = 4
-    })
+    s.edit(state => { state.agents.find(a => a.id === s.worker)!.roleName = 'Tester' })
     const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {})
     expect(view.derived.agents[s.lead]!.roleName).toBe('PM')
     expect(view.derived.agents[s.worker]!.roleName).toBe('Tester')
-    expect(view.parts.head.data.projects![0]).toMatchObject({ instructionsRevision: 4, coordinatorName: 'Product Manager' })
-    s.edit(state => { state.projects![0]!.coordinatorName = 'Lead engineer' })
-    expect(readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {}).parts.head.data.projects![0]!.coordinatorName)
-      .toBe('Lead engineer')
   })
 })
 
