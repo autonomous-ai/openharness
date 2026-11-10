@@ -100,9 +100,6 @@ void main() {
       ('MacbookPro.local', 'MacbookPro'),
       ('Mac-mini.local', 'Mac-mini'),
       ('build-server.LOCAL', 'build-server'),
-      // A Mac's Harness Team account entry, as the backend reads it (task #3060): its Mac's name, then the label.
-      ('Gray.local · Team account', 'Gray · Team account'),
-      ('Ada’s Mac · Team account', 'Ada’s Mac · Team account'),
     ]) {
       expect(superTabMachineName(hostname), shown);
     }
@@ -1084,7 +1081,7 @@ void main() {
     );
 
     testWidgets(
-      'a Swarm-wide Buddy has no project: its name is listed alone and Remove still asks',
+      'an agent with no project: its name is listed alone and Remove still asks',
       (tester) async {
         final server = _RemovalServer();
         server.state['machines'] = [machine('owner')];

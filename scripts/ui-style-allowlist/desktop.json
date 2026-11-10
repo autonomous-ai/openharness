@@ -44,6 +44,6 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/view.dart": {
-    "edge-insets": 15
+    "edge-insets": 14
   }
 }

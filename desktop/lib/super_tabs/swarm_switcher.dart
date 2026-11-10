@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../core/models.dart' show sameMachineId;
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
@@ -10,8 +9,6 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'count_badge.dart' show SuperTabCountBadge;
 import 'controller.dart';
-import 'machines.dart' show contributeComputer;
-import 'personal_machines.dart';
 import 'section_heading.dart' show SuperTabSectionHeading;
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
@@ -45,7 +42,6 @@ class PersonalSwarm extends ChangeNotifier {
   final _pickedIds = <String, String>{};
   final _reads = <String, Future<void>>{};
   final _creating = <String, Future<String>>{};
-  final _adding = <String>{};
 
   /// Swarms taken away from each account while shown here: listed no more,
   /// even once their tab has let them go.
@@ -79,9 +75,8 @@ class PersonalSwarm extends ChangeNotifier {
   bool _usable(String id) =>
       !lost(id) && app.superTabs.peek(id)?.accessRevoked != true;
 
-  /// Personal is being created or set up for the signed-in person.
-  bool get busy =>
-      _creating.containsKey(_account) || _adding.contains(_account);
+  /// Personal is being created for the signed-in person.
+  bool get busy => _creating.containsKey(_account);
 
   /// Why picking Personal in Swarm tab [tab] failed last, if it did.
   String? errorIn(String tab) => switch (_error) {
@@ -202,9 +197,11 @@ class PersonalSwarm extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Shows Personal in Swarm tab [swarmId], creating it first if needed, then
-  /// adds this computer to it. A tab that moved to another Swarm meanwhile,
-  /// or a person who signed out, is left as it is.
+  /// Shows Personal in Swarm tab [swarmId], creating it first if needed. No
+  /// computer is added from here: an agent runs on its own person's computer,
+  /// whose daemon joins the Swarm once one of their agents runs there (cli
+  /// superTabs/host.ts `joinSwarms`). A tab that moved to another Swarm
+  /// meanwhile, or a person who signed out, is left as it is.
   Future<void> show(String swarmId) async {
     final account = _account;
     final shown = _tabShowing(swarmId);
@@ -228,93 +225,10 @@ class PersonalSwarm extends ChangeNotifier {
     }
     if (_account != account || _tabShowing(swarmId) != shown) return;
     app.showSuperTabIn(swarmId, personal, kPersonalSwarmName);
-    await _addThisComputer(account, swarmId, personal);
-    // Then the person's other machines, whatever became of this one.
-    if (app.superTabs.peek(personal) case final opened?) {
-      unawaited(PersonalMachines.of(app).sync(opened));
-    }
   }
 
   String? _tabShowing(String swarmId) =>
       app.swarms.where((s) => s.id == swarmId).firstOrNull?.superTabId;
-
-  /// This computer, added as Add machine adds it: only the person's own,
-  /// linked and online, and never a Harness Team account's machine.
-  Future<void> _addThisComputer(
-    String account,
-    String tab,
-    String personal,
-  ) async {
-    final here = app.machineStates.values
-        .where(
-          (m) =>
-              m.isLocalMachine &&
-              !m.machine.isTeamAccount &&
-              !m.belongsToOtherAccount &&
-              !m.needsLink &&
-              !m.isOffline,
-        )
-        .firstOrNull;
-    if (here == null || !_adding.add(account)) return;
-    notifyListeners();
-    SuperTabController? opened;
-    // Let go since (the tab moved on): its answers are no one's now.
-    bool alive() =>
-        _account == account &&
-        opened != null &&
-        !opened.accessRevoked &&
-        identical(app.superTabs.peek(personal), opened);
-    try {
-      final c = opened = await app.superTabs.open(personal);
-      if (c.snapshot == null) await c.refresh();
-      final machineId = here.machine.machineId;
-      final snapshot = c.snapshot;
-      if (!alive() || snapshot == null) return;
-      if (snapshot.machines.any(
-        (m) =>
-            m['machineId'] is String &&
-            sameMachineId(m['machineId'], machineId),
-      )) {
-        return;
-      }
-      // Its person took it out, on any computer: it stays out (backend
-      // commands.ts machine.remove). Add machine brings it back.
-      if (snapshot.removedMachines.any((id) => sameMachineId(id, machineId))) {
-        return;
-      }
-      await contributeComputer(
-        c,
-        app,
-        machineId,
-        setupId: 'personal-swarm-setup',
-        alive: alive,
-        // As Add machine: where the Swarm runs teammates' work through Team
-        // accounts, this Mac is never lent under its owner's own login.
-        teamAccountOnly: snapshot.teamAccounts,
-        // The server decides, whatever this computer read.
-        ifMissing: true,
-        unlessRemoved: true,
-      );
-    } catch (failure) {
-      // Only while the tab still shows Personal: once it moved on, Personal
-      // was let go, and what was still out (its saved state being read, an
-      // add on its way) answers no one.
-      if (_tabShowing(tab) == personal && (opened == null || alive())) {
-        const headline = 'Could not add this computer to Personal.';
-        final reason = failure is SuperTabFailure ? failure.message : null;
-        _fail(
-          account,
-          tab,
-          reason == null || reason == 'Could not add this machine.'
-              ? headline
-              : '$headline $reason',
-        );
-      }
-    } finally {
-      _adding.remove(account);
-      notifyListeners();
-    }
-  }
 }
 
 /// The Swarms the dropdown lists under Personal, by name: every Swarm the

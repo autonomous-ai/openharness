@@ -127,7 +127,7 @@ void main() {
   test(
     'an unchanged poll echoes the summary etag and keeps the summary it holds',
     () async {
-      server.state['teamAccounts'] = false;
+      server.state['avatars'] = <String, dynamic>{};
       final c = open();
       await c.refresh();
       await c.refresh();
@@ -135,16 +135,13 @@ void main() {
       expect(echoed.path, '/api/super-tabs/tab/changes');
       expect(echoed.queryParameters['derivedEtag'], isNotEmpty);
       expect(server.parts.unchangedSummaries, 1);
-      expect(c.snapshot!.teamAccounts, isFalse);
 
       // The summary moves: the next read sends it whole, and it replaces the one held.
-      server.state.remove('teamAccounts');
+      server.state.remove('avatars');
       await c.refresh();
       expect(server.parts.unchangedSummaries, 1);
-      expect(c.snapshot!.teamAccounts, isTrue);
       await c.refresh();
       expect(server.parts.unchangedSummaries, 2);
-      expect(c.snapshot!.teamAccounts, isTrue);
       expect(c.error, isNull);
     },
   );

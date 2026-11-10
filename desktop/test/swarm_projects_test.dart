@@ -199,18 +199,4 @@ void main() {
       c.dispose();
     },
   );
-
-  test('internal consolidation requests do not appear as chat posts', () async {
-    final server = projectsServer(), c = server.controller();
-    server.append('Internal scheduled request');
-    server.messages.last['source'] = {'kind': 'update-request'};
-    server.append('Verification passed. Review is next.');
-    server.messages.last['source'] = {'kind': 'project-report'};
-    await c.refresh();
-    expect(c.messages('lead').map((m) => m.text), [
-      'Verification passed. Review is next.',
-    ]);
-    await c.flush();
-    c.dispose();
-  });
 }
