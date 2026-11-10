@@ -1,3 +1,10 @@
+/// One agent's name however it is written: as it signs a comment ("Pip Two"), as its builder label has it (`pip-two`), or
+/// cased otherwise: in lower case, letters and digits only. The merger's rule (cli superTabs/githubMerge.ts `sameKey`), so the
+/// board finds the agent a label or a signature names, and counts a read as the merger does.
+String swarmSameKey(String name) =>
+    name.toLowerCase().replaceAll(_notLetterOrDigit, '');
+final _notLetterOrDigit = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+
 /// A task's pull request on its project's board (Swarm v4, anh Dee 2026-11-09: "show PR status on task cards"): the open
 /// pull request that closes the issue ("Closes #14"), else the one on its builder's branch for it (`pip/14`), and where it
 /// stands by the rule Harness merges by (cli/src/superTabs/githubMerge.ts), so a card says what happens next.
@@ -190,7 +197,7 @@ class SwarmPull {
           (e) =>
               e.value.verdict == 'READ-OK' &&
               head.startsWith(e.value.sha) &&
-              e.key != author,
+              (author == null || swarmSameKey(e.key) != swarmSameKey(author)),
         )
         .length;
     return intoDefault && reads >= (twoReads ? 2 : 1)

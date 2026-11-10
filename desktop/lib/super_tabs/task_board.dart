@@ -15,6 +15,7 @@ import 'controller.dart';
 import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'identity.dart';
+import 'model.dart';
 import 'pull_chip.dart';
 import 'swarm_type.dart';
 
@@ -545,27 +546,39 @@ class _BoardSkeleton extends StatelessWidget {
   );
 }
 
-/// The face of the agent named [name] in this Swarm (a `builder:<name>` label, or the name a comment is signed with),
-/// matched without case and with a hyphen for a space; a face drawn from the name when the Swarm has no such agent.
+/// The agent of this Swarm named [name] (a `builder:<name>` label, or the name a comment is signed with), by [swarmSameKey]:
+/// "First builder" is `builder:first-builder`. Null when the Swarm has no such agent.
+SuperTabAgent? swarmAgentNamed(SuperTabController controller, String name) {
+  final snapshot = controller.snapshot;
+  if (snapshot == null) return null;
+  // Keyed once per snapshot: a board draws a face on every card and comment.
+  final byKey = _agentsByKey[snapshot] ??= {
+    for (final agent in snapshot.agents.reversed)
+      // Its name as its label is made from it (cli githubMentions.ts): the first of its two names that is not blank.
+      swarmSameKey(
+        (agent.displayName?.trim().isNotEmpty ?? false)
+            ? agent.displayName!
+            : agent.name,
+      ): agent,
+  };
+  return byKey[swarmSameKey(name)];
+}
+
+final _agentsByKey = Expando<Map<String, SuperTabAgent>>();
+
+/// The face of the agent named [name] in this Swarm ([swarmAgentNamed]); a face drawn from the name when the Swarm has no such
+/// agent, the same for every way of writing it.
 Widget swarmAgentFace(
   SuperTabController controller,
   String name, {
   double size = 22,
 }) {
-  final key = name.toLowerCase();
-  // Read as Harness writes a builder label (cli superTabs/githubMentions.ts builderLabel): in lower case, with a hyphen for each
-  // run of spaces, so the label `builder:first-builder` and a comment signed "First builder" are both the agent "First builder".
-  String asLabel(String text) =>
-      text.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '-');
-  final wanted = asLabel(name);
-  final agent = controller.snapshot?.agents
-      .where((a) => asLabel(a.displayName ?? a.name) == wanted)
-      .firstOrNull;
+  final agent = swarmAgentNamed(controller, name);
   if (agent != null) {
     return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
   }
   return SuperTabAvatar(
-    identity: 'agent:$key',
+    identity: 'agent:${swarmSameKey(name)}',
     name: name,
     size: size,
     face: true,

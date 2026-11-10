@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/github_pulls.dart';
+import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -249,4 +251,46 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'a comment signed "First builder" and the label first-builder are one agent; an unknown one draws one face however written',
+    (tester) async {
+      final c = swarmV4Server().controller(
+        account: 'owner',
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+      );
+      addTearDown(c.dispose);
+      await tester.runAsync(c.refresh);
+      String identity(String name) =>
+          (swarmAgentFace(c, name) as SuperTabAvatar).identity;
+      expect(identity('First builder'), 'agent:first builder');
+      expect(identity('first-builder'), 'agent:first builder');
+      expect(swarmAgentNamed(c, 'FIRST_BUILDER')?.id, 'first builder');
+      // Nobody of this Swarm: the same drawn face for the label and the signature.
+      expect(identity('Zed Two'), identity('zed-two'));
+      expect(swarmAgentNamed(c, 'Zed Two'), isNull);
+    },
+  );
+
+  test('a two-word agent\'s own READ-OK on its pull request is no read, as the merger counts it', () {
+    const head = 'f6edb44a1b2c3d4e5f60718293a4b5c6d7e8f901';
+    SwarmPullStatus status(String signedBy) => SwarmPull.statusOf(
+      draft: false,
+      head: head,
+      author: SwarmPull.authorOf(['builder:first-builder'], 'first-builder/14'),
+      body: 'Closes #14',
+      comments: [
+        {
+          'body': '$signedBy, 10:05: READ-OK f6edb44',
+          'createdAt': '2026-11-10T03:05:00Z',
+          'authorAssociation': 'MEMBER',
+          'author': {'login': 'deehw'},
+        },
+      ],
+      checks: 'SUCCESS',
+      mergeable: 'MERGEABLE',
+    );
+    expect(status('First builder'), SwarmPullStatus.review);
+    expect(status('Kai'), SwarmPullStatus.merging);
+  });
 }
