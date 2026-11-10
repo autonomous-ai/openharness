@@ -7,30 +7,24 @@ import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
-import '../state/pane_arrangement.dart';
-import '../state/pane_layout_store.dart';
-import '../state/pane_preset.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 
-/// A person's panes as projects of their Personal Swarm (Dee, 10-30 design;
-/// "build the rest, but leave the tabs", 10-31): every pane of theirs joins
-/// the project of its repo, whatever tab it is in, the same repo on each of
-/// their computers being one project, and a pane with no repo joins its tab's
-/// project, named after the tab (Huy, 11-03: his tabs' panes all landed in one
-/// # scratch). A project's [term] shows those very panes: the tab keeps them,
-/// and nothing about a tab changes.
+/// A person's repos as the projects of their Personal Swarm (Swarm v4, anh Dee 2026-11-09): every pane of theirs in a
+/// checkout joins the project of its repo, whatever tab it is in, the same repo on each of their computers being one
+/// project, and each project's Tasks board reads that repo's GitHub issues ([PersonalProjects.repositoryOf]). A pane with
+/// no repo is in no project: it stays in Your Team (personal_agents.dart).
 ///
-/// Which pane belongs where is worked out here, on the person's own Desktop,
-/// from the panes it already shows. Nothing of a pane is sent anywhere: the
-/// server learns only each project's name, as a private project of a Swarm
-/// that has no one else in it.
+/// Which pane belongs where is worked out here, on the person's own Desktop, from the panes it already shows. Nothing of
+/// a pane is sent anywhere: the server learns only each project's name, as a private project of a Swarm that has no one
+/// else in it.
 ///
-/// Not yet: a repo that already has a team project joining that one. It
-/// crosses Swarms and needs its own security review.
+/// The projects v3 made for a tab's panes with no repo ("one", "two") go: each this computer made is closed on the server
+/// once (backend commands.ts `project.closeTab`: deleted when none of its chats has a message, else kept read-only and
+/// out of the list).
 
 /// The form an agent reports its project's remote in: `host[:port]/owner/repo`
 /// with no scheme, user or `.git` (the CLI's `canonicalRepository`, and
@@ -85,24 +79,6 @@ String? normalizedRemote(String? remote) {
   return [host, ...parts].join('/').toLowerCase();
 }
 
-/// The project key of a tab's panes with no repo: the desk's tab id, the same
-/// on each of the person's computers and through a rename (task #2376).
-String personalTabKey(String tabId) => 'tab:$tabId';
-
-/// The name a tab's project is made with on every computer, so that request is
-/// one request wherever it is sent (the server refuses a request id reused for
-/// another name: review of #2753). It is then renamed to its tab's name, and a
-/// tab with no usable name keeps it.
-const kTabProjectName = 'Tab';
-
-/// [name] as a project name the server takes: trimmed, at most 160
-/// characters (backend `project.create`), [kTabProjectName] for none.
-String tabProjectName(String name) {
-  final trimmed = name.trim();
-  if (trimmed.isEmpty) return kTabProjectName;
-  return trimmed.length > 160 ? trimmed.substring(0, 160).trimRight() : trimmed;
-}
-
 /// The repo's own name: `github.com/owner/api` is `api`.
 String repoName(String repo) => repo.split('/').last;
 
@@ -120,79 +96,24 @@ String _hash(String text) => const DartSha256()
     .join()
     .substring(0, 24);
 
-/// The request id a repo's or a tab's project is created with: the same on
-/// every computer of the person's, so the server answers each with the one
-/// project (backend commands.ts `project.create`: the project's id comes from
-/// it). Neither the URL nor the tab's id is in it.
-String personalProjectOperation(String key) => _isTab(key)
-    ? 'personal-tab-${_hash(key.substring(4))}'
-    : 'personal-repo-${_hash(key)}';
+/// The request id a repo's project is created with: the same on every computer of the person's, so the server answers
+/// each with the one project (backend commands.ts `project.create`: the project's id comes from it). The URL is not in it.
+String personalProjectOperation(String repo) => 'personal-repo-${_hash(repo)}';
 
-bool _isTab(String key) => key.startsWith('tab:');
+/// The request id v3 made desk tab [tabId]'s project with: the server closes a project only for the request that made it
+/// (backend commands.ts `closingTabProject`).
+String _tabOperation(String tabId) => 'personal-tab-${_hash(tabId)}';
 
-/// A Personal project's own desk tab (task #3099, migration plan Phase 1):
-/// `project-` and a hash of the project's id, the same on every computer, so
-/// each finds the project a tab belongs to by hashing the projects Personal
-/// lists. A project with more than 9 panes gets a second tab, `-2`, then `-3`.
-/// It fits the desk's id rule (backend `lib/desk.ts`).
-String personalProjectTabId(String projectId, [int number = 1]) {
-  // Views read it while they build: each project's hash is worked out once.
-  if (_projectTabIds.length > 512) _projectTabIds.clear();
-  final base = _projectTabIds[projectId] ??=
-      'project-${_hash('project:$projectId')}';
-  return number <= 1 ? base : '$base-$number';
-}
+/// What this computer kept of v3's tab projects: `tab:<desk tab id>` beside the repos.
+const _tabPrefix = 'tab:';
 
-final _projectTabIds = <String, String>{};
-
-/// [tabId] as a project tab: its first tab's id and its number (1 for the
-/// first), or null for any other tab.
-({String base, int number})? personalProjectTabParts(String tabId) {
-  final match = kProjectTabId.firstMatch(tabId);
-  if (match == null) return null;
-  final number = match.group(2);
-  return (
-    base: match.group(1)!,
-    number: number == null ? 1 : int.parse(number),
-  );
-}
-
-/// What the person reads when a start needs a tab and the desk is full
-/// (migration plan, Phase 1 item 2).
-const kTabsFullMessage =
-    'Your tabs are full (24). Close a tab to start another agent.';
-
-/// A project tab's name: the project's, then "api 2", "api 3", within the
-/// desk's 80 characters.
-String projectTabName(String projectName, int number) {
-  final suffix = number <= 1 ? '' : ' $number';
-  var name = projectName.trim();
-  if (name.isEmpty) name = kTabProjectName;
-  if (name.length + suffix.length > 80) {
-    name = name.substring(0, 80 - suffix.length).trimRight();
-  }
-  return '$name$suffix';
-}
-
-/// Whether [key] is the project key of a project tab's no-repo panes: their
-/// project is the tab's own, never one made for the tab.
-bool _isProjectTab(String key) =>
-    _isTab(key) && personalProjectTabParts(key.substring(4)) != null;
-
-/// One of the person's panes, the tab it is first in, and its project's key:
-/// its repo, or [personalTabKey] of its tab for none.
+/// One of the person's panes in a checkout, the tab it is first in, and its repo ([normalizedRemote]).
 typedef PersonalPane = ({Swarm tab, TerminalPane pane, String repo});
 
-/// The person's own panes in their tabs, in tab order then each tab's reading
-/// order, each once. Swarm tabs, viewers and panes on another person's or a
-/// shared machine, or on a Harness Team account, are left out. A pane in the
-/// own tab of a project Personal lists ([projectTabs], their first tabs' ids)
-/// is that project's whatever its repo: it was started there (Reed's review
-/// of #3090).
-List<PersonalPane> personalPanes(
-  AppNotifier app, {
-  Set<String> projectTabs = const {},
-}) {
+/// The person's own panes in a checkout of a repo, in tab order then each tab's reading order, each once. Swarm tabs,
+/// viewers, panes with no repo and panes on another person's or a shared machine, or on a Harness Team account, are left
+/// out.
+List<PersonalPane> personalPanes(AppNotifier app) {
   final seen = <(String, String)>{};
   final out = <PersonalPane>[];
   for (final tab in app.swarms) {
@@ -206,22 +127,17 @@ List<PersonalPane> personalPanes(
           machine.machine.isTeamAccount) {
         continue;
       }
-      if (!seen.add((pane.machineId, agentId))) continue;
       final project = machine.agents
           .where((a) => a.id == agentId)
           .firstOrNull
           ?.project;
-      out.add((
-        tab: tab,
-        pane: pane,
-        // The repo an SSH alias stands for first, so a clone through
-        // `Host gh-work` and one straight from GitHub are one (task #2476).
-        repo: projectTabs.contains(personalProjectTabParts(tab.id)?.base)
-            ? personalTabKey(tab.id)
-            : normalizedRemote(project?.repository) ??
-                  normalizedRemote(project?.remote) ??
-                  personalTabKey(tab.id),
-      ));
+      // The repo an SSH alias stands for first, so a clone through `Host gh-work` and one straight from GitHub are one
+      // (task #2476).
+      final repo =
+          normalizedRemote(project?.repository) ??
+          normalizedRemote(project?.remote);
+      if (repo == null || !seen.add((pane.machineId, agentId))) continue;
+      out.add((tab: tab, pane: pane, repo: repo));
     }
   }
   return out;
@@ -231,16 +147,14 @@ List<PersonalPane> personalPanes(
 /// made once, remembered on this computer, and found again by the same
 /// request on another.
 class PersonalProjects extends ChangeNotifier {
-  PersonalProjects._(this.app) {
-    app.addArrangedListener(_arranged);
-  }
+  PersonalProjects._(this.app);
   static final _of = Expando<PersonalProjects>();
   static PersonalProjects of(AppNotifier app) =>
       _of[app] ??= PersonalProjects._(app);
 
   final AppNotifier app;
 
-  /// The longest wait before a failed repo's project is asked for again.
+  /// The longest wait before a failed request is asked again.
   static const maxRetryWait = Duration(minutes: 5);
 
   /// Each account's remembered projects, one key for all their Personal
@@ -251,17 +165,11 @@ class PersonalProjects extends ChangeNotifier {
   /// deleted it (it is not made again).
   final _known = <String, Map<String, Map<String, String?>>>{};
 
+  /// Per account and Personal Swarm: v3's tab projects not closed yet, desk tab id to project id.
+  final _tabs = <String, Map<String, Map<String, String>>>{};
+
   /// Repos renamed to their long name, per account and Swarm.
   final _renamed = <String, Map<String, Set<String>>>{};
-
-  /// Each project's own split sizes, per account and Swarm: project id to
-  /// the arrangement the person gave its panes here. Kept on this computer
-  /// only, beside the project map, and never sent (task #3099).
-  final _layouts = <String, Map<String, Map<String, Map<String, dynamic>>>>{};
-
-  /// The order Personal first saw its projects in the tabs, per account and
-  /// Swarm (migration plan, Phase 1 item 5): its PROJECTS list can start so.
-  final _order = <String, Map<String, List<String>>>{};
   final _loads = <String, Future<void>>{};
   final _syncing = <String>{};
   final _again = <String>{};
@@ -293,6 +201,13 @@ class PersonalProjects extends ChangeNotifier {
       if (value == projectId) key,
   };
 
+  /// The repo project [projectId] of [c] was made for (`github.com/owner/name`), read on this computer: what its Tasks
+  /// board reads, since the server never learns it. Null for any other project, or outside the person's Personal Swarm.
+  String? repositoryOf(SuperTabController c, String projectId) {
+    if (!eligible(c)) return null;
+    return _reposOf(c.accountId, c.tabId, projectId).firstOrNull;
+  }
+
   /// The panes project [conversationId] of [c] shows behind [term], in their
   /// tabs' order: its lead conversation in the person's own Personal Swarm,
   /// else none. The very panes the tabs hold.
@@ -306,237 +221,10 @@ class PersonalProjects extends ChangeNotifier {
     final project = snapshot.projectFor(conversationId);
     if (project == null) return const [];
     final repos = _reposOf(c.accountId, c.tabId, project.id);
-    final ownTab = personalProjectTabId(project.id);
     return [
-      for (final entry in personalPanes(app, projectTabs: _projectTabs(c)))
-        if (repos.contains(entry.repo) ||
-            (_isProjectTab(entry.repo) &&
-                personalProjectTabParts(entry.repo.substring(4))?.base ==
-                    ownTab))
-          entry.pane,
+      for (final entry in personalPanes(app))
+        if (repos.contains(entry.repo)) entry.pane,
     ];
-  }
-
-  /// The first-tab ids of the projects [c] lists ([personalProjectTabId]).
-  Set<String> _projectTabs(SuperTabController c) => {
-    for (final p in c.snapshot?.projects ?? const <SuperTabProject>[])
-      personalProjectTabId(p.id),
-  };
-
-  /// The project of Personal whose own tab [tabId] is ([personalProjectTabId]),
-  /// or null: another kind of tab, or a project Personal does not list.
-  SuperTabProject? projectOfTab(SuperTabController c, String tabId) {
-    if (!eligible(c)) return null;
-    final base = personalProjectTabParts(tabId)?.base;
-    if (base == null) return null;
-    return c.snapshot!.projects
-        .where((p) => personalProjectTabId(p.id) == base)
-        .firstOrNull;
-  }
-
-  /// Project [projectId]'s own tabs here, by number.
-  List<(int, Swarm)> _tabsOf(String projectId) {
-    final base = personalProjectTabId(projectId);
-    return [
-      for (final tab in app.swarms)
-        if (!tab.isSuperTab && !tab.isUtility)
-          if (personalProjectTabParts(tab.id)
-              case (base: final b, :final number) when b == base)
-            (number, tab),
-    ]..sort((a, b) => a.$1.compareTo(b.$1));
-  }
-
-  /// Each project tab whose name the person did not choose takes its
-  /// project's current name ("api 2" for the second).
-  void _nameProjectTabs(SuperTabController c) {
-    for (final tab in app.swarms.toList()) {
-      if (tab.nameIsCustom || !tab.isProjectTab) continue;
-      final project = projectOfTab(c, tab.id);
-      final number = personalProjectTabParts(tab.id)?.number;
-      if (project == null || number == null) continue;
-      app.renameTabAutomatically(tab.id, projectTabName(project.name, number));
-    }
-  }
-
-  /// The person arranged [view]'s panes: kept as the project's own when
-  /// Personal shows one of its projects there ([rememberLayout]).
-  void _arranged(Swarm view) {
-    final id = view.superTabId;
-    if (!view.isSuperTab || id == null || PersonalSwarm.of(app).id != id) {
-      return;
-    }
-    final c = app.superTabs.peek(id);
-    if (c == null) return;
-    final chat = c.selectedId;
-    if (!c.groupTerminalsOpen(chat) || c.terminalAgents(chat).isNotEmpty) {
-      return;
-    }
-    rememberLayout(c, chat, view);
-  }
-
-  /// Keeps [view]'s arrangement as project [conversationId]'s own, on this
-  /// computer only (migration plan, Phase 1 item 4): for a project whose
-  /// panes are not exactly one tab's, which lends its sizes ([soleTab]).
-  void rememberLayout(SuperTabController c, String conversationId, Swarm view) {
-    if (!eligible(c) || !c.snapshot!.isProjectLead(conversationId)) return;
-    final project = c.snapshot!.projectFor(conversationId);
-    if (project == null) return;
-    final panes = panesFor(c, conversationId);
-    if (panes.isEmpty ||
-        view.panes.length != panes.length ||
-        soleTab(panes) != null) {
-      return;
-    }
-    final count = panes.length, prefix = '$count:';
-    ((_layouts[c.accountId] ??= {})[c.tabId] ??= {})[project.id] = {
-      'count': count,
-      if (view.presets[count] case final preset?) 'preset': preset.id,
-      'sizes': {
-        for (final MapEntry(:key, :value) in view.paneSizes.entries)
-          if (key.startsWith(prefix)) key: value.toJson(),
-      },
-      if (view.arrangedKey case final key? when key.startsWith(prefix))
-        'arrangedKey': key,
-      'gridColumns': ?view.gridColumns,
-    };
-    // What this computer kept is read first, so the save keeps it.
-    final account = c.accountId;
-    unawaited(_load(account).then((_) => _save(account)));
-  }
-
-  /// Gives [view] project [conversationId]'s own arrangement, when the person
-  /// made one here for this many panes; false otherwise (the view keeps its
-  /// default).
-  bool applyLayout(SuperTabController c, String conversationId, Swarm view) {
-    if (!eligible(c)) return false;
-    final project = c.snapshot!.projectFor(conversationId);
-    if (project == null) return false;
-    final saved = _layouts[c.accountId]?[c.tabId]?[project.id];
-    final count = view.panes.length;
-    if (saved == null || saved['count'] != count) return false;
-    final sizes = <String, PaneArrangement>{};
-    if (saved['sizes'] case final Map raw) {
-      for (final MapEntry(:key, :value) in raw.entries) {
-        final arrangement = PaneArrangement.fromJson(value);
-        if (key is String && arrangement != null) sizes[key] = arrangement;
-      }
-    }
-    app.applySuperTabLayout(
-      view.id,
-      count: count,
-      preset: PanePreset.byId(saved['preset'] as String?),
-      sizes: sizes,
-      arrangedKey: saved['arrangedKey'] as String?,
-      gridColumns: saved['gridColumns'] as int?,
-    );
-    return true;
-  }
-
-  /// The order Personal first saw its projects in the tabs: each project
-  /// where its first pane was then, new ones after (migration plan, Phase 1
-  /// item 5). Kept on this computer.
-  List<String> projectOrder(SuperTabController c) =>
-      List.unmodifiable(_order[c.accountId]?[c.tabId] ?? const <String>[]);
-
-  /// Adds the projects of the panes now in the tabs that the order lacks, in
-  /// tab order, and drops those gone from Personal; whether it changed.
-  bool _noteOrder(SuperTabController c) {
-    final order = (_order[c.accountId] ??= {})[c.tabId] ??= [];
-    final projects = _projects(c.accountId, c.tabId);
-    final listed = {for (final p in c.snapshot!.projects) p.id};
-    final before = order.length;
-    order.removeWhere((id) => !listed.contains(id));
-    var changed = order.length != before;
-    for (final entry in personalPanes(app, projectTabs: _projectTabs(c))) {
-      final id = _isProjectTab(entry.repo)
-          ? projectOfTab(c, entry.repo.substring(4))?.id
-          : projects[entry.repo];
-      if (id == null || !listed.contains(id) || order.contains(id)) continue;
-      order.add(id);
-      changed = true;
-    }
-    return changed;
-  }
-
-  /// A project gone from Personal takes its saved layout with it.
-  void _dropGoneLayouts(SuperTabController c) {
-    final saved = _layouts[c.accountId]?[c.tabId];
-    if (saved == null || saved.isEmpty) return;
-    final ids = {for (final p in c.snapshot!.projects) p.id};
-    final before = saved.length;
-    saved.removeWhere((id, _) => !ids.contains(id));
-    if (saved.length != before) unawaited(_save(c.accountId));
-  }
-
-  /// A desk tab holds 9 harnesses (backend `DESK_MAX_PANES`); it drops a 10th
-  /// without an error.
-  static bool _hasRoom(Swarm tab) =>
-      tab.panes.where((p) => p.agentId != null).length <
-      PaneLayoutStore.maxPanes;
-
-  /// Why a start in Personal's [conversationId] (a new project's when
-  /// [newProject]) is refused before any agent runs, or null: its pane needs
-  /// a tab, and the desk holds [AppNotifier.deskMaxTabs] already (migration
-  /// plan, Phase 1 item 2). Never for another Swarm.
-  String? startRefusal(
-    String? tabId,
-    String? conversationId, {
-    bool newProject = false,
-  }) {
-    if (tabId == null || PersonalSwarm.of(app).id != tabId) return null;
-    final c = app.superTabs.peek(tabId);
-    if (c == null || !eligible(c)) return null;
-    final projectId = newProject || conversationId == null
-        ? null
-        : c.snapshot!.projectFor(conversationId)?.id;
-    if (projectId != null && _tabsOf(projectId).any((t) => _hasRoom(t.$2))) {
-      return null;
-    }
-    return app.deskTabCount >= AppNotifier.deskMaxTabs
-        ? kTabsFullMessage
-        : null;
-  }
-
-  /// Puts the pane of the agent just started from Personal's project
-  /// [projectId] in that project's own tab (migration plan, Phase 1 item 1),
-  /// so the phone and older Desktops see it: the first with room, else the
-  /// next, "api 2". The tab on screen stays. Nothing when the pane is in one
-  /// already, or when the desk filled up since the start was checked (said
-  /// in the log: the agent stays in its project).
-  Future<void> placeInProjectTab(
-    SuperTabController c,
-    String projectId,
-    String machineId,
-    String agentId,
-  ) async {
-    if (!eligible(c)) return;
-    final project = c.snapshot!.projectById(projectId);
-    if (project == null) return;
-    final tabs = _tabsOf(projectId);
-    bool holds(Swarm tab) =>
-        tab.panes.any((p) => p.machineId == machineId && p.agentId == agentId);
-    if (tabs.any((t) => holds(t.$2))) return;
-    var target = tabs.where((t) => _hasRoom(t.$2)).firstOrNull?.$2;
-    if (target == null) {
-      if (app.deskTabCount >= AppNotifier.deskMaxTabs) {
-        appLog.warn('super-tabs', 'Personal project tab not made: desk full');
-        return;
-      }
-      final number = tabs.isEmpty ? 1 : tabs.last.$1 + 1;
-      target = app.ensureBackgroundTab(
-        personalProjectTabId(projectId, number),
-        projectTabName(project.name, number),
-      );
-    }
-    await app.assignAgentToPane(
-      null,
-      machineId,
-      agentId,
-      swarmId: target.id,
-      autoTile: true,
-      focus: false,
-      intent: AttachIntent.automatic,
-    );
   }
 
   /// Whether project [projectId] of [c] leaves the project list (Huy, 11-05,
@@ -558,15 +246,7 @@ class PersonalProjects extends ChangeNotifier {
     if (known == null || known.isEmpty || _unresolvedPanes(app)) {
       return const {};
     }
-    // A pane in a listed project's own tab is that project's, as panesFor
-    // reads it (#3090): counted for it, never for its repo.
-    final shown = {
-      for (final entry in personalPanes(app, projectTabs: _projectTabs(c)))
-        if (_isProjectTab(entry.repo))
-          ?projectOfTab(c, entry.repo.substring(4))?.id
-        else
-          ?known[entry.repo],
-    };
+    final shown = {for (final entry in personalPanes(app)) ?known[entry.repo]};
     final snapshot = c.snapshot!;
     return {
       for (final id in known.values)
@@ -621,8 +301,7 @@ class PersonalProjects extends ChangeNotifier {
   void _forget(String account, String swarm) {
     final had =
         (_known[account]?.remove(swarm) != null) |
-        (_layouts[account]?.remove(swarm) != null) |
-        (_order[account]?.remove(swarm) != null);
+        (_tabs[account]?.remove(swarm) != null);
     _renamed[account]?.remove(swarm);
     // Called while a view builds: saved after, and no one is told now.
     if (had) unawaited(_save(account));
@@ -640,7 +319,15 @@ class PersonalProjects extends ChangeNotifier {
         final repos = entry['projects'];
         if (repos is Map) {
           for (final MapEntry(:key, :value) in repos.entries) {
-            if (key is String && (value == null || value is String)) {
+            if (key is! String || (value != null && value is! String)) continue;
+            if (key.startsWith(_tabPrefix)) {
+              if (value is String) {
+                ((_tabs[account] ??= {})[swarm] ??= {}).putIfAbsent(
+                  key.substring(_tabPrefix.length),
+                  () => value,
+                );
+              }
+            } else {
               projects.putIfAbsent(key, () => value as String?);
             }
           }
@@ -651,22 +338,6 @@ class PersonalProjects extends ChangeNotifier {
             renamed.whereType<String>(),
           );
         }
-        final order = entry['order'];
-        if (order is List) {
-          final kept = (_order[account] ??= {})[swarm] ??= [];
-          for (final id in order.whereType<String>()) {
-            if (!kept.contains(id)) kept.add(id);
-          }
-        }
-        final layouts = entry['layouts'];
-        if (layouts is Map) {
-          final kept = (_layouts[account] ??= {})[swarm] ??= {};
-          for (final MapEntry(:key, :value) in layouts.entries) {
-            if (key is String && value is Map) {
-              kept.putIfAbsent(key, () => Map<String, dynamic>.from(value));
-            }
-          }
-        }
       }
     } catch (_) {
       // Nothing kept: each project is asked for again, and the server answers
@@ -676,20 +347,17 @@ class PersonalProjects extends ChangeNotifier {
 
   Future<void> _save(String account) async {
     final known = _known[account] ?? const {};
-    final layouts = _layouts[account] ?? const {};
+    final tabs = _tabs[account] ?? const {};
     final value = jsonEncode({
-      for (final swarm in {
-        ...known.keys,
-        ...layouts.keys,
-        ...?_order[account]?.keys,
-      })
+      for (final swarm in {...known.keys, ...tabs.keys})
         swarm: {
-          'projects': known[swarm] ?? const <String, String?>{},
+          'projects': {
+            ...?known[swarm],
+            for (final MapEntry(:key, :value)
+                in tabs[swarm]?.entries ?? <MapEntry<String, String>>[])
+              '$_tabPrefix$key': value,
+          },
           'renamed': [...?_renamed[account]?[swarm]],
-          if (layouts[swarm] case final saved? when saved.isNotEmpty)
-            'layouts': saved,
-          if (_order[account]?[swarm] case final order? when order.isNotEmpty)
-            'order': order,
         },
     });
     try {
@@ -700,15 +368,14 @@ class PersonalProjects extends ChangeNotifier {
   }
 
   /// Makes the projects [c]'s Personal Swarm still lacks for the person's
-  /// panes, one request at a time, and tells apart two repos of one name.
-  /// Anything that answers after the Swarm, its access or the account
-  /// changed is dropped.
+  /// repos, one request at a time, tells apart two repos of one name, and
+  /// closes v3's tab projects. Anything that answers after the Swarm, its
+  /// access or the account changed is dropped.
   Future<void> sync(SuperTabController c) async {
     if (!eligible(c)) {
       if (c.accessRevoked) _forget(c.accountId, c.tabId);
       return;
     }
-    _nameProjectTabs(c);
     final account = c.accountId, swarm = c.tabId;
     final scope = '$account/$swarm';
     if (!_syncing.add(scope)) {
@@ -717,33 +384,19 @@ class PersonalProjects extends ChangeNotifier {
     }
     try {
       await _load(account);
-      if (eligible(c)) _dropGoneLayouts(c);
       do {
         _again.remove(scope);
         if (!eligible(c)) return;
+        if (await _closeTabs(c) && eligible(c)) await _reread(c);
+        if (!eligible(c)) return;
         final projects = _projects(account, swarm);
-        // Each project's name: the repo's own, or its tab's name, given once its
-        // project is made (a later rename of the tab keeps the project, and its
-        // name).
-        // A project tab's no-repo panes are its project's (panesFor): no
-        // project is made for that tab, on any computer.
-        final wanted = <String, String>{
-          for (final p in personalPanes(app, projectTabs: _projectTabs(c)))
-            if (!_isProjectTab(p.repo))
-              p.repo: _isTab(p.repo)
-                  ? tabProjectName(p.tab.name)
-                  : repoName(p.repo),
-        };
+        final wanted = {for (final p in personalPanes(app)) p.repo};
         var made = false;
-        for (final MapEntry(key: repo, value: name) in wanted.entries) {
+        for (final repo in wanted) {
           if (projects.containsKey(repo)) continue;
           final retryAt = _retryAt['$scope/$repo'];
           if (retryAt != null && clock.now().isBefore(retryAt)) continue;
-          final answer = await _create(
-            c,
-            repo,
-            _isTab(repo) ? kTabProjectName : name,
-          );
+          final answer = await _create(c, repo);
           if (!eligible(c)) return;
           if (answer case (:final id)) {
             projects[repo] = id;
@@ -755,10 +408,7 @@ class PersonalProjects extends ChangeNotifier {
         // The new projects read before two of one name are told apart.
         if (made && !await _reread(c)) return;
         if (!eligible(c)) return;
-        if (await _nameTabs(c, wanted) && eligible(c)) await _reread(c);
-        if (!eligible(c)) return;
         if (await _tellApart(c) && eligible(c)) await _reread(c);
-        if (eligible(c) && _noteOrder(c)) await _save(account);
       } while (_again.contains(scope));
     } finally {
       _syncing.remove(scope);
@@ -778,11 +428,7 @@ class PersonalProjects extends ChangeNotifier {
   /// Creates (or finds again) [repo]'s project: its id, null once the person
   /// deleted it, or nothing on a failure, asked again after a wait that
   /// doubles up to [maxRetryWait] when the Swarm next changes.
-  Future<({String? id})?> _create(
-    SuperTabController c,
-    String repo,
-    String name,
-  ) async {
+  Future<({String? id})?> _create(SuperTabController c, String repo) async {
     final key = '${c.accountId}/${c.tabId}/$repo';
     try {
       final answer = await c.request(
@@ -793,9 +439,8 @@ class PersonalProjects extends ChangeNotifier {
           'command': {
             'type': 'project.create',
             // Every computer sends the same request, so the name is the repo's
-            // own, or the tab's (the desk names a tab alike on each); two repos
-            // of one name are told apart after ([_tellApart]).
-            'name': name,
+            // own; two repos of one name are told apart after ([_tellApart]).
+            'name': repoName(repo),
             'visibility': 'private',
             'brief': '',
           },
@@ -821,6 +466,52 @@ class PersonalProjects extends ChangeNotifier {
     return null;
   }
 
+  /// Closes each of v3's tab projects this computer made, once: gone from the server, or kept read-only when one of its
+  /// chats has a message (backend `project.closeTab`). One the server no longer lists, or will not close as a tab's, is
+  /// forgotten. A failure waits as a refused create does; whether any closed.
+  Future<bool> _closeTabs(SuperTabController c) async {
+    final tabs = _tabs[c.accountId]?[c.tabId];
+    if (tabs == null || tabs.isEmpty) return false;
+    var changed = false;
+    for (final MapEntry(key: tab, value: id) in tabs.entries.toList()) {
+      final key = '${c.accountId}/${c.tabId}/$_tabPrefix$tab';
+      final retryAt = _retryAt[key];
+      if (retryAt != null && clock.now().isBefore(retryAt)) continue;
+      final project = c.snapshot?.projectById(id);
+      if (project != null && !project.archived) {
+        try {
+          await c.request(
+            'POST',
+            '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
+            body: {
+              'operationId': 'personal-tab-close-${_hash(tab)}',
+              'command': {
+                'type': 'project.closeTab',
+                'projectId': id,
+                'tabOperation': _tabOperation(tab),
+              },
+            },
+          );
+          changed = true;
+        } on SuperTabFailure catch (failure) {
+          if (failure.code != 'NOT_FOUND') {
+            _failed(key, 'close', failure);
+            continue;
+          }
+        } catch (error) {
+          _failed(key, 'close', error);
+          continue;
+        }
+        if (!eligible(c)) return changed;
+      }
+      _failures.remove(key);
+      _retryAt.remove(key);
+      tabs.remove(tab);
+      await _save(c.accountId);
+    }
+    return changed;
+  }
+
   /// What a failure is called in the log: its code, or its kind.
   static String _codeOf(Object error) =>
       error is SuperTabFailure ? error.code : '${error.runtimeType}';
@@ -839,48 +530,6 @@ class PersonalProjects extends ChangeNotifier {
     );
   }
 
-  /// A tab's project still under the name every computer makes it with takes
-  /// its tab's name. Asked again on the next sync when it fails. A name the
-  /// person chose stays.
-  Future<bool> _nameTabs(
-    SuperTabController c,
-    Map<String, String> wanted,
-  ) async {
-    final projects = _projects(c.accountId, c.tabId);
-    var changed = false;
-    for (final MapEntry(key: repo, value: name) in wanted.entries) {
-      final id = projects[repo];
-      if (!_isTab(repo) || id == null || name == kTabProjectName) continue;
-      if (c.snapshot?.projectById(id)?.name != kTabProjectName) continue;
-      // A refused rename waits as a refused create does ([_failed]).
-      final key = '${c.accountId}/${c.tabId}/$repo/name';
-      final retryAt = _retryAt[key];
-      if (retryAt != null && clock.now().isBefore(retryAt)) continue;
-      try {
-        await c.request(
-          'POST',
-          '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
-          body: {
-            'operationId': 'personal-tab-name-${_hash('$repo\n$name')}',
-            'command': {
-              'type': 'project.rename',
-              'projectId': id,
-              'name': name,
-            },
-          },
-        );
-      } catch (error) {
-        _failed(key, 'rename', error);
-        continue;
-      }
-      _failures.remove(key);
-      _retryAt.remove(key);
-      if (!eligible(c)) return changed;
-      changed = true;
-    }
-    return changed;
-  }
-
   /// Two repos of one name, both still under it: each is renamed to its long
   /// name, once. A name the person chose stays.
   Future<bool> _tellApart(SuperTabController c) async {
@@ -889,7 +538,7 @@ class PersonalProjects extends ChangeNotifier {
     final renamed = (_renamed[account] ??= {})[swarm] ??= {};
     final byName = <String, List<String>>{};
     for (final MapEntry(key: repo, value: id) in projects.entries) {
-      if (id == null || _isTab(repo)) continue;
+      if (id == null) continue;
       (byName[repoName(repo)] ??= []).add(repo);
     }
     var changed = false;

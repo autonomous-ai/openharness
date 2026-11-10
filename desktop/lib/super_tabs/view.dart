@@ -6337,6 +6337,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                   controller: c,
                                   conversationId: c.selectedId,
                                   github: _github,
+                                  app: widget.app,
                                   openNumber: _issue?.number,
                                   refreshEvery: kUnderTest
                                       ? null

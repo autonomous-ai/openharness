@@ -682,6 +682,7 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       boardMode = row['boardMode'] == true,
+      archived = row['archived'] == true,
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
@@ -692,6 +693,10 @@ class SuperTabProject {
   /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
   /// False when not switched and from an older backend: everything then works as today.
   final bool boardMode;
+
+  /// Kept read-only and out of the project list: a v3 tab's project that had messages when it was closed (backend
+  /// commands.ts `project.closeTab`).
+  final bool archived;
 
   /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
   final List<String> canChatIds;

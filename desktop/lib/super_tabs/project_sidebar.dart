@@ -1018,7 +1018,8 @@ class ProjectSidebar extends StatelessWidget {
       ),
   ];
 
-  /// The projects Projects lists, each with a chat, in its order.
+  /// The projects Projects lists, each with a chat, in its order. An archived one is not listed (a v3 tab's project that
+  /// had messages: personal_projects.dart).
   Iterable<_ProjectReading> _listed(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
@@ -1027,7 +1028,8 @@ class ProjectSidebar extends StatelessWidget {
     return [
       for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
         if (reading.of(project) case final read
-            when read.lead != null &&
+            when !project.archived &&
+                read.lead != null &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
                 !_paneless(project, read.lead!, hidden))
           read,
@@ -1352,7 +1354,8 @@ List<String> superTabSidebarOrder(
           case final chat?)
         chat.id,
     for (final project in projects)
-      if (snapshot.conversation(project.leadConversationId) != null &&
+      if (!project.archived &&
+          snapshot.conversation(project.leadConversationId) != null &&
           (controller.selectedId == project.leadConversationId ||
               !hidden.contains(project.id)))
         project.leadConversationId,
