@@ -33,6 +33,17 @@ export const OLD_PAYLOADS = {
   'work.lane': { conversationId: 'task-1', lane: 'Backend' },
   'member.start': { conversationId: 'task-1' },
   'member.helper': { conversationId: 'task-1' },
+  'proposal.create': { projectId: 'lead', title: 'Sync edits', text: 'Sync edits across devices', goal: 'Edits sync', why: 'People lose edits',
+    doneWhen: 'An edit shows on the other device', evidence: ['Two reports'], priority: 'P2' },
+  'proposal.decide': { conversationId: 'card-1', decision: 'accept', reason: 'Worth it',
+    task: { goal: 'Edits sync', changes: 'Sync on save', constraints: 'None', owns: ['src/sync'], requires: { access: ['github'] }, review: { focus: 'Data loss' } },
+    checks: [{ description: 'An edit shows on the other device', independent: true }] },
+  'proposal.ask': { conversationId: 'card-1', personId: 'u2', question: 'Which devices?', defaultAnswer: 'All', deadline: 1_762_800_000_000, requiresConsent: false },
+  'proposal.answer': { conversationId: 'card-1', questionId: 'q-1', text: 'Phones too' },
+  'proposal.merge': { conversationId: 'card-1', intoConversationId: 'card-2', reason: 'Same ask' },
+  'proposal.close': { projectId: 'lead', messageId: 'm-3', reason: 'Built already' },
+  'buddy.propose': { conversationId: 'buddy-chat', ownerMessageId: 'm-4', projectId: 'lead', text: 'Sync my edits', title: 'Sync edits',
+    goal: 'Edits sync', scope: 'Desktop and phone', priority: 'normal', attachmentIds: ['file-1'] },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */
