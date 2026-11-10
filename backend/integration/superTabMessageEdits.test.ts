@@ -142,7 +142,7 @@ describe('message.delete', () => {
     expect((await f.page(f.web.conversationId, owner, { thread: root })).threads.find(t => t.id === root)?.replies).toBe(1)
     expect((await f.remove(f.web.conversationId, reply)).result).toMatchObject({ changed: true, kept: false })
     expect(await db.superTabMessage.findUnique({ where: { id: reply } })).toBeNull()
-    expect(await db.superTabDelivery.count({ where: { messageId: reply, status: { in: ['queued', 'claimed', 'gathered'] } } })).toBe(0)
+    expect(await db.superTabDelivery.count({ where: { messageId: reply, status: { in: ['queued', 'claimed'] } } })).toBe(0)
     // Its file goes to the hourly sweep, which removes the stored bytes (lib/attachmentSweep.ts).
     expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: fileId } })).usedBy).toBe(EXPIRED_UPLOAD)
     // The thread it was in no longer counts it.

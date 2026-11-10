@@ -8,11 +8,10 @@ import { personView, withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
-import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
-export type Role = 'owner' | 'collaborator' | 'viewer'
+type Role = 'owner' | 'collaborator' | 'viewer'
 
 export interface Person {
   id: string
@@ -212,9 +211,6 @@ export interface AgentStart {
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
  * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
 export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
-/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts). */
-export const STATUS_LABELS = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done',
-  stopped: 'Stopped' } as const satisfies Partial<Record<WorkStatus, string>>
 export interface Check {
   id: string
   description: string
@@ -479,8 +475,6 @@ export interface SuperTabState {
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   environment: string
-  /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
-  routingPolicy?: import('./routingPolicy.js').RoutingOverride
   /** The owner's routing rules (rules.ts); absent until the first is set. */
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
@@ -494,8 +488,6 @@ export interface SuperTabState {
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
   deletion?: { at: string; by: string; purgeAt: string }
-  /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
-  tidy?: false
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
@@ -583,8 +575,8 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
-  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
-   *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
+  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; only an agent's post
+   *  in its 1:1 chat tells its person's phone (store.ts tellPhones). */
   post?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
@@ -624,20 +616,10 @@ export const NOTICE_READERS = {
   // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (task #3462), written until 2026-11-10:
   // read by nobody.
   'crew-timing': 'agent',
-  // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
-  'notice-digest': 'recipients',
-  // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
-  'crew-need': 'recipients',
   // A person's decision wakes the task's PM; people read the decision in Tasks.
   'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
-  // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
-  // before are read by nobody (#3165), and a project chat ending in one is served as read (read/servedTops.ts). A change is
-  // read in the Instructions history.
-  instructions: 'agent',
-  // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
-  'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people',
   // Proposal history, written until proposals went (2026-11-10), and the private Buddy notices stored before task #4558, are visible
   // to the people who can read their card/chat. Delete them with the notice readers of v1-v3 (slice S18).
@@ -707,12 +689,8 @@ export interface CommandEffects {
   /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
    *  attempt row as a builder's own done does. */
   closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
-  /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
-  instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
   projectRules?: import('./policy.js').RulesWrite
-  /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
-  notes?: import('./instructions.js').NotesWrite
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -878,8 +856,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
   // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
-  // It starts on a copy of the built-in instructions, which the store writes beside it (store.ts create).
-  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default', ...FIRST_INSTRUCTIONS }]
+  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
   // Swarm as it is, and the owner's first share or run in Your models sets the models up then.

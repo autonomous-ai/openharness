@@ -780,13 +780,6 @@ enum AttachIntent { person, automatic }
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
 
-const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
-
-/// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
-/// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
-const buddyKeepsItsAgent =
-    'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.';
-
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
 
@@ -1613,7 +1606,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// The Swarms the join's Bring agent was offered for were kept per account
-  /// until v3's Buddy went (2026-11-10); nothing reads them now. Goes on
+  /// until v3's Bring agent went (2026-11-10); nothing reads them now. Goes on
   /// 2026-12-10, when clients that wrote it are past 30 days.
   void _forgetJoinSeen(String account) {
     unawaited(
@@ -1889,7 +1882,7 @@ class AppNotifier extends ChangeNotifier {
   /// Team account's, here either (a computer switched with `harness team on`):
   /// its daemon relays under a team sign-in, which the server refuses to let
   /// speak as the person ("A team sign-in can only run Swarm agents on its own
-  /// machine", every Buddy-chat post from a phone, 10-29), so nothing is sent.
+  /// machine", 10-29), so nothing is sent.
   MachineState? get sharedTabsTarget {
     if (viewer == null) {
       final here = localMachineState;
@@ -4558,15 +4551,12 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// A device picked a project of a Swarm: show that Swarm, then its Lead
-  /// chat, or with [buddy] (a round dial on its Buddy side, or a tap on the
-  /// reader's Buddy) the reader's own Buddy chat there when they have one.
-  /// Never a terminal tab: closing one stopped the Buddy (Diego, 10-30).
+  /// chat. Never a terminal tab.
   Future<void> _openSuperTabProject(
     MachineState source,
     String tabId,
-    String projectId, {
-    bool buddy = false,
-  }) async {
+    String projectId,
+  ) async {
     final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     final name = open?.name ?? _superTabNames[tabId];
     // A tab this account does not belong to is nobody's to open.
@@ -4593,24 +4583,8 @@ class AppNotifier extends ChangeNotifier {
           .where((p) => p.id == projectId)
           .firstOrNull;
       if (project == null) return;
-      // Only an existing chat of the reader's own: a device never makes one.
-      // Where the Swarm gives one Buddy per person, that is their Swarm chat
-      // (# buddy, which names no project), whichever project the dial is on;
-      // an earlier project chat there is history (Diego, 11-02).
-      final buddyKey =
-          controller.oneBuddy &&
-              controller.buddyChat(SuperTabController.kSwarmBuddyKey) != null
-          ? SuperTabController.kSwarmBuddyKey
-          : projectId;
-      if (buddy && controller.buddyChat(buddyKey) != null) {
-        await (controller.buddyChatOpener ?? controller.openBuddyChat)(
-          buddyKey,
-        );
-        if (_disposed || _devicePick != pick) return;
-      } else {
-        await controller.select(project.leadConversationId);
-        if (_disposed || _devicePick != pick) return;
-      }
+      await controller.select(project.leadConversationId);
+      if (_disposed || _devicePick != pick) return;
       // Selecting what is already selected announces nothing by itself.
       _announceOpenPanesToDial();
     } catch (error) {
@@ -18021,24 +17995,6 @@ class AppNotifier extends ChangeNotifier {
   /// top, which shows it as a snack bar; null when no screen is listening.
   void Function(String message)? agentChangeNotice;
 
-  /// Whether [agentId] is a Swarm Buddy, as any open Swarm's roster says. Its machine refuses to
-  /// stop it, so Change agent cannot switch it.
-  @visibleForTesting
-  final buddyAgentsForTest = <(String, String)>{};
-
-  bool isSwarmBuddy(String machineId, String agentId) =>
-      buddyAgentsForTest.contains((machineId, agentId)) ||
-      superTabs.loadedControllers.any(
-        (c) =>
-            c.snapshot?.agents.any(
-              (a) =>
-                  a.isBuddy &&
-                  a.machineId == machineId &&
-                  a.harnessId == agentId,
-            ) ==
-            true,
-      );
-
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -18091,9 +18047,6 @@ class AppNotifier extends ChangeNotifier {
       return Future.value(
         'This agent is not supported by the installed harness.',
       );
-    }
-    if (isSwarmBuddy(machineId, agentId)) {
-      return Future.value(buddyKeepsItsEngine);
     }
     final key = (machineId, agentId);
     if (source.dsh == 'autonomous/pair' &&
@@ -18319,9 +18272,6 @@ class AppNotifier extends ChangeNotifier {
       final saved = await close('now');
       if (saved['closed'] != true) {
         change.preservingViews = false;
-        // A Swarm Buddy keeps running, so it keeps its agent. The daemon's
-        // refusal speaks of Stop Harness, which is no help here.
-        if (saved['keptRunning'] == true) return buddyKeepsItsAgent;
         return saved['detail'] as String? ??
             'Could not save and stop this conversation. Its agent has not been changed.';
       }
@@ -22872,9 +22822,7 @@ class AppNotifier extends ChangeNotifier {
         break;
       case 'dial_super_tab':
         // The Harness Pro picked a Lead's project. Show that Swarm, then the
-        // project's Lead chat as a click on its row in the sidebar does. A
-        // round dial names the chat it shows: 'buddy' opens the reader's
-        // Buddy chat there; anything else is the Lead chat.
+        // project's Lead chat as a click on its row in the sidebar does.
         final tabId = payload['superTabId'];
         final projectId = payload['projectId'];
         if (payload['threadOnly'] == true) {
@@ -22889,12 +22837,7 @@ class AppNotifier extends ChangeNotifier {
             );
           }
         } else if (tabId is String && projectId is String) {
-          await _openSuperTabProject(
-            machine,
-            tabId,
-            projectId,
-            buddy: payload['chat'] == 'buddy',
-          );
+          await _openSuperTabProject(machine, tabId, projectId);
         }
         break;
       case 'dial_forked':

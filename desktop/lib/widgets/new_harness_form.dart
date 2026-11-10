@@ -1728,24 +1728,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (box.integration?.heading
-                                      case final heading?) ...[
-                                    Text(
-                                      heading,
-                                      style: DesktopChrome.heading(),
-                                    ),
-                                    if (box.integration?.intro
-                                        case final intro?) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        intro,
-                                        style: DesktopChrome.text(
-                                          color: DesktopChrome.muted,
-                                        ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 14),
-                                  ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
                                   if (_installing case final run?)
@@ -1753,8 +1735,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   else ...[
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
-                                    // A Buddy runs as the Swarm starts it.
-                                    if (!box.bringsBuddy) _desktopSettings(),
+                                    _desktopSettings(),
                                     if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
@@ -2024,9 +2005,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             // Fo takes no repository; a cloud coding agent works on the chosen
             // repository's GitHub copy, never on this computer's folder.
-            // A Buddy has a folder of its own (task #4196).
-            if (!box.bringsBuddy &&
-                (!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+            if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
                 (!box.asGuest ||
                     box.fields.contains(NewHarnessField.projectMenu)))
               _desktopField(
@@ -2666,15 +2645,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           box.integration?.projectVisibility != null &&
           (box.agentKind ?? 'lead') == 'lead')
         _desktopProjectVisibility(9.95),
-      // A Buddy is an offer: saying no is as plain as saying yes (#4442).
-      if (box.bringsBuddy && !widget.embedded)
-        TextButton(
-          key: const ValueKey('new-harness-not-now'),
-          onPressed: () {
-            if (box.requestDismiss()) widget.onClose();
-          },
-          child: const Text('Not now'),
-        ),
       // Chosen where the agent is started, directly left of Start (product owner, task #4445).
       if (includeChoices)
         if (box.agentKind case final kind?) _desktopKindChip(kind),

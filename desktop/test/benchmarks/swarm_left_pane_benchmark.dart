@@ -25,7 +25,6 @@ void main() {
     tester,
   ) async {
     final server = swarm()
-      ..state['swarmBuddy'] = true
       ..state['agents'] = [
         for (var i = 0; i < 40; i++)
           {

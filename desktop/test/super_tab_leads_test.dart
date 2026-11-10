@@ -5,7 +5,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'support/buddy_fixture.dart';
+import 'support/own_agent_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// The Product Managers ("product-managers") chat is gone (Dee, 2026-10-31):
@@ -14,11 +14,10 @@ import 'support/super_tab_fixture.dart';
 /// still does, Desktop drops it when it reads the Swarm, so no list shows it
 /// and nothing opens it.
 void main() {
-  /// Two projects, the owner's Buddy chat and, as an older server still sends
+  /// Two projects, the owner's chat with their agent and, as an older server still sends
   /// it, the Leads conversation with messages in it.
   ConversationServer swarm() {
     final server = ConversationServer();
-    server.state['buddies'] = true;
     server.state['projects'] = [
       projectFixture('lead', 'openharness', 'lead'),
       projectFixture('os', 'autonomous-os', 'os-lead'),
@@ -52,7 +51,7 @@ void main() {
       'agentIds': ['pm-1', 'pm-2'],
     });
     server.state['leadsConversationId'] = 'leads';
-    giveBuddy(
+    giveOwnAgent(
       server,
       person: 'owner',
       id: 'sol',
@@ -116,7 +115,7 @@ void main() {
       'lead',
       'offline',
       'os-lead',
-      'buddy-owner-lead',
+      'agent-chat-sol',
     ]);
   });
 

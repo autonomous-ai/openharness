@@ -10,7 +10,6 @@ import { leadStartFailed } from './leadStart.js'
 import { staleSwitches } from './tidy.js'
 import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
-import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { handed, pickUp, unclaimedReason } from './handed.js'
 
@@ -45,9 +44,6 @@ export const SWEEP_EVERY_MS = 30_000
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const machineName = (state: SuperTabState, machineId: string) => state.machines?.find(m => m.machineId === machineId)?.name ?? 'its machine'
-/** What [group]'s project calls its coordinator; never a lookup that throws, since these checks run inside machine reports. */
-const coordinatorOfGroup = (state: SuperTabState, group: Conversation) =>
-  coordinatorNameOf(projectsOf(state).find(p => p.id === (group.projectId ?? 'lead')) ?? {})
 /** [group]'s project chat when it is loaded; never a lookup that throws. */
 const projectChatOf = (state: SuperTabState, group: Conversation) =>
   state.conversations.find(c => c.id === projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.leadConversationId)
@@ -388,7 +384,7 @@ function failedStartNotices(state: SuperTabState, start: AgentStart, now: number
   if (!group) return []
   // Told to the coordinator and the agent that made it, with the model it asked for; nothing is started elsewhere (project
   // instructions, phase 4, decision 18).
-  const text = `${failureNotice(start.request.name, start.error!, askedModel(start), coordinatorOfGroup(state, group))}${suspended ? `\n\n${suspended}` : ''}`
+  const text = `${failureNotice(start.request.name, start.error!, askedModel(start))}${suspended ? `\n\n${suspended}` : ''}`
   const source = { kind: 'start-timeout', startId: start.id }
   const author = failureAuthor(state, start, group)
   if (!author) return []

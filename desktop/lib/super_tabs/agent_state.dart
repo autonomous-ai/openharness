@@ -108,7 +108,6 @@ class SwarmAgentStates extends ChangeNotifier {
     final projects = <String, SuperTabProject>{};
     final agents = <String, SuperTabAgent>{};
     for (final agent in superTabMyAgents(snapshot, controller.accountId)) {
-      if (agent.buddyOf != null) continue;
       agents[agent.id] = agent;
       if (snapshot.projectById(agent.projectId) case final project?) {
         projects.putIfAbsent(project.id, () => project);
