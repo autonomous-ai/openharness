@@ -75,6 +75,24 @@ describe('a v4 agent in a project\'s channel', () => {
     expect(f.run(post('lead', 'Run `@first builder` as written.'), pip).messages.at(-1)!.recipients).toEqual([])
   })
 
+  // Review of #3904.
+  it('reads a several-word name on one line only, leaves a person\'s tag theirs, and wakes nobody for a name two agents share', () => {
+    const f = swarm()
+    const pip = f.newAgent(owner, 'Pip'), first = f.newAgent(mate, 'first'), whole = f.newAgent(mate, 'first builder')
+    // A name does not run on over a line break: the next paragraph's first word is not part of the tag.
+    expect(f.run(post('lead', 'Thanks @first\n\nBuilder agents should rebase.'), pip).messages.at(-1)!.recipients).toEqual([first.agentId])
+    expect(f.run(post('lead', 'Thanks @first\tbuilder'), pip).messages.at(-1)!.recipients).toEqual([whole.agentId])
+    // "mate" is a person here: a tag of them stays theirs, though an agent is called "mate builder".
+    f.newAgent(owner, 'mate builder')
+    expect(f.run(post('lead', '@mate builder #12 is ready'), pip).messages.at(-1)!.recipients).toEqual([])
+    // Two agents of one several-word name: neither is woken, and not the agent of its first word either.
+    f.newAgent(owner, 'First Builder')
+    expect(f.run(post('lead', '@first builder ping'), pip).messages.at(-1)!.recipients).toEqual([])
+    // A name with marks that mean something to a pattern is read as written.
+    const plus = f.newAgent(mate, 'c++ dev (x)')
+    expect(f.run(post('lead', 'Over to @c++ dev (x).'), pip).messages.at(-1)!.recipients).toEqual([plus.agentId])
+  })
+
   it('stays out of a private project its person does not read', () => {
     const f = swarm()
     const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { conversationId: string }

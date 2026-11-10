@@ -309,6 +309,42 @@ void main() {
       expect(runsOf(tester, '@first'), isEmpty);
     });
 
+    // Review of #3904.
+    testWidgets('a several-word name is one line\'s, a tagged person\'s tag stays theirs, and a name no tag can open is addressed in words', (
+      tester,
+    ) async {
+      Future<void> show(
+        String text, {
+        List<String> people = const [],
+        List<String> to = const [],
+      }) => tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabMessageText(
+              text,
+              mentions: people,
+              agents: const ['first', 'first builder', 'mate builder', '(qa) bot'],
+              addressed: to,
+            ),
+          ),
+        ),
+      );
+      // The next paragraph's first word is not part of the tag.
+      await show('Thanks @first\n\nBuilder agents should rebase.');
+      expect(runsOf(tester, '@first').single?.backgroundColor, isNotNull);
+      // "mate" is a person tagged here: the tag is theirs, not the agent "mate builder"'s.
+      await show('@mate builder #12 is ready', people: ['mate']);
+      expect(runsOf(tester, '@mate').single?.backgroundColor, isNotNull);
+      expect(runsOf(tester, '@mate builder'), isEmpty);
+      // No tag opens with a bracket, so a post to such an agent still opens with its name.
+      await show('@(qa) bot can you look?', to: ['(qa) bot']);
+      expect(
+        find.text('@(qa) bot @(qa) bot can you look?', findRichText: true),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a full address is the same person', (tester) async {
       await showText(tester, 'Ask @dee@example.com first.', ['dee']);
       expect(
