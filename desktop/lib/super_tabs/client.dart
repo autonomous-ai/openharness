@@ -445,7 +445,7 @@ class SuperTabClient {
   /// Only a name the daemon says a person chose, never the creation name or an
   /// engine's session title; a daemon that does not say sends nothing. Only for
   /// an agent this person may rename (its contributor or its machine's owner,
-  /// as the Swarm decides), and never a Buddy, whose name its own settings set.
+  /// as the Swarm decides).
   /// [tabId] narrows it to one Swarm, [machineId] and [harnessId] to one
   /// harness: only what changed is looked at. Returns how many were sent.
   Future<int> syncChosenNames(
@@ -464,8 +464,7 @@ class SuperTabClient {
         if (machineId != null && agent.machineId != machineId) continue;
         if (harnessId != null && agent.harnessId != harnessId) continue;
         final person = controller.accountId;
-        if (agent.isBuddy ||
-            (agent.contributorId != person && agent.machineOwnerId != person)) {
+        if (agent.contributorId != person && agent.machineOwnerId != person) {
           continue;
         }
         final local = native(agent.machineId, agent.harnessId);

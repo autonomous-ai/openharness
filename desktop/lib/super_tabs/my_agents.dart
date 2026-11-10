@@ -1,9 +1,9 @@
 import 'controller.dart';
 import 'model.dart';
 
-/// The agents in [accountId]'s My agents, for the left pane (Swarm v3, task #4118): their Buddy first, then the others by
-/// name. The server says which (task #4192: their own account's, running and not finished), so every client lists the same.
-/// An older backend says nothing: then every agent the person brought, and only their own Buddy (this can go 2026-12-07).
+/// The agents in [accountId]'s My agents, for the left pane (task #4118), by name. The server says which (task #4192: their
+/// own account's, running and not finished), so every client lists the same; a backend that says nothing lists every
+/// agent the person brought.
 List<SuperTabAgent> superTabMyAgents(
   SuperTabSnapshot snapshot,
   String accountId,
@@ -14,16 +14,11 @@ List<SuperTabAgent> superTabMyAgents(
   ];
   String name(SuperTabAgent agent) =>
       (agent.displayName ?? agent.name).toLowerCase();
-  return own..sort((a, b) {
-    final buddy = (b.buddyOf != null ? 1 : 0) - (a.buddyOf != null ? 1 : 0);
-    return buddy != 0 ? buddy : name(a).compareTo(name(b));
-  });
+  return own..sort((a, b) => name(a).compareTo(name(b)));
 }
 
 bool _mine(SuperTabAgent agent, String accountId) =>
-    agent.myAgent ??
-    (agent.contributorId == accountId &&
-        (agent.buddyOf == null || agent.buddyOf == accountId));
+    agent.myAgent ?? agent.contributorId == accountId;
 
 /// Whether [agent] is a PM, to wear the Lead ring: the backend's kind when it sends one (#4116), else whether it leads a
 /// project, as before.
@@ -51,7 +46,7 @@ List<(SuperTabAgent, SuperTabConversation)> superTabAgentsAsking(
   if (snapshot == null || c.accessRevoked) return const [];
   return [
     for (final agent in snapshot.agents)
-      if (agent.buddyOf == null && _mine(agent, c.accountId))
+      if (_mine(agent, c.accountId))
         if (superTabAgentChat(snapshot, agent) case final chat?
             when c.unreadShown(chat))
           (agent, chat),

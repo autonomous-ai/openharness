@@ -181,7 +181,6 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       expect(key('super-agent-orion'), findsOneWidget);
       expect(key('super-agent-tuan-agent'), findsNothing);
-      expect(key('super-swarm-buddy'), findsNothing);
       // The PM still wears the gold ring, and no row says more than its name.
       expect(ring('orion'), findsOneWidget);
       expect(ring('kestrel'), findsNothing);

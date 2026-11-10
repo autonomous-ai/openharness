@@ -252,11 +252,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   int _revision = 0;
 
   SuperTabController get c => widget.controller;
-  // Team agents only: a Buddy is listed nowhere, and its machine may be its
-  // person's alone, outside the Swarm (backend buddyOnly).
   Set<String> get _ids => {
-    for (final a in c.snapshot?.teamAgents ?? const <SuperTabAgent>[])
-      a.machineId,
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
     for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
       m['machineId'] as String,
   };
@@ -450,7 +447,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // their own computer. Actions stay the Mac's; the backend changes its team account with it.
     final team = snapshot.teamPoolOf(id);
     final teamId = team?['machineId'] as String?;
-    final agents = snapshot.teamAgents
+    final agents = snapshot.agents
         .where((a) => snapshot.placeOf(a.machineId) == id)
         .toList();
     final contributor =
@@ -1631,7 +1628,7 @@ class _RemovalPreview {
       final agent = superTabMap(item);
       final name = agent['name'], projectName = agent['projectName'];
       final task = agent['task'];
-      // A Swarm-wide Buddy has no project: the server sends an empty name.
+      // An agent of no project: the server sends an empty name.
       if (name is! String ||
           name.isEmpty ||
           projectName is! String ||
