@@ -1,7 +1,8 @@
 /**
  * Where an old Harness Team account's config is, on a Mac, Linux and Windows, and the checks every value in it passes
  * (team/config.ts). Setup, which wrote it root-owned, was removed on 2026-11-10; the config stays on computers set up
- * before, and its account's daemon reads it to stop itself (superTabs/inCore/teamRetire.ts).
+ * before, until the person removes the account, and names what is to go. While it is there, the account's own boot job
+ * ends at once (./bootGuard.ts).
  */
 import { isAbsolute, normalize, win32 } from 'node:path'
 

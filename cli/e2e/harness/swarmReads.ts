@@ -42,7 +42,7 @@ export function overOldRoutes(handler: Handler): Handler {
       const whole = await old(`/api/super-tabs/${tab[1]}${as ? `?asAgentId=${as}` : ''}`)
       if (whole.error) return whole
       const answer = (whole.data ?? {}) as Json
-      return { data: partsOf({ id: tab[1], ...(answer.state ?? {}) }, { githubApp: answer.githubApp === true, lastChangedAt: answer.revision }) }
+      return { data: partsOf({ id: tab[1], ...(answer.state ?? {}) }, { lastChangedAt: answer.revision }) }
     }
     const group = /^\/api\/super-tabs\/([^/]+)\/groups\/([^/]+)$/.exec(path)
     if (method === 'GET' && group) {

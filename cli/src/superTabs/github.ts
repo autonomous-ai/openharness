@@ -5,6 +5,9 @@
  *
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
+ *
+ * Only for sessions started with the App before its removal: no new agent uses it, and the backend issues their task
+ * tokens until 2026-12-10 (backend #3723), so they keep push and gh mid-work. Delete on or after that date.
  */
 import { readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
@@ -32,7 +35,7 @@ function githubDir(core: CoreApi, session: Session | undefined): string | null {
  *  of #2390). A backend that could not be reached, or GitHub not answering it (GITHUB_UNAVAILABLE), decides nothing, and an
  *  unexpired token stays. */
 const DECIDED_5XX = new Set(['GITHUB_APP_NOT_CONFIGURED', 'GITHUB_APP_MISCONFIGURED'])
-export const decided = (error: SuperTabHostError) => (error.status >= 400 && error.status < 500) || DECIDED_5XX.has(error.code)
+const decided = (error: SuperTabHostError) => (error.status >= 400 && error.status < 500) || DECIDED_5XX.has(error.code)
 
 /**
  * The token of [harnessId]'s task: asked as each Swarm membership this machine's roster lists for that harness (one,
