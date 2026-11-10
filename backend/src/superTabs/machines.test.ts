@@ -3,6 +3,7 @@ import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest,
 import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, removalPreview, servedLocalModels, storedObservation, type ContributedMachine,
   type MachineObservation } from './machines.js'
 import { owner, peer, richSwarm } from './read/fixture.test-support.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -234,12 +235,17 @@ describe('reported engine profiles', () => {
     expect(ok([{ ...profile, leftPercent: 101 }])).toBe(false)
     expect(ok([{ ...profile, extra: 1 }])).toBe(false)
   })
+  const pool: ContributedMachine = { machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
+    cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false }
+  const store = (profiles: unknown[]) => storedObservation(pool, { ...sent, profiles } as MachineObservation, { team: false, now: NOW, preparable: () => true })
+  const own = { ...profile, id: defaultProfileId('host', 'claude'), label: 'Default' }
   it('keeps profiles of contributed engines only', () => {
-    const pool: ContributedMachine = { machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
-      cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false }
-    const kept = storedObservation(pool, { ...sent, profiles: [profile, { ...profile, engine: 'codex' }] } as MachineObservation,
-      { team: false, now: NOW, preparable: () => true })
-    expect(kept.profiles).toEqual([profile])
+    expect(store([own, { ...own, engine: 'codex', id: defaultProfileId('host', 'codex') }]).profiles).toEqual([own])
+  })
+  // A PM runs on the default account alone (pmAccount.ts): another account a CLI of the last 30 days still reports is not kept,
+  // so no reader sees it to pick.
+  it('keeps each engine\'s default account only', () => {
+    expect(store([own, profile, { ...own, id: defaultProfileId('other', 'claude') }]).profiles).toEqual([own])
   })
 })
 
@@ -328,7 +334,7 @@ it('the removal preview names only the agents and projects its owner reads', () 
   const secretLead = s.state.projects!.find(project => project.id === s.secret)!.leadConversationId
   const secretPm = s.add('hidden-pm-harness', secretLead, true)
   const secretWorker = s.add('hidden-builder-harness', secretTask)
-  s.run({ type: 'work.assign', conversationId: secretTask, agentId: secretWorker })
+  storedAssignment(s.state, secretTask, secretWorker, NOW)
   s.edit(state => {
     // The peer owns this machine but is not a member of the owner's private project.
     const machine = state.machines!.find(item => item.machineId === 'host')!

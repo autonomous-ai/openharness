@@ -11,7 +11,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type VoiceTranscription } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { logger } from '../src/utils/logger.js'
-import { readBy } from '../src/superTabs/parts/indexed.js'
 import { VOICE_READ_MS } from '../src/superTabs/voiceMessages.js'
 import { voiceInflightBytes } from '../src/lib/voiceBudget.js'
 
