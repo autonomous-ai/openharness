@@ -51,6 +51,16 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     }
   })
 
+  // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
+  // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
+  it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
+    const line = '- Stop only processes you started, by their process id; no sudo or system-wide installs; temp files in a folder from mktemp -d; never remove a worktree another process uses.'
+    for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
+      const rows = prepareSwarmSkill(fixture(), saved).instructions.split('\n')
+      expect(rows.filter(row => row === line), saved.key).toHaveLength(1)
+    }
+  })
+
   it('tells no agent to send a person a private line: their chat with their own agent is theirs alone (task #4547)', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'private-buddy' }).file, 'utf8')
     expect(text).not.toContain('person.tell')
