@@ -149,8 +149,13 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
     f.github.repo.comments.set(4, [comment('READ-OK f6edb44')])
     await f.merger.tick()
+    // A minute later, and the next: swarm-sandbox #24-#26 got it again every minute (46 times each, 2026-11-10), as its words
+    // carried the time of day, so each was a new thing to say.
+    f.clock.now += 60_000
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, \d\d:\d\d: READ-OK f6edb44"\.$/)])
+    f.clock.now += 60_000
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, HH:MM: READ-OK f6edb44"\.$/)])
   })
 
   // A reader is one however it writes its name: a HOLD as "Kai Lee" stood for good after its READ-OK as "kai-lee".
