@@ -1,13 +1,10 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
 import { identifier, object } from './wire.js'
 import { BUDDY_SKILL_USE, isSwarmSkillMode, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
-import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { projectsRoot } from '../lib/projectFolder.js'
@@ -15,6 +12,7 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
+import { isTeamAccount } from '../team/config.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -123,12 +121,13 @@ export const BUDDY_CLAUDE_SIGNED_OUT = 'Sign in to Claude Code on this computer 
  * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
  * like their own Claude Code or Codex session, so it launches only where those rights are its owner's own. The Swarm starts a
  * Buddy only on its owner's own machine (backend commands.ts buddy.create, BUDDY_OWN_MACHINE); here the machine checks again,
- * by what it knows itself: it is not a Harness Team account, and the account signed in to Harness here is the Buddy's owner. The
+ * by what it knows itself: it is not an old Harness Team account (whose launch refuses a Buddy too, lib/swarmSkills.ts), and the
+ * account signed in to Harness here is the Buddy's owner. The
  * start's record must say the same: the machine is its owner's, contributed by them, and not lent to them. Anything missing refuses.
  */
 export function buddyOnOwnMachine(input: Json, start: Json, buddyOf: Json): boolean {
   const owner = buddyOf.personId
-  return identifier(owner) && !isTeamDaemon() && input.signedIn === owner
+  return identifier(owner) && !isTeamAccount() && input.signedIn === owner
     && start.machineOwnerId === owner && start.contributorId === owner && !start.hostGrant
 }
 
@@ -168,24 +167,6 @@ export async function inspectCapacity(target: Daemon, request: Json) {
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
  *  before the flags does not name the field, and agent_create would silently drop a model it does not know. */
 const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(capacity.launchModel) && capacity.launchModel.includes(engine)
-
-/**
- * Names a Team-written start's checkout untrusted in its own Codex home (task #3009). The home names no project so that the
- * branch's own config, hooks and exec policies stay off (audit H2), but codex-cli 0.165 then stops on "Trust this folder?
- * 1. Trust and continue / 2. Quit" in a pane nobody sees: every such start timed out at 3 minutes (10 of 10, 2026-10-29 to
- * 11-05). Named untrusted, it asks "Open restricted / Quit" instead, whose first row keeps them off and saves no trust, and
- * the host answers that screen alone (machines.ts). A worktree takes its repository's answer, so the source folder is named,
- * as written and as the disk resolves it. Never `trusted`; an entry already there is left as it is.
- */
-export function untrustCheckout(home: string, checkout: string): void {
-  const file = joinPath(home, 'config.toml')
-  let resolved = checkout
-  try { resolved = realpathSync(checkout) } catch { /* A folder not made yet is named as written. */ }
-  const config = existsSync(file) ? readFileSync(file, 'utf8') : ''
-  // A TOML basic string is a JSON string, except that DEL must be escaped too (engines/kit/folderTrust.ts recordToml).
-  const tables = [...new Set([checkout, resolved])].map(folder => `[projects.${JSON.stringify(folder).replace(/\x7f/g, '\\u007f')}]`).filter(table => !config.includes(table))
-  if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
-}
 
 /**
  * Starts through the ordinary native launch protocol, with its durable receipt. Only a contributed machine's own host runs it,
@@ -309,17 +290,16 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // Code a Team agent wrote runs with none of its branch's own settings, hooks or trust (backend superTabs/teamWritten.ts,
       // audit H2). Since Swarm v3 there is no Team machine, and the server sends such work only to the project owner's own
       // computer (ruling #4120); a refusal here failed every start of it (#4188, 11-07). Claude Code launches there in the
-      // `teamWritten` mode below. Codex keeps the branch's settings out only in an engine home of its own, which off a Team
-      // daemon has no sign-in, and Harness never reads or links one (anh Dee, 11-07; loginReads.spec.ts): refused, before
-      // anything is made.
-      const projectSettingsOff = request.projectSettings === 'off', team = isTeamDaemon()
-      if (projectSettingsOff && !team && request.engine !== 'claude') {
+      // `teamWritten` mode below. Codex keeps the branch's settings out only in an engine home of its own, which has no
+      // sign-in, and Harness never reads or links one (anh Dee, 11-07; loginReads.spec.ts): refused, before anything is made.
+      const projectSettingsOff = request.projectSettings === 'off'
+      if (projectSettingsOff && request.engine !== 'claude') {
         requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_CLAUDE_ONLY } }))
         return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_CLAUDE_ONLY }
       }
       // Its Claude trust is saved for the folder it runs in and cleared when Harness removes its worktree (machines.ts, task
       // #4353). The owner's main checkout is neither Harness's to trust for it nor to remove: refused there.
-      if (projectSettingsOff && !team && request.worktree !== true) {
+      if (projectSettingsOff && request.worktree !== true) {
         requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_WORKTREE_ONLY } }))
         return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_WORKTREE_ONLY }
       }
@@ -387,16 +367,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }
       for (const key of ['codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
-      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
-      // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
-      // Team-written Codex work too: a home that trusts no project keeps the branch's own settings out (engines/codex/launch.ts).
-      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, team, homedir()) : null
-      if (pmHome) {
-        // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
-        mkdirSync(pmHome, { recursive: true, mode: 0o700 })
-        payload.codexHome = pmHome
-        if (projectSettingsOff) untrustCheckout(pmHome, String(request.cwd))
-      }
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves
       // it as the person's default in their own Claude settings (manual run 2, 2026-10-19).
       launched = canLaunch && launchesWithModel(resources.capacity, request.engine)

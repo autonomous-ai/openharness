@@ -200,6 +200,31 @@ describe('attachment files', () => {
   })
 })
 
+// A voice message's read and an upload's read-back give up on a silent bucket (store.ts): the download itself stops then, so it
+// holds no memory and no connection after its caller gave up.
+describe('reading from the bucket', () => {
+  class Bucket extends GcsAttachmentStore {
+    constructor(private readonly stream: () => Readable) { super('bucket') }
+    protected override files() { return Promise.resolve({ file: () => ({ createReadStream: this.stream }) }) as never }
+  }
+
+  it('reads a whole object, or its first bytes, from its stream', async () => {
+    const bucket = new Bucket(() => Readable.from([Buffer.from('RIFF'), Buffer.from('WAVE')]))
+    expect((await bucket.read('k')).toString()).toBe('RIFFWAVE')
+    expect((await bucket.head('k', 8)).toString()).toBe('RIFFWAVE')
+  })
+
+  it('stops the download when its caller gives up', async () => {
+    const stream = new Readable({ read() {} })
+    const control = new AbortController()
+    const reading = new Bucket(() => stream).head('k', 16, control.signal)
+    stream.push(Buffer.from('RIFF'))
+    control.abort(new Error('timeout'))
+    await expect(reading).rejects.toThrow()
+    expect(stream.destroyed).toBe(true)
+  })
+})
+
 describe('upload links on the memory bucket, with storage\'s rules', () => {
   const at = 1_800_000_000_000
   it('writes the linked object once, of exactly its size, before it expires, with its headers unchanged', async () => {

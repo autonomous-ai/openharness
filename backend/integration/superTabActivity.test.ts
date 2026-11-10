@@ -97,7 +97,8 @@ async function scene(extra: Array<{ kind: 'person'; userId: string; email: strin
   s.join(outsiderActor)
   for (const person of extra) s.join(person)
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
-  const open = s.run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }).projectId as string
+  const created = s.run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' })
+  const open = created.projectId as string, openChannel = created.conversationId as string
   const openChat = s.group('Open chat', open)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
@@ -117,7 +118,7 @@ async function scene(extra: Array<{ kind: 'person'; userId: string; email: strin
   await writeLegacySwarm(db, { state, revision: 3 })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
-  return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat, swarmBuddy }
+  return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat, openChannel, swarmBuddy }
 }
 
 const run = async (tabId: string, command: Command, as: AuthUser = owner, asAgentId?: string) =>
@@ -287,6 +288,26 @@ describe('Phone push end to end on the server: a write, its phones, and what App
     await tag('Peer, look again')
     // Its phone here; earlier tests may have given peer others.
     expect(apple.filter(r => r.path.endsWith(token)).map(r => JSON.parse(r.body).aps.alert.title)).toEqual([expect.stringMatching(/ tagged you$/)])
+  })
+
+  it('a project\'s channel muted before Swarm v4, which has no way to unmute it, rings as if not muted; the stored mute stays (2026-11-10)', async () => {
+    const apple: ApnsRequest[] = []
+    const senders = { ios: apnsSender(apnsKeys, { transport: async request => { apple.push(request); return { status: 200, reason: null } } }), android: null }
+    const sending: Array<Promise<void>> = []
+    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices)) } })
+    const s = await scene()
+    const token = 'd4'.repeat(32)
+    await registerPushDevice(db, peer.sub, { platform: 'ios', token }, Date.now())
+    const root = await send(s.tabId, s.openChannel, 'Peer root', peer)
+    expect((await notify(s.tabId, s.openChannel, 'muted', peer)).status).toBe(200)
+    for (const [text, mentions] of [['Owner answers', []], ['Peer, look', [peer.sub]]] as const) {
+      await pushing.execute(owner, s.tabId, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: s.openChannel, text, replyTo: root, recipientIds: [], mentions: [...mentions] } })
+      await Promise.all(sending.splice(0))
+    }
+    expect(apple.filter(r => r.path.endsWith(token)).map(r => JSON.parse(r.body).aps.alert.title))
+      .toEqual([expect.stringMatching(/ replied in a thread$/), expect.stringMatching(/ tagged you$/)])
+    expect((await db.superTabChatSetting.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.openChannel, peer.sub, 'notify') } })).notify).toBe('muted')
   })
 
   it('weighs a write\'s tags against their chats\' mutes in one read by id, examining no other setting', async () => {
@@ -587,6 +608,15 @@ describe('Activity: a reply tells everyone in its thread (task #2745)', () => {
     expect(await rowsOf(s.tabId, outsider)).toHaveLength(1)
     const tag = await tagging(s.tabId, s.web, 'Peer, please check', owner, root, [peer.sub])
     expect((await tags(s.tabId, peer)).map(t => t.messageId)).toEqual([tag])
+  })
+
+  it('writes reply rows in a project\'s channel muted before Swarm v4, which has no way to unmute it; the stored mute stays (2026-11-10)', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.openChannel, 'Peer root', peer)
+    expect((await notify(s.tabId, s.openChannel, 'muted', peer)).status).toBe(200)
+    const reply = await send(s.tabId, s.openChannel, 'Owner answers', owner, root)
+    expect(await rowsOf(s.tabId, peer)).toEqual([reply])
+    expect((await db.superTabChatSetting.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.openChannel, peer.sub, 'notify') } })).notify).toBe('muted')
   })
 
   it('tells nobody new of a Swarm notice or an agent-only notice in a thread: the starter alone, as before', async () => {

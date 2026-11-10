@@ -30,7 +30,7 @@ function writeRecord(dataDir: string, changeId: string, at: number) {
   writeFileSync(join(dir, `${createHash('sha256').update('h1').digest('hex')}.json`), JSON.stringify({ version: 1, agentId: 'h1', changeId, targetEngine: 'claude', at }), { mode: 0o600 })
 }
 
-function setup(options: { claim?: boolean; home?: string | null; team?: boolean; refuse?: string; live?: boolean; resultStale?: boolean; old?: Record<string, unknown>; signedIn?: boolean;
+function setup(options: { claim?: boolean; home?: string | null; refuse?: string; live?: boolean; resultStale?: boolean; old?: Record<string, unknown>; signedIn?: boolean;
   claimGate?: Promise<void>; claimFails?: boolean; createTimesOut?: boolean; createHeld?: boolean; noRecord?: boolean } = {}) {
   const clock = { now: NOW }
   const dataDir = mkdtempSync(join(tmpdir(), 'lead-switch-'))
@@ -68,8 +68,8 @@ function setup(options: { claim?: boolean; home?: string | null; team?: boolean;
   const core = fakeCore({ dataDir, account: { backend },
     agents: { byAgent: vi.fn((id: string) => id === 'h1' && live ? { ...PM, ...options.old } as never : undefined) } })
   const profiles = vi.fn(() => options.home === undefined ? '/home/p1' : options.home)
-  const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, home: () => home, signedIn: async () => options.signedIn !== false,
-    open: async () => daemon, profiles: profiles as never, team: () => options.team === true,
+  const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, signedIn: async () => options.signedIn !== false,
+    open: async () => daemon, profiles: profiles as never,
     readHandoff: () => 'Earlier project state.' })
   return { core, switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
 }
@@ -282,15 +282,11 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain('You are PM.')
   })
 
-  // A Team daemon's default account was signed in through its owner's relay, which this could not read, so it went
-  // unchecked. With no relay (#4137) it is the account's own sign-in, which the CLI reports like any other.
-  it('refuses a signed-out default account before closing the PM, in a Team daemon too', async () => {
-    for (const team of [false, true]) {
-      const t = setup({ home: 'default', signedIn: false, team })
-      await t.switches.serve(row())
-      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
-      expect(t.calls).toEqual([])
-    }
+  it('refuses a signed-out default account before closing the PM', async () => {
+    const t = setup({ home: 'default', signedIn: false })
+    await t.switches.serve(row())
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
+    expect(t.calls).toEqual([])
   })
 
   it('refuses a signed-out account without closing the PM', async () => {
@@ -300,24 +296,11 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls).toEqual([])
   })
 
-  it('a Team daemon switches to its default account (the hex id counts), and a Codex PM keeps an engine home of its own', async () => {
-    const t = setup({ team: true, home: 'default' })
-    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'abcdef0123456789' } }))
-    const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    const changeId = String(create.creationId)
-    expect(create).toMatchObject({ engine: 'codex', codexHome: join(t.home, '.harness-pm-homes', changeId, 'codex') })
-    expect(create).not.toHaveProperty('claudeHome')
-    const c = setup({ team: true, home: 'default' })
-    await c.switches.serve(row())
-    expect(c.calls.find(x => x[0] === 'agent_create')![1]).not.toHaveProperty('claudeHome')
-  })
-
-  it('refuses a gone profile without closing the PM, and a Team daemon any profile but the default', async () => {
-    for (const t of [setup({ home: null }), setup({ team: true })]) {
-      await t.switches.serve(row())
-      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is no longer on this machine' })
-      expect(t.calls).toEqual([])
-    }
+  it('refuses a gone profile without closing the PM', async () => {
+    const t = setup({ home: null })
+    await t.switches.serve(row())
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is no longer on this machine' })
+    expect(t.calls).toEqual([])
   })
 
   it('does nothing for a request it cannot claim', async () => {
@@ -514,9 +497,9 @@ describe('a Buddy engine handoff', () => {
     expect(String(create.prompt)).not.toContain('Product Manager of the project')
   })
 
-  it.each(['different-owner', 'unknown-owner', 'missing-folder-owner', 'signed-out', 'team', 'no-chat', 'model-pending'])(
+  it.each(['different-owner', 'unknown-owner', 'missing-folder-owner', 'signed-out', 'no-chat', 'model-pending'])(
     'refuses %s before preparing or closing the Buddy', async reason => {
-      const t = buddySetup({ signedIn: reason !== 'signed-out', team: reason === 'team' })
+      const t = buddySetup({ signedIn: reason !== 'signed-out' })
       if (reason === 'different-owner') writeBuddyAccount('other', t.dataDir)
       if (reason === 'unknown-owner') writeBuddyAccount(null, t.dataDir)
       if (reason === 'missing-folder-owner') markBuddyOwner('work', 'other', t.dataDir)

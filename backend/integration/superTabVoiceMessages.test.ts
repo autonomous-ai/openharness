@@ -13,6 +13,8 @@ import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { logger } from '../src/utils/logger.js'
 import { FIELDS, preview, row } from '../src/superTabs/read/inbox.js'
 import { readBy } from '../src/superTabs/parts/indexed.js'
+import { VOICE_READ_MS } from '../src/superTabs/voiceMessages.js'
+import { voiceInflightBytes } from '../src/lib/voiceBudget.js'
 
 // Chat voice messages (task #2584): the phone uploads a WAV, the server transcribes it once before it is sent, and the words
 // become the message's text, so agents read them in the delivery written with the message.
@@ -119,6 +121,34 @@ describe('reading a voice file', () => {
     await db.superTabAttachment.update({ where: { id: file.id }, data: { voiceSince: new Date(at - 60_000) } })
     await expect(f.store.readVoice(owner, f.tab, file.id, 'en')).rejects.toMatchObject({ code: 'VOICE_TRANSCRIBING' })
     at += 61_000 + 60_000
+    expect((await f.store.readVoice(owner, f.tab, file.id, 'en')).voice.transcribed).toBe(true)
+  })
+
+  // The bucket's own client retries for minutes. Meanwhile the call held the file's claim and its share of the voice memory, so a
+  // silent bucket made every voice message of the server answer busy. The read ends in VOICE_READ_MS, as a failed read does.
+  it('gives up a read from a silent bucket, stops its download, frees the file and the memory, and tries again on the next call', async () => {
+    const f = await swarm()
+    const file = await f.upload(wav(2))
+    let download: AbortSignal | undefined
+    // The bucket never answers: the read waits until its signal stops it. Fake timers only from the read on, so the database's are real.
+    const head = vi.spyOn(f.files, 'head').mockImplementationOnce((_key, _bytes, signal) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      download = signal
+      return new Promise<Buffer>((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
+    })
+    try {
+      const reading = f.store.readVoice(owner, f.tab, file.id, 'en').then(() => null, (error: unknown) => error)
+      await vi.waitFor(() => expect(download).toBeDefined(), { interval: 5 })
+      await vi.advanceTimersByTimeAsync(VOICE_READ_MS)
+      vi.useRealTimers()
+      expect(await reading).toMatchObject({ code: 'ATTACHMENTS_UNAVAILABLE', status: 503 })
+    } finally {
+      vi.useRealTimers()
+      head.mockRestore()
+    }
+    expect(download!.aborted).toBe(true)
+    expect(voiceInflightBytes()).toBe(0)
+    expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: file.id } })).voiceSince).toBeNull()
     expect((await f.store.readVoice(owner, f.tab, file.id, 'en')).voice.transcribed).toBe(true)
   })
 

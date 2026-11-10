@@ -244,9 +244,13 @@ export interface CoreApi {
      *  knowing. Returns how to stop hearing. */
     onDelivery(listener: (event: TurnDelivery) => void): () => void
     /** Hear the end of each live turn, whichever engine ran it and whoever started it: never a turn read back from a
-     *  transcript at attach. The Swarm's host reads the turn's answer then and posts it where its person asked
-     *  (superTabs/agentReplies.ts). Returns how to stop hearing. */
+     *  transcript at attach. Each says which turn it was, by a hash of its prompt, and the Swarm's host asks for that turn's
+     *  answer then and posts it where its person asked (superTabs/agentReplies.ts). Returns how to stop hearing. */
     onEnd(listener: (event: TurnEnd) => void): () => void
+    /** What the turn that ended [end] answered, as it was said, or null when it said nothing or is not one the core knows. Its own
+     *  words as it went, so a follow-up that began at once does not change them, and the transcript's last turn only for a turn the
+     *  core did not see from its start (core/turns/ends.ts). */
+    answerOf(end: Pick<TurnEnd, 'sessionId' | 'prompt' | 'turnId'>): Promise<string | null>
     /** Replace a service's short-lived permission to write queued typed deliveries.
      * IDs use `team:service:<service>:`; expired or absent permission means wait.
      * This guards the final terminal write even when its authorizing service stops. */
@@ -581,17 +585,20 @@ export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number }
  *  delivered to, as the delivery named it. */
 export type TurnDelivery = SessionInputDelivery
 
-/** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session (what `transcripts.lastTurn` reads), and
- *  whether it was cut short (an interrupt). */
-export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean }
+/** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session, whether it was cut short (an interrupt), and
+ *  which turn it was, whatever any transcript shows by the time it is asked: its prompt as a hash (lib/promptIdentity.ts), which
+ *  says which message it answers, and its number among the turns this core has told, which tells it from another turn asked the same
+ *  words. */
+export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number }
 
 /** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */
-export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd' | 'leaseDeliveries'> = {
+export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd' | 'answerOf' | 'leaseDeliveries'> = {
   deliver: () => {},
   cancelDelivery: () => false,
   onDelivery: () => () => {},
   onEnd: () => () => {},
+  answerOf: async () => null,
   leaseDeliveries: async () => false,
 }
 
@@ -1571,26 +1578,6 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
 
 /** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
 export type RemoteRole = 'web' | 'device'
-
-/**
- * What the account's own apps away from this desk may ask of this machine and hear from it, beyond what an owner may
- * (backendSocket.ts `remoteAppPolicy`). Set only on a Harness Team daemon, by the Swarm (superTabs/inCore/teamApps.ts):
- * there the account is the Mac's owner's, and another person's Product Manager may run, holding people's private chats.
- */
-export interface RemoteAppPolicy {
-  /** Why a request is refused, or null to answer it as for any owner. */
-  refuse(type: string, payload: Record<string, unknown>): { error: string; message: string } | null
-  /** A reply's payload as the apps may see it. */
-  reply(type: string, payload: Record<string, unknown>): Record<string, unknown>
-  /** An up-frame as the apps may hear it, or null to withhold it. */
-  event<F extends { agentId?: unknown; payload?: unknown }>(frame: F): F | null
-  /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
-   *  (lib/terminalStreamManager.ts `watchOnly`). */
-  watchOnly(): boolean
-  /** Whether a session, by its agent id or its engine's session id, is closed to the apps: its open terminal streams close
-   *  (lib/terminalStreamManager.ts `closedTo`). */
-  isConfidential(id: string): boolean
-}
 
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its
  *  identity was paired under (null for none) for naming it to the person, its identity's public key (the

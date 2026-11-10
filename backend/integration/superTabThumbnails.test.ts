@@ -10,7 +10,7 @@ import { PrismaClient } from '@prisma/client'
 import sharp from 'sharp'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { MemoryAttachmentStore, MemoryAvatarStore, type Attachment, type Attachments } from '../src/superTabs/attachments.js'
+import { MemoryAttachmentStore, MemoryAvatarStore, UPLOAD_CHECK_MS, type Attachment, type Attachments } from '../src/superTabs/attachments.js'
 import { thumbKeyOf, thumbnailsReserve as realReserve } from '../src/superTabs/thumbnails.js'
 
 // The thumbnailer's queue is full while this says so (thumbnails.ts thumbnailsBusy).
@@ -206,6 +206,44 @@ describe('a picture uploaded straight to the bucket', () => {
     expect((await f.store.completeUpload(owner, f.tab, upload.id)).attachment).toMatchObject({ width: 2400, thumb: { width: 720 } })
     const [read] = await f.read(await f.send(attachment))
     expect(read).toMatchObject({ width: 2400, height: 1600, thumb: { width: 720, height: 480 } })
+  })
+})
+
+// The bucket's client retries for minutes. A finish waited on it with the person, and its picture's read-back held one of the
+// server's few thumbnail places: a silent bucket kept them all. The read stops after UPLOAD_CHECK_MS, and the file goes without one.
+describe('a picture whose read-back the bucket never answers', () => {
+  it('completes without a thumbnail once the read is given up, stops the download and gives its place back', async () => {
+    const f = await swarm()
+    const original = await jpeg(2400, 1600)
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength })
+    expect(await f.files.receive(upload.url, upload.headers, original)).toBe(200)
+    // How many places are free: taken until none is, then given back.
+    const free = () => {
+      const taken: Array<() => void> = []
+      for (let place = realReserve(); place; place = realReserve()) taken.push(place)
+      taken.forEach(release => release())
+      return taken.length
+    }
+    const before = free()
+    let download: AbortSignal | undefined
+    const read = vi.spyOn(f.files, 'read').mockImplementationOnce((_key, signal) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      download = signal
+      return new Promise<Buffer>((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
+    })
+    try {
+      const finishing = f.store.completeUpload(owner, f.tab, upload.id)
+      await vi.waitFor(() => expect(download).toBeDefined(), { interval: 5 })
+      await vi.advanceTimersByTimeAsync(UPLOAD_CHECK_MS)
+      vi.useRealTimers()
+      const { attachment } = await finishing
+      expect(attachment.thumb).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+      read.mockRestore()
+    }
+    expect(download!.aborted).toBe(true)
+    expect(free()).toBe(before)
   })
 })
 

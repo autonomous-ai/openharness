@@ -12,7 +12,7 @@
  */
 import { win32 } from 'node:path'
 import { isGuestUser } from '../guestAccounts.js'
-import { checkSid } from '../../team/windowsLayout.js'
+import { checkSid } from './sid.js'
 
 /** The macOS form's cap: a guest sees at most this many folders. */
 export const GUEST_SHARE_MAX = 20

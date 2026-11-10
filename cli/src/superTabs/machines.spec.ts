@@ -3,25 +3,21 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { availableParallelism, homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
-import { createSwarmAgents } from './inCore/agents.js'
-import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
-import { PM_HOMES } from './teamDaemon.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { recordCleanupClose } from './cleanupCloses.js'
 import { SwarmReads } from './swarmReads.js'
 import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
-  let now = 1000, stamp = 's0', team = false
+function fixture(env: NodeJS.ProcessEnv = {}) {
+  let now = 1000, stamp = 's0'
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
     stopped: vi.fn(async id => id === 'stopped'),
@@ -57,9 +53,9 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
   const claudeProfiles = vi.fn((): unknown[] => [])
   const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, now: () => now }
+  const deps = { backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, modelsStamp, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
-  return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  return { deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -277,18 +273,16 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null })
   })
-  it('asks the server for no GitHub token, whoever the account, and starts the start', async () => {
-    for (const team of [false, true]) {
-      const f = fixture()
-      const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
-      Object.assign(f.pool, { githubApp: true })
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
-        : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
-      await machine.tick()
-      expect(f.backend.mock.calls.some(c => String(c[2]).endsWith('/github-token'))).toBe(false)
-      expect(f.start).toHaveBeenCalledTimes(1)
-    }
+  it('asks the server for no GitHub token, and starts the start', async () => {
+    const f = fixture()
+    const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
+      log: f.log, env: {}, now: () => 1000 } as never)
+    Object.assign(f.pool, { githubApp: true })
+    f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
+      : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
+    await machine.tick()
+    expect(f.backend.mock.calls.some(c => String(c[2]).endsWith('/github-token'))).toBe(false)
+    expect(f.start).toHaveBeenCalledTimes(1)
   })
   it('publishes only scoped measurements and executes through the owner start endpoint', async () => {
     const f = fixture()
@@ -614,8 +608,8 @@ describe('contributed machine executor', () => {
       })
     })
 
-    it('drops only the readiness field for a backend from before it, for ten minutes, keeping privacy', async () => {
-      const f = fixture({}, () => ({ mode: 'dedicated' }))
+    it('drops only the readiness field for a backend from before it, for ten minutes', async () => {
+      const f = fixture()
       withEngines(f)
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
@@ -625,7 +619,6 @@ describe('contributed machine executor', () => {
       await f.machine.tick()
       expect(readings(f)).toHaveLength(2)
       expect(readings(f)[1]).not.toHaveProperty('readiness')
-      expect(readings(f)[1]).toMatchObject({ privacy: { mode: 'dedicated' } })
       f.advance(); await f.machine.tick()
       expect(readings(f)).toHaveLength(3)
       f.step(10 * 60_000); await f.machine.tick()
@@ -1041,25 +1034,9 @@ describe('contributed machine executor', () => {
         const REASON = 'This project already has Mine as its Product Manager.'
         const refusedStart = { ok: false, error: REASON, refused: REASON, startId: 'start', machineId: 'host', creationId: 'creation', harnessId: 'launched' }
 
-        it('removes a Team account\'s engine home for it, through the Swarm\'s own close', async () => {
-          const home = mkdtempSync(join(tmpdir(), 'refused-start-'))
-          onTestFinished(() => rmSync(home, { recursive: true, force: true }))
-          const own = join(home, PM_HOMES, 'super-start', 'codex')
-          mkdirSync(own, { recursive: true })
-          const purge = async (request: Record<string, unknown>) => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true }
-          const ended = createConfidentialPurge({ confidential: () => true, home, record: purgeRecord(join(home, 'purges.json')), purge,
-            session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
-          const { f, fail } = failedLater(() => ({ error: REASON }))
-          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], closeAgent: async () => ({ closed: true }), purgeEnded: ended,
-            members: { leads: () => new Set(), harnesses: () => new Set() } } as never).closeMember as never
-          f.start.mockResolvedValue(refusedStart as never)
-          await f.machine.tick()
-          fail(); f.advance(); await f.machine.tick(); await settle(); await vi.waitFor(() => expect(existsSync(dirname(own))).toBe(false))
-        })
-
-        it('tries again when the purge fails, and stops once it has gone', async () => {
+        it('tries again when its close fails, and stops once it has gone', async () => {
           const { f, closeMember, fail } = failedLater(() => ({ error: REASON }))
-          closeMember.mockResolvedValueOnce({ error: 'PURGE_FAILED', detail: 'Something still names the session' })
+          closeMember.mockResolvedValueOnce({ error: 'AGENT_BUSY' })
           f.start.mockResolvedValue(refusedStart as never)
           await f.machine.tick()
           fail(); f.advance(); await f.machine.tick(); await settle()
@@ -1250,8 +1227,8 @@ describe('contributed machine executor', () => {
     })
   })
 
-  it('drops readiness alone for a backend that takes progress, and both, keeping privacy, for one that takes neither', async () => {
-    const f = fixture({}, () => ({ mode: 'dedicated' }))
+  it('drops readiness alone for a backend that takes progress, and both for one that takes neither', async () => {
+    const f = fixture()
     const usage = f.request.getMockImplementation()!
     f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? { engines: [{ engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
     let refuses = ['readiness']
@@ -1263,13 +1240,13 @@ describe('contributed machine executor', () => {
     })
     const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
     const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
-    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress', 'privacy'].filter(key => key in post)
+    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress'].filter(key => key in post)
     await machine.tick()
-    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy']])
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress'], ['harnessProgress']])
     refuses = ['readiness', 'harnessProgress']
     const older = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
     f.backend.mockClear(); await older.tick()
-    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy'], ['privacy']])
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress'], ['harnessProgress'], []])
   })
 
   it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
@@ -1457,99 +1434,26 @@ describe('contributed machine executor', () => {
     expect(read[0]!.name).toHaveLength(200)
   })
 
-  // The Harness Team account (cli/src/team/): its daemon reports its privacy check with the reading, and refuses new
-  // work while it fails, besides routing (Task 3) not sending it any.
-  describe('Harness Team privacy', () => {
-    const passed: PrivacyObservation = { mode: 'account', passed: true, checkedAt: 900 }
-    const exposed: PrivacyObservation = { mode: 'account', passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: 900 }
+  describe('a reading the backend refuses', () => {
     const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
 
-    it('sends the check with the reading, and nothing from the owner\'s own daemon', async () => {
-      const team = fixture({}, () => passed)
-      await team.machine.tick()
-      expect(posts(team)[0]).toMatchObject({ privacy: passed })
-      expect(team.start).toHaveBeenCalledOnce()
-      const owner = fixture()
-      await owner.machine.tick()
-      expect(posts(owner)[0]).not.toHaveProperty('privacy')
-      const dedicated = fixture({}, () => ({ mode: 'dedicated' }))
-      await dedicated.machine.tick()
-      expect(posts(dedicated)[0]).toMatchObject({ privacy: { mode: 'dedicated' } })
-      expect(dedicated.start).toHaveBeenCalledOnce()
-    })
-
-    it('refuses a new start while the team account is not private, and never starts it anywhere else', async () => {
-      const f = fixture({}, () => exposed)
-      await f.machine.tick()
-      expect(f.start).not.toHaveBeenCalled()
-      const refusal = f.backend.mock.calls.find(c => String(c[2]).endsWith('/starts/tab/start'))![3] as { operationId: string; command: Record<string, unknown> }
-      expect(refusal.operationId).toBe('privacy-failed-start')
-      expect(refusal.command).toMatchObject({ type: 'agent.startFailed', startId: 'start' })
-      expect(String(refusal.command.error)).toContain('not private (gitconfig)')
-      // One already dispatched is reconciled as before: refusing it could orphan what it launched.
-      f.pool.starts[0]!.dispatched = true
-      f.advance(); await f.machine.tick()
-      expect(f.start).toHaveBeenCalledOnce()
-    })
-
-    it('sends a changed result at once, without waiting for the next beat', async () => {
-      let current: PrivacyObservation = passed
-      const f = fixture({}, () => current)
-      await f.machine.tick()
-      f.step(6_000); await f.machine.tick()
-      expect(posts(f)).toHaveLength(1)
-      current = exposed
-      f.step(6_000); await f.machine.tick()
-      expect(posts(f)).toHaveLength(2)
-      expect(posts(f)[1]).toMatchObject({ privacy: { passed: false, item: 'gitconfig' } })
-    })
-
-    it('reports a check that throws as unchecked, and refuses on it', async () => {
-      const f = fixture({}, () => { throw new Error('config unreadable') })
-      await f.machine.tick()
-      expect(posts(f)[0]).toMatchObject({ privacy: { mode: 'account', passed: false, item: 'unchecked' } })
-      expect(f.start).not.toHaveBeenCalled()
-    })
-
-    it('drops only the privacy field for a backend from before it, for ten minutes, keeping the local-model fields', async () => {
-      const f = fixture({}, () => passed)
-      f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
-        tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
-      const original = f.backend.getMockImplementation()!
-      f.backend.mockImplementation(async (core, method, path, body) => {
-        if (method === 'POST' && (body as Record<string, unknown>)?.privacy) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: privacy', 400)
-        return original(core, method, path, body)
-      })
-      await f.machine.tick()
-      expect(posts(f)).toHaveLength(2)
-      expect(posts(f)[1]).not.toHaveProperty('privacy')
-      expect(posts(f)[1]).toHaveProperty('toolProbeErrors')
-      f.advance(); await f.machine.tick()
-      expect(posts(f)).toHaveLength(3)
-      expect(posts(f)[2]).not.toHaveProperty('privacy')
-      f.step(10 * 60_000); await f.machine.tick()
-      expect(posts(f).at(-2)).toHaveProperty('privacy')
-      expect(posts(f).at(-1)).not.toHaveProperty('privacy')
-    })
-
-    it('falls back to the oldest reading when the backend refuses the other new fields too', async () => {
-      const f = fixture({}, () => passed)
+    it('falls back to the oldest reading when the backend refuses its newer fields', async () => {
+      const f = fixture()
       f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
         tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
         const sent = body as Record<string, unknown>
-        if (method === 'POST' && (sent?.privacy || sent?.toolProbeErrors)) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+        if (method === 'POST' && sent?.toolProbeErrors) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
         return original(core, method, path, body)
       })
       await f.machine.tick()
-      expect(posts(f)).toHaveLength(3)
-      expect(posts(f)[2]).not.toHaveProperty('privacy')
-      expect(posts(f)[2]).not.toHaveProperty('toolProbeErrors')
+      expect(posts(f).at(-2)).toHaveProperty('toolProbeErrors')
+      expect(posts(f).at(-1)).not.toHaveProperty('toolProbeErrors')
     })
 
     it('does not retry a refusal that is not about the fields', async () => {
-      const f = fixture({}, () => passed)
+      const f = fixture()
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
         if (method === 'POST' && String(path).includes('/machines/')) throw new SuperTabHostError('FORBIDDEN', 'no', 403)
@@ -3034,15 +2938,6 @@ describe('the profiles a machine reports', () => {
     expect(read.join()).not.toContain(id('b'))
   })
 
-  it('a Team daemon reports its default accounts only', async () => {
-    const f = both()
-    f.setTeam(true)
-    await f.machine.tick()
-    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
-    expect(profiles.map(p => [p.engine, p.label])).toEqual([['claude', 'Default'], ['codex', 'Default']])
-    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile)).toEqual([])
-  })
-
   it("reports the default Codex home once, as Default", async () => {
     const f = both()
     const home = join(process.env.CODEX_HOME || join(homedir(), '.codex'))
@@ -3102,7 +2997,7 @@ describe('a launched start whose engine stops on a screen', () => {
   const RESTRICTED = screens('codex-0165-open-restricted'), TRUST = screens('codex-0165-trust-fresh-home')
   const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
     detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
-  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex', projectSettings: 'off' }, result: Record<string, unknown> = waiting) {
+  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex' }, result: Record<string, unknown> = waiting) {
     const f = fixture()
     f.pool.starts = [{ id: 'start', dispatched: true, request } as never]
     f.start.mockResolvedValue(result as never)
@@ -3116,15 +3011,6 @@ describe('a launched start whose engine stops on a screen', () => {
   /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
   const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
 
-  it.each(['0165', '0166'])('opens a Team-written Codex %s start\'s untrusted checkout restricted, with Enter on that exact screen alone', async version => {
-    const restricted = screens(`codex-${version}-open-restricted`)
-    const { f, screen, inputIfScreen, failures } = launched(restricted, 'trust_open')
-    await f.machine.tick()
-    expect(screen).toHaveBeenCalledWith('launched', 0)
-    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], restricted)
-    expect(failures()).toEqual([])
-  })
-
   it('fails it at once on the trust question, naming it, and types nothing', async () => {
     const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
     await twice(f)
@@ -3134,12 +3020,12 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   it('also when its own check already read the screen as needing a person', async () => {
-    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
+    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex' }, { ...waiting, needsPerson: true })
     await twice(f)
     expect(failures()[0]?.error).toContain('folder trust question')
   })
 
-  it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
+  it('fails, never answers, Codex\'s restricted screen on a start', async () => {
     const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
     await twice(f)
     expect(inputIfScreen).not.toHaveBeenCalled()
@@ -3147,13 +3033,10 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   // On 2026-11-04 another program's two hooks stopped every Codex start on DESKTOP-0TFH0OJ at this screen. Esc goes on with
-  // those hooks off: nothing is trusted on the person's behalf, and it applies to any Swarm Codex start, Team-written or not.
-  it.each([
-    ['a Team-written start', { engine: 'codex', projectSettings: 'off' }],
-    ['any other Swarm start', { engine: 'codex' }],
-  ])("skips Codex's review of another program's hooks on %s, with Esc alone", async (_name, request) => {
+  // those hooks off: nothing is trusted on the person's behalf.
+  it("skips Codex's review of another program's hooks on a Swarm start, with Esc alone", async () => {
     const REVIEW = screens('codex-0163-hooks-review')
-    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open', request)
+    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open')
     await twice(f)
     expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Escape'], REVIEW)
     expect(failures()).toEqual([])
@@ -3200,15 +3083,14 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   it('leaves it waiting while its creation is still preparing, with no agent to read', async () => {
-    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' },
+    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex' },
       { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending', detail: 'Preparing.' })
     await f.machine.tick()
     expect(screen).not.toHaveBeenCalled()
     expect(failures()).toEqual([])
   })
 
-  // Security review 1 of #3063: one read of a screen still drawing, or of a Codex that words its restricted screen otherwise,
-  // failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
+  // Security review 1 of #3063: one read of a screen still drawing failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
   it('fails it only once two passes in a row read the same waiting screen', async () => {
     const { f, failures } = launched(TRUST, 'trust_open')
     await f.machine.tick()

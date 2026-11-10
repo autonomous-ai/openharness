@@ -213,8 +213,8 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
     expect(settings.statusLine.command).toContain('statusline.mjs')
   })
 
-  it('merges with every other --settings of the launch, the Swarm\'s shell guard too', () => {
-    const guard = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'guard' }] }] } }
+  it('merges with every other --settings of the launch', () => {
+    const guard = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'another' }] }] } }
     const told = agentInstructionArgs('claude', said, place({}))
     const args = joinedInstructions('claude', ['--agent', 'x', '--settings', JSON.stringify(guard), ...told])
     const settings = settingsOf(args)

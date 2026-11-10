@@ -13,7 +13,7 @@ const row = (over: Record<string, unknown> = {}, agent: Record<string, unknown> 
 /** A keeper on a fake core. The screen is [text] with [hold]; typing adds to it, and Enter goes through only on the screen
  *  the caller read (inputIfScreen, as the core's pane lock does). `still` is when the whole screen last changed, which the
  *  terminal watch records from its own reads. */
-function setup(options: { working?: () => boolean; owns?: () => boolean; typing?: () => boolean; team?: boolean } = {}) {
+function setup(options: { working?: () => boolean; owns?: () => boolean; typing?: () => boolean } = {}) {
   let clock = 1_000_000
   let text = '❯ '
   let hold: 'permission_open' | null = null
@@ -40,7 +40,7 @@ function setup(options: { working?: () => boolean; owns?: () => boolean; typing?
       }) },
   })
   const log = vi.fn()
-  const keeper = new CrewKeeper(core, 'm1', { now: () => clock, log, owns: async () => options.owns?.() ?? true, stillSince: () => still, team: () => options.team ?? false })
+  const keeper = new CrewKeeper(core, 'm1', { now: () => clock, log, owns: async () => options.owns?.() ?? true, stillSince: () => still })
   return { core, keeper, steps, log, closeMember, activity, screen,
     wait: (ms: number) => { clock += ms },
     moved: () => { still = clock },
@@ -81,6 +81,16 @@ describe('a frozen crew session', () => {
     expect(t.log).toHaveBeenCalledWith(expect.stringContaining('froze'))
   })
 
+  // It was spared while a close in a Harness Team account deleted a confidential session's data, which the reopen needs. Team
+  // accounts went (backend 1.4.52) and their purge with them: a close deletes nothing, so a frozen one is reopened as any other.
+  it('is closed when the roster marks its session confidential, as any other', async () => {
+    const t = setup()
+    await t.keeper.tick([row({ confidential: true })])
+    t.wait(CREW_FROZEN_MS)
+    await t.keeper.tick([row({ confidential: true })])
+    expect(t.steps).toEqual(['close h1'])
+  })
+
   // Review of #3222 (AGENTS.md standard 4, the daemon's idle work): the keeper reads no screen of its own for this, and asks the
   // engines' activity once a minute for all its crew in one call, whatever the host's poll rate.
   it('reads no screen and asks activity once a minute for all crew in one call', async () => {
@@ -112,25 +122,6 @@ describe('a frozen crew session', () => {
     unread.wait(2 * CREW_FROZEN_MS)
     await unread.keeper.tick([row()])
     expect(unread.closeMember).not.toHaveBeenCalled()
-  })
-
-  // Security review 1 of #3222: on a Team daemon a close is the Swarm's end for good, which deletes a Team-written Codex
-  // session's own engine home (inCore/teamPurge.ts), so the reopen could not resume it. There it is left, and said once.
-  it('is never closed on a Team daemon, where a close deletes what the reopen needs', async () => {
-    const t = setup({ team: true })
-    await t.keeper.tick([row()])
-    for (let i = 0; i < 2 * CREW_FROZEN_MS / CREW_LOOK_MS; i++) { t.wait(CREW_LOOK_MS); await t.keeper.tick([row()]) }
-    expect(t.closeMember).not.toHaveBeenCalled()
-    expect(t.log.mock.calls.filter(([line]) => String(line).includes('Team account'))).toHaveLength(1)
-  })
-
-  it('is never closed when its session is confidential: closing one deletes its data in a Team account', async () => {
-    const t = setup()
-    await t.keeper.tick([row({ confidential: true })])
-    t.wait(2 * CREW_FROZEN_MS)
-    await t.keeper.tick([row({ confidential: true })])
-    expect(t.closeMember).not.toHaveBeenCalled()
-    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('confidential'))
   })
 
   it('counts its 30 minutes again after the engine went idle', async () => {

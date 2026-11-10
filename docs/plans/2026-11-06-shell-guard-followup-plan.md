@@ -1,5 +1,8 @@
 # Shell guard follow-up implementation plan
 
+> Removed in Swarm v4 (anh Dee, 2026-11-09): plain agents run with their person's own settings, with no shell guard. The
+> CLI keeps a no-op `__swarm-shell-guard` entry until 2026-12-10, for agents started before.
+
 > Implement task by task in this Engineer session, test first, with independent security reviews of the completed PR.
 
 **Goal:** Close the three shell guard bypasses in task #3668.
