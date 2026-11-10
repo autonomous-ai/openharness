@@ -32,12 +32,13 @@ void main() {
     final app = createApp(connected: true);
     addTearDown(app.dispose);
     await app.handleEventForTest('m', synced('a1'));
+    await app.handleEventForTest('m', synced('a2'));
     expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.idle);
     await app.handleEventForTest('m', synced('a1', waitingFor: 'engine'));
     expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.starting);
     expect(app.engineStarting('m', 'a1'), isTrue);
     // Another agent of the same computer is not.
-    expect(harnessActivity(app, 'm', 'a2'), isNot(HarnessActivity.starting));
+    expect(harnessActivity(app, 'm', 'a2'), HarnessActivity.idle);
     // Its engine is up: the daemon sends the frame again, waiting for nothing.
     await app.handleEventForTest('m', synced('a1'));
     expect(harnessActivity(app, 'm', 'a1'), isNot(HarnessActivity.starting));
@@ -57,7 +58,22 @@ void main() {
     addTearDown(app.dispose);
     await app.handleEventForTest('m', synced('a3', waitingFor: 'engine'));
     app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
-    expect(harnessActivity(app, 'm', 'a3'), isNot(HarnessActivity.starting));
+    expect(harnessActivity(app, 'm', 'a3'), HarnessActivity.offline);
+    // Your Team's row and the chat's bar ask the same.
+    expect(app.engineStarting('m', 'a3'), isFalse);
+  });
+
+  test('a stopped agent says stopped, not starting', () async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    await app.handleEventForTest('m', {
+      'type': 'agent_synced',
+      'payload': {
+        'agent': {...frame('a6', waitingFor: 'engine'), 'status': 'stopped'},
+      },
+    });
+    expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.paused);
+    expect(app.engineStarting('m', 'a6'), isFalse);
   });
 
   test('a wait for anything else is not a start', () async {

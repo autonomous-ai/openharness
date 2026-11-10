@@ -9,6 +9,7 @@ import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
 import 'browser_copies.dart';
+import 'harness_activity.dart' show HarnessActivity, harnessActivity;
 import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
@@ -15146,12 +15147,10 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.start(machineId, agentId);
   }
 
-  /// Whether a message waits for [agentId]'s engine to start on [machineId]: its frame's `waitingFor`.
+  /// Whether [agentId] on [machineId] reads as starting (a message waits for its engine, its frame's `waitingFor`, or it is
+  /// launching): [harnessActivity]'s one answer, so a computer that is off or an agent stopped never says it.
   bool engineStarting(String machineId, String agentId) =>
-      machineStates[machineId]?.agents.any(
-        (agent) => agent.id == agentId && agent.waitingFor == 'engine',
-      ) ??
-      false;
+      harnessActivity(this, machineId, agentId) == HarnessActivity.starting;
 
   void _cancelTurnActivity(
     String machineId,
