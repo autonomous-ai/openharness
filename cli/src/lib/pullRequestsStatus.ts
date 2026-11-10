@@ -17,7 +17,7 @@ export interface PullRequestRow {
 }
 /** `account`: which GitHub account the answer was read as, failed reads included, so a reader forgets another account's
  *  answers before taking this one's. Opaque: a hash under this reader's own random salt, never the token. */
-export interface PullRequestsResult extends Record<string, unknown> { rows: PullRequestRow[]; checkedAt: string; account?: string; error?: string; detail?: string }
+interface PullRequestsResult extends Record<string, unknown> { rows: PullRequestRow[]; checkedAt: string; account?: string; error?: string; detail?: string }
 
 const FIELDS = 'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deletions,statusCheckRollup,reviewDecision,mergeStateStatus,autoMergeRequest'
 const text = (value: unknown, max = 40): string => cleanText(value, max)

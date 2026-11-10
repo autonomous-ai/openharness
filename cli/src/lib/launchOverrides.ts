@@ -117,12 +117,12 @@ export interface LaunchOverridesDeps {
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
-  /** What the Swarm prepares on every relaunch of a session it started: its skill file and instructions
+  /** What the Swarm prepares on every relaunch of a session it started: its instructions
    *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
    *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
-    prepare(workspace: string, saved: SwarmSkill): { instructions: string }
+    prepare(saved: SwarmSkill): { instructions: string }
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
   }
@@ -320,8 +320,7 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again; a
-    // Buddy's too (task #2832).
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
     const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
     // A Browser agent's `browser` MCP server (lib/browserMcpArgs.ts), in the slot `agent_create` gave it.
@@ -342,7 +341,7 @@ export async function prepareLaunchOverrides(
     if (source.swarmSkill) {
       try {
         if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
-        swarmInstructions = swarm!.prepare(source.cwd, source.swarmSkill).instructions
+        swarmInstructions = swarm!.prepare(source.swarmSkill).instructions
       } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const told = agentLaunchArgs(engine, source.startedBy, {

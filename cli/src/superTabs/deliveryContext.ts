@@ -5,7 +5,7 @@
  * thread. Each line is left out when it does not apply or cannot be read; the delivery always goes.
  */
 import { isCoordinator, isStep, openWorkOf, projectOpenWork, stepName } from './agentContext.js'
-import { authorName, personName } from './personName.js'
+import { authorName } from './personName.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -30,21 +30,14 @@ export const cut = (text: string, max: number): string => {
  *  (security review 2 of #2570), at every break a reader may see as one: U+2028, U+2029 and U+0085 too (security review 1). */
 export const setOff = (text: string): string => text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/).map(line => line ? `> ${line}` : '>').join('\n')
 
-/** Which conversation [groupId] is, in words: a task by number and title, a linked task by title, a project chat, a
- *  Buddy chat by its person; the id alone when the read does not have it. */
+/** Which conversation [groupId] is, in words: a task by number and title, a linked task by title, a project chat; the id
+ *  alone when the read does not have it. */
 export function placeLine(state: Json, groupId: string): string {
   const group = list(state.conversations).find(c => c.id === groupId)
   const at = `(conversation ${groupId}).`
   if (!group) return `In conversation ${groupId}.`
   const project = list(state.projects).find(p => p.leadConversationId === groupId)
   if (project) return `In the project chat of ${String(project.name)} ${at}`
-  if (group.kind === 'buddy' || group.kind === 'swarm-buddy') {
-    const buddy = list(state.agents).find(a => Array.isArray(group.agentIds) && group.agentIds.includes(a.id) && object(a.buddyOf).personId)
-    const person = buddy ? list(state.people).find(p => p.id === object(buddy.buddyOf).personId) : undefined
-    // By name, never email (task #2954).
-    const name = personName(person)
-    return name ? `In ${name}'s Buddy chat ${at}` : `In a Buddy chat ${at}`
-  }
   const title = JSON.stringify(String(group.title ?? ''))
   // A step is said as its task and its name (task steps design).
   const task = isStep(group) ? list(state.conversations).find(c => c.id === group.reviewOf) : undefined

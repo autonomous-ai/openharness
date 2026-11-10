@@ -378,13 +378,12 @@ export function createAgentCreator({
     if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
     let swarmInstructions: string | undefined
     if (swarmLaunch && swarmSkill) {
-      try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }
+      try { swarmInstructions = swarmLaunch.prepare(swarmSkill).instructions }
       catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
-    // as every relaunch reads them again (`buildLaunchOverrides`). A Buddy's too: it launches like its owner's own session
-    // (task #2832).
+    // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
     // A Browser agent's `browser` MCP server (lib/browserMcpArgs.ts), as every relaunch adds it again. `harness` by name:
     // the pane's PATH runs it, as it runs every other `harness` verb the agent calls.

@@ -1,5 +1,5 @@
 /**
- * A model switch on the real daemon, as a Buddy's machine makes it (task #2354, superTabs/buddyModel.ts): onto a grid model and
+ * A model switch on the real daemon (task #2354): onto a grid model and
  * back keeps the conversation; a conversation too long for the model starts fresh there, and the way home reopens the one it
  * left, as the same agent. The fake Claude Code (e2e/harness/fakeEngine.mjs) resumes the session `--resume` names, as the real
  * one does.

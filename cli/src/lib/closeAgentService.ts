@@ -19,17 +19,11 @@ export type AgentClosePlan = {
 /** Why the Lead of an active Swarm project is not closed (owner, 2026-10-23: it is never stopped, in any case). */
 export const LEAD_PROTECTED_DETAIL = 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.'
 export const LEAD_SWITCHING_DETAIL = 'This Product Manager is already switching its agent. Wait for it to finish.'
-/** Why a Swarm Buddy is not closed (Diego, 10-30: closing the tab that showed his Buddy stopped it, and two proposals
- *  waited 30 minutes). A window closes only its view; the machine's owner still stops it with Stop Harness. */
-export const BUDDY_PROTECTED_DETAIL = 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.'
+
 /** `changeId`: the Change agent switch this `now` close is part of, which its handoff was prepared for (superTabs/leadSwitch.ts). */
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string
-  /** Internal idle-close authority, rechecked at physical stop boundaries. Never accepted from a client payload. */
-  buddySleep?: () => boolean }
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string }
 /** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
-/** `keptRunning`: a close refused for a session that keeps running on purpose (a Swarm Buddy): a window closes its view and
- *  stops nothing, as it does for a Swarm pane (desktop app_state.dart `canStop`). */
-export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity; keptRunning?: true }
+export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
 
 /**
  * How long a close waits for a harness still starting to bind its first conversation, trying again meanwhile.
@@ -101,7 +95,7 @@ function stillStarting(s: RegisteredSession, at: number): boolean {
 /** What makes two requests the same one: the agent, the mode, and whether it holds only while no tab
  *  shows the agent. A cleanup that finds the agent on screen again must not answer the person's own close. */
 function jobKey(request: AgentCloseRequest): string {
-  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt, request.buddySleep !== undefined])
+  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
   if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && s.startedBy !== 'agent') || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
@@ -130,8 +124,7 @@ export interface CloseAgentServiceDeps {
   /** The `now` close naming switch [changeId] ended, [stopped] or not (superTabs/leadSwitch.ts `leadSwitchEnded`): the pass its
    *  stop was given is gone either way. */
   leadSwitchEnded?(agentId: string, changeId: string, stopped: boolean): void
-  /** A Buddy refuses ordinary closes; its prepared engine switch or internal idle sleep permit grants one stop. */
-  buddyProtected?(agentId: string, changeId?: string): boolean
+
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
@@ -139,8 +132,6 @@ export interface CloseAgentServiceDeps {
   sleep?: (ms: number) => Promise<void>
 }
 
-/** An inspect of a Buddy, read as any other, says it will keep running, so a window does not ask to stop it. */
-const keptRunning = (result: AgentCloseResult): AgentCloseResult => result.activity ? { ...result, keptRunning: true } : result
 
 class CloseRefused extends Error {
   constructor(readonly activity: CloseActivity) { super('The session is not idle.') }
@@ -193,10 +184,7 @@ export class CloseAgentService {
     if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId, changeId)) {
       return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
     }
-    const buddy = this.deps.buddyProtected?.(request.agentId, changeId) === true
-    if (buddy && request.mode !== 'inspect' && !(request.mode === 'idle' && typeof request.buddySleep === 'function' && request.buddySleep())) {
-      return Promise.resolve({ error: 'BUDDY_PROTECTED', detail: BUDDY_PROTECTED_DETAIL, keptRunning: true })
-    }
+
     // A job answers only a request of its own kind. When any job running for the agent answered every
     // request, a close asked for while another window (or the cleanup preview) was inspecting the agent
     // was answered with that inspect's `{ activity }` and never carried out, and an inspect beside a
@@ -204,7 +192,7 @@ export class CloseAgentService {
     // the job ahead of it, then runs for itself against the agent as it was when it was asked.
     const key = jobKey(request)
     const pending = this.jobs.get(key)
-    if (pending) return buddy ? pending.then(keptRunning) : pending
+    if (pending) return pending
     const target = identity(current)
     const revision = this.revisions.get(request.agentId) ?? 0
     const ahead = this.queues.get(request.agentId)
@@ -224,7 +212,7 @@ export class CloseAgentService {
       this.deps.leadSwitchEnded?.(request.agentId, changeId, false)
       throw error
     })
-    return buddy ? answered.then(keptRunning) : answered
+    return answered
   }
 
   /**
@@ -307,7 +295,6 @@ export class CloseAgentService {
         && s && identity(s) === target
         && (request.expiresAt === undefined || request.expiresAt > this.now())
         && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent')
-        && (request.buddySleep === undefined || (request.mode === 'idle' && typeof request.buddySleep === 'function' && request.buddySleep()))
         && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {
