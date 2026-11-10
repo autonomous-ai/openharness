@@ -440,11 +440,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     const configuration = { engine, model: matched?.model ?? null,
       effort: matched?.effort === 'auto' && launchedEffort ? launchedEffort : matched?.effort ?? null,
       contextWindow: number(seenFrame.contextWindow), engineVersion: text(seenFrame.engineVersion) }
-    // A helper's folder gets its Member's set-up copy before it joins: the server gives it its task only once it has, so the copy
-    // never races its work. The host's own step logs what it did; a helper it could not ready still starts, and installs itself.
-    if (!start.harnessId && typeof input.beforeJoin === 'function' && identifier(object(request.helperOf).harnessId)) {
-      await (input.beforeJoin as (harnessId: string) => Promise<void>)(nativeId).catch(() => {})
-    }
     const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
     let joined: Json = { result: {} }
     if (!start.harnessId) {

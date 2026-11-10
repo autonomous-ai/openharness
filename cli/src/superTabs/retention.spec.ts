@@ -184,27 +184,18 @@ it('retains a harness that holds an assignment, and for a minute after the host 
   expect([...retainedHarnesses(dir, now + 1000)]).toEqual(['heron'])
 })
 
-// Task #3397: a crew member is kept in no open group as between tasks, never lapses, and is among the sessions the core may
-// reopen; off the crew it is an ordinary member again on the next roster.
-it('keeps a crew member with no open group, past the lapse, and names it among those the core reopens', () => {
+// Backend S14 (#3877): there is no crew. A row the server still marks crew or Member is kept as any member: it lapses, and
+// it is not among the sessions the core may reopen.
+it('keeps no crew: a row marked crew or Member is retained as any member', () => {
   const dir = root(), now = Date.now(), file = retentionFile(dir)
-  const crew = { crew: { role: 'Engineer', at: 1, by: 'pm' } }
-  const crewRow = (harnessId: string, extra: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { harnessId, machineId: 'machine', ...crew }, ...extra })
-  retainContributions(dir, 'machine', [crewRow('standing', { active: false }), row('idle', { active: false }), row('pm', { lead: true })], now)
-  expect([...retainedHarnesses(dir, now)]).toEqual(['pm', 'standing'])
-  expect([...retainedLeads(dir)].sort()).toEqual(['pm', 'standing'])
-  expect(JSON.parse(readFileSync(file, 'utf8')).crew).toEqual(['standing'])
+  const marked = (harnessId: string, agent: Record<string, unknown>) => ({ tabId: 'tab', active: false, agent: { harnessId, machineId: 'machine', ...agent } })
+  retainContributions(dir, 'machine', [marked('crew', { crew: { role: 'Engineer', at: 1, by: 'pm' } }),
+    marked('member', { member: { projectId: 'p1' } }), row('pm', { lead: true })], now)
+  expect(JSON.parse(readFileSync(file, 'utf8'))).not.toHaveProperty('crew')
+  expect([...retainedLeads(dir)]).toEqual(['pm'])
   const lapsed = new Date(now - RETENTION_LAPSE_MS - 60_000)
   utimesSync(file, lapsed, lapsed)
-  expect([...retainedHarnesses(dir, now)].sort()).toEqual(['pm', 'standing'])
-  // A crew mark is not a Lead's: a stop still reaches it (leadSwitch.ts mayBeLead).
-  expect(mayBeLead(dir, 'standing')).toBe(false)
-  // Security review 1 of #3222: one whose stop is asked for is no crew the core may reopen.
-  retainContributions(dir, 'machine', [crewRow('standing', { stopRequested: true }), row('pm', { lead: true })], now)
-  expect([...retainedLeads(dir)]).toEqual(['pm'])
-  retainContributions(dir, 'machine', [row('standing', { active: false }), row('pm', { lead: true })], now)
   expect([...retainedHarnesses(dir, now)]).toEqual(['pm'])
-  expect([...retainedLeads(dir)]).toEqual(['pm'])
 })
 
 

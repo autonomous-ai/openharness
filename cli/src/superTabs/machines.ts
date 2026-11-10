@@ -15,7 +15,6 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { copySetup } from './memberSetup.js'
 import { settleHiddenScreen } from './startScreen.js'
 import { prepareSwarmStart } from './projectFolder.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
@@ -146,8 +145,6 @@ export interface MachineDeps {
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
-  /** Copies a Member's set-up folders into its helper's new worktree ([copySetup], task #4698). */
-  readySetup?: typeof copySetup
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 /** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
@@ -178,9 +175,7 @@ const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list
 // windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
 // Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
 // `regularAgent`: it launches a Regular agent's start, sent apart as `regularStarts` (backend agent.new, task #4116).
-// `memberSetUp`: a Member's start tells it to set its project up once and report agent.setUp, and a helper's start gets its
-// Member's set-up folders (memberSetup.ts, task #4698). The backend waits for that report only from a host that says this.
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'memberSetUp']
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
@@ -735,10 +730,7 @@ export class ContributedMachines {
               // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
               // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
               const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
-              const helperOf = object(object(start.request).helperOf)
-              const helperRequest = object(start.request)
-              const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId, helperRequest) : null
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn, ...(beforeJoin ? { beforeJoin } : {}) },
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
@@ -1111,35 +1103,6 @@ export class ContributedMachines {
    *  after the weekly sweep's idle week, by that sweep's own rule (lib/worktreeSweep.ts): only a worktree this machine's
    *  record proves the Swarm made, with no session in it and nothing uncommitted. Its branch keeps every commit and goes
    *  only when they are all on other branches or the remote, as once its pull request merged. Anything else stays. */
-  /** The worktree a Swarm start made for [harnessId] here, from this machine's record: its folder and its project clone. */
-  worktreeOf(tabId: string, harnessId: string): { path: string; source: string } | null {
-    const record = readWorktrees(swarmWorktreesFile(this.core.dataDir, this.machineId)).find(w => w.tabId === tabId && w.harnessId === harnessId)
-    return record ? { path: record.path, source: record.source } : null
-  }
-
-  /** A helper's new worktree gets its Member's set-up folders (task #4698), from the Member's worktree this machine's Swarm made.
-   *  A Member set up elsewhere, or a copy this disk cannot make, leaves the helper to install itself; the log says which,
-   *  with no path. */
-  private async readyHelper(tabId: string, memberHarnessId: string, harnessId: string, request: Record<string, unknown>): Promise<void> {
-    try {
-      const member = this.worktreeOf(tabId, memberHarnessId)?.path, helper = this.core.agents.byAgent(harnessId)?.cwd
-      if (!member || !helper) { this.log('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE'); return }
-      // Only into the new worktree its own start made: never the Member's folder, nor the checkout it came from, which may be a
-      // person's own (security review 2 of #3579).
-      const source = typeof request.cwd === 'string' ? request.cwd : null
-      const shared = (a: string, b: string) => within(a, b) || within(b, a)
-      if (request.worktree !== true || !source || shared(helper, member) || shared(helper, source)) {
-        this.log('Started a helper without its Member\'s setup: HELPER_FOLDER_NOT_OWN'); return
-      }
-      const copy = await (this.deps.readySetup ?? copySetup)(member, helper)
-      this.log(copy.skipped ? `Started a helper without its Member's setup: ${copy.skipped}`
-        : `Readied a helper from its Member's setup: ${copy.copied.length} folder${copy.copied.length === 1 ? '' : 's'} copied`)
-    } catch {
-      // Its own name only: an error's words can carry a path.
-      this.log('Started a helper without its Member\'s setup: HELPER_SETUP_FAILED')
-    }
-  }
-
   removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
     // Lead, 10-30: an ended session (host.ts endSession) and a stopped worker (releaseWorker) can ask at the same moment.
     // Each waits for the one before it and then checks for itself: after a removal it finds no record; after one that
