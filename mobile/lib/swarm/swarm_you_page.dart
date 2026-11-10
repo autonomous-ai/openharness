@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -22,7 +21,6 @@ import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
 import 'swarm_inbox.dart';
 import 'swarm_models_page.dart';
-import 'swarm_profile_sheet.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
@@ -87,8 +85,8 @@ void openSwarmYou(BuildContext context) {
 }
 
 /// The person's avatar at the end of Home's and Activity's top bars (Slack's
-/// You, Tony 2026-11-03): their face with their status, "You" in their
-/// initial before they are read. A tap opens You ([openSwarmYou]).
+/// You, Tony 2026-11-03): their face, "You" in their initial before they are
+/// read. A tap opens You ([openSwarmYou]).
 class SwarmYouButton extends StatelessWidget {
   const SwarmYouButton({super.key});
 
@@ -99,10 +97,9 @@ class SwarmYouButton extends StatelessWidget {
     Widget face() {
       final me = swarmYouOf(session).me;
       final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
-      final status = me?.statusAt(clock.now())?.label;
       return Semantics(
         button: true,
-        label: status == null ? 'You' : 'You, $status',
+        label: 'You',
         excludeSemantics: true,
         onTap: () => openSwarmYou(context),
         child: InkWell(
@@ -116,7 +113,6 @@ class SwarmYouButton extends StatelessWidget {
                 name: name,
                 picture: me?.avatar,
                 size: 30,
-                status: me?.status,
               ),
             ),
           ),
@@ -139,8 +135,7 @@ class SwarmYouButton extends StatelessWidget {
 /// You, as Tony's prototype C4 draws it (2026-10-30), opened from the avatar
 /// on Home and Activity since it stopped being a tab (2026-11-03):
 /// who they are in the Swarm Home shows — their face, their name and that
-/// Swarm — which opens their profile, where name, username, picture and status
-/// are set ([showSwarmProfile]); Your models, with how many of their own
+/// Swarm; Your models, with how many of their own
 /// machines' models the Swarms can use now, and Your devices, with how many of
 /// their own computers are online; then Notifications and Theme, out of
 /// Settings, and Settings. Only what is theirs counts: not a teammate's, not
@@ -240,10 +235,6 @@ class SwarmYouPage extends StatelessWidget {
         key: const ValueKey('swarm-you-me'),
         me: me,
         swarm: me == null ? null : you!.name,
-        // Nothing to set before the Swarm is read, or once it is taken away.
-        onTap: me == null
-            ? null
-            : () => unawaited(showSwarmProfile(context, swarmId: you!.id)),
       ),
       const SizedBox(height: AppSpace.l),
       SwarmGroup(
@@ -342,30 +333,20 @@ class SwarmYouPage extends StatelessWidget {
 }
 
 /// The person at the top of You: their face, their name and the Swarm it is
-/// in; "You" alone before a Swarm is read with them in it. A tap ([onTap])
-/// opens their profile, and a chevron says so; none before they are read.
+/// in; "You" alone before a Swarm is read with them in it.
 class _Me extends StatelessWidget {
-  const _Me({
-    super.key,
-    required this.me,
-    required this.swarm,
-    required this.onTap,
-  });
+  const _Me({super.key, required this.me, required this.swarm});
 
   final SuperTabPerson? me;
   final String? swarm;
-  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final me = this.me;
-    final onTap = this.onTap;
     // A Home kept for a cold start holds no email.
     final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
-    final header = Padding(
-      // On the right as far in as a card's rows, so its chevron stands over
-      // theirs.
+    return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,
         AppSpace.s,
@@ -405,27 +386,7 @@ class _Me extends StatelessWidget {
               ],
             ),
           ),
-          if (onTap != null) ...[
-            const SizedBox(width: AppSpace.m),
-            Icon(
-              LucideIcons.chevronRight300,
-              size: 18,
-              color: AppPalette.textFaint,
-            ),
-          ],
         ],
-      ),
-    );
-    if (onTap == null) return header;
-    return Semantics(
-      button: true,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppCard.radius),
-          onTap: onTap,
-          child: header,
-        ),
       ),
     );
   }

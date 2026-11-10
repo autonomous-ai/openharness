@@ -746,7 +746,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       messageId: _messageId,
       threadId: _threadId,
       threadFocus: _threadFocus,
-      homeC: _homeC,
     ),
     SwarmProjectTab.buddy => SwarmProjectBuddy(
       findRequests: _findRequests,

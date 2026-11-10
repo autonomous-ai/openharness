@@ -498,7 +498,7 @@ void main() {
 
       expect(find.byType(TextField), findsNothing);
       expect(key('swarm-send'), findsNothing);
-      // A tap on the line offers no reply or reaction.
+      // A tap on the line offers no reply.
       await tester.tap(find.text('From before the one Buddy'));
       await settle(tester);
       expect(key('swarm-reply-$oldMobile-2'), findsNothing);

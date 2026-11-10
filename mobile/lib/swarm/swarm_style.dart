@@ -530,7 +530,7 @@ class SwarmSkeletonRows extends StatelessWidget {
 }
 
 /// A person's or an agent's round mark: their picture, or their initial on
-/// their colour; a person's status emoji at its corner while it lasts.
+/// their colour.
 class SwarmAvatar extends StatelessWidget {
   const SwarmAvatar({
     super.key,
@@ -538,7 +538,6 @@ class SwarmAvatar extends StatelessWidget {
     required this.name,
     this.size = 32,
     this.picture,
-    this.status,
   });
 
   final String id, name;
@@ -547,13 +546,10 @@ class SwarmAvatar extends StatelessWidget {
   /// What they chose to wear; null wears the initial.
   final SuperTabAvatarPicture? picture;
 
-  /// A person's status; null for an agent.
-  final SuperTabPersonStatus? status;
-
   @override
   Widget build(BuildContext context) {
     final color = swarmAvatarColor(id);
-    final face = SwarmFace(
+    return SwarmFace(
       picture: picture,
       size: size,
       tint: color,
@@ -573,7 +569,6 @@ class SwarmAvatar extends StatelessWidget {
         ),
       ),
     );
-    return SwarmStatusFace(name: name, size: size, status: status, face: face);
   }
 }
 

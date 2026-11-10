@@ -507,6 +507,29 @@ describe('whom it reads for (watchedAgents)', () => {
     expect(watched).toEqual([expect.objectContaining({ names: ['Faye', 'Claude Code'], label: 'builder:faye' })])
   })
 
+  // swarm-sandbox, 2026-11-10: attached as their sessions were named, "juno" and "pip" sign "Juno, 12:17:" and are asked "to
+  // **Juno**". Read in their own case alone, Juno never heard Harness's ask to read #24 again, and Pip heard its own posts.
+  it('hears an agent named in lower case by its name with a capital too, and knows its own posts signed so', async () => {
+    const watched = await watchedAgents({ me: 'dee', live: () => true, read: async () => ({
+      conversations: [{ id: 'chat-juno', kind: 'agent-chat', agentIds: ['juno'] }, { id: 'chat-pip', kind: 'agent-chat', agentIds: ['pip'] }],
+      projects: [{ repository: { repositoryUrl: 'https://github.com/acme/app.git' } }] }),
+    roster: async () => [row({ id: 'juno', harnessId: 'h-juno', name: 'juno', displayName: 'juno' }), row({ id: 'pip', name: 'pip', displayName: 'pip' })] })
+    expect(watched.map(agent => [agent.names, agent.label])).toEqual([[['juno', 'Juno'], 'builder:juno'], [['pip', 'Pip'], 'builder:pip']])
+    const f = setup(watched)
+    f.github.issues.push(issue(24, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.clock.now += 20_000
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.comments.push(comment(1, 10, 'Pip, 12:31, to **Juno**: fixed the HOLD. Merged main, then added a `--next 2` example.', { issue_url: 'https://api.github.com/repos/acme/app/issues/24' }),
+      comment(2, 11, 'Harness, 12:31, to **Juno**: the head is now 239a631, after your HOLD on e7422a6: please read it again.', { issue_url: 'https://api.github.com/repos/acme/app/issues/24' }))
+    await f.mentions.tick()
+    // Juno hears both, as each names it; Pip only Harness's, on its own pull request, and never its own post.
+    expect(f.relayed().map(command => [command.agentId, command.text])).toEqual([
+      ['juno', 'Pip, 12:31, to **Juno**: fixed the HOLD. Merged main, then added a `--next 2` example.'],
+      ['juno', 'Harness, 12:31, to **Juno**: the head is now 239a631, after your HOLD on e7422a6: please read it again.'],
+      ['pip', 'Harness, 12:31, to **Juno**: the head is now 239a631, after your HOLD on e7422a6: please read it again.']])
+  })
+
   it('reads for nobody while no one is signed in here', async () => {
     expect(await watchedAgents({ me: null, live: () => true, read, roster: async () => [row({})] })).toEqual([])
   })

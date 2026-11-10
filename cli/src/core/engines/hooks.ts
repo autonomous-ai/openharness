@@ -16,7 +16,7 @@ import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { validTerminalRuntime } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
-import type { ProcessRow } from '../../lib/processTable.js'
+import { hermesGatewayProcess, type ProcessRow } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
@@ -117,7 +117,28 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
   }
 
-  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, onWait }) => {
+  /**
+   * Whether the hook came through Hermes' shared gateway (lib/processTable.ts `hermesGatewayProcess`): Hermes 0.22+ runs
+   * every session's shell hooks there, with the gateway's environment, so the pane and processes above it are the
+   * gateway's. The hook server then names the session's own pane instead (hookServer.ts `hermesSessionHint`).
+   */
+  const hookViaSharedProcess: NonNullable<HookServerHandlers['hookViaSharedProcess']> = async ({ engine, callerPid }) => {
+    if (engine !== 'hermes') return false
+    const rows = await processRows()
+    if (!rows) return false
+    const byPid = new Map(rows.map(row => [row.pid, row]))
+    const seen = new Set<number>()
+    for (let pid = callerPid; pid > 0 && !seen.has(pid);) {
+      seen.add(pid)
+      const row = byPid.get(pid)
+      if (!row) return false
+      if (hermesGatewayProcess(row)) return true
+      pid = row.parentPid
+    }
+    return false
+  }
+
+  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, bySessionPane = false, onWait }) => {
     if (!callerPid) return null
     // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
     // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
@@ -144,7 +165,8 @@ export function createEngineHooks(deps: EngineHookDeps) {
     if (!table) return null
     const parents = new Map(table.map(row => [row.pid, row]))
     const ancestry = new Map<number, ProcessRow>()
-    for (let pid = callerPid; pid > 0 && !ancestry.has(pid);) {
+    // By its session's pane, the caller's processes are the shared gateway's: no evidence for any pane.
+    if (!bySessionPane) for (let pid = callerPid; pid > 0 && !ancestry.has(pid);) {
       const row = parents.get(pid)
       if (!row) break
       ancestry.set(pid, { ...row })
@@ -152,7 +174,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
 
     let found = (await matchCaller(resolved, engine, ancestry, table))!
-    let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+    let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine, bySessionPane)
     // Every relaunch starts its engine before it records the new process — create, fork, resume, a
     // restart and the new conversation it falls back to, a retarget — so a SessionStart in between came
     // from a pid no agent had yet, and was dropped. A resumed Codex agent then never showed its turns
@@ -167,7 +189,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
       const again = await matchCaller(resolved, engine, ancestry)
       if (!again) return null
       found = again
-      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine, bySessionPane)
     }
     // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
     // dispatched there must not rewrite its row before that pane operation has committed its route.
@@ -180,13 +202,15 @@ export function createEngineHooks(deps: EngineHookDeps) {
       const again = await matchCaller(resolved, engine, ancestry)
       if (!again) return null
       found = again
-      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine, bySessionPane)
     }
     const { candidates } = found
     if (choice.agent) {
       if (choice.reason === 'runtime') {
-        console.log(`[hooks] ${engine} hook accepted on runtime evidence alone`
-          + ` · agent=${sid(choice.agent.agentId)} · caller=${callerPid} is outside that engine's process tree`)
+        console.log(bySessionPane
+          ? `[hooks] ${engine} hook from its shared gateway accepted on its session's pane · agent=${sid(choice.agent.agentId)}`
+          : `[hooks] ${engine} hook accepted on runtime evidence alone`
+            + ` · agent=${sid(choice.agent.agentId)} · caller=${callerPid} is outside that engine's process tree`)
       }
       return choice.agent
     }
@@ -195,7 +219,8 @@ export function createEngineHooks(deps: EngineHookDeps) {
     // gates closed — no runtime resolved from the hint, no registered agent on that runtime, or the
     // hook's own process is not a descendant of the engine we registered.
     const onRuntime = resolved.map((runtime) => registry.byRuntimeEngine(runtime, engine)).filter(Boolean)
-    console.log(`[hooks] unmatched ${engine} hook · hints=${(runtimeHints ?? []).map((hint) => `${hint.backend}:${hint.paneId}`).join(',') || 'none'}`
+    console.log(`[hooks] unmatched ${engine} hook${bySessionPane ? ' · from its shared gateway, by its session\'s pane' : ''}`
+      + ` · hints=${(runtimeHints ?? []).map((hint) => `${hint.backend}:${hint.paneId}`).join(',') || 'none'}`
       + ` · resolvedRuntimes=${resolved.length} · agentsOnRuntime=${onRuntime.length}`
       + ` · callerPid=${callerPid}${onRuntime.length && !candidates.size ? ' · caller is not a descendant of that engine process' : ''}`
       + `${candidates.size > 1 ? ` · ambiguous (${candidates.size} candidates)` : ''}`)
@@ -214,7 +239,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
     else delete row.admissionHold
     syncSession(row)
   }
-  return { resolveHookAgent, onSessionEnd, onAdmissionHeld }
+  return { resolveHookAgent, hookViaSharedProcess, onSessionEnd, onAdmissionHeld }
 }
 
 /**

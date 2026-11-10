@@ -4,7 +4,7 @@ import 'model.dart';
 import 'swarm_reader.dart';
 
 /// What a closed chat held: its messages, oldest first, where the earlier
-/// ones start, the reaction counter they were read with, and the thread lines
+/// ones start, the edit counter they were read with, and the thread lines
 /// of their roots.
 typedef SwarmChatKept = ({
   List<SuperTabMessage> messages,

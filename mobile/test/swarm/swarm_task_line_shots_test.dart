@@ -157,30 +157,18 @@ void main() {
       'id': name,
       'name': '$name@example.com',
     };
-    List<Map<String, Object>> reacted(String agent, List<String> emoji) => [
-      for (final e in emoji)
-        {
-          'emoji': e,
-          'count': 1,
-          'by': [
-            {'kind': 'agent', 'id': agent},
-          ],
-        },
-    ];
     Map<String, dynamic> row(
       String id,
       int sequence,
       Map<String, Object?> author,
       String text, {
       String? kind,
-      List<Map<String, Object>> reactions = const [],
     }) => {
       ...taskLine(id: id, sequence: sequence),
       'text': text,
       'thread': id,
       'author': author,
       'source': kind == null ? null : {'kind': kind},
-      'reactions': reactions,
     };
     final river = {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'};
     final rows = [
@@ -189,14 +177,12 @@ void main() {
         1,
         person('huy'),
         'Jumping back a week in a chat freezes my Mac.',
-        reactions: reacted('gannet', ['eyes']),
       ),
       row(
         'darren',
         5,
         person('darren'),
         'I renamed the agents, but the sidebar still shows the old names.',
-        reactions: reacted('egret', ['eyes', 'check']),
       ),
       row(
         'diego',

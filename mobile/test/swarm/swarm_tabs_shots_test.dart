@@ -170,14 +170,9 @@ void main() {
       );
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
         ...load,
-        // A made-up person, in a meeting (no emoji: a test draws none), and
-        // the models one machine serves.
+        // A made-up person, and the models one machine serves.
         'members': [
-          part(me, 1, {
-            ...person(me),
-            'email': 'ada@example.com',
-            'status': {'text': 'In a meeting'},
-          }),
+          part(me, 1, {...person(me), 'email': 'ada@example.com'}),
         ],
         'machines': [
           part('mac-1', 1, {
