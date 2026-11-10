@@ -98,16 +98,13 @@ describe('usernames in a Swarm', () => {
     expect(f.name('nova')).toBe(`${shown.toLowerCase()}2`)
   })
 
-  /** A Swarm with `peer`, a private project's Lead `Hush` that only the owner reads, and the owner's Buddy `Pal`. */
+  /** A Swarm with `peer` and a private project's Lead `Hush` that only the owner reads. */
   function hidden() {
     const f = fixture()
     f.join(person('peer', 'peer@example.com'))
     const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { conversationId: string }
     f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'hidden', machineId: 'machine', name: 'Hush', configuration,
       lead: true }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-    const generation = f.state.people[0]!.generation
-    f.state.agents.push({ id: 'buddy', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'owner', contributorId: 'owner',
-      membershipGeneration: generation, name: 'Pal', configuration, buddyOf: { personId: 'owner', generation } })
     return f
   }
 
@@ -120,11 +117,10 @@ describe('usernames in a Swarm', () => {
     expect(f.name('stray')).toBe('stray')
   })
 
-  it('does not number a default around an agent some members cannot see, or a Buddy', () => {
+  it('does not number a default around an agent some members cannot see', () => {
     const f = hidden()
     f.join(person('hush', 'hush@example.com'))
-    f.join(person('pal', 'pal@example.com'))
-    expect([f.name('hush'), f.name('pal')]).toEqual(['hush', 'pal'])
+    expect(f.name('hush')).toBe('hush')
   })
 
   it('keeps a person’s name when an agent named like them arrives later', () => {
@@ -134,21 +130,6 @@ describe('usernames in a Swarm', () => {
     f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
       owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     expect(f.name('river')).toBe('river')
-  })
-
-  it('reaches a Buddy as each person’s username, beside its own read limits (#2115)', () => {
-    const f = fixture()
-    f.join(person('peer', 'ken@example.com'))
-    f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
-      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-    const generation = f.state.people[0]!.generation
-    f.state.agents.push({ id: 'buddy', projectId: 'lead', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'owner',
-      contributorId: 'owner', membershipGeneration: generation, name: 'Pal', configuration, buddyOf: { personId: 'owner', generation } })
-    const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), { kind: 'agent', agentId: 'buddy', machineOwnerId: 'owner' },
-      NOW, {})
-    expect(Object.fromEntries(view.parts.members.map(m => [m.key, m.data.username]))).toEqual({ owner: 'ken15', peer: 'ken' })
-    // Its person's machines stay out of what it reads.
-    expect(view.parts.agents.map(a => a.data.machineId)).not.toContain('machine')
   })
 
   it('reaches readers as each person’s username whatever order the members are read in', () => {

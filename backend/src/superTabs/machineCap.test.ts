@@ -78,10 +78,4 @@ describe('which hosts are asked to join', () => {
     expect(await joinSwarm(f, 'laptop')).toMatchObject({ joinSwarm: true })
   })
 
-  it('still asks the Lead on its owner\'s Buddy-only record at 20: that record is counted already', async () => {
-    const state = swarm({ owner: { real: 20 } })
-    state.machines!.find(m => m.machineId === 'owner-m19')!.buddyOnly = true
-    expect(await joinSwarm(leadOn(state, 'owner-m19'), 'owner-m19')).toMatchObject({ joinSwarm: true })
-  })
-
 })

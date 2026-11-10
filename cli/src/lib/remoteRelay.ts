@@ -37,7 +37,7 @@ import {
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
-import { admitRelayedPairFrame, isPairFrameType } from './e2ee/applicationFrames.js'
+import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, isPairFrameType } from './e2ee/applicationFrames.js'
 import { declaredClientQuery } from './declaredClient.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
@@ -134,6 +134,8 @@ const P2P_UPGRADE_ATTEMPT_TIMEOUT_MS = 15_000
 // already-live channel — 5s is generous for that, not for a cold negotiation.
 const P2P_UPGRADE_DRAIN_TIMEOUT_MS = 5_000
 const P2P_PROMOTE_ACK_TIMEOUT_MS = 5_000
+// Agent browser opens in flight on one machine: four viewers a browser, with room. The machine answers every one.
+const BROWSER_OPENS_MAX = 32
 
 
 function binaryBytes(raw: RawData): Uint8Array {
@@ -230,6 +232,15 @@ interface Entry {
    *  no "next demote" to re-arm a budget for here, since staying on direct or giving up are both
    *  permanent for this entry. */
   upgradeDone: boolean
+  /**
+   * Agent browser streams open through this entry, each with the P2P channel it opened on (null: the relay). Never in
+   * `streams`: a terminal survives a move between wires through its resync and keyframe, and VNC has neither, so
+   * promoteOpenStreams(), demoteP2p() and promoteToDirect() never resync or move these. A stream whose channel goes
+   * ends with reason `route`, and its panel opens a new one on whatever route there is then.
+   */
+  browserStreams: Map<string, TerminalP2pInitiator | null>
+  /** `agent_browser_open`s waiting for their result, by request id, with the channel each was sent on. */
+  browserOpens: Map<string, TerminalP2pInitiator | null>
 }
 
 export interface RelaySession {
@@ -622,6 +633,8 @@ export class RemoteRelayPool {
       upgradeWaitResolve: null,
       upgradeOrphan: null,
       upgradeDone: false,
+      browserStreams: new Map(),
+      browserOpens: new Map(),
     }
     entry.viewers = new RemoteViewerProxy({
       supported: () => crypto.viewerForwardingVersion === 1,
@@ -781,8 +794,9 @@ export class RemoteRelayPool {
           try { ws.close(4404, 'peer revoked trust') } catch { ws.terminate() }
           return
         }
-        // The relay cannot inject response bytes/headers into a local browser in plaintext.
-        if (typeof frame.type === 'string' && VIEWER_UP_TYPES.has(frame.type)
+        // The relay cannot inject response bytes/headers into a local browser in plaintext, nor open or close an
+        // agent browser's stream: those are sealed to this session alone.
+        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type))
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
         // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
         if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
@@ -818,6 +832,7 @@ export class RemoteRelayPool {
         if (entry.sink && entry.viewers?.receive(plain)) return
         entry.sink?.sendFrame(plain)
         this.noteTerminalResponse(entry, plain, 'relay')
+        this.noteBrowserResponse(entry, plain)
       })
       ws.once('close', (code, reasonBuf) => {
         if (!settled) {
@@ -899,6 +914,7 @@ export class RemoteRelayPool {
     let detached = false
     return {
       send: async (frame) => {
+        if (typeof frame.type === 'string' && AGENT_BROWSER_DOWN_TYPES.has(frame.type)) return this.sendBrowserFrame(machineId, entry, frame)
         if (frame.type === 'terminal_open') {
           frame = { ...frame, payload: { ...framePayload(frame), viewId } }
         }
@@ -931,6 +947,7 @@ export class RemoteRelayPool {
       sendBinary: async (clear) => {
         const sealed = entry.crypto.encryptTerminal(clear)
         if (!sealed) return
+        if (clear.kind === TerminalBinaryKind.browser) return this.sendBrowserBinary(machineId, entry, clear.streamId, sealed)
         const wantsP2p = entry.p2pStreams.has(clear.streamId)
         // A burst of large frames (a chunked upload's chunks, fired back-to-back) can push the data
         // channel's send buffer over TERMINAL_P2P_MAX_BUFFERED_BYTES well before the real network has
@@ -1035,6 +1052,11 @@ export class RemoteRelayPool {
     if (typeof data !== 'string') {
       const clear = entry.crypto.decryptTerminal(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
       if (!clear) return
+      if (clear.kind === TerminalBinaryKind.browser) {
+        const local = encodeTerminalLocal(clear)
+        if (local) entry.sink?.sendBinary(local)
+        return
+      }
       if (clear.kind !== TerminalBinaryKind.output && clear.kind !== TerminalBinaryKind.keyframe
         && clear.kind !== TerminalBinaryKind.sync) return
       // Phase 2 of a live migration confirmed: the responder has committed its own flip and this
@@ -1058,6 +1080,74 @@ export class RemoteRelayPool {
     if (!plain) return
     entry.sink?.sendFrame(plain) // real frame before the derived terminal_link_mode — see comment above
     this.noteTerminalResponse(entry, plain, 'p2p')
+    this.noteBrowserResponse(entry, plain)
+  }
+
+  /** An agent browser stream's control frame: on the channel the stream opened on. A frame that channel refuses goes
+   *  over the relay (the machine keeps the stream's route whichever wire its frames come on), and the lost channel's
+   *  streams end. An open takes the direct link when there is one, waiting for it as a terminal's open does. */
+  private async sendBrowserFrame(machineId: string, entry: Entry, frame: Frame): Promise<void> {
+    const payload = framePayload(frame)
+    let channel: TerminalP2pInitiator | null
+    if (frame.type === 'agent_browser_open') {
+      if (typeof payload.requestId !== 'string') return
+      const p2p = entry.p2p
+      const ready = !!p2p && (p2p.isReady || await p2p.waitUntilReady(entry.p2pPolicy?.openWaitMs ?? 1_500))
+      channel = ready && entry.p2p === p2p ? p2p : null
+      if (entry.browserOpens.size >= BROWSER_OPENS_MAX) entry.browserOpens.delete(entry.browserOpens.keys().next().value!)
+      entry.browserOpens.set(payload.requestId, channel)
+    } else {
+      const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+      channel = entry.browserStreams.get(streamId) ?? null
+      if (frame.type === 'agent_browser_close') entry.browserStreams.delete(streamId)
+    }
+    const wrapped = JSON.stringify(entry.crypto.wrapOutgoing(frame))
+    const direct = !!channel && channel === entry.p2p
+    if (direct && channel!.send(wrapped)) return
+    try { entry.ws.send(wrapped) } catch { /* closed — onClosed will fire */ }
+    if (direct) this.demoteP2p(machineId, entry, 'send_failed')
+  }
+
+  /** An agent browser stream's keys and mouse: on its own channel only, never moved onto the relay. */
+  private async sendBrowserBinary(machineId: string, entry: Entry, streamId: string, sealed: Uint8Array): Promise<void> {
+    const channel = entry.browserStreams.get(streamId) ?? null
+    if (!channel) {
+      try { entry.ws.send(sealed, { binary: true }) } catch { /* closed — onClosed will fire */ }
+      return
+    }
+    // A stream still bound to a channel that is gone was closed with it: what the page sends for it goes nowhere.
+    if (channel !== entry.p2p) return
+    if (await channel.sendWithBackpressureRetry(Buffer.from(sealed))) return
+    if (entry.p2p === channel) this.demoteP2p(machineId, entry, 'send_failed')
+  }
+
+  /** The machine's word on a browser stream: its open's result binds it to the channel the open went on. */
+  private noteBrowserResponse(entry: Entry, frame: Frame): void {
+    const payload = framePayload(frame)
+    const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+    if (frame.type === 'agent_browser_close') { entry.browserStreams.delete(streamId); return }
+    if (frame.type !== 'agent_browser_open_result' || typeof payload.requestId !== 'string') return
+    const channel = entry.browserOpens.get(payload.requestId) ?? null
+    entry.browserOpens.delete(payload.requestId)
+    if (!streamId) return
+    entry.browserStreams.set(streamId, channel)
+    // Opened on a channel that went while the machine answered.
+    if (channel && channel !== entry.p2p) this.closeBrowserStream(entry, streamId)
+  }
+
+  /** A browser stream whose channel went: the app is told `route` (its panel reconnects once by itself), and the
+   *  machine is told over the relay, so its exec ends. */
+  private closeBrowserStream(entry: Entry, streamId: string): void {
+    entry.browserStreams.delete(streamId)
+    entry.sink?.sendFrame({ type: 'agent_browser_close', payload: { streamId, reason: 'route' } })
+    const close = entry.crypto.wrapOutgoing({ type: 'agent_browser_close', payload: { streamId } })
+    try { entry.ws.send(JSON.stringify(close)) } catch { /* relay close handles cleanup */ }
+  }
+
+  /** Every browser stream on [channel] ends with it. */
+  private closeBrowserStreamsOn(entry: Entry, channel: TerminalP2pInitiator | null): void {
+    if (!channel) return
+    for (const [streamId, on] of [...entry.browserStreams]) if (on === channel) this.closeBrowserStream(entry, streamId)
   }
 
   /**
@@ -1127,6 +1217,8 @@ export class RemoteRelayPool {
     entry.upgradeWaitResolve = null
     const p2p = entry.p2p
     entry.p2p = null
+    // Opens still waiting on this channel are kept: their result, when it comes, closes the stream (noteBrowserResponse).
+    this.closeBrowserStreamsOn(entry, p2p)
     const streamIds = [...entry.p2pStreams]
     entry.p2pStreams.clear()
     entry.p2pPendingOpens.clear()
@@ -1340,7 +1432,9 @@ export class RemoteRelayPool {
       }
     }
     // Phase 2 — the actual cutover. entry.p2pStreams is untouched: every streamId in it was already
-    // p2p and stays p2p, only the object behind entry.p2p changes.
+    // p2p and stays p2p, only the object behind entry.p2p changes. A browser stream cannot be drained or moved: it
+    // ends here, after every bail-out above, so an abandoned upgrade closes nothing.
+    this.closeBrowserStreamsOn(entry, old)
     entry.p2p = shadow
     entry.upgradeShadow = null
     const acked = await this.waitForUpgradeMilestone(entry, () => {

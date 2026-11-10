@@ -117,6 +117,7 @@ class _OpeningApp extends _PreparingApp {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     starts.add((engine: engine, folder: folder, prompt: prompt));
     if (refusal != null) return refusal;
@@ -153,6 +154,7 @@ class _AnsweredApp extends _OpeningApp {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     starts.add((engine: engine, folder: folder, prompt: prompt));
     attempts.add(attempt);

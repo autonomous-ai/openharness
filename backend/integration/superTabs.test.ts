@@ -583,7 +583,7 @@ describe('private swarm projects on the real control API', () => {
 
   // Quiet project chats (Dee, 2026-10-31; task #3593): the server writes the status card's lines from task state and wakes the coordinator
   // for none of them; its report adds its own lines after them and posts nothing.
-  it('wakes the coordinator for no work change and shows the server\'s card with its own lines', async () => {
+  it('wakes the coordinator for no work change and shows its own lines alone on the card', async () => {
     // 14:00 in Vietnam.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
@@ -605,24 +605,21 @@ describe('private swarm projects on the real control API', () => {
     expect(await updates()).toEqual([])
     // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
     expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system'])
-    // The server wrote the card: one line for the task, which waits on an owner.
-    expect((await status())!.text).toContain('"Work": to do. Waits on: an owner. Owner: none.')
-    // The Lead's report adds its own lines after the server's, and posts nothing.
+    // The server writes no line for the task (Swarm v4, 2026-11-10).
+    expect(await status()).toBeUndefined()
+    // The Lead's report is the card, and posts nothing.
     const card = 'Freeze starts Friday.'
     await execute({ type: 'project.report', projectId: 'lead', through: {}, text: card }, lead)
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
-    expect((await status())!.text).toContain('"Work": to do.')
-    expect((await status())!.text.endsWith(card)).toBe(true)
+    expect((await status())!.text).toBe(card)
     // An ordinary message and a second task wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 3_600_000
     await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
     now += 900_000
     expect(await updates()).toEqual([])
-    const lines = (await status())!.text
-    expect(lines).toContain('"Docs": to do.')
-    expect(lines.endsWith(card)).toBe(true)
+    expect((await status())!.text).toBe(card)
   })
 })
 
@@ -1583,30 +1580,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
       .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
   })
 
-  it('a PM reaction settles the joke and question in durable owed state without an extra reply', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const sent = async (text: string) => String((await run(tab, { type: 'message.send', conversationId: 'lead', text,
-      replyTo: null, recipientIds: [lead] }, peer)).result.messageId)
-    const joke = await sent('The PM has more tabs than my browser 😂')
-    const question = await sent('Are we collecting tabs now?')
-    const react = (messageId: string, emoji: string, on = true, as = lead) => run(tab,
-      { type: 'message.react', conversationId: 'lead', messageId, emoji, on } as Command, host, as)
-    const owed = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.owed?.map(a => a.id) ?? []
-    expect(await owed()).toEqual([joke, question])
-    await run(tab, { type: 'message.react', conversationId: 'lead', messageId: joke, emoji: 'laugh', on: true }, peer)
-    await react(joke, 'laugh', false)
-    expect(await owed()).toEqual([joke, question])
-    await react(joke, 'laugh')
-    expect(await owed()).toEqual([question])
-    await react(question, 'eyes')
-    await react(question, 'eyes')
-    const restarted = new SuperTabStore(db)
-    const chat = (await restarted.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
-    expect(chat.owed ?? []).toEqual([])
-    expect(chat.pulse!.asks.count).toBe(0)
-  })
-
   // Task #3391: acknowledging is a reaction, not a post, so a reaction settles the recipient's delivery as an answer does.
   it('closes the reacting agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
@@ -2064,15 +2037,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const account = await app.inject({ url: '/api/super-tabs/routing-policy', headers: { authorization: `Bearer ${owner.sub}` } })
     expect(account.json().data).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
     expect(await db.routingPolicy.count({ where: { id } })).toBe(1)
-
-    // A Buddy reads no routing.
-    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
-    const people = (await store.read(owner, tab)).state.people
-    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
-      buddyOf: { personId: owner.sub, generation: people.find(p => p.id === owner.sub)!.generation } } } })
-    await expect(store.tabPolicy(host, tab, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
   })
 
   it('records, supersedes and lets a person change a route decision; a closed one refuses', async () => {
@@ -4091,7 +4055,7 @@ describe('Swarm parts storage', () => {
   })
 })
 
-describe('a closed Chat with PM through the store (Buddies replaced it, 10-29)', () => {
+describe('a closed Chat with PM through the store', () => {
   it('is never opened again, by a person or the PM', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

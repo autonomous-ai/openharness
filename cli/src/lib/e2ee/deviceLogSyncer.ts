@@ -40,8 +40,8 @@ export type DeviceLogAppendAnswer = { head: DevLogHead } | { error: string; head
 export interface DevLogSignIn {
   /** Which sign-in it is. */
   epoch: string
-  /** Given to a session from before sign-ins were recorded, or a Team sign-in's (authSession `teamSignInEpoch`):
-   *  nobody saw it being made by hand here, so it never starts the log over (it may take a file over). */
+  /** Given to a session from before sign-ins were recorded: nobody saw it being made by hand here, so it never starts
+   *  the log over (it may take a file over). */
   adopted: boolean
   /** When it was made (ms); null when not known — then it never starts the log over either. */
   at: number | null
@@ -383,12 +383,6 @@ export class DeviceLogSyncer {
     return local === null || file.owner === local.epoch
   }
 
-  private archiveDeparting(file: DevLogFile): void {
-    const epoch = this.deps.signIn()?.epoch ?? ''
-    // Team agents must not inherit the departing owner's device names, keys or trust decisions.
-    this.deps.store.archive(file, { forget: epoch.startsWith('team:') || epoch.startsWith('adopted:team:') })
-  }
-
   /** `file`, with every key a fork suspended in another account's kept log, and active in this one,
    *  suspended (and new) here as well: it is not trusted either way, so the list says so — and "It's
    *  mine" lifts it, everywhere (a review of this list does not: it never showed that suspension). */
@@ -572,9 +566,9 @@ export class DeviceLogSyncer {
       }
       if (reset) {
         if (now) {
-          // Ordinary sign-ins keep the departing trust and log; Team sign-ins discard them.
+          // The departing trust and log are kept, for a sign-in back to that account.
           this.deps.switchAccount?.(now.acct, got.acct)
-          this.archiveDeparting(latest)
+          this.deps.store.archive(latest)
         }
         // Back to an account this machine was signed in to before: its log as verified then, and every
         // mark on it (frozen, suspended, pending), go on from where they were.
@@ -1030,12 +1024,12 @@ export class DeviceLogSyncer {
       // The joined point never moves up past the reviewed head: a shorter list (rolled back, or
       // another account's) must leave every key added to it from here on news.
       const joinedSeq = Math.min(base.joinedSeq ?? base.notifiedUpTo, next.head.seq)
-      // The reviewed list is another account's: the departing log follows the same policy as a sign-in
-      // (and what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
-      // goes on from where it was.
+      // The reviewed list is another account's: the departing log is kept as on a sign-in (and what a
+      // fork suspended in it stays suspended here) — and a kept one of the reviewed account goes on
+      // from where it was.
       if (file.state && !same) {
         this.deps.switchAccount?.(file.state.acct, next.acct)
-        this.archiveDeparting(file)
+        this.deps.store.archive(file)
       }
       const { joining: _j, ...rest } = base
       const reviewed: DevLogFile = this.carrySuspensions({

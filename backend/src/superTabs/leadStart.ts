@@ -1,5 +1,5 @@
-/** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B), as a Buddy's start is
- *  (buddies.ts): recorded on the machine's contribution and launched by its host. Its person names the machine, which is their
+/** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B):
+ *  recorded on the machine's contribution and launched by its host. Its person names the machine, which is their
  *  own computer: Swarm v3 starts no agent on another person's computer (task #4120). Desktop's
  *  own-machine flow (project.create, a local start, agent.add) is unchanged. */
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder,
@@ -11,7 +11,7 @@ import { coordinatorNameOf } from './instructions.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
-/** The coordinator's name in rows written before projects could name it (store.ts reads them for Buddies); new rows use what
+/** The coordinator's name in rows written before projects could name it; new rows use what
  *  the project calls it (instructions.ts coordinatorNameOf). */
 export const LEAD_NAME = 'Product Manager'
 /** Memory and disk gate it; CPU use is one momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). */
@@ -132,8 +132,7 @@ export function leadOvertaken(state: SuperTabState, start: AgentStart, home: Con
 }
 
 /** Its agent [agentId] joined the project's Lead conversation [home]: it leads it, unless a Lead was added there by hand
- *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine, so a Buddy reads
- *  it without the name (store.ts withoutMachineNames; Diego, 10-30). */
+ *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine. */
 export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): { text: string; source: { kind: 'system'; machine?: string } } {
   if (!home.leadId || !home.agentIds.includes(home.leadId)) home.leadId = agentId
   const placement = placementOf(state, start)
@@ -192,8 +191,8 @@ export function leadWaits(project: SwarmProject, id: string, now: number): void 
   project.leadWaiting = [...(project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS), { id, at: now }].slice(-MAX_LEAD_WAITING)
 }
 
-/** [project]'s Lead [agentId] joined its chat: the messages its person sent there while it had none are delivered to it, as a
- *  Buddy's waiting messages are (store.ts writeLateDeliveries checks each is its person's own row in that chat), and what waited
+/** [project]'s Lead [agentId] joined its chat: the messages its person sent there while it had none are delivered to it
+ *  (store.ts writeLateDeliveries checks each is its person's own row in that chat), and what waited
  *  and the claim end. */
 export function leadArrived(state: SuperTabState, project: SwarmProject, agentId: string, now: number) {
   const waiting = (project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS)

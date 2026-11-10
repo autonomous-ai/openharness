@@ -270,7 +270,7 @@ describe('who changes the rules', () => {
       .projectRules?.rules.instructionApprovals).toBeNull()
   })
 
-  it('refuses every other agent, the PM of another project and a Buddy', () => {
+  it('refuses every other agent and the PM of another project', () => {
     const f = fixture()
     f.invite()
     f.add('lead', 'lead', true)
@@ -281,9 +281,6 @@ describe('who changes the rules', () => {
     const otherLead = f.add('other-lead', other.conversationId, true)
     // Another project's PM reads nothing of this one.
     expect(code(() => f.run(set(0, later(), asked('lead')), as(otherLead), context))).toBe('NOT_FOUND')
-    const buddy = f.add('buddy', task)
-    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
-    expect(code(() => f.run(set(0, later(), asked(task)), as(buddy), context))).toBe('BUDDY_FORBIDDEN')
   })
 })
 

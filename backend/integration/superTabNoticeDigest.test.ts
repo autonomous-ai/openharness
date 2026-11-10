@@ -124,7 +124,7 @@ describe('which messages to the coordinator are gathered', () => {
     expect((await deliveryOf(other, f.worker)).status).toBe('queued')
   })
 
-  it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
+  it.each(['pair-loop', 'terminal-alert', 'update-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
     const f = await swarm()
     const id = await f.write({ kind }, f.lead)
     expect((await deliveryOf(id, f.lead)).status).toBe('queued')
@@ -785,12 +785,12 @@ describe('the PM\'s inbox at its turn\'s end', () => {
     expect(await listed(f, 'busy')).toEqual(expect.arrayContaining([message, followup]))
     expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
     expect(await inboxes(f.tab)).toEqual([])
-    // Delivery is not an answer: the later notice inbox lists these again as owed.
+    // Delivered, they are not listed again: Swarm v4 keeps no asks a PM owes (2026-11-10).
     f.clock.now += 16 * MIN
     await f.report()
     await listed(f, 'busy')
-    expect((await inboxes(f.tab)).join('\n')).toContain(`message ${message} in lead`)
-    expect((await inboxes(f.tab)).join('\n')).toContain(`message ${followup} in lead`)
+    expect((await inboxes(f.tab)).join('\n')).not.toContain(`message ${message} in lead`)
+    expect((await inboxes(f.tab)).join('\n')).not.toContain(`message ${followup} in lead`)
   })
 
   it('releases people gathered by the previous server on the first busy poll without releasing notices', async () => {
@@ -869,8 +869,6 @@ describe('PM person receipt eyes', () => {
     expect(after.messages.find(m => m.id === message)?.reactions).toEqual([])
     expect((await deliveryOf(message, f.lead)).status).toBe('delivered')
     expect((await deliveryOf(message, f.lead)).answeredAt).toBeNull()
-    const state = await f.timed.read(owner, f.tab)
-    expect(state.state.conversations.find(c => c.id === 'lead')?.owed?.map(a => a.id)).toContain(message)
   })
 
   it('does not add eyes for worker receipts or agent-authored input to the PM', async () => {

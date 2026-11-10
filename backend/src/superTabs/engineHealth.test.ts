@@ -122,13 +122,13 @@ describe('an engine whose starts fail on a machine', () => {
     expect(suspendedEngines(pool, NOW)).toEqual({})
   })
 
-  it('counts each engine apart, and never a grid model, a removal, an abandoned start, a memory refusal, a Product Manager or a Buddy', () => {
+  it('counts each engine apart, and never a grid model, a removal, an abandoned start, a memory refusal or a Product Manager', () => {
     const pool = machine(), state = stateWith(pool)
     noteStartFailed(state, start({ engine: 'claude' }), NOW)
     expect(noteStartFailed(state, start(), NOW)).toBeNull()
     for (const failed of [start({ gridModel: 'qwen3' }), start({}, MACHINE_REMOVED), start({}, ABANDONED), start({}, 'Removed by its owner before it started.'),
       start({}, 'Not enough free memory: 1.2 GiB free, 2 GiB needed.'),
-      start({ leadFor: 'p1' } as never), start({ buddyOf: 'owner' } as never)]) {
+      start({ leadFor: 'p1' } as never)]) {
       expect(noteStartFailed(state, failed, NOW)).toBeNull()
     }
     expect(suspendedEngines(pool, NOW)).toEqual({})

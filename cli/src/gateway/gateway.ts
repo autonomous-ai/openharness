@@ -14,7 +14,7 @@
  * E2EE_REQUIRED. backendSocket.spec.ts and gateway/gateway.spec.ts hold each of them.
  */
 import { env } from '../config/env.js'
-import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
+import type { BrowserRoute, GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
 import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
 import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
@@ -39,6 +39,9 @@ import {
 import { UpstreamLink } from './upstream.js'
 
 type Frame = Record<string, unknown>
+
+/** Agent browser opens a client may have waiting on its P2P channel: four viewers a browser, with room. */
+const BROWSER_PENDING_OPENS_MAX = 32
 
 export interface RelayGatewayOptions {
   /** Backend-resolved machine id, persisted by the SSO login preflight; in isolated unit tests, the token. */
@@ -113,6 +116,14 @@ export class RelayGateway implements GatewayPort {
    * closed meanwhile is closed again by the `terminal_closed` that follows it, which takes it off P2P.
    */
   private readonly liveStreams = new Map<string, Set<string>>()
+  /** The `agent_browser_open`s a client sent over its P2P channel, by request id: the stream its result names opens there. */
+  private readonly browserPendingOpens = new Map<string, Set<string>>()
+  /**
+   * Each client's agent browser streams, and the route each opened on, kept apart from the terminal's `p2pStreams`:
+   * a terminal survives a move between wires through its resync and keyframe, and VNC has neither (core/browserStreams.ts).
+   * A stream keeps its route until it closes; when the route goes, the stream ends.
+   */
+  private readonly browserStreams = new Map<string, Map<string, BrowserRoute>>()
   /** Cross-instance commander (device) client count, from backend `__clients` frames. */
   private commanderCount = 0
   /** Until when a terminal app of the account counts as open, from the backend's `__tui_open`; null until it has said
@@ -196,6 +207,7 @@ export class RelayGateway implements GatewayPort {
       onSessionOpened: (connId, role, identity) => {
         // A new session counts from the start again: a counter kept from the last one would pin its streams.
         this.forgetRoutes(connId)
+        this.forgetBrowserStreams(connId)
         const peer = this.e2ee.pairedPeers().find(p => p.identityPub === identity)
         this.core.client(connId, {
           role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
@@ -207,6 +219,7 @@ export class RelayGateway implements GatewayPort {
       },
       onSessionDropped: (connId) => {
         this.forgetRoutes(connId)
+        this.forgetBrowserStreams(connId)
         this.core.client(connId, null)
       },
       onPeerLinked: (peer) => {
@@ -254,6 +267,8 @@ export class RelayGateway implements GatewayPort {
     this.liveStreams.clear()
     this.routeCounters.clear()
     this.staleRouteLogged.clear()
+    this.browserPendingOpens.clear()
+    this.browserStreams.clear()
     this.replayCommanderOnNextSnapshot = true
     this.tuiUntil = null
     this.uiGate = null
@@ -405,6 +420,7 @@ export class RelayGateway implements GatewayPort {
   terminal(connId: string, type: string, payload: Record<string, unknown>): boolean {
     const frame = this.e2ee.wrapTarget(connId, type, payload)
     if (!frame) return false
+    if (type.startsWith('agent_browser_')) return this.browserFrame(connId, type, payload, frame)
     this.noteLiveStream(connId, type, payload)
     if (this.routeTerminalOutputToP2p(connId, type, payload)) {
       if (this.terminalP2p.send(connId, JSON.stringify(frame))) return true
@@ -422,6 +438,7 @@ export class RelayGateway implements GatewayPort {
   /** Pairwise-encrypted binary terminal output/keyframe. The hop prefix exposes
    * only connId and direction to the opaque backend relay. */
   terminalBinary(connId: string, clear: TerminalBinaryClear): boolean {
+    if (clear.kind === TerminalBinaryKind.browser) return this.browserBinary(connId, clear)
     const clientFrame = this.e2ee.wrapTerminalBinary(connId, clear)
     if (!clientFrame) return false
     if (this.p2pStreams.get(connId)?.has(clear.streamId)) {
@@ -661,6 +678,7 @@ export class RelayGateway implements GatewayPort {
     }
     // `unwrapDown` opened it, so its envelope counter is a number.
     if (type.startsWith('terminal_')) this.noteTerminalInputRoute(connId, type, payload, transport, (frame.payload as WrappedPayload).__e2e.n)
+    else if (type === 'agent_browser_open') this.noteBrowserOpen(connId, payload, transport)
     await this.core.frame(connId, opened, transport, role)
   }
 
@@ -709,6 +727,7 @@ export class RelayGateway implements GatewayPort {
       this.p2pStreams.delete(connId)
       this.liveStreams.delete(connId)
       this.forgetRoutes(connId)
+      this.forgetBrowserStreams(connId)
       await this.core.disconnected(connId)
       return
     }
@@ -727,6 +746,13 @@ export class RelayGateway implements GatewayPort {
     }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.
     if (type.startsWith('__')) return
+
+    // The relay dropped one of this machine's browser frames over its budget (backend lib/adapterWs.ts). It cannot
+    // say whose: the stream is inside the ciphertext.
+    if (type === 'agent_browser_transport_error') {
+      this.core.browserTransportError()
+      return
+    }
 
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. Closing the link blocks the reconnect that would otherwise fire on socket drop.
@@ -1027,7 +1053,85 @@ export class RelayGateway implements GatewayPort {
     this.p2pPendingOpens.delete(connId)
     this.p2pStreams.delete(connId)
     this.forgetRoutes(connId)
-    console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}`)
+    this.browserPendingOpens.delete(connId)
+    // A browser stream never falls back to the relay with its terminals: it ends, and its panel opens a new one.
+    const browser = this.browserStreams.get(connId)
+    const lost = browser ? [...browser].filter(([, route]) => route !== 'relay').map(([streamId]) => streamId) : []
+    for (const streamId of lost) browser!.delete(streamId)
+    if (browser?.size === 0) this.browserStreams.delete(connId)
+    console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}${lost.length ? ` browser_streams_closed=${lost.length}` : ''}`)
+    for (const streamId of lost) this.core.browserRouteLost(streamId)
+  }
+
+  // ── agent browser streams, each on the route it opened on ─────────────────────────────────────────
+
+  /** An open over the client's P2P channel opens its stream there. Bounded: the core answers every open. */
+  private noteBrowserOpen(connId: string, payload: Record<string, unknown>, transport: RemoteTransport): void {
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+    if (!requestId) return
+    let pending = this.browserPendingOpens.get(connId)
+    if (transport !== 'p2p') {
+      pending?.delete(requestId)
+      return
+    }
+    if (!pending) { pending = new Set(); this.browserPendingOpens.set(connId, pending) }
+    if (pending.size >= BROWSER_PENDING_OPENS_MAX) pending.delete(pending.values().next().value!)
+    pending.add(requestId)
+  }
+
+  /** A browser stream's control frame to its client: on the stream's own route, the open's result fixing it. A frame
+   *  the direct link refuses goes over the relay, ahead of the closes the lost link raises. */
+  private browserFrame(connId: string, type: string, payload: Record<string, unknown>, frame: Frame): boolean {
+    const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+    let route: BrowserRoute | undefined
+    if (type === 'agent_browser_open_result') {
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+      const pending = this.browserPendingOpens.get(connId)
+      const opened = !!requestId && pending?.delete(requestId) === true
+      if (pending?.size === 0) this.browserPendingOpens.delete(connId)
+      // A link the responder cannot classify is paced as TURN, which is billed per GB.
+      route = !opened ? 'relay' : this.terminalP2p.transport(connId) === 'direct' ? 'direct' : 'turn'
+      if (streamId) {
+        let streams = this.browserStreams.get(connId)
+        if (!streams) { streams = new Map(); this.browserStreams.set(connId, streams) }
+        streams.set(streamId, route)
+        this.core.browserRoute(streamId, route)
+      }
+    } else {
+      const streams = this.browserStreams.get(connId)
+      route = streams?.get(streamId)
+      if (type === 'agent_browser_close' && streams?.delete(streamId) && streams.size === 0) this.browserStreams.delete(connId)
+    }
+    const direct = route === 'direct' || route === 'turn'
+    if (direct && this.terminalP2p.send(connId, JSON.stringify(frame))) return true
+    const sent = this.link.sendBestEffort({ t: 'up', targetConnId: connId, webEligible: true, commanderEligible: false, frame })
+    if (direct) this.demoteP2pConnection(connId, 'send_failed')
+    return sent
+  }
+
+  /**
+   * A browser stream's screen bytes, on its route only. One that cannot go (the direct link refused it, there is no
+   * session, the relay socket is closed, or the stream has no route here) is dropped and its stream told to end: a
+   * hole in a VNC stream corrupts it, and a move onto the other wire would reorder it.
+   */
+  private browserBinary(connId: string, clear: TerminalBinaryClear): boolean {
+    const route = this.browserStreams.get(connId)?.get(clear.streamId)
+    const sealed = route ? this.e2ee.wrapTerminalBinary(connId, clear) : null
+    if (sealed && route !== 'relay') {
+      if (this.terminalP2p.send(connId, Buffer.from(sealed))) return true
+      // The demotion ends this stream with every other one on the link.
+      this.demoteP2pConnection(connId, 'send_failed')
+      return false
+    }
+    const packet = sealed ? encodeTerminalHop(TerminalHopDirection.up, connId, sealed) : null
+    if (packet && this.link.sendBinary(packet)) return true
+    this.core.browserRouteLost(clear.streamId)
+    return false
+  }
+
+  private forgetBrowserStreams(connId: string): void {
+    this.browserPendingOpens.delete(connId)
+    this.browserStreams.delete(connId)
   }
 
   // ── the Wi-Fi device's direct links, which ride the same E2EE sessions ──────────────────────────

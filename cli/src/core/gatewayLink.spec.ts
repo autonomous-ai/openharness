@@ -14,6 +14,7 @@ function events(): { [K in keyof GatewayEvents]: ReturnType<typeof vi.fn> } {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
     device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
+    browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
   }
 }
 
@@ -175,7 +176,17 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.notice({ kind: 'toWindows', frame: { type: 'device_key_added' } })
     link.notice({ kind: 'tabFrame', event: { sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', from: { machineId: 'alice-mac', userId: 'u' }, payload: { a: 1 }, extra: 'x' } })
     link.notice({ kind: 'tabFrame', event: { from: { machineId: 'alice-mac', userId: 'u' } } })
+    link.notice({ kind: 'browserRoute', streamId: 's-1', route: 'direct' })
+    link.notice({ kind: 'browserRoute', streamId: 's-2', route: 'p2p' })
+    link.notice({ kind: 'browserRoute', streamId: '', route: 'relay' })
+    link.notice({ kind: 'browserRouteLost', streamId: 's-3' })
+    link.notice({ kind: 'browserRouteLost' })
+    link.notice({ kind: 'browserTransportError' })
     link.notice({ kind: 'mystery' })
+    // A route it does not know is not a route: the stream is paced as a relayed one until it closes.
+    expect(heard.browserRoute.mock.calls).toEqual([['s-1', 'direct']])
+    expect(heard.browserRouteLost.mock.calls).toEqual([['s-3']])
+    expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
     expect(heard.frame.mock.calls).toEqual([['phone-1', { type: 'message' }, 'p2p', 'web'], ['dial-1', {}, 'relay', 'device']])
     expect(heard.client).toHaveBeenCalledWith('phone-1', null)
     expect(heard.disconnected).toHaveBeenCalledWith('phone-1')

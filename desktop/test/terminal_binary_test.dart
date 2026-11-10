@@ -188,4 +188,39 @@ void main() {
     final invalid = Uint8List.fromList(encoded)..[7] = 1;
     expect(decodeTerminalLocal(invalid), isNull);
   });
+
+  test('browser kind round-trips the local encoding', () {
+    final frame = TerminalBinaryFrame(
+      kind: TerminalBinaryKind.browser,
+      streamId: streamId,
+      seq: 1,
+      bytes: Uint8List.fromList(ascii.encode('RFB')),
+      compressed: false,
+    );
+    final encoded = encodeTerminalLocal(frame)!;
+    // The CLI's golden (cli/src/lib/terminalBinary.spec.ts): the same bytes on both sides.
+    expect(
+      encoded.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join(),
+      '4854524c010800000000001b'
+      '00112233445566778899aabbccddeeff'
+      '0000000000000001'
+      '524642',
+    );
+    final decoded = decodeTerminalLocal(encoded)!;
+    expect(decoded.kind, TerminalBinaryKind.browser);
+    expect(decoded.seq, 1);
+    expect(ascii.decode(decoded.bytes), 'RFB');
+    expect(
+      encodeTerminalLocal(
+        TerminalBinaryFrame(
+          kind: TerminalBinaryKind.browser,
+          streamId: streamId,
+          seq: 1,
+          bytes: frame.bytes,
+          compressed: true,
+        ),
+      ),
+      isNull,
+    );
+  });
 }

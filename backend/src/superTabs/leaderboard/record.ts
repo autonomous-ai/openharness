@@ -78,8 +78,6 @@ export interface GroupLedger {
   reviews?: ReviewCount[]
   /** The same by hour, for the last LEDGER_WEEKS weeks. */
   reviewHours?: ReviewHour[]
-  /** The Buddy's proposal the group was opened from, written until proposals went (2026-11-10): the Buddy earns when it ships. */
-  proposal?: { buddyId: string; messageId: string }
 }
 
 /** The leaderboard reads this week and last; a little more keeps a streak and week boundaries safe. */
@@ -95,9 +93,6 @@ export function recordAsked(group: Conversation, requesterId: string | undefined
   if (requesterId) group.requesterId = requesterId
   group.ledger = { askedAt: now }
 }
-
-/** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
-export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
 export function waitedOn(state: SuperTabState, group: Conversation): string {

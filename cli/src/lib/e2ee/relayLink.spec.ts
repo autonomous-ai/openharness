@@ -218,6 +218,19 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(instructionsReply.payload).not.toHaveProperty('text')
       expect(crypto.unwrapIncoming(instructionsReply)?.payload).toEqual(instructions)
 
+      // An agent browser's settings from another of the owner's computers carry the proxy and its password, and a proxy
+      // test's reply the proxy's exit address: sealed both ways, for every request a remote Desktop sends.
+      for (const type of ['agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+        const browser = { requestId: `browser-${type}`, agentId: 'faye-agent', settings: { proxy: { host: 'proxy.example', password: 'pw-secret' } } }
+        const browserRequest = crypto.wrapOutgoing({ type, payload: browser })
+        expect(JSON.stringify(browserRequest), type).not.toContain('pw-secret')
+        expect(manager.unwrapDown('session-conn', browserRequest)?.payload, type).toEqual(browser)
+        const answer = { requestId: `browser-${type}`, ok: true, address: '203.0.113.7', timeZone: 'Asia/Ho_Chi_Minh' }
+        const browserReply = manager.wrapTarget('session-conn', `${type}_result`, answer)!
+        expect(JSON.stringify(browserReply), type).not.toContain('203.0.113.7')
+        expect(crypto.unwrapIncoming(browserReply)?.payload, type).toEqual(answer)
+      }
+
       const lowerDown = crypto.wrapOutgoing({ type: 'terminal_resize', payload: { streamId: 's', cols: 80 } })
       const higherDown = crypto.wrapOutgoing({ type: 'terminal_resize', payload: { streamId: 's', cols: 120 } })
       expect((manager.unwrapDown('session-conn', higherDown)?.payload as Record<string, unknown>).cols).toBe(120)

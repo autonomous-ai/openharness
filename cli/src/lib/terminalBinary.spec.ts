@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './e2ee/terminalSeal.js'
 import {
+  BROWSER_CHUNK_BYTES,
+  decodeTerminalHop,
   decodeTerminalLocal,
+  encodeTerminalHop,
   encodeTerminalLocal,
+  maxCiphertextBytesFor,
   parseTerminalBinaryEnvelope,
+  terminalBinaryAadLabel,
   TerminalBinaryKind,
+  TerminalHopDirection,
   TERMINAL_BINARY_IMAGE_PASTE_MAX_CIPHERTEXT_BYTES,
   TERMINAL_BINARY_MAX_CIPHERTEXT_BYTES,
   TERMINAL_BINARY_PASTE_FILE_MAX_CIPHERTEXT_BYTES,
@@ -223,6 +229,37 @@ describe('terminal binary protocol v3', () => {
     expect(parseTerminalBinaryEnvelope(sealed.subarray(0, sealed.length - 1))).toBeNull()
     const badFlags = sealed.slice(); badFlags[6] = 0x80
     expect(openTerminalBinary(key, badFlags)).toBeNull()
+  })
+
+  it('browser kind round-trips plain, local and hop encodings', () => {
+    const frame = { kind: TerminalBinaryKind.browser, streamId, seq: 1, bytes: Buffer.from('RFB'), compressed: false }
+    const clear = { ...frame, bytes: new Uint8Array(frame.bytes) }
+    const local = encodeTerminalLocal(frame)!
+    // Golden: desktop/test/terminal_binary_test.dart decodes these same bytes.
+    expect(Buffer.from(local).toString('hex')).toBe(
+      '4854524c010800000000001b' +
+      '00112233445566778899aabbccddeeff' +
+      '0000000000000001' +
+      '524642',
+    )
+    expect(decodeTerminalLocal(local)).toEqual(clear)
+    const sealed = sealTerminalBinary(key, 40, frame)!
+    expect(openTerminalBinary(key, sealed)?.frame).toEqual(clear)
+    const hop = decodeTerminalHop(encodeTerminalHop(TerminalHopDirection.up, streamId, sealed)!)!
+    expect(openTerminalBinary(key, hop.clientFrame)?.frame).toEqual(clear)
+    expect(new TextDecoder().decode(terminalBinaryAadLabel(TerminalBinaryKind.browser))).toBe('HTRM|3|agent_browser_data')
+    // VNC is already compressed, and the socat on the far side reads raw bytes: nothing inflates a browser frame.
+    expect(encodeTerminalLocal({ ...frame, compressed: true })).toBeNull()
+    expect(sealTerminalBinary(key, 41, { ...frame, compressed: true })).toBeNull()
+  })
+
+  it('a full browser chunk fits under the output ceiling', () => {
+    const chunk = { kind: TerminalBinaryKind.browser, streamId, seq: 2, bytes: new Uint8Array(BROWSER_CHUNK_BYTES).fill(7), compressed: false }
+    const sealed = sealTerminalBinary(key, 42, chunk)!
+    expect(maxCiphertextBytesFor(TerminalBinaryKind.browser)).toBe(TERMINAL_BINARY_MAX_CIPHERTEXT_BYTES)
+    expect(sealed.length).toBeLessThan(TERMINAL_BINARY_MAX_CIPHERTEXT_BYTES)
+    expect(openTerminalBinary(key, sealed)?.frame.bytes).toEqual(chunk.bytes)
+    expect(decodeTerminalLocal(encodeTerminalLocal(chunk)!)?.bytes).toEqual(chunk.bytes)
   })
 })
 

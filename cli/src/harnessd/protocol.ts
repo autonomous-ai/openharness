@@ -22,8 +22,9 @@ import type { SupervisorStatus } from './supervisor.js'
  *  request needs it or the release's own harnesses are to be put in place (core/viewersWake.ts).
  *  6: `stop`, the core asking its master to stop everything (`harness stop` on Windows, where the CLI has no signal
  *  to send the master), and `shutdown`, the master asking the core or a service to leave, where a signal cannot:
- *  on Windows Node's `kill` is TerminateProcess, whatever the signal, and nothing would be torn down. */
-export const HARNESSD_PROTOCOL = 6
+ *  on Windows Node's `kill` is TerminateProcess, whatever the signal, and nothing would be torn down.
+ *  7: `want` for the agent browser's process, which runs once a browser is wanted here (core/agentBrowserLink.ts). */
+export const HARNESSD_PROTOCOL = 7
 
 /** The command a bundle's master answers its probe on, and what it answers. */
 export const PROBE_COMMAND = '__harnessd-probe'

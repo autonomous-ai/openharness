@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from '../leads.test-support.js'
 import * as store from '../parts/index.js'
 import { groupView, readerView } from './views.js'
-import { projectLightGroup, lightSelect } from '../parts/lightSelect.js'
-import { recordPulse } from '../pulse.js'
-import { fullSwarm, NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
+import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
 import type { Actor, Conversation } from '../model.js'
 
 const R = 9_000
@@ -17,7 +15,7 @@ function scene() {
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const peerGeneration = state.people.find(p => p.id === peer.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peer.userId, generation: peerGeneration }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'agent-chat', audience: { people: [{ id: peer.userId, generation: peerGeneration }] } })
     const worker = state.agents.find(a => a.id === s.worker)!
     worker.downNamed = 'named'
     worker.limitedUntil = new Date(NOW - MINUTE).toISOString()
@@ -34,15 +32,6 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('reader view of the parts (design 4.1, 4.3)', () => {
-  // Task #3818 (Desktop's ask, #3820): the head always says how many Buddies a person may have, so an app tells a backend that
-  // makes several from an older one, which sends none.
-  it('always sends the Swarm\'s Buddy cap: its owner\'s number, else the default', () => {
-    const { s } = scene()
-    const head = (state: typeof s.state) => readerView(store.split(state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, {}).parts.head.data
-    expect(head(s.state).buddyCap).toBe(5)
-    expect(head({ ...s.state, buddyCap: 3 }).buddyCap).toBe(3)
-  })
-
   it('sends the head without owner-only and internal fields, and projects without their progress', () => {
     const { parts } = scene()
     const { head } = readerView(parts, peer, NOW, {}).parts
@@ -64,12 +53,11 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(keys(readerView(parts, peer, NOW, {}).parts.groups)).not.toContain(s.secretGroup)
   })
 
-  it('keeps a Buddy chat from every reader but its owner, the Lead and the Swarm owner included, and a closed Chat with PM from all', () => {
+  it('keeps a person\'s 1:1 chat from every reader but its owner, the Lead and the Swarm owner included, and a closed Chat with PM from all', () => {
     const { s, parts, privateId } = scene()
     const groups = (actor: Actor, from = parts) => keys(readerView(from, actor, NOW, {}).parts.groups)
     expect(groups(peer)).toContain(privateId)
     for (const reader of [agentActor(s.lead), owner, outsider, agentActor(s.worker)]) expect(groups(reader)).not.toContain(privateId)
-    expect(readerView(parts, peer, NOW, {}).parts.groups.find(g => g.key === privateId)!.data).toMatchObject({ buddyOwnerId: peer.userId })
     s.edit(state => { delete state.conversations.find(c => c.id === privateId)!.kind })
     const closed = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     for (const reader of [peer, agentActor(s.lead), owner]) expect(groups(reader, closed)).not.toContain(privateId)
@@ -111,13 +99,6 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
       const view = readerView(parts, actor, NOW, {})
       expect(keys(view.parts.groups)).not.toContain('old-leads')
       expect(view.parts.head.data).not.toHaveProperty('leadsConversationId')
-    }
-  })
-
-  it('says to every reader that this server takes New session in a thread reply', () => {
-    const { s, parts } = scene()
-    for (const actor of [owner, peer, agentActor(s.worker)]) {
-      expect(readerView(parts, actor, NOW, {}).derived).toMatchObject({ threadSessions: true, sessionsFromChat: true })
     }
   })
 
@@ -263,113 +244,26 @@ describe('instructions in the reader\'s view (project instructions, phase 2)', (
   })
 })
 
-// Task #3384: the board's pulse is cross-part and timed, so it goes in `derived`, for each project the reader sees; what it is
-// counted from (a conversation's owed asks, a project's idle mark) is bookkeeping no reader gets.
-describe('the pulse on the read', () => {
-  it('is derived for each project the reader sees, never from a part', () => {
+// Swarm v4 keeps no pulse (2026-11-10): a task is the project's GitHub issue. A project chat stored before it may still hold its
+// last pulse, the asks the PM owed and a task's status line: a reader gets none of them, and no pulse is derived.
+describe('a pulse stored before Swarm v4', () => {
+  it('is read by nobody: the read derives none, and the chat sends neither it nor its owed asks', () => {
     const { s } = scene()
     s.edit(state => {
-      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
-      recordPulse(state, NOW - MINUTE)
+      Object.assign(state.conversations.find(c => c.id === 'lead')!, {
+        owed: [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }],
+        pulse: { pmId: null, asks: { count: 1, oldestAt: NOW - MINUTE, personId: peer.userId, list: [] }, working: { count: 0, crew: 0, agentIds: [] },
+          nextUp: { count: 0, conversationIds: [] }, lost: { count: 0, since: null, conversationIds: [] }, held: { count: 0, withoutReason: 0, list: [] },
+          idleSince: null, redAt: { asks: NOW, idle: null, lost: null, held: null }, limits: { askMinutes: 5, idleMinutes: 10, lostMinutes: 10 } },
+        statusLine: { text: 'Fix login: building', since: NOW - MINUTE } })
     })
     const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const view = readerView(parts, peer, NOW, {})
-    const pilot = view.parts.head.data.projects!.find(p => p.name === 'Pilot')!
-    expect(view.derived.pulse?.[pilot.id]?.asks).toMatchObject({ count: 1, oldestAt: NOW - MINUTE, personId: peer.userId })
-    expect(Object.keys(view.derived.pulse ?? {})).toEqual(view.parts.head.data.projects!.map(p => p.id))
-    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('owed')
-    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('pulse')
-    const owners = readerView(parts, owner, NOW, {})
-    expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
-  })
-
-  // River, on ReviewPulse2's review of #3209: the pulse's lists name conversations, so a reader gets only those they read; a
-  // Buddy reads only its person's own, so it gets the counts alone (they are its project's totals, which it may read).
-  it('names only conversations the reader may read: a Buddy gets the counts without the lists', () => {
-    const s = fullSwarm()
-    s.edit(state => {
-      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
-      recordPulse(state, NOW - MINUTE)
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const pulseFor = (actor: Actor) => Object.values(readerView(parts, actor, NOW, {}).derived.pulse ?? {})[0]!
-    expect(pulseFor(peer).asks.list).toHaveLength(1)
-    const buddy = pulseFor(agentActor(s.buddy))
-    expect(buddy.asks).toMatchObject({ count: 1, list: [] })
-    expect([buddy.nextUp.conversationIds, buddy.lost.conversationIds, buddy.held.list, buddy.working.agentIds]).toEqual([[], [], [], []])
-    expect(buddy.nextUp.count).toBe(pulseFor(peer).nextUp.count)
-  })
-
-  // Hugo's review of #3209: a change poll reads the light base (parts/light.ts: the project chats and running work, light
-  // fields only), so a pulse derived from it lost the asks and Next up the first full read showed.
-  it('is the same from a change poll\'s light base as from a full read', () => {
-    const { s } = scene()
-    s.edit(state => {
-      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
-      recordPulse(state, NOW - MINUTE)
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const light = { ...parts, ...lightSelect({ ...parts, groups: parts.groups.map(projectLightGroup) }, { groups: 'working' }), machines: parts.machines }
-    const full = readerView(parts, peer, NOW, {}).derived.pulse!
-    const pilot = Object.keys(full)[0]!
-    expect(full[pilot]!.asks.count).toBe(1)
-    expect(full[pilot]!.nextUp.count).toBeGreaterThan(0)
-    expect(readerView(light as never, peer, NOW, {}).derived.pulse).toEqual(full)
-  })
-})
-
-// Task #3384: the board's pulse is cross-part and timed, so it goes in `derived`, for each project the reader sees; what it is
-// counted from (a conversation's owed asks, a project's idle mark) is bookkeeping no reader gets.
-describe('the pulse on the read', () => {
-  it('is derived for each project the reader sees, never from a part', () => {
-    const { s } = scene()
-    s.edit(state => {
-      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
-      recordPulse(state, NOW - MINUTE)
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const view = readerView(parts, peer, NOW, {})
-    const pilot = view.parts.head.data.projects!.find(p => p.name === 'Pilot')!
-    expect(view.derived.pulse?.[pilot.id]?.asks).toMatchObject({ count: 1, oldestAt: NOW - MINUTE, personId: peer.userId })
-    expect(Object.keys(view.derived.pulse ?? {})).toEqual(view.parts.head.data.projects!.map(p => p.id))
-    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('owed')
-    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('pulse')
-    const owners = readerView(parts, owner, NOW, {})
-    expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
-  })
-
-  // River, on ReviewPulse2's review of #3209: the pulse's lists name conversations, so a reader gets only those they read; a
-  // Buddy reads only its person's own, so it gets the counts alone (they are its project's totals, which it may read).
-  it('names only conversations the reader may read: a Buddy gets the counts without the lists', () => {
-    const s = fullSwarm()
-    s.edit(state => {
-      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
-      recordPulse(state, NOW - MINUTE)
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const pulseFor = (actor: Actor) => Object.values(readerView(parts, actor, NOW, {}).derived.pulse ?? {})[0]!
-    expect(pulseFor(peer).asks.list).toHaveLength(1)
-    const buddy = pulseFor(agentActor(s.buddy))
-    expect(buddy.asks).toMatchObject({ count: 1, list: [] })
-    expect([buddy.nextUp.conversationIds, buddy.lost.conversationIds, buddy.held.list, buddy.working.agentIds]).toEqual([[], [], [], []])
-    expect(buddy.nextUp.count).toBe(pulseFor(peer).nextUp.count)
-  })
-
-  // Hugo's review of #3209: a change poll reads the light base (parts/light.ts: the project chats and running work, light
-  // fields only), so a pulse derived from it lost the asks and Next up the first full read showed.
-  it('is the same from a change poll\'s light base as from a full read', () => {
-    const { s } = scene()
-    s.edit(state => {
-      state.conversations.find(c => c.id === 'lead')!.owed = [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }]
-      recordPulse(state, NOW - MINUTE)
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const light = { ...parts, ...lightSelect({ ...parts, groups: parts.groups.map(projectLightGroup) }, { groups: 'working' }), machines: parts.machines }
-    const full = readerView(parts, peer, NOW, {}).derived.pulse!
-    const pilot = Object.keys(full)[0]!
-    expect(full[pilot]!.asks.count).toBe(1)
-    expect(full[pilot]!.nextUp.count).toBeGreaterThan(0)
-    expect(readerView(light as never, peer, NOW, {}).derived.pulse).toEqual(full)
+    for (const actor of [owner, peer]) {
+      const view = readerView(parts, actor, NOW, {})
+      expect(view.derived).not.toHaveProperty('pulse')
+      const chat = view.parts.groups.find(g => g.key === 'lead')!.data
+      for (const field of ['owed', 'pulse', 'statusLine']) expect(chat, field).not.toHaveProperty(field)
+    }
   })
 })
 

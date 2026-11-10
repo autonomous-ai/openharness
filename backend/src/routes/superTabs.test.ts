@@ -246,6 +246,15 @@ describe('the retired reads', () => {
       body: { success: false, error: { code: 'REMINDERS_RETIRED', message: 'Reminders are gone. Nothing was set.' } } })
   })
 
+  // Personal tasks (2026-11-10): an older Desktop's and phone's own tasks are the project's GitHub issues now.
+  it('answers an older client\'s personal tasks read with none, a page or not, and reads nothing', async () => {
+    for (const url of ['/api/super-tabs/tab-1/personal-tasks', '/api/super-tabs/tab-2/personal-tasks?before=c2VlbjoxMjM']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200,
+        body: { success: true, data: { approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null } } })
+    }
+  })
+
   // Proposals go too (S9): an older Desktop's Tasks view reads a project's.
   it('answers an older client\'s proposals read with none, with each query it sent, and reads nothing', async () => {
     for (const url of ['/api/super-tabs/tab-1/proposals?projectId=app', '/api/super-tabs/tab-2/proposals?projectId=lead', '/api/super-tabs/tab-1/proposals']) {

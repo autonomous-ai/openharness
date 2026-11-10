@@ -97,7 +97,6 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/sharing', `${t}/sharing`, { operationId: op(), revision: 0, access: { mode: 'link', role: 'viewer' } }),
     json('GET', 'GET /api/super-tabs/:tabId/routing-policy', `${t}/routing-policy`),
     json('GET', 'GET /api/super-tabs/:tabId/groups', `${t}/groups?dormant=1&projectId=${project}`),
-    json('GET', 'GET /api/super-tabs/:tabId/personal-tasks', `${t}/personal-tasks`),
     json('GET', 'GET /api/super-tabs/:tabId/groups/:conversationId', `${t}/groups/${chat}`),
     json('POST', 'POST /api/super-tabs/:tabId/join', `${t}/join`, { operationId: op(), token: 'a'.repeat(43) }),
     json('POST', 'POST /api/super-tabs/:tabId/join/preview', `${t}/join/preview`, { token: 'a'.repeat(43) }),
@@ -181,13 +180,12 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     }
   })
 
-  it('answers a deleted Swarm alike on every route, to its owner and members too, for its chats, Buddy chat and private project', async () => {
+  it('answers a deleted Swarm alike on every route, to its owner and members too, for its chats and private project', async () => {
     const f = await swarm()
     const execute = (command: Command, as = owner) => store.execute(as, f.tab, { operationId: randomUUID(), command })
-    const buddyChat = String((await execute({ type: 'buddy.chat' }, member)).result.conversationId)
     await execute({ type: 'swarm.delete', name: 'Not available' })
     const missing = calls(MISSING, 'lead', 'lead')
-    for (const [chat, project] of [['lead', 'lead'], [buddyChat, 'lead'], [f.privateChat, f.privateProject]] as const) {
+    for (const [chat, project] of [['lead', 'lead'], [f.privateChat, f.privateProject]] as const) {
       for (const [i, call] of calls(f.tab, chat, project).entries()) {
         const cases = { owner: await answer(call, owner), member: await answer(call, member), outsider: await answer(call, outsider), missing: await answer(missing[i]!, owner) }
         const expected = /\/github\/approve$|\/github\/repository$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }

@@ -49,8 +49,7 @@ describe('org-wide weekly team play', () => {
 
   it('counts visible own-account agents once, with no agent or lending points', () => {
     const { state, agent, read } = fixture()
-    state.agents = [agent('regular'), agent('other', { projectId: 'other' }),
-      agent('session', { buddySession: { thread: 'thread', from: 1 } }), agent('old', { membershipGeneration: 'former' })]
+    state.agents = [agent('regular'), agent('other', { projectId: 'other' }), agent('old', { membershipGeneration: 'former' })]
     state.machines = [{ machineId: 'mac', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g',
       cwd: '/repo', scope: 'swarm', engines: ['codex'], maxAgents: 8, paused: false, lent: [{ week: WEEK, busyMs: 100 * 3_600_000 }] }]
     const view = read([], ['lead'])

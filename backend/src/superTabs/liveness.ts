@@ -1,19 +1,17 @@
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
-import { failedSessionStart } from './buddySessions.js'
 import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPickupSuffix, REFUSED_INFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
-import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
+import { MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
-import { staleModelRequests, staleSwitches } from './tidy.js'
+import { staleSwitches } from './tidy.js'
 import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
-import { endedReply } from './taskLine.js'
 import { handed, pickUp, unclaimedReason } from './handed.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
@@ -220,9 +218,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
     recipients: [], text: wake, source }).map(row => reachable(state, row))),
   reachable(state, { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
-    text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }),
-  // And its project chat's thread says Stuck, as no command saw the loss (task #2693).
-  ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
+    text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` })]
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
@@ -244,16 +240,6 @@ export function judgedMachines(before: SuperTabState, state: SuperTabState, rows
   return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
 }
 
-/** A Buddy chat has no Lead: its owner reads why their Buddy did not start, written as theirs and sent to no one. */
-function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
-  const owner = state.people.find(p => p.id === start.request.buddyOf!.personId && p.generation === start.request.buddyOf!.generation)
-  if (!owner || !state.conversations.some(c => c.id === start.request.conversationId)) return []
-  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
-    author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
-    // Their own Buddy on a machine of the Swarm: the reason names only that machine, so its owner reads it whole.
-    text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
-}
-
 /** A Product Manager's start that stopped trying ([text], leadStart.ts), said once as a system row of its project's
  *  conversation, written under the person who asked for it. Nothing while
  *  it still waits for a machine. */
@@ -271,16 +257,9 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
  *  removed confidential session whose data is not deleted say so once; a PM on another account of its machine is moved back to
  *  the default one (pmAccount.ts). Swarm v4 loses no task and nudges no worker. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...failStalledStarts(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now), ...pmsToDefaultAccount(state, now)]
-  // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
-  dropIdleBuddyMachines(state, now)
-  return drafts
+  return [...failStalledStarts(state, now), ...staleSwitches(state, now), ...pmsToDefaultAccount(state, now)]
 }
 
-/** What a project's conversation heard, before Harness Team accounts went, of a removed confidential session still held on
- *  [machine]: written by nothing now; store.ts still hides the machine of the stored ones from a Buddy. */
-export const unpurgedNotice = (machine: string) =>
-  `The saved session of a removed agent that held people's private chats, on ${machine}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`
 
 
 
@@ -317,7 +296,7 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
     return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
   }
   // Only unfinished starts are loaded, with those that ended in this same write.
-  const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
+  const start = state.starts?.findLast(s => s.request.conversationId === group.id)
   if (start && !start.harnessId && !start.error) {
     if (start.dispatched) return { state: 'waiting', why: 'starting', since: start.dispatchedAt ?? now }
     // A start from before requestedAt runs from when it was first recorded queued.
@@ -356,24 +335,18 @@ const sameState = (a: TaskLiveness | undefined, b: TaskLiveness | undefined) => 
 
 
 
-/** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
- *  host from before Buddies never sees one (read/hostRows.ts). */
-export const BUDDY_PICKUP_MS = 5 * 60_000
+/** A Product Manager's start its machine has not taken this long after it was asked for, while that machine reports, has
+ *  failed: a host from before PM starts never sees one (read/hostRows.ts). */
+export const PM_PICKUP_MS = 5 * 60_000
 
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
-    if ((start.request.buddyOf || start.request.leadFor) && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
-      && now - start.requestedAt > BUDDY_PICKUP_MS) {
+    if (start.request.leadFor && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+      && now - start.requestedAt > PM_PICKUP_MS) {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
-      if (start.request.leadFor) {
-        start.error = `${machineName(state, start.request.machineId)}${leadPickupSuffix(start.request.name)}`
-        return leadNotice(state, start, leadStartFailed(state, start, start.error))
-      }
-      start.error = start.request.buddySession ? `${machineName(state, start.request.machineId)} did not start this session.`
-        : `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
-      // A thread session's start ends through its own path: its thread says why, never the main chat (buddySessions.ts).
-      return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
+      start.error = `${machineName(state, start.request.machineId)}${leadPickupSuffix(start.request.name)}`
+      return leadNotice(state, start, leadStartFailed(state, start, start.error))
     }
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
     // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
@@ -404,12 +377,11 @@ export function failRefusedStarts(state: SuperTabState, machineId: string, now: 
   })
 }
 
-/** Who hears that [start] failed, and what they read: its Lead, its Buddy's person, or its task's coordinator and the agent
+/** Who hears that [start] failed, and what they read: its Lead, or its task's coordinator and the agent
  *  that made it. [suspended]: the line saying its engine is now suspended there, if this failure suspended it. */
 function failedStartNotices(state: SuperTabState, start: AgentStart, now: number, suspended: string | null): MessageDraft[] {
   if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error!))
   // Never a lookup that throws: these checks run inside every machine's report.
-  if (start.request.buddyOf) return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
   const group = state.conversations.find(c => c.id === start.request.conversationId)
   // Recorded in this write: once the start has ended, no later poll loads it.
   if (group) recordTaskState(state, group, now)
