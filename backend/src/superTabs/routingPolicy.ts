@@ -1,8 +1,7 @@
 /** The routing policy's shape (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md), kept for older clients
  * (project instructions, phase 4). The tab's routing-policy read serves the built-in policy below, made from the model catalog
  * (catalog.ts), so an older CLI reads the catalog's rows as a policy; an owner's saved policy or tab override is accepted,
- * kept nowhere and never read to route. Only the migration (migration/instructions.ts) still reads a saved one, with
- * effectivePolicy, to write its differences into the project's instructions. */
+ * kept nowhere and never read to route. */
 import { z } from 'zod'
 import { BENCHMARK_PRIORS } from './benchmarkPriors/data.js'
 import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchmarkPriors/priors.js'

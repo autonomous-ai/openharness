@@ -262,12 +262,6 @@ export interface HostAgentRow {
   agent: Agent
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
-  role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
-  /** The role it goes by (instructions.ts roleNameOf). */
-  roleName: string
-  /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
-   *  `hash`): no document yet, so the built-in template. */
-  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
   /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
   owed: { messageId: string; since: number; restartAfterMs: number } | null

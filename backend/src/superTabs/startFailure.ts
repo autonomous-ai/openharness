@@ -3,7 +3,7 @@
  *  2026-10-27), and every member reads the group and its starts (review of #1847). */
 import { actorKey, type Actor, type AgentStart, type Conversation, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
-import { DEFAULT_COORDINATOR_NAME } from './instructions.js'
+import { COORDINATOR_NAME } from './roleNames.js'
 
 export const MACHINE_FAILED = 'Its machine could not prepare or launch it.'
 export const TIMED_OUT = 'Its machine did not start it within 3 minutes.'
@@ -57,7 +57,7 @@ export function publicReason(error: string): string {
 /** The group's notice of a failed start, with the model it asked for (project instructions, phase 4, decision 18): what
  *  happened, never what to do next. Whoever made it, its coordinator ([coordinator], as its project calls it) and its machine's
  *  owner read the raw reason on the start (readsRawReason). */
-export function failureNotice(name: string, error: string, model?: string, coordinator = DEFAULT_COORDINATOR_NAME): string {
+export function failureNotice(name: string, error: string, model?: string, coordinator = COORDINATOR_NAME): string {
   const reason = publicReason(error)
   return `Could not start ${name}${model ? ` on ${model}` : ''}: ${reason[0]!.toLowerCase()}${reason.slice(1)}`
     + (reason === MACHINE_FAILED ? ` Whoever started it, the ${coordinator} and the machine owner can read why.` : '')

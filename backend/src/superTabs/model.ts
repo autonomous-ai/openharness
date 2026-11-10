@@ -8,7 +8,6 @@ import { personView, withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
-import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
@@ -583,8 +582,8 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
-  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
-   *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
+  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; only an agent's post
+   *  in its 1:1 chat tells its person's phone (store.ts tellPhones). */
   post?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
@@ -703,12 +702,8 @@ export interface CommandEffects {
   /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
    *  attempt row as a builder's own done does. */
   closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
-  /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
-  instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
   projectRules?: import('./policy.js').RulesWrite
-  /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
-  notes?: import('./instructions.js').NotesWrite
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -874,8 +869,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
   // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
-  // It starts on a copy of the built-in instructions, which the store writes beside it (store.ts create).
-  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default', ...FIRST_INSTRUCTIONS }]
+  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
   // Swarm as it is, and the owner's first share or run in Your models sets the models up then.

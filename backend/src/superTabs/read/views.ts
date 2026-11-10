@@ -10,7 +10,7 @@ import { availableSlots, slotCounter, type ContributedMachine } from '../machine
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
-import { coordinatorNameOf, roleNameOf } from '../instructions.js'
+import { roleNameOf } from '../roleNames.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
 import { personView, withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
@@ -79,9 +79,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
-  // is the server's bookkeeping: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // The progress is the server's bookkeeping: no reader shows it.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   return {

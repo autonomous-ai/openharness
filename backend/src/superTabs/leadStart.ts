@@ -7,7 +7,7 @@ import { admitMachineStart, contributedEngines, failTeamWork, machineContributio
 import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
-import { coordinatorNameOf } from './instructions.js'
+import { COORDINATOR_NAME } from './roleNames.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
@@ -62,7 +62,7 @@ function admitLead(state: SuperTabState, project: SwarmProject, pool: Contribute
   }
   admitMachineStart(state, start, context.now, undefined, project)
   if (!pool.observation?.capabilities?.includes(LEAD_CAPABILITY)) {
-    fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${coordinatorNameOf(project)} there.`, 409)
+    fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${COORDINATOR_NAME} there.`, 409)
   }
 }
 
@@ -77,7 +77,7 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
   const startIn = (pool: ContributedMachine): AgentStartRequest => noRepositoryStart(pool, project, { conversationId: project.leadConversationId, machineId: pool.machineId,
-    engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: coordinatorNameOf(project),
+    engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: COORDINATOR_NAME,
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
   // A PM starts only on its person's own computer, as them (task #4120, the PM's ruling): the person starting it is
   // [leadFor]'s, else the project's owner.
@@ -125,7 +125,7 @@ export function leadOvertaken(state: SuperTabState, start: AgentStart, home: Con
   const placement = placementOf(state, start)
   const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
   if (placement) delete project.lead
-  const name = coordinatorNameOf(project)
+  const name = COORDINATOR_NAME
   const reason = `This project already has ${holder.displayName ?? holder.name} as its ${name}.`
   return { reason, text: `${name} started on ${machine ?? 'its machine'}, but this project already has ${holder.displayName ?? holder.name} as its ${name}, so it did not join.`,
     source: machine ? { kind: 'system', machine } : { kind: 'system' } }
@@ -139,7 +139,7 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   if (placement) placement.status = 'started'
   const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
   const project = start.request.leadFor && projectsOf(state).find(p => p.id === start.request.leadFor!.projectId)
-  const started = `${project ? coordinatorNameOf(project) : start.request.name} started on ${machine ?? 'its machine'}.`
+  const started = `${project ? COORDINATOR_NAME : start.request.name} started on ${machine ?? 'its machine'}.`
   const ran = state.agents.find(a => a.id === agentId)?.configuration
   const other = ran && otherThanAsked(start.request, ran)
   return { text: other ? `${started} ${other}` : started, source: machine ? { kind: 'system', machine } : { kind: 'system' } }
