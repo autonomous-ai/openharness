@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { removePath } from './removePath.js'
+import { removeLink, removePath } from './removePath.js'
 
 let root = ''
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'remove-path-')) })
@@ -37,4 +37,23 @@ it('removes a folder with what is in it, a file, and nothing when nothing is the
   removePath(file)
   removePath(join(root, 'never'))
   expect([there(folder), there(file)]).toEqual([false, false])
+})
+
+it('removes only a link or a file where a link is kept, and refuses a real folder there', () => {
+  const link = join(root, 'tool'), folder = join(root, 'bin-folder')
+  symlinkSync(join(root, 'gone'), link)
+  removeLink(link)
+  expect(there(link)).toBe(false)
+  mkdirSync(join(folder, 'inner'), { recursive: true })
+  expect(() => removeLink(folder)).toThrow()
+  expect(existsSync(join(folder, 'inner'))).toBe(true)
+  removeLink(join(root, 'never'))
+})
+
+it('takes a path under a file as nothing there', () => {
+  const file = join(root, 'file')
+  writeFileSync(file, 'f')
+  removePath(join(file, 'under'))
+  removeLink(join(file, 'under'))
+  expect(there(file)).toBe(true)
 })
