@@ -45,9 +45,10 @@ const upload = async (tab: string, bytes: Uint8Array, name = 'me.png', mime = 'i
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const image = (size: number, head: number[] = PNG) => { const bytes = new Uint8Array(size).map((_, i) => i % 251); bytes.set(head); return bytes }
 // A picture already set, as the avatar commands set them before they were retired (2026-11-09): nothing sets one now, so the
-// object goes in the store and its key on the member's part, which is what a read finds.
-const keepPicture = async (bucket: MemoryAttachmentStore, tab: string, bytes: Uint8Array = image(64)) => {
-  const objectKey = `avatars/${tab}/${randomUUID().replaceAll('-', '')}/avatar`
+// object goes in the store, in the folder its links are signed for (avatarLinks.ts), and its key on the member's part, which is
+// what a read finds. The stores here read no cache, so a part written straight is what the next read sees.
+const keepPicture = async (bucket: MemoryAttachmentStore, tab: string, bytes: Uint8Array = image(64), folder = 'super-tabs') => {
+  const objectKey = `${folder}/${tab}/${randomUUID().replaceAll('-', '')}/avatar`
   await bucket.put(objectKey, { name: 'avatar', mime: 'image/png' }, Readable.from([Buffer.from(bytes)]), 1024 * 1024)
   return objectKey
 }
@@ -70,7 +71,7 @@ beforeAll(async () => {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
-  store = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures })
+  store = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures }, { readCache: null })
   for (const user of [owner, peer, outsider]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
   // The owner's own machine runs the agents, so acting as one needs no machine share.
@@ -186,7 +187,7 @@ describe('a picture already set, in the attachments bucket', () => {
   let reads: FastifyInstance
   beforeAll(async () => {
     shared = new SuperTabStore(db, Date.now, { store: bucket, prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
-      avatars: new SharedAvatarStore(bucket), avatarPrefix: 'avatars' })
+      avatars: new SharedAvatarStore(bucket), avatarPrefix: 'avatars' }, { readCache: null })
     reads = Fastify()
     reads.setErrorHandler(errorHandler)
     reads.addHook('onRequest', async request => { request.user = [owner, peer].find(u => `Bearer ${u.sub}` === request.headers.authorization) })
@@ -203,14 +204,14 @@ describe('a picture already set, in the attachments bucket', () => {
     const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
     const invitation = await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } })
     await shared.execute(peer, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    const first = await keepPicture(bucket, tab, image(64))
+    const first = await keepPicture(bucket, tab, image(64), 'avatars')
     await setPicture(tab, owner.sub, first)
     expect(first).toMatch(new RegExp(`^avatars/${tab}/[0-9a-f]{32}/avatar$`))
     const firstLink = (await linkFor(tab))!
     expect(firstLink).toMatch(new RegExp(`^https://storage\\.memory\\.test/${first}\\?expires=\\d+&signature=`))
     expect(bucket.open(firstLink)).toEqual(Buffer.from(image(64)))
     expect(bucket.open(firstLink, Number(new URL(firstLink).searchParams.get('expires')))).toBeNull()
-    const second = await keepPicture(bucket, tab, image(96))
+    const second = await keepPicture(bucket, tab, image(96), 'avatars')
     await setPicture(tab, owner.sub, second)
     expect(bucket.open((await linkFor(tab))!)).toEqual(Buffer.from(image(96)))
   })
