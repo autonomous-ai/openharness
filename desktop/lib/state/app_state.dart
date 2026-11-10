@@ -3077,7 +3077,7 @@ class AppNotifier extends ChangeNotifier {
   /// Each machine's open views of an agent's browser, which its `agent_browser_*` frames and kind-8 bytes reach.
   final _browserStreams = <String, Set<BrowserStream>>{};
 
-  /// A view of [agentId]'s browser on [machineId], not yet opened, routed until it closes.
+  /// A view of [agentId]'s browser on [machineId], not yet opened, routed until it closes and its open is answered.
   BrowserStream browserStream(String machineId, String agentId) {
     final stream = BrowserStream(
       machineId: machineId,
@@ -3087,7 +3087,7 @@ class AppNotifier extends ChangeNotifier {
     );
     final streams = _browserStreams.putIfAbsent(machineId, () => {})
       ..add(stream);
-    stream.closed.whenComplete(() {
+    stream.settled.whenComplete(() {
       streams.remove(stream);
       if (streams.isEmpty) _browserStreams.remove(machineId);
     });
@@ -13229,15 +13229,16 @@ class AppNotifier extends ChangeNotifier {
   /// scheduling turn to the socket's incoming queue. Matching frames enter the
   /// session's ordered renderer queue synchronously, regardless of tab order.
   Future<void> _handleTerminalBinary(String machineId, Uint8List raw) async {
-    // An agent browser's bytes go to its stream alone, by their header, without visiting the terminals.
-    final browser = peekTerminalLocal(raw);
-    if (browser?.kind == TerminalBinaryKind.browser) {
+    // An agent browser's bytes go to its stream alone, without visiting the terminals. Only the kind byte is read
+    // first, so a terminal frame builds nothing here; one that does not decode falls through to be reported below.
+    if (raw.length > 5 && raw[5] == TerminalBinaryKind.browser.code) {
       final frame = decodeTerminalLocal(raw);
-      if (frame == null) return;
-      for (final stream in [...?_browserStreams[machineId]]) {
-        stream.handleBinary(frame);
+      if (frame != null) {
+        for (final stream in [...?_browserStreams[machineId]]) {
+          stream.handleBinary(frame);
+        }
+        return;
       }
-      return;
     }
     final targets = _terminalSessionsFor(machineId).toList();
     if (targets.isEmpty) return;

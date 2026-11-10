@@ -267,7 +267,10 @@ void main() {
 
   testWidgets('podman_install_failed shows Retry on this computer only, and '
       'Retry calls agentBrowserSetup', (tester) async {
-    const failed = AgentBrowser(state: 'failed', error: 'podman_install_failed');
+    const failed = AgentBrowser(
+      state: 'failed',
+      error: 'podman_install_failed',
+    );
     await show(tester, failed);
     expect(find.text('Podman didn\'t install'), findsOneWidget);
     await tester.tap(find.text('Retry'));
@@ -344,22 +347,36 @@ void main() {
   });
 
   testWidgets('a stream closed with reason route reconnects by itself once, '
-      'with no message; a second route close in a row shows "Browser lost '
-      'its connection" with Retry', (tester) async {
+      'with no message; a reconnect that loses its route too shows "Browser '
+      'lost its connection" with Retry', (tester) async {
     await showOpen(tester);
     await closeWith(tester, 'route');
     expect(app.streams, hasLength(2));
     expect(find.text('Browser lost its connection'), findsNothing);
-    app.answer();
+    // The reconnect's open loses its route before the machine answers.
+    app.streams.last.stream.connectionLost();
     await tester.pump();
     await tester.pump();
-    await closeWith(tester, 'route');
     expect(app.streams, hasLength(2));
     expect(find.text('Browser lost its connection'), findsOneWidget);
     await tester.tap(find.text('Retry'));
     await tester.pump();
     await tester.pump();
     expect(app.streams, hasLength(3));
+  });
+
+  testWidgets('a reconnect that reaches a working stream resets the route '
+      'count: the next route close reconnects again', (tester) async {
+    await showOpen(tester);
+    for (var drop = 1; drop <= 3; drop++) {
+      await closeWith(tester, 'route');
+      expect(find.text('Browser lost its connection'), findsNothing);
+      expect(app.streams, hasLength(drop + 1));
+      app.answer();
+      await tester.pump();
+      await tester.pump();
+      expect(key('browser-screen'), findsOneWidget);
+    }
   });
 
   testWidgets('an open refused with VIEWER_LIMIT shows "Browser is open in '
@@ -403,6 +420,25 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(app.streams, hasLength(3));
+  });
+
+  testWidgets('a close with reason agent while the frame stays ready times '
+      'out to "Browser stopped" with Retry, which reconnects', (tester) async {
+    await showOpen(tester);
+    await closeWith(tester, 'agent');
+    expect(find.text('Starting browser…'), findsOneWidget);
+    await tester.pump(BrowserStream.openTimeout);
+    await tester.pump();
+    expect(find.text('Starting browser…'), findsNothing);
+    expect(find.text('Browser stopped'), findsOneWidget);
+    expect(app.streams, hasLength(1));
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    await tester.pump();
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
   });
 
   testWidgets('Paste sends the clipboard\'s text to the browser, and the gear '

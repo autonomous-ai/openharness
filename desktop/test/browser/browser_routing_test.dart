@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/browser/browser_stream.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
@@ -30,7 +32,10 @@ class _Daemon extends WsConn {
   bool get isReady => true;
 
   @override
-  Future<bool> sendTerminalFrame(String type, Map<String, dynamic> payload) async {
+  Future<bool> sendTerminalFrame(
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
     frames.add((type, Map.of(payload)));
     return true;
   }
@@ -79,7 +84,11 @@ void main() {
     final stream = await open('m', _id);
     final got = <int>[];
     stream.bytes.listen(got.addAll);
-    for (final (streamId, bytes) in [(_id, [1, 2]), (_other, [9]), (_id, [3])]) {
+    for (final (streamId, bytes) in [
+      (_id, [1, 2]),
+      (_other, [9]),
+      (_id, [3]),
+    ]) {
       await app.handleTerminalBinaryForTest(
         'm',
         encodeTerminalLocal(
@@ -125,5 +134,64 @@ void main() {
     app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
     expect(await here.closed, 'route');
     expect(there.isClosed, isFalse);
+  });
+
+  test('a stream closed before its open is answered still closes what the '
+      'machine opens, also after the open timed out', () async {
+    final stream = app.browserStream('m', 'a1');
+    final opened = expectLater(
+      stream.open(),
+      throwsA(isA<BrowserStreamError>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+    final request = daemons['m']!.frames.last.$2['requestId'];
+    await stream.close();
+    await app.handleMachineEventForTest('m', {
+      'type': 'agent_browser_open_result',
+      'payload': {'requestId': request, 'streamId': _id},
+    });
+    await opened;
+    expect(daemons['m']!.frames.last.$1, 'agent_browser_close');
+    expect(daemons['m']!.frames.last.$2, {'streamId': _id});
+
+    fakeAsync((async) {
+      final late = app.browserStream('m', 'a1');
+      Object? failure;
+      late.open().catchError((Object e) => failure = e);
+      async.flushMicrotasks();
+      final request = daemons['m']!.frames.last.$2['requestId'];
+      async.elapse(BrowserStream.openTimeout);
+      expect((failure as BrowserStreamError).code, BrowserStreamError.route);
+      late.close();
+      app.handleMachineEventForTest('m', {
+        'type': 'agent_browser_open_result',
+        'payload': {'requestId': request, 'streamId': _other},
+      });
+      async.flushMicrotasks();
+      expect(daemons['m']!.frames.last.$1, 'agent_browser_close');
+      expect(daemons['m']!.frames.last.$2, {'streamId': _other});
+    });
+  });
+
+  test('terminal binary frames pass the browser check without being parsed '
+      '(prints the time for 100k frames)', () async {
+    final frame = encodeTerminalLocal(
+      TerminalBinaryFrame(
+        kind: TerminalBinaryKind.output,
+        streamId: _id,
+        seq: 0,
+        bytes: Uint8List(64),
+        compressed: false,
+      ),
+    )!;
+    for (var i = 0; i < 10000; i++) {
+      await app.handleTerminalBinaryForTest('m', frame);
+    }
+    final clock = Stopwatch()..start();
+    for (var i = 0; i < 100000; i++) {
+      await app.handleTerminalBinaryForTest('m', frame);
+    }
+    // ignore: avoid_print
+    print('100k terminal frames: ${clock.elapsedMilliseconds} ms');
   });
 }

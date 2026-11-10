@@ -56,12 +56,17 @@ class BrowserStream {
   // Buffered until the bridge listens: the server's banner comes right after the open.
   final _bytes = StreamController<Uint8List>();
   final _closed = Completer<String?>();
+  final _settled = Completer<void>();
 
   Stream<Uint8List> get bytes => _bytes.stream;
 
   /// The close reason: `closed` (this end closed it), `agent`, `rate`, `backlog` or `route`.
   Future<String?> get closed => _closed.future;
   bool get isClosed => _closed.isCompleted;
+
+  /// Closed, with no open still waiting for the machine's answer. Until then its frames must still reach it: an
+  /// answer that comes after the close is what lets it close the exec the machine started.
+  Future<void> get settled => _settled.future;
 
   Future<void> open() async {
     final opening = _opening = Completer<void>();
@@ -71,15 +76,21 @@ class BrowserStream {
       'requestId': requestId,
       'agentId': agentId,
     });
-    if (!sent) _failOpen(BrowserStreamError.route);
-    return opening.future.timeout(
-      openTimeout,
-      onTimeout: () {
-        appLog.warn('browser', 'open on $machineId was not answered');
-        _requestId = null;
-        throw const BrowserStreamError(BrowserStreamError.route);
-      },
-    );
+    if (!sent) {
+      // It never reached the machine, so no answer will come.
+      _requestId = null;
+      _finish('route');
+    }
+    // Unanswered, it closes, and still waits for the answer: a late one closes what it opened.
+    final timeout = Timer(openTimeout, () {
+      appLog.warn('browser', 'open on $machineId was not answered');
+      _finish('route');
+    });
+    try {
+      await opening.future;
+    } finally {
+      timeout.cancel();
+    }
   }
 
   void _failOpen(String code) {
@@ -94,21 +105,25 @@ class BrowserStream {
       case 'agent_browser_open_result':
         if (_requestId == null || payload['requestId'] != _requestId) return;
         _requestId = null;
-        final error = payload['error'], id = payload['streamId'];
-        if (error is String) return _failOpen(error);
-        if (id is! String) return _failOpen(BrowserStreamError.route);
-        streamId = id;
-        if (isClosed) {
-          // Closed while it opened: the machine's exec ends with it.
-          unawaited(_send('agent_browser_close', {'streamId': id}));
-          return;
-        }
-        _opening?.complete();
+        _answered(payload['error'], payload['streamId']);
+        _settle();
       case 'agent_browser_close':
         if (streamId == null || payload['streamId'] != streamId) return;
         final reason = payload['reason'];
         _finish(reason is String ? reason : 'closed');
     }
+  }
+
+  void _answered(Object? error, Object? id) {
+    if (error is String) return _failOpen(error);
+    if (id is! String) return _failOpen(BrowserStreamError.route);
+    streamId = id;
+    if (isClosed) {
+      // Closed while it opened: the machine's exec ends with it.
+      unawaited(_send('agent_browser_close', {'streamId': id}));
+      return;
+    }
+    _opening?.complete();
   }
 
   void handleBinary(TerminalBinaryFrame frame) {
@@ -162,6 +177,7 @@ class BrowserStream {
   void connectionLost() {
     _requestId = null;
     _finish('route');
+    _settle();
   }
 
   Future<void> close() async {
@@ -179,6 +195,13 @@ class BrowserStream {
     unawaited(_bytes.close());
     if (reason != 'closed') {
       appLog.warn('browser', 'stream on $machineId closed: $reason');
+    }
+    _settle();
+  }
+
+  void _settle() {
+    if (isClosed && _requestId == null && !_settled.isCompleted) {
+      _settled.complete();
     }
   }
 }

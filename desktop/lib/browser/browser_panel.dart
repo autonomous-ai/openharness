@@ -99,8 +99,10 @@ class _BrowserPanelState extends State<BrowserPanel> {
   bool _open = false;
   _Failure? _failure;
 
-  /// The agent frame's browser when the machine said it is not ready: no stream opens until the frame changes.
+  /// The agent frame's browser when the machine said it is not ready: no stream opens until the frame changes, or
+  /// until [_waitEnds] says the browser stopped.
   AgentBrowser? _waiting;
+  Timer? _waitEnds;
   int _routeLosses = 0;
   bool _settings = false;
 
@@ -109,8 +111,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
 
   AppNotifier get _app => widget.app;
   MachineState? get _machine => _app.stateOf(widget.machineId);
-  String get _machineName =>
-      _machine?.machine.displayName ?? widget.machineId;
+  String get _machineName => _machine?.machine.displayName ?? widget.machineId;
 
   AgentBrowser? get _browser => _machine?.agents
       .where((a) => a.id == widget.agentId)
@@ -134,6 +135,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
   @override
   void dispose() {
     _app.removeListener(_sync);
+    _waitEnds?.cancel();
     _end();
     super.dispose();
   }
@@ -143,6 +145,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
     if (!mounted) return;
     final browser = _browser;
     if (_waiting != null && browser != _waiting) _waiting = null;
+    if (_waiting == null) _waitEnds?.cancel();
     final wanted =
         WebPanePanel.webviewAvailable &&
         _online &&
@@ -171,6 +174,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
       return;
     }
     if (!mounted || _bridge != bridge) return;
+    // A working stream: the next route loss is the first in a row again.
+    _routeLosses = 0;
     _app.productMeasurement.agentBrowserOpened();
     unawaited(stream.closed.then((reason) => _closed(bridge, reason)));
     setState(() => _open = true);
@@ -191,9 +196,12 @@ class _BrowserPanelState extends State<BrowserPanel> {
       case 'NOT_OWNER':
         _failure = (line: 'Only its owner can open this browser', retry: false);
       case 'NOT_READY' || 'NO_BROWSER':
-        _waiting = _browser;
+        _wait();
       case BrowserStreamError.page:
-        _failure = (line: 'This computer can\'t show the browser', retry: false);
+        _failure = (
+          line: 'This computer can\'t show the browser',
+          retry: false,
+        );
       default:
         return _lostRoute();
     }
@@ -209,12 +217,29 @@ class _BrowserPanelState extends State<BrowserPanel> {
       case 'rate' || 'backlog':
         _failure = (line: 'Browser is slow here', retry: true);
       case 'agent':
-        _waiting = _browser;
+        _wait();
       default:
         // noVNC closed its own side.
         _failure = (line: 'Browser lost its connection', retry: true);
     }
     _sync();
+  }
+
+  /// Waits for the agent frame's browser to change. A frame that stays ready while no stream opens (the exec alone
+  /// failed) is a stopped browser, with Retry.
+  void _wait() {
+    _waiting = _browser;
+    _waitEnds?.cancel();
+    _waitEnds = Timer(BrowserStream.openTimeout, () {
+      if (!mounted || _waiting == null) return;
+      appLog.warn(
+        'browser',
+        'browser on ${widget.machineId} did not come back',
+      );
+      _waiting = null;
+      _failure = (line: _failed['browser_stopped']!, retry: true);
+      _sync();
+    });
   }
 
   /// The stream's route went away: the next stream takes whatever route there is now, once; twice in a row says so.
@@ -362,7 +387,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
   Widget _failedLine(String? error) {
     final retry = (
       'Retry',
-      () => _ask(() => _app.agentBrowserRetry(widget.machineId, widget.agentId)),
+      () =>
+          _ask(() => _app.agentBrowserRetry(widget.machineId, widget.agentId)),
     );
     return switch (error) {
       'needs_setup' when !widget.thisComputer => _line(
@@ -406,7 +432,11 @@ class _BrowserPanelState extends State<BrowserPanel> {
         mainAxisSize: MainAxisSize.min,
         spacing: DesktopChrome.controlGap,
         children: [
-          Text(line, textAlign: TextAlign.center, style: DesktopChrome.control()),
+          Text(
+            line,
+            textAlign: TextAlign.center,
+            style: DesktopChrome.control(),
+          ),
           if (action case (final label, final onPressed))
             FilledButton(onPressed: onPressed, child: Text(label)),
           if (_refused case final refused?)
