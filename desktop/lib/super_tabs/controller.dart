@@ -2841,15 +2841,6 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
-  /// Whether the reader may write in [group]: in a project on the Board its chat takes only its owner, the Swarm's
-  /// owner and people granted Can chat (#3819); everything else is as today.
-  bool mayChatIn(SuperTabConversation? group) {
-    if (group == null) return true;
-    final project = snapshot?.projectById(group.projectId);
-    if (project == null || project.leadConversationId != group.id) return true;
-    return project.canChat(accountId, swarmOwner: isOwner);
-  }
-
   /// Whether the reader may set P0 and pause or resume any task of [project] (spec "Who may do what on the Board").
   bool maySteer(SuperTabProject project) =>
       project.canSteer(accountId, swarmOwner: isOwner);

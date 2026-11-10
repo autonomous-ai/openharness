@@ -1,12 +1,9 @@
-import 'dart:io';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/super_tabs/actions.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 
-import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
@@ -44,9 +41,6 @@ Future<SuperTabController> _swarm({String account = 'owner'}) async {
 }
 
 void main() {
-  final captureDir = Platform.environment['HARNESS_ROSTER_CAPTURE_DIR'];
-  setUpAll(() => loadCaptureFonts(captureDir));
-
   group('Add agent names the agent', () {
     test('an explicit harness name is sent as it is', () {
       expect(

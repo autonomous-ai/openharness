@@ -19,31 +19,23 @@ Map<String, dynamic> _project([Map<String, dynamic> extra = const {}]) => {
 
 void main() {
   group('a project', () {
-    test('not switched reads as today: no Board mode, everyone who may write may chat, nobody steers but the owner', () {
-      final p = SuperTabProject.fromJson(_project());
-      expect(p.boardMode, isFalse);
-      expect(p.deciderId, isNull);
-      expect(p.canChatIds, isEmpty);
-      expect(p.canChat('tuan'), isTrue);
-      expect(p.canSteer('owner'), isTrue);
-      expect(p.canSteer('tuan'), isFalse);
-    });
+    test(
+      'not switched reads as today: no Board mode, nobody steers but the owner',
+      () {
+        final p = SuperTabProject.fromJson(_project());
+        expect(p.boardMode, isFalse);
+        expect(p.deciderId, isNull);
+        expect(p.canSteer('owner'), isTrue);
+        expect(p.canSteer('tuan'), isFalse);
+      },
+    );
 
-    test('switched: Can chat is the owner, the Swarm owner and the people granted it; the decider steers', () {
+    test('switched: the decider steers', () {
       final p = SuperTabProject.fromJson(
-        _project({
-          'boardMode': true,
-          'canChat': ['dee'],
-          'decider': 'dee',
-        }),
+        _project({'boardMode': true, 'decider': 'dee'}),
       );
       expect(p.boardMode, isTrue);
-      expect(p.canChatIds, ['dee']);
       expect(p.deciderId, 'dee');
-      expect(p.canChat('owner'), isTrue);
-      expect(p.canChat('dee'), isTrue);
-      expect(p.canChat('tuan'), isFalse);
-      expect(p.canChat('tuan', swarmOwner: true), isTrue);
       expect(p.canSteer('dee'), isTrue);
       expect(p.canSteer('tuan'), isFalse);
       expect(p.canSteer('tuan', swarmOwner: true), isTrue);
