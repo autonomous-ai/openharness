@@ -4,7 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
-    // Names the run, whose workers' temporary folders are then its own (vitest.tmpdir.ts), and removes them when it ends.
+    // Gives the run a temporary folder of its own, which its workers' folders go in (vitest.tmpdir.ts).
     globalSetup: ['./src/__fixtures__/vitestRun.ts'],
     setupFiles: ['./vitest.tmpdir.ts', './vitest.setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
