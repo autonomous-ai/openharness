@@ -193,7 +193,7 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
   String? get projectId => _following;
 
   void _follow() {
-    // A chat of no project (the one Buddy) still has models to show in Manage:
+    // A chat of no project (an agent's own) still has models to show in Manage:
     // the read needs some project. It sums them all unless Members has been
     // set to one project, a choice this shared board keeps.
     final snapshot = controller.snapshot;

@@ -389,7 +389,7 @@ class SuperTabLaunch {
     LeadMachine row(String id, Map<String, dynamic> pool) {
       final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
       final observation = part(reading['observation']);
-      // As Add machine and the Buddy picker name it ("Studio", not "Studio.local").
+      // As Add machine names it ("Studio", not "Studio.local").
       final name = superTabMachineName(pool['name'] as String? ?? id);
       final own = pool['contributorId'] == accountId;
       final connected = app.stateOf(id) != null;

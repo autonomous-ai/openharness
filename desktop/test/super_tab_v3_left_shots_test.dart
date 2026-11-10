@@ -59,15 +59,12 @@ void main() {
         if (scene == 'no-agents') {
           server.state['agents'] = <dynamic>[];
         } else {
-          server.state['swarmBuddy'] = true;
           server.state['agents'] = [
-            // The person's one Buddy is of no project, as the server sends it.
+            // The person's own agent is of no project, as the server sends it.
             {
               ...(_agent('buddy', 'Buddy')..remove('projectId')),
-              'buddyScope': 'swarm',
-              'buddyOf': {'personId': 'owner'},
-              'kind': 'buddy',
-              'chatId': 'swarm-buddy-owner',
+              'kind': 'regular',
+              'chatId': 'agent-chat-buddy',
               'myAgent': true,
             },
             {
@@ -91,9 +88,8 @@ void main() {
             },
           ];
           groups.add({
-            ...conversationFixture('swarm-buddy-owner', 'Buddy'),
-            'kind': 'swarm-buddy',
-            'buddyOwnerId': 'owner',
+            ...conversationFixture('agent-chat-buddy', 'Buddy'),
+            'kind': 'agent-chat',
             'agentIds': ['buddy'],
           });
           groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';

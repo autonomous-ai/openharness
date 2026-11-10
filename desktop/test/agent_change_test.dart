@@ -1316,31 +1316,6 @@ void main() {
     expect(connection.creations.single['engine'], 'claude');
   });
 
-  test(
-    'a Buddy keeps its agent, and the refusal says how to use another',
-    () async {
-      // The daemon's refusal speaks of Stop Harness, which is no help to someone changing the agent.
-      final connection = SwitchConnection()
-        ..closeRefusal = {
-          'error': 'BUDDY_PROTECTED',
-          'detail': 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
-          'keptRunning': true,
-        };
-      final app = fixture(connection);
-      addTearDown(app.dispose);
-      await app.addAgentToSwarm('m', 'a0');
-      final pane = app.panes.single;
-      expect(
-        await app.changeAgent('m', 'a0', 'opencode'),
-        'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.',
-      );
-      expect(connection.creations, isEmpty);
-      expect(app.panes.single, same(pane));
-      expect(pane.agentId, 'a0');
-      expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
-    },
-  );
-
   // Dee, 11-01: a Swarm Product Manager's engine is switched from its pane,
   // as any pane's. Its machine lets the stop through only for the switch
   // whose handoff it prepared, so the stop names that switch.
@@ -1804,35 +1779,6 @@ void main() {
         expect(await app.addClaudeAccount('m', 'a0'), isNotNull);
       },
     );
-
-    test('a Swarm Buddy keeps its engine: rows disabled, no change', () async {
-      final connection = ProfileConnection();
-      final app = fixture(connection, sourceEngine: 'claude');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      app.buddyAgentsForTest.add(('m', 'a0'));
-      final search = SwarmSearchController(app, []);
-      addTearDown(search.dispose);
-      search.setQuery('&');
-      search.setAgentSelection('m', 'a0');
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(
-        search.rows.every(
-          (r) => r.detail == 'A Buddy keeps its engine for now',
-        ),
-        isTrue,
-      );
-      expect(search.canSubmit(search.rows.first), isFalse);
-      expect(
-        connection.requests.where((t) => t.endsWith('profiles_list')),
-        isEmpty,
-      );
-      expect(
-        await app.changeAgent('m', 'a0', 'codex'),
-        'A Buddy keeps its engine for now',
-      );
-      expect(connection.creations, isEmpty);
-    });
   });
 
   test('& searches all agents and only submits supported choices for its exact source', () {

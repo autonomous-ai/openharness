@@ -55,16 +55,14 @@ String superTabAgentName(SuperTabController c, SuperTabAgent agent) =>
     c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
 
 /// Who `@` offers in [group]: the people who read it, then its agents,
-/// filtered by [query]. Never the reader. Without [agents] (a thread its own
-/// Buddy session answers, where only that session hears a reply), people
-/// alone. [choose] puts the picked one in the text.
+/// filtered by [query]. Never the reader. [choose] puts the picked one in the
+/// text.
 List<SuperTabComposerChoice> superTabTagChoices(
   SuperTabController c,
   SuperTabConversation group,
   String query, {
   required String Function(String machineId) machineName,
   required void Function(String id, String name) choose,
-  bool agents = true,
 }) {
   final snapshot = c.snapshot;
   if (snapshot == null) return const [];
@@ -75,7 +73,6 @@ List<SuperTabComposerChoice> superTabTagChoices(
     // sent, so nobody else is offered (audit finding 12 of task #4211).
     _ when group.isAgentChat => false,
     SuperTabConversation(:final audience?) => audience.contains(person.id),
-    _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
     _ =>
       project == null ||
           !project.isPrivate ||
@@ -89,17 +86,13 @@ List<SuperTabComposerChoice> superTabTagChoices(
         (person.username.contains(query) ||
             (person.name?.toLowerCase().contains(query) ?? false)),
   );
-  final offered = agents
-      ? snapshot.agents.where(
-          (agent) =>
-              group.agentIds.contains(agent.id) &&
-              // A thread's own session answers only there: nobody tags it.
-              agent.buddySession == null &&
-              '${superTabAgentName(c, agent)} ${agent.engine}'
-                  .toLowerCase()
-                  .contains(query),
-        )
-      : const <SuperTabAgent>[];
+  final offered = snapshot.agents.where(
+    (agent) =>
+        group.agentIds.contains(agent.id) &&
+        '${superTabAgentName(c, agent)} ${agent.engine}'.toLowerCase().contains(
+          query,
+        ),
+  );
   return [
     for (final person in people)
       (

@@ -147,40 +147,6 @@ ConversationServer membersSwarm() {
       'harnessId': 'h-sparky',
       'name': 'Sparky',
       'displayName': 'Sparky',
-      'buddyOf': {'personId': 'peer', 'generation': 'g'},
-    },
-  ];
-  server.leaderboard!['agents'] = [
-    {
-      'agentId': 'lead-agent',
-      'displayName': 'River',
-      'kind': 'pm',
-      'personId': null,
-      'machineId': 'studio',
-      'points': 212,
-      'rank': 1,
-      'shipped': 70,
-    },
-    {
-      'agentId': 'sparky',
-      'displayName': 'Sparky',
-      'kind': 'buddy',
-      'personId': 'peer',
-      'machineId': 'studio',
-      'points': 12,
-      'rank': 2,
-      'shipped': 4,
-    },
-    // Another agent named like one in the list is never taken for it.
-    {
-      'agentId': 'elsewhere',
-      'displayName': 'Luna',
-      'kind': 'buddy',
-      'personId': 'owner',
-      'machineId': 'studio',
-      'points': 88,
-      'rank': 3,
-      'shipped': 3,
     },
   ];
   return server;

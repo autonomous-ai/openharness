@@ -97,7 +97,7 @@ class PersonalLeadStarter extends ChangeNotifier {
     if (!PersonalProjects.of(app).eligible(c)) return false;
     final snapshot = c.snapshot!;
     final group = snapshot.conversation(conversationId);
-    if (group == null || group.archived || group.isBuddyChat) return false;
+    if (group == null || group.archived) return false;
     if (!snapshot.isProjectLead(conversationId)) return false;
     final project = snapshot.projectFor(conversationId);
     return project != null && snapshot.leadOf(project.id) == null;
