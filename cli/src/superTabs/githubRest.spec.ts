@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubReads, githubRest, type GitHubGet } from './githubRest.js'
+import { GitHubReads, githubRest, retryIn, waitWords, type GitHubGet } from './githubRest.js'
 
 describe('GitHub\'s REST API as this computer\'s gh login (githubRest.ts)', () => {
   it('reads the token from gh once, asks with the ETag, and reads the token again after GitHub refuses it', async () => {
@@ -88,3 +88,9 @@ describe('a file of a repository (GitHubReads.file)', () => {
   })
 })
 
+describe('how long a failing GitHub or server is left alone', () => {
+  it('waits 30 seconds, doubling to 15 minutes, and says the wait in words', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 20].map(retryIn)).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000])
+    expect([0, 400, 30_000, 59_700, 90_000, 120_000, 900_000].map(waitWords)).toEqual(['1 s', '1 s', '30 s', '60 s', '2 min', '2 min', '15 min'])
+  })
+})
