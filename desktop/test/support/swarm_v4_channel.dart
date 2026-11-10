@@ -159,7 +159,6 @@ Future<SuperTabController> openSwarmV4(
         body: SuperTabView(
           controller: c,
           app: shown,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           onNewAgent: onNewAgent ?? () {},
@@ -171,7 +170,6 @@ Future<SuperTabController> openSwarmV4(
               shown.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,
           instructions: instructions,
-          board: true,
         ),
       ),
     ),

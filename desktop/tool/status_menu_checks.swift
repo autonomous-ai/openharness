@@ -266,8 +266,7 @@ do {
   status.click(status.item("sessions"))
   try check(emitted.last?.0 == "sessions", "Keymap identifiers preserve the existing Open Harness action")
 
-  // The Swarm section: what needs the person in their Swarms, which the
-  // Swarm sidebar's Notifications row listed before.
+  // The Swarm section: the person's agents that ask them in their Swarms.
   func notice(_ kind: String, _ id: String, _ title: String, swarm: String = "swarm-1",
               name: String = "Pilot") -> [String: Any] {
     ["swarmTabId": swarm, "kind": kind, "id": id, "title": title,
@@ -279,19 +278,19 @@ do {
     status.menu.items.filter { $0.identifier?.rawValue == "openSwarmNotice" &&
       ($0.representedObject as? [String: Any])?["kind"] as? String != "all" }
   }
-  var notices = [notice("decision", "decision-1", "Wren asks you"), notice("mention", "mention-1", "Wren tagged you")]
+  var notices = [notice("chat", "agent-chat-wren", "Wren"), notice("chat", "agent-chat-river", "River")]
   status.update(["enabled": true, "statusMenuEntries": [], "statusMenuSwarmEntries": notices])
   let swarmHeading = status.menu.items.first { $0.identifier?.rawValue == "swarmHeading" }
   try check(swarmHeading?.view?.accessibilityLabel() == "Swarm (2)" &&
-            swarmRows().map { $0.title } == ["Wren asks you", "Wren tagged you"],
-            "The Swarm section lists the person's decisions, then tags")
+            swarmRows().map { $0.title } == ["Wren", "River"],
+            "The Swarm section lists the agents that ask, in Dart's order")
   try check(swarmRows().first?.view?.accessibilityLabel()?.contains("Ship it behind a flag?") == true &&
             swarmRows().first?.toolTip?.contains("web-project · Lead") == true,
-            "A Swarm row reads its question and where it was asked")
+            "A Swarm row reads the agent's words")
   let beforeSwarm = reveals
   status.click(swarmRows()[1])
   try check(emitted.last?.0 == "openSwarmNotice" &&
-            (emitted.last?.1 as? [String: Any])?["id"] as? String == "mention-1" && reveals == beforeSwarm,
+            (emitted.last?.1 as? [String: Any])?["id"] as? String == "agent-chat-river" && reveals == beforeSwarm,
             "Choosing a Swarm row sends its receipt; Dart opens it and reveals the window")
   status.menuWillOpen(status.menu)
   let answered = swarmRows()[0]
@@ -299,19 +298,19 @@ do {
   notices.removeFirst()
   status.update(["enabled": true, "statusMenuEntries": [], "statusMenuSwarmEntries": notices])
   status.click(answered)
-  try check(emitted.count == beforeAnswered, "A decision answered meanwhile cannot be opened from a stale menu")
+  try check(emitted.count == beforeAnswered, "A chat read meanwhile cannot be opened from a stale menu")
   status.menuDidClose(status.menu)
-  let many = (1...6).map { notice("mention", "mention-\($0)", "Tag \($0)") }
+  let many = (1...6).map { notice("chat", "chat-\($0)", "Agent \($0)") }
   status.update(["enabled": true, "statusMenuEntries": [], "statusMenuSwarmEntries": many])
   let viewAll = status.menu.items.first { ($0.representedObject as? [String: Any])?["kind"] as? String == "all" }
   try check(swarmRows().count == 5 && viewAll?.title == "View all 6 in Pilot…",
             "Five Swarm rows, then View all")
   if let viewAll { status.click(viewAll) }
   try check((emitted.last?.1 as? [String: Any])?["kind"] as? String == "all",
-            "View all opens the Swarm's Notifications page")
+            "View all brings the Swarm forward")
   // Two Swarms: each its own heading, five rows and View all, so nothing in
   // the second is out of reach behind the first's.
-  let second = (1...2).map { notice("decision", "d\($0)", "Ask \($0)", swarm: "swarm-2", name: "Atlas") }
+  let second = (1...2).map { notice("chat", "d\($0)", "Ask \($0)", swarm: "swarm-2", name: "Atlas") }
   status.update(["enabled": true, "statusMenuEntries": [], "statusMenuSwarmEntries": many + second])
   let headings = status.menu.items.filter { $0.identifier?.rawValue == "swarmHeading" }
   try check(headings.compactMap { $0.view?.accessibilityLabel() } == ["Pilot (6)", "Atlas (2)"],
@@ -324,7 +323,7 @@ do {
   try check((emitted.last?.1 as? [String: Any])?["swarmTabId"] as? String == "swarm-2" &&
             (emitted.last?.1 as? [String: Any])?["id"] as? String == "d2",
             "A row of the second Swarm opens in its own Swarm")
-  let secondMany = (1...7).map { notice("mention", "s\($0)", "Tag \($0)", swarm: "swarm-2", name: "Atlas") }
+  let secondMany = (1...7).map { notice("chat", "s\($0)", "Agent \($0)", swarm: "swarm-2", name: "Atlas") }
   status.update(["enabled": true, "statusMenuEntries": [], "statusMenuSwarmEntries": many + secondMany])
   let secondAll = status.menu.items.last { ($0.representedObject as? [String: Any])?["kind"] as? String == "all" }
   try check(secondAll?.title == "View all 7 in Atlas…", "The second Swarm has its own View all")

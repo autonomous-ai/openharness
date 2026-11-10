@@ -33,9 +33,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -100,27 +98,8 @@ void main() {
       findsOneWidget,
     );
     expect(line('message-4'), findsNothing);
-  });
-
-  testWidgets('a thread line says @ you when an unread reply tags the reader', (
-    tester,
-  ) async {
-    final server = threaded();
-    server.tag(
-      'message-2',
-      threadId: 'message-1',
-      messageSequence: server.revision,
-    );
-    final c = await show(tester, server);
-    final tag = find.descendant(
-      of: line('message-1'),
-      matching: find.text('@ you'),
-    );
-    expect(tag, findsOneWidget);
-    c.markThreadRead('lead', 'message-1', server.revision);
-    await tester.pumpAndSettle();
-    expect(tag, findsNothing);
-    await c.flush();
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('a reply also sent to the chat shows in both, marked as a '
@@ -136,6 +115,8 @@ void main() {
       find.descendant(of: line('message-1'), matching: find.text('2 replies')),
       findsOneWidget,
     );
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('the reply line opens the thread beside the chat, and its '
@@ -155,6 +136,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('super-thread-close')));
     await tester.pumpAndSettle();
     expect(panel(), findsNothing);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('lost access closes the thread and forgets its rows and '
@@ -408,6 +391,8 @@ void main() {
       expect(left.picture, isNull);
       // Faces about 24 points, as Slack's (Huy, 2026-11-03, #2315).
       expect(tester.getSize(find.byWidget(person)).width, 24);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a person with a preset shows it', (tester) async {
@@ -423,6 +408,8 @@ void main() {
         find.descendant(of: line('message-1'), matching: find.text('🦉')),
         findsOneWidget,
       );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a person who leaves and an agent removed while the chat is '
@@ -525,61 +512,6 @@ void main() {
     expect(panel(), findsNothing);
   });
 
-  testWidgets('a reply from the thread composer goes to the root, and '
-      '"Also send to #Pilot" sends it to both', (tester) async {
-    final server = threaded();
-    final c = await show(tester, server);
-    // The test platform's touch handles sit under a typed reply's end:
-    // where the wide pane puts it, over send. Leaving the box hides them.
-    void hideHandles() => FocusManager.instance.primaryFocus?.unfocus();
-    await tester.tap(line('message-1'));
-    await tester.pumpAndSettle();
-    // The label shortens where the test font leaves no room; its hint keeps
-    // the full wording (super_tab_reply_box_test.dart covers the label).
-    expect(
-      inPanel(find.byTooltip('Also send to #Pilot as well as this thread')),
-      findsOneWidget,
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('super-thread-composer')),
-      'In the thread only.',
-    );
-    await tester.pump();
-    hideHandles();
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('super-thread-send')));
-    await tester.pumpAndSettle();
-    Map sentLast() => server.posts
-        .map((post) => post['command'] as Map)
-        .lastWhere((command) => command['type'] == 'message.send');
-    final sent = sentLast();
-    expect(sent['replyTo'], 'message-1');
-    expect(sent.containsKey('alsoSend'), isFalse);
-    expect(inPanel(find.text('In the thread only.')), findsOneWidget);
-    expect(row('message-5'), findsNothing);
-
-    await tester.tap(find.byKey(const ValueKey('super-thread-also-send')));
-    await tester.enterText(
-      find.byKey(const ValueKey('super-thread-composer')),
-      'Everyone should see this.',
-    );
-    await tester.pump();
-    hideHandles();
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('super-thread-send')));
-    await tester.pumpAndSettle();
-    expect(sentLast()['alsoSend'], isTrue);
-    expect(inPanel(find.text('Everyone should see this.')), findsOneWidget);
-    expect(row('message-6'), findsOneWidget);
-    expect(
-      find.descendant(of: line('message-1'), matching: find.text('4 replies')),
-      findsOneWidget,
-    );
-    expect(c.messages('lead').map((m) => m.id), contains('message-6'));
-    // The read mark's save.
-    await tester.pump(const Duration(seconds: 1));
-  });
-
   testWidgets('Reply on a message opens its thread; on a message from before '
       'threads it keeps the inline reply', (tester) async {
     final server = threaded();
@@ -643,6 +575,8 @@ void main() {
     });
     await show(tester, server, account: 'third');
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('the reader\'s own last reply leaves the thread read', (
@@ -659,6 +593,8 @@ void main() {
       ),
     );
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   test('a thread read on another device, with no mark kept here, shows as '
@@ -844,6 +780,8 @@ void main() {
     final c = await show(tester, server);
     expect(row('message-5'), findsNothing);
     expect(c.unread(c.snapshot!.conversation('lead')!), isFalse);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   test('a reply only in its thread leaves the chat neither bold nor counted; '
