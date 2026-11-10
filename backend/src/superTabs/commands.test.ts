@@ -3894,9 +3894,6 @@ describe('credentials in every command', () => {
   }, command)
 
   it.each([
-    ['proposal.decide', 'reason'], ['proposal.decide', 'task.changes'], ['proposal.decide', 'checks[].description'],
-    ['proposal.ask', 'question'], ['proposal.ask', 'defaultAnswer'], ['proposal.answer', 'text'], ['proposal.merge', 'reason'],
-    ['proposal.create', 'text'], ['proposal.create', 'evidence[]'], ['buddy.propose', 'why'], ['buddy.propose', 'evidence[]'],
     ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
     ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
     ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'],
@@ -3939,11 +3936,11 @@ describe('credentials in every command', () => {
       'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
       'agent.start request.requirements.devices[]', 'buddy.create setup.cwd', 'lead.start branchRef', 'lead.start repositoryUrl',
       'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
-      'conversation.create task.requires.devices[]', 'proposal.decide task.requires.devices[]',
+      'conversation.create task.requires.devices[]',
       'conversation.unlink pullRequestUrl']],
     ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
       'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
-      'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
+      'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'route.override candidateId',
       'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account',
       'rules.set rules.instructionApprovals.topDeciderId',
       'rules.set rules.instructionApprovals.people[].accountIds[]',
