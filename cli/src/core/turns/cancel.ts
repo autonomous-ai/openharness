@@ -9,6 +9,7 @@ import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { WifiFeed } from '../wifi.js'
+import type { TurnEnds } from './ends.js'
 import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -32,11 +33,13 @@ export interface CancelDeps {
   agentIdFor: (sessionId: string) => string
   /** The app. */
   clients: { send(frame: ReturnType<typeof correlateAgentEvent>): void }
+  /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts). */
+  ends?: Pick<TurnEnds, 'ended'>
 }
 
 export function createCancel({
   resolve, normalizers, cursorSubagents, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt,
-  agentIdFor, clients, beforeCancel,
+  agentIdFor, clients, beforeCancel, ends,
 }: CancelDeps) {
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
   // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
@@ -60,6 +63,17 @@ export function createCancel({
     turnActivity.observe(sessionId, 'turn_ended')
     const activity = turnActivity.snapshot(sessionId)
     if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+    // The turn is over for whoever answers a person at its end (the Swarm's host) as it is for the windows above: told as an
+    // interrupted one, so that a message whose turn it was is not owed an answer that never comes, and cannot take that of the same
+    // words sent again. An app's stop is over at once, as the windows read it; a confirmed one (a device's) only once its interrupt
+    // was sent, and one that could not be sent leaves the turn running. Not a turn_ended to the windows, which would recap it, and
+    // told after everything that stops the agent: nothing it does can hold the stop back.
+    void cancelled.then(sent => {
+      if (!sent) return
+      try { ends?.ended({ agentId: agentIdFor(sessionId), sessionId, aborted: true }) } catch (error) {
+        console.error(`[cancel] the end of the turn of ${agentIdFor(sessionId).slice(0, 40)} was not told · ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }, () => {})
     return cancelled
   }
   return cancelAgent

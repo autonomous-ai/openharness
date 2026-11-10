@@ -60,6 +60,26 @@ it('never reads stdin for a post whose TEXT is the message', () => {
   expect(stdin).not.toHaveBeenCalled()
   expect(terminal).not.toHaveBeenCalled()
 })
+// The server takes 32,000 characters of a post (backend `message.send`); a longer one it refused with a field message, and from 512 KiB the
+// daemon's socket closed on it, so the agent was only told "The connection to Harness closed." (Q3, 2026-11-09). Said before anything is sent.
+it('refuses a post or an answer of more than 32,000 characters with the length, before anything is sent, and takes 32,000', async () => {
+  const exactly = 'x'.repeat(32_000)
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', exactly, 'op-1'], where).payload.command).toMatchObject({ text: exactly })
+  // Counted as the server counts, once trimmed: a heredoc's line breaks and spaces around the words are no part of it.
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', `  ${exactly}\n\n`, 'op-1'], where).payload.command).toMatchObject({ text: `  ${exactly}\n\n` })
+  const long = 'x'.repeat(32_001)
+  const refusal = 'This post is 32,001 characters, and a post takes at most 32,000: nothing was posted. Say it shorter, or put the rest in a file or a pull request and post its link.'
+  expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', long, 'op-1'], where)).toThrow(refusal)
+  expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', long, 'op-1', '--attach', 'a.png'], where)).toThrow(refusal)
+  expect(() => parseSuperTabArgs([...prefix, 'answer', 'lead', 'msg-1', long, 'op-2'], where)).toThrow(refusal)
+  expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', '-', 'op-3'], where, () => long, () => false)).toThrow(refusal)
+  // From the command: the agent is told in the line it reads, and the daemon is never asked.
+  const print = vi.fn(), request = vi.fn(), open = vi.fn(async () => ({ request, close: vi.fn(), machineId: 'machine' }))
+  expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-4'], { where: () => where, pane: undefined, open: open as never, print, stdin: () => 'y'.repeat(3_000_000), terminal: () => false })).toBe(1)
+  // Named, as other refusals are, with the words in its detail.
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'POST_TOO_LONG', detail: 'This post is 3,000,000 characters, and a post takes at most 32,000: nothing was posted. Say it shorter, or put the rest in a file or a pull request and post its link.', operationId: 'op-4' })
+  expect(open).not.toHaveBeenCalled()
+})
 // An interrupted post is repeated with the same id and the same stdin; stdin is read before anything is sent, so the repeat
 // sends the same message under the same id, and the Swarm keeps one.
 it('repeats an interrupted stdin post with the same id and text, and it posts once', async () => {

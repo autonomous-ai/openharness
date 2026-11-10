@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TeamConfig } from '../team/config.js'
-import { agentTmpFolder, agentTmpLaunch, agentTmpRoot, agentTmpState, buddyTmpEnv, buddyTmpFolder, buddyTmpOf, buddyTmpParent, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepTmpFolders, type AgentTmpDeps } from './agentTmp.js'
+import { agentTmpFolder, agentTmpLaunch, agentTmpRoot, buddyTmpEnv, buddyTmpFolder, buddyTmpOf, buddyTmpParent, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepTmpFolders, type AgentTmpDeps } from './agentTmp.js'
 
 const made: string[] = []
 afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); resetAgentTmpSweep() })
@@ -107,21 +107,6 @@ describe('the folder itself', () => {
     const folder = join(scratch(), 'agent-tmp')
     writeFileSync(folder, 'x')
     expect(prepareAgentTmp(folder)).toBe(false)
-  })
-
-  it('reports its state for harness team status', () => {
-    const data = scratch(), folder = agentTmpFolder(data)
-    expect(agentTmpState(folder)).toEqual({ path: folder, state: 'not-made', mode: null })
-    mkdirSync(folder, { mode: 0o700 })
-    chmodSync(folder, 0o700)
-    expect(agentTmpState(folder)).toEqual({ path: folder, state: 'private', mode: 0o700 })
-    // Another account's 0700 folder is not this account's private one.
-    expect(agentTmpState(folder, 99_999)).toEqual({ path: folder, state: 'open', mode: 0o700 })
-    chmodSync(folder, 0o755)
-    expect(agentTmpState(folder)).toEqual({ path: folder, state: 'open', mode: 0o755 })
-    rmSync(folder, { recursive: true })
-    symlinkSync(scratch(), folder)
-    expect(agentTmpState(folder)).toEqual({ path: folder, state: 'open', mode: null })
   })
 })
 

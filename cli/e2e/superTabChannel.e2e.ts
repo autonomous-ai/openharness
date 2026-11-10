@@ -162,16 +162,15 @@ it('stores an agent\'s post in its channel once, from its own pane, whatever it 
   expect((await f.run(pip, ['post', CHANNEL, '-', 'post-stdin'], `${words}\n`)).code).toBe(0)
   expect(f.stored.get('post-stdin')!.text).toBe(words)
 
-  // Past the server's 32,000 characters the server says so, and nothing is stored or cut.
+  // Past the server's 32,000 characters the agent is told so, with the length, and nothing is sent, stored or cut: far past what
+  // the daemon's own socket takes too.
+  const tooLong = (length: string) => `This post is ${length} characters, and a post takes at most 32,000: nothing was posted. `
+    + 'Say it shorter, or put the rest in a file or a pull request and post its link.'
   const over = await f.run(pip, ['post', CHANNEL, 'y'.repeat(32_001), 'post-over'])
-  expect(over.code).toBe(1)
-  expect(over.answer).toMatchObject({ error: 'VALIDATION_ERROR', operationId: 'post-over' })
-  expect(f.stored.has('post-over')).toBe(false)
-  // Far past what the daemon's own socket takes, the agent hears a reason, not silence.
+  expect(over).toEqual({ code: 1, answer: { error: 'POST_TOO_LONG', detail: tooLong('32,001'), operationId: 'post-over' } })
   const huge = await f.run(pip, ['post', CHANNEL, '-', 'post-huge'], 'z'.repeat(3_000_000))
-  expect(huge.code).toBe(1)
-  expect(huge.answer.error, JSON.stringify(huge.answer)).toMatch(/\S/)
-  expect(f.stored.has('post-huge')).toBe(false)
+  expect(huge).toEqual({ code: 1, answer: { error: 'POST_TOO_LONG', detail: tooLong('3,000,000'), operationId: 'post-huge' } })
+  expect(sent('post-over').concat(sent('post-huge'))).toEqual([])
 
   // An agent in two Swarms names one; with its Swarm named it posts there.
   f.rosters.get(OTHER_TAB)!.push(f.member(pip))
