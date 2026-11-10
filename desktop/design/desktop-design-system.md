@@ -330,7 +330,7 @@ them their due without disturbing the work.
 dialogs, the footer, Settings) stay calm: everything above applies unchanged
 and nothing there celebrates. Harness's own UI uses no emoji on instrument
 surfaces; what people and programs write shows as written. Team surfaces (the
-leaderboard, profiles and the project chat) are where people appear, and they
+leaderboard, the people list and the project chat) are where people appear, and they
 may be warm: they may name a moment, carry a mark and smile in their words.
 
 **Earned, not ambient.** One real event earns one moment: a person ships,
@@ -354,9 +354,9 @@ as tall as a row without one.
 
 **Badges are content artwork**, like agent marks: each has its own colors, a
 name and one line saying how it was earned ("First pull request merged"). They
-are not app icons and do not join the `AppIcons` vocabulary. A person's badges
-live on their profile sheet; a new badge is announced once in the project
-chat, naming the person and the badge, and is not repeated.
+are not app icons and do not join the `AppIcons` vocabulary. A new badge is
+announced once in the project chat, naming the person and the badge, and is
+not repeated.
 
 **Every mark has words.** The crown, a badge or a celebration message carries
 an accessible label that says what it means ("Number one this week", "Badge:
@@ -509,7 +509,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   read, so they never read as current. Its text can be selected. Info,
   Instructions and Terminal are one at a time: each closes the other two.
 - **Agent face.** An agent with no chosen picture wears a face
-  (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
+  (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards and chat:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.
   Everything comes from the FNV-1a hash of the trimmed, lowercased name, so a
   name draws the same face on every computer. The fill is

@@ -71,10 +71,8 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
-import 'agent_details.dart';
 import 'agent_info.dart';
-import 'identity.dart' show SuperTabAvatar, superTabMachineName;
-import 'identity_card.dart';
+import 'identity.dart' show SuperTabAvatar;
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'project_people.dart';
@@ -2973,62 +2971,6 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// What the card over [message]'s name or avatar shows, worked out as it
-  /// opens (Huy, 11-04): a person's status and zone; an agent's engine and
-  /// model, machine and task, as its details dialog reads them.
-  SuperTabIdentityFacts _identityFacts(
-    SuperTabMessage message,
-    SuperTabAgent? agent,
-  ) {
-    final name = c.snapshot?.authorName(message) ?? message.authorName;
-    if (agent == null) {
-      if (message.fromAgent) return SuperTabAgentFacts(name);
-      final person = _people[message.authorId];
-      return SuperTabPersonFacts(
-        person?.shownName ?? name,
-        status: person?.statusAt(clock.now()),
-        timeZone: person?.timeZone,
-      );
-    }
-    final info = SuperTabAgentInfo(c, widget.app, agent);
-    final place = c.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
-    final device = superTabMap(
-      superTabMap(c.snapshot?.pool(place)?['observation'])['resources'],
-    )['deviceType'];
-    final group = info.taskGroup;
-    return SuperTabAgentFacts(
-      agent.displayName ?? name,
-      engine: agent.engine,
-      model: info.model,
-      machine: superTabMachineName(
-        info.machine ?? widget.machineName(agent.machineId),
-      ),
-      deviceType: device is String ? device : null,
-      task: group == null ? null : _taskLine(info, group),
-      onOpenTask: group == null ? null : () => _openGroup(group.id),
-    );
-  }
-
-  /// What the agent does with [group], its number and title in place of the
-  /// quoted title: "Working on #2605 Chat: a card…".
-  static String _taskLine(SuperTabAgentInfo info, SuperTabConversation group) {
-    final named = switch (group.number) {
-      final number? => '#$number ${group.title}',
-      null => group.title,
-    };
-    final status = info.status;
-    final quoted = '"${group.title}"';
-    return status != null && status.contains(quoted)
-        ? status.replaceFirst(quoted, named)
-        : named;
-  }
-
-  void _openGroup(String id) {
-    setState(() => _showPullRequests = false);
-    c.select(id);
-    c.selectTerminal(id, null);
-  }
-
   void _openAgent(SuperTabAgent agent) {
     setState(() {
       _showPullRequests = _showTasks = false;
@@ -5003,7 +4945,6 @@ class _SuperTabViewState extends State<SuperTabView>
       agent: agent,
       person: message.fromAgent ? null : _people[message.authorId],
       member: _member,
-      identity: grouped ? null : () => _identityFacts(message, agent),
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
