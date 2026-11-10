@@ -1,5 +1,13 @@
 # Swarm GitHub App
 
+> **Swarm v4 (2026-11-10, backend slice S6):** every agent runs on its own person's computer and pushes with that person's
+> login, so the server no longer advertises the app: no read says `githubApp`, a start's `.../github-token` answers
+> `{ "github": false }` (a Harness Team host, asking `always`, hears `GITHUB_APP_NOT_CONFIGURED`), and
+> `GET .../projects/:projectId/ci-load` answers `{ "state": "unavailable" }`. A session started with the app before still gets
+> its task's token from `POST /api/super-tabs/:tabId/github-token`, revoked when its task ends, so it never loses push
+> mid-work; that ends on or after 2026-12-10. The app also serves New Repository, the repository approvals below and the
+> server's own read-only pull request reads. The rest of this page describes clients from before Swarm v4.
+
 When a Swarm agent works on another person's project, it pushes commits and opens
 pull requests with the **Harness GitHub App**, not the GitHub login of the computer
 it runs on. Each token is for the project's one repository and lasts at most an hour.

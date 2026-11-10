@@ -743,7 +743,7 @@ describe('a project on the template', () => {
     const agentId = f.add('worker-1')
     // A project from before project instructions: nothing saved, so it reads the template.
     for (const project of f.state.projects ?? []) { delete project.instructionsRevision; delete project.instructionsHash }
-    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [] }
     const user = { sub: 'host-owner', email: 'host@example.com', role: 'user', autonomousEnv: 'test' } as never
     const rows = await hostTab('tab', f.state, 'host', user, null, lookups as never)
     const row = rows.roster.find(r => (r as { agent?: { id: string } }).agent?.id === agentId) as { instructions?: { revision: number; hash: string | null } }

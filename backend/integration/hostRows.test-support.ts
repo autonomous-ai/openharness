@@ -7,18 +7,16 @@ import type { SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { HostTabRows } from '../src/superTabs/read/contract.js'
 
-type Options = { githubApp?: boolean }
-
 /** A full host read, holding no etags, so every Swarm comes back with its rows. */
-async function hostRead(store: SuperTabStore, user: AuthUser, machineId: string, options: Options = {}): Promise<HostTabRows[]> {
-  return (await new HostReads(store, options).changes(user, machineId, { full: true })).tabs as HostTabRows[]
+async function hostRead(store: SuperTabStore, user: AuthUser, machineId: string): Promise<HostTabRows[]> {
+  return (await new HostReads(store).changes(user, machineId, { full: true })).tabs as HostTabRows[]
 }
 /** What `store.hostTabs` listed: every Swarm's roster rows, in order. */
-export const rosterRows = async (store: SuperTabStore, user: AuthUser, machineId: string, options?: Options) =>
-  (await hostRead(store, user, machineId, options)).flatMap(tab => tab.roster)
+export const rosterRows = async (store: SuperTabStore, user: AuthUser, machineId: string) =>
+  (await hostRead(store, user, machineId)).flatMap(tab => tab.roster)
 /** What `store.hostPools` listed: the pool of every Swarm where this machine is the caller's contribution. */
-export const poolRows = async (store: SuperTabStore, user: AuthUser, machineId: string, options?: Options) =>
-  (await hostRead(store, user, machineId, options)).flatMap(tab => tab.pool ? [tab.pool] : [])
+export const poolRows = async (store: SuperTabStore, user: AuthUser, machineId: string) =>
+  (await hostRead(store, user, machineId)).flatMap(tab => tab.pool ? [tab.pool] : [])
 /** What `store.hostAssignments` listed: the active assignments this machine runs for the caller. */
-export const assignmentRows = async (store: SuperTabStore, user: AuthUser, machineId: string, options?: Options) =>
-  (await hostRead(store, user, machineId, options)).flatMap(tab => tab.assignments)
+export const assignmentRows = async (store: SuperTabStore, user: AuthUser, machineId: string) =>
+  (await hostRead(store, user, machineId)).flatMap(tab => tab.assignments)
