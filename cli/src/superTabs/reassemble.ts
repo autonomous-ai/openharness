@@ -64,7 +64,6 @@ export function reassemble(store: PartsStore): Json {
     })
   }
   if (derived.otherProjectsWork !== undefined) state.otherProjectsWork = derived.otherProjectsWork
-  if (derived.mentionsWaiting !== undefined) state.mentionsWaiting = derived.mentionsWaiting
   if (derived.mentionsDigest !== undefined) state.mentionsDigest = derived.mentionsDigest
   if (derived.decisionsDigest !== undefined) state.decisionsDigest = derived.decisionsDigest
   return state

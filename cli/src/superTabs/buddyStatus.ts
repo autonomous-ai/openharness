@@ -22,8 +22,6 @@ const ROLES: Record<string, string> = { builder: 'Engineer', reviewer: 'Reviewer
 export interface BuddyStatusDeps {
   /** The person's own GitHub, through gh on their machine (lib/pullRequestsStatus.ts). */
   pullRequests: (urls: string[]) => Promise<PullRequestsResult>
-  /** The person's open decisions in this project, as the backend's decisions read gives them to their Buddy. */
-  decisions: () => Promise<unknown>
 }
 /** The projects a person's one Buddy lists, one line each, and the newest changed tasks across them (spec: Staying within one
  *  context): an index, so a Swarm with many projects never fills its context; status --project NAME reads one in full. */
@@ -137,12 +135,8 @@ async function taskRows(groups: Json[], state: Json, deps: BuddyStatusDeps, acti
   const urls = (group: Json) => (Array.isArray(group.pullRequestUrls) ? group.pullRequestUrls : []).filter(validPullRequestUrl)
   // Newest tasks first, so the reader's limit leaves out the oldest pull requests, never the ones being worked on.
   const checked = [...new Set(groups.flatMap(urls))].slice(0, PULL_REQUESTS_MAX)
-  const [read, asked] = await Promise.all([
-    checked.length ? deps.pullRequests(checked) : Promise.resolve({ rows: [] } as unknown as PullRequestsResult),
-    deps.decisions().catch(() => null),
-  ])
+  const read = checked.length ? await deps.pullRequests(checked) : { rows: [] } as unknown as PullRequestsResult
   const prs = new Map(read.rows.map(row => [row.url, row]))
-  const decisions = list(object(asked).decisions)
   const agents = new Map(list(state.agents).map(a => [a.id, a]))
   const tasks = groups.map(group => {
     const assignment = object(group.assignment), status = typeof assignment.status === 'string' ? assignment.status : 'open'
@@ -166,10 +160,8 @@ async function taskRows(groups: Json[], state: Json, deps: BuddyStatusDeps, acti
         if (row.status !== 'found') return { url, state: row.status === 'no_access' ? 'no access' : 'unavailable' }
         return { url, state: row.state, ci: row.ci, checks: row.checks, review: row.reviewDecision || null, merge: row.mergeStateStatus }
       }),
-      decisions: decisions.filter(d => d.conversationId === group.id)
-        .map(d => ({ question: d.question, options: d.options, recommended: d.recommended, unblocks: d.unblocks })),
       ...activity(group.id),
     }
   })
-  return { tasks, ...(read.error ? { pullRequestsError: read.error } : {}), ...(asked === null ? { decisionsError: 'Your decisions could not be read.' } : {}) }
+  return { tasks, ...(read.error ? { pullRequestsError: read.error } : {}) }
 }
