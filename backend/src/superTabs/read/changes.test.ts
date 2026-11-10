@@ -159,8 +159,9 @@ describe('changes since a cursor (design 4.4)', () => {
     const { s } = scene()
     // Only an agent of the private project runs on 'secret-mac', so the peer does not see that machine.
     s.add('secret-harness', s.secretGroup, false, owner, 'secret-mac')
-    s.run({ type: 'work.define', conversationId: s.done, task: { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
-      requires: { machines: ['secret-mac', 'mac'] } }, checks: [{ description: 'It answers.', independent: false }] })
+    // A task whose requirements were defined before Swarm v4 (work.define answers as retired).
+    s.edit(state => { state.conversations.find(c => c.id === s.done)!.task = { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
+      requires: { machines: ['secret-mac', 'mac'] } } })
     const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const requires = (groups: Array<{ key: string }>) => (groups.find(g => g.key === s.done) as unknown as { data: { task: { requires: unknown } } }).data.task.requires
     expect(requires(readerView(fresh, owner, LATER, {}).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })

@@ -10,6 +10,7 @@ import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
 import { staleModelRequests, staleSwitches } from './tidy.js'
+import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -65,12 +66,12 @@ const reachable = (state: SuperTabState, row: MessageDraft): MessageDraft => ({ 
 
 /** A notice for the Lead (terminal.ts toLead): when the Lead hears it in its own chat, the copy left in the task's chat for
  *  no one is that same notice, read by no one either. With no Lead to hear it, people read it (review of #2177). */
-export function leadNoticeRows(rows: MessageDraft[]): MessageDraft[] {
+function leadNoticeRows(rows: MessageDraft[]): MessageDraft[] {
   return rows.some(row => row.recipients.length) ? rows.map(row => row.recipients.length ? row : { ...row, source: forRecipients(row.source ?? {}) }) : rows
 }
 
 /** The agent's own progress (an assignment, a status, a check, a post) renews the lease stored on its assignment. */
-export function renewLease(assignment: Assignment, now: number): void {
+function renewLease(assignment: Assignment, now: number): void {
   assignment.leaseUntil = now + LEASE_MS
   assignment.progressAt = now
 }
@@ -90,13 +91,6 @@ export function waitingForReview(assignment: Assignment): boolean {
   if (assignment.status === 'review') return true
   return assignment.status === 'working' && assignment.reviewFoundAt === undefined && !!assignment.result
     && READY_FOR_REVIEW.test(assignment.result) && REVISION.test(assignment.result)
-}
-
-/** Work that stopped waiting for its review counts its quiet time from now: its agent keeps it QUIET_RUNNING_MS without
- *  progress, as after its last screen change, though its screen stayed still while it waited. */
-export function restartQuietTime(assignment: Assignment, now: number): void {
-  assignment.progressAt = now
-  assignment.leaseUntil = Math.max(assignment.leaseUntil ?? 0, now + QUIET_RUNNING_MS)
 }
 
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
@@ -181,9 +175,9 @@ const reopening = (worker: Agent, now: number): boolean => {
 
 /** Why [worker] cannot work now: its session stopped (unless [closedOnPurpose]: asleep, task #3398; or, for a task it
  *  [holds], a crew member its host is reopening, crew.ts), its machine offline, a usage limit, or its model failing. A task
- *  its agent holds is lost for it (lostReason); the crew dispatch hands such a member nothing new (dispatch.ts freeCrew).
+ *  its agent holds is lost for it (lostReason).
  *  Only a machine that has reported can be offline. */
-export function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
+function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
   if (!closedOnPurpose && pool?.observation?.stoppedHarnessIds.includes(worker.harnessId) && !(holds && reopening(worker, now))) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
@@ -219,13 +213,12 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
 
 /** Marks a worker's task lost and fences its agent. The Lead hears who, why, how long since progress and the last result;
  *  the old agent hears that its task moved. Rows are written as the Lead, or as the worker when the project has none. */
-function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reason: string, now: number, resumeAt?: string): MessageDraft[] {
+function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reason: string, now: number): MessageDraft[] {
   const assignment = group.assignment!
-  const resume = resumeAt ? { resumeAt } : {}
   assignment.status = 'lost'
-  assignment.lost = { reason, at: now, ...resume }
+  assignment.lost = { reason, at: now }
   group.lostAttempt = { id: assignment.id, agentId: worker.id, machineId: assignment.execution.machineId, engine: assignment.configuration.engine }
-  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now, ...resume }
+  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now }
   const sender = writtenBy(state, leadOf(state, worker) ?? worker)
   const progress = lastProgress(state, worker, assignment)
   const since = progress === undefined ? 'unknown' : `${plural(Math.max(0, Math.floor((now - progress) / 60_000)), 'minute')} ago`
@@ -235,8 +228,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   // What happened, never the next step (project instructions, phase 4): the instructions say what the coordinator does.
   const wake = `${worker.displayName ?? worker.name} lost its task "${group.title}": ${reason}. Last progress ${since}. `
     + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''}`
-    + (resumeAt ? ` It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC.` : '')
-  // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
+  // Named by the loss, not the task: a task resumed after a usage limit before Swarm v4 kept its id and can be lost again (2026-10-28).
   const loss = String(now)
   return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
     recipients: [], text: wake, source }).map(row => reachable(state, row))),
@@ -247,12 +239,11 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
- *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
- *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
-export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
+ *  the agents of a machine that just reported. None resumes after a usage limit since Swarm v4 (work.resume is retired). */
+export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true): MessageDraft[] {
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
     const reason = lostReason(state, group, worker, assignment, now)
-    return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
+    return reason ? loseTask(state, group, worker, reason, now) : []
   })
 }
 
@@ -290,9 +281,11 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 
 /** The time checks, run on any machine's report once per Swarm sweep: every start dispatched over 3 minutes ago that is not running
  *  fails, unless its machine is still preparing it; a Product Manager switch nobody answered, a model request nobody answered and a
- *  removed confidential session whose data is not deleted say so once. Swarm v4 loses no task and nudges no worker. */
+ *  removed confidential session whose data is not deleted say so once; a PM on another account of its machine is moved back to
+ *  the default one (pmAccount.ts). Swarm v4 loses no task and nudges no worker. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now),
+    ...pmsToDefaultAccount(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts

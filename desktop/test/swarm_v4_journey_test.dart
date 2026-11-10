@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -166,6 +167,16 @@ void main() {
       expect(tester.takeException(), isNull, reason: tab);
     }
     expect(find.textContaining(crew), findsNothing);
+
+    // A machine's Details have no Configure: no agents limit, and nothing it may reach or run for others.
+    await tester.tap(key('super-machine-host'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Details'));
+    await tester.pumpAndSettle();
+    expect(find.text('Status'), findsOneWidget);
+    expect(find.text('Configure'), findsNothing);
+    await tester.tapAt(Offset.zero);
+    await tester.pumpAndSettle();
 
     // And back to a chat: the left pane still answers.
     await tester.tap(key('super-agent-second'));

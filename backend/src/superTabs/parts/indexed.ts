@@ -103,12 +103,10 @@ export const NAMED_INDEX = {
   },
   /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
   SuperTabThread: { id: { _id: 1 } },
-  /** `age`: Activity rows past their expiry (retiredRows.ts sweepActivity). */
-  SuperTabActivity: { age: { createdAt: 1 } },
+  /** Which agent wrote a GitHub comment, by its id (githubComments.ts commentAuthors). */
+  SuperTabGithubComment: { id: { _id: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
-  /** `due`: reminders due more than 30 days ago (retiredRows.ts sweepReminders). */
-  SuperTabReminder: { due: { dueAt: 1 } },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

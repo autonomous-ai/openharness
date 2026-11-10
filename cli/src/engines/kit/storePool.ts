@@ -41,7 +41,10 @@ function verify(evidence: readonly Evidence[]): void {
 export async function readStorePool(
   declared: StoreHomes,
   defaultHome: string,
-  query: { sql: string; params: SqliteParam[]; maxRows: number; maxBuffer: number;
+  query: {
+    /** The statement, or one built from the store's own (non-hidden) columns: the stores of a pool may differ. */
+    sql: string | ((columns: ReadonlySet<string>) => string)
+    params: SqliteParam[]; maxRows: number; maxBuffer: number;
     columns: readonly string[]; pointKey?: string; knownHome?: string },
 ): Promise<StorePoolRow[]> {
   const deadline = performance.now() + 2_000
@@ -130,7 +133,9 @@ export async function readStorePool(
       || (query.pointKey && !columns.some(column => column.name === query.pointKey && column.pk === 1))) {
       unavailable('the native session table has unsupported control columns')
     }
-    const result = { rows: await read(query.sql, query.params, query.maxBuffer) }
+    const sql = typeof query.sql === 'string' ? query.sql
+      : query.sql(new Set(columns.filter(column => column.hidden === 0).map(column => String(column.name))))
+    const result = { rows: await read(sql, query.params, query.maxBuffer) }
     if (result.rows.length > query.maxRows) unavailable('a native store query exceeded its row limit')
     if (found.length + result.rows.length > MAX_POOL_ROWS) unavailable('the native store pool exceeded its row limit')
     for (const row of result.rows) found.push({ home: store.home, aliases: store.aliases, row })

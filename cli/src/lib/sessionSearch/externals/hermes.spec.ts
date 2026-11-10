@@ -271,6 +271,28 @@ describe.each(READERS)('Hermes discovery read through %s', (_name, reader) => {
     main.close(); work.close(); odd.close(); named.close()
   })
 
+  it('lists a Hermes 0.23 local session by the surface that created it, beside a resumed older one', async () => {
+    // The unified runtime writes source='local' and the creator in created_source; a session resumed from before it
+    // keeps its old id and label (hermes_state_local_migration.py `bind_legacy_target`).
+    const root = tempDir()
+    const store = new Store(join(root, 'state.db'), V22.replace('"profile_name" TEXT,', '"profile_name" TEXT, "created_source" TEXT,'))
+    const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+    store.session(id(1), { source: 'cli', cwd: '/work/old' }).turn(id(1))
+    for (const [n, created] of [[1, 'cli'], [2, 'tui'], [3, 'acp'], [4, 'gui'], [5, 'kanban'], [6, 'unknown'], [7, null]] as const) {
+      store.session(local(n), { source: 'local', cwd: `/work/${created}`, config: created === 'acp' ? { cwd: '/work/editor' } : null }).turn(local(n))
+      store.db.prepare('UPDATE sessions SET created_source = ? WHERE id = ?').all(created, local(n))
+    }
+    store.session(local(8), { source: 'subagent' }).turn(local(8))
+    const provider = hermesProvider({ root })
+    const found = byId(await provider.scan(context()))
+    expect([...found.keys()].sort()).toEqual([id(1), local(1), local(2), local(3)].sort())
+    expect(found.get(local(1))).toMatchObject({ cwd: '/work/cli', origin: 'terminal' })
+    expect(found.get(local(3))).toMatchObject({ origin: 'editor' })
+    expect((await found.get(local(1))!.readHistory!()).map((e) => e.type)).toEqual(['user_message', 'text_delta', 'done'])
+    expect(provider.lastScan()).toMatchObject({ found: 4, source: 5 })
+    store.close()
+  })
+
   it('reads the schema each store has: 17, and older', async () => {
     const root = tempDir()
     const v17 = new Store(join(root, 'state.db'), V17)

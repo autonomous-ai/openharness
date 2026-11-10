@@ -109,6 +109,10 @@ export interface Agent {
   gridModelName?: string
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
+  /** The liveness sweep's moves of a PM on another account back to the default one (pmAccount.ts): how many it asked for, when
+   *  the last was asked or seen to end (ms), whether it is asking now, and whether its project chat heard it failed 3 times.
+   *  Dropped once the PM is on the default account. */
+  accountReturn?: { tries: number; at: number; asking?: true; gaveUp?: true }
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
@@ -364,7 +368,7 @@ export interface WorkTask {
 export interface ReviewPlan { focus?: string; reviews?: 1 | 2 }
 
 /** How many independent reviews [task] wants: 2 only when its review plan says so. */
-export const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
+const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
 /** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
@@ -855,7 +859,8 @@ export const NOTICE_READERS = {
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
   // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
   switch: 'people',
-  // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
+  // The machine owner's one line when another person moved a PM onto one of their non-default accounts: written until a PM ran on
+  // its machine's default account alone (pmAccount.ts), read still. Delete it with the notice readers of v1-v3 (slice S18).
   'pm-switch-notice': 'people',
   // The machine owner's line, once a week, when someone else's work started on their machine: written until Swarm v4, read still.
   // Delete it with the notice readers of v1-v3 (slice S18).
@@ -919,7 +924,6 @@ export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
   cancelledAgents: string[]
-  previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
@@ -935,7 +939,7 @@ export interface CommandEffects {
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
    *  attempt row as a builder's own done does. */
-  closedAssignment?: { assignmentId: string; outcome: 'done' }
+  closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */

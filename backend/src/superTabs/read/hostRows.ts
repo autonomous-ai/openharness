@@ -55,12 +55,6 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   const closed = lookups.confidential.has(target.id)
   const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
     c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
-  // A task it lost to a usage limit that gave a reset time, while nobody has handed it on: its host resumes it then
-  // (cli superTabs/limitResume.ts), and the backend still decides (commands.ts work.resume).
-  const marked = target.lostTask
-  const lost = marked?.resumeAt ? state.conversations.find(c => c.id === marked.conversationId)?.assignment : undefined
-  const resume = marked?.resumeAt && lost?.id === marked.assignmentId && lost.status === 'lost' && lost.lost?.at === marked.at
-    ? { conversationId: marked.conversationId, assignmentId: marked.assignmentId, lostAt: marked.at, at: marked.resumeAt } : null
   const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = home && skillSetOf(home) === 'custom' ? home : null
   const chosen = custom ? agentSetRole(state, custom, target) : null
@@ -70,7 +64,9 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
     active: state.conversations.some(c => !c.archived && c.agentIds.includes(target.id)),
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
-    resume,
+    // No task resumes after a usage limit since Swarm v4 (work.resume is retired, 2026-11-10): an older host still reads the
+    // field (cli superTabs/limitResume.ts, gone from the CLI since #3864), so it stays, always empty, until 2026-12-09.
+    resume: null,
     agent: target,
     ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),
     // The Swarm owner's host adds the machine any live agent of theirs runs on, in any Swarm they own: a Lead, or a plain v4 agent, which

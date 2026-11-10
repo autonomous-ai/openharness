@@ -21,6 +21,18 @@ export const OLD_PAYLOADS = {
     head: 'A'.repeat(40), base: 'main' },
   'conversation.merged': { conversationId: 'task-1', pullRequestUrl: 'https://github.com/acme/app/pull/12', mergedAt: '2026-11-10T08:00:00.000Z',
     fixes: 'https://github.com/acme/app/pull/9' },
+  'work.assign': { conversationId: 'task-1', agentId: 'agent-2', roleId: 'engineer', routeDecisionId: 'route-1', overrideReason: 'Faster machine' },
+  'work.status': { conversationId: 'task-1', assignmentId: 'a-1', status: 'needs_human', result: 'Which login provider?',
+    ask: { personId: 'u2', options: ['GitHub', 'Google'], recommended: 0 }, hold: { kind: 'person', personId: 'u2', defaultAt: '2026-11-11T09:00:00.000Z' } },
+  'work.cancel': { conversationId: 'task-1', assignmentId: 'current', reason: 'Duplicate of #12' },
+  'work.define': { conversationId: 'task-1', brief: 'Sign in works offline.', checks: [{ description: 'Signs in offline', independent: true }] },
+  'work.queue': { conversationId: 'task-1', after: null, notBefore: '2026-11-12', hold: { kind: 'task', taskNumber: 9 } },
+  'work.priority': { conversationId: 'task-1', priority: 'P1' },
+  'work.pause': { conversationId: 'task-1', paused: true, reason: 'Waiting on design' },
+  'work.resume': { conversationId: 'task-1', assignmentId: 'a-1', lostAt: 1_762_000_000_000 },
+  'work.lane': { conversationId: 'task-1', lane: 'Backend' },
+  'member.start': { conversationId: 'task-1' },
+  'member.helper': { conversationId: 'task-1' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

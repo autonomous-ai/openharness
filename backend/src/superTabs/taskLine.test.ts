@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type CommandEffects } from './model.js'
-import { SHIP_KIND } from './ship.js'
 import { TASK_LINE_KIND } from './taskLine.js'
-
-const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+import { storedAssignment } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'dee@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -30,11 +28,8 @@ function fixture() {
     brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: ask, ...extra } as Command, as(pm), { request: request(ask) } as Partial<CommandContext>)
     .result.conversationId as string
   const task = (id: string) => state.conversations.find(c => c.id === id)!
-  const status = (id: string, worker: string, value: 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped', result: string | null = null,
-    extra: Record<string, unknown> = {}) =>
-    run({ type: 'work.status', conversationId: id, assignmentId: task(id).assignment!.id, status: value, result, ...(value === 'blocked' || value === 'needs_human' ? { hold: HOLD } : {}), ...extra } as Command, as(worker))
   const lines = (effects: CommandEffects) => effects.messages.filter(m => m.source?.kind === TASK_LINE_KIND)
-  return { run, add, as, group, request, task, status, lines, pm, get state() { return state } }
+  return { run, add, as, group, request, task, lines, pm, get state() { return state } }
 }
 
 describe('ordinary task messages and progress replies', () => {
@@ -47,10 +42,6 @@ describe('ordinary task messages and progress replies', () => {
       const id = created.result.conversationId as string
       expect(created.messages.filter(m => m.conversationId !== id)).toEqual([])
       expect(f.task(id).cards?.line).toBeUndefined()
-      const builder = f.add('Kai', id)
-      const moves = [f.run({ type: 'work.assign', conversationId: id, agentId: builder }), f.status(id, builder, 'review', `Ready: ${PR}`),
-        f.status(id, builder, 'done', `Checks passed: ${PR}`)]
-      expect(moves.flatMap(m => m.messages).filter(m => m.conversationId === 'lead')).toEqual([])
     }
   })
 
@@ -68,35 +59,12 @@ describe('ordinary task messages and progress replies', () => {
     }
   })
 
-  const thread = (effects: CommandEffects, root: string) => effects.messages.filter(m => m.thread === root).map(m => m.text)
-
-  it('replies in the approved words, as the PM, without editing the root', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+  it('keeps agents\' posts in the task\'s own conversation', () => {
+    const f = fixture(), id = f.group()
     const builder = f.add('Kai', id)
-    const assigned = f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    expect(f.lines(assigned)).toEqual([])
-    // Kai's 👀 on the ask says it, not a reply (anh Dee, 11-04, 'bot messages').
-    expect(assigned.messages.filter(m => m.thread === root)).toEqual([])
-    expect(thread(f.status(id, builder, 'working', 'Started.'), root)).toEqual([])
-    const ready = f.status(id, builder, 'review', `Ready: ${PR}`)
-    expect(ready.messages.filter(m => m.thread === root)).toEqual([expect.objectContaining({ text: 'Ready for review: PR #7',
-      author: expect.objectContaining({ kind: 'agent', id: f.pm }) })])
-    expect(thread(f.status(id, builder, 'working', 'Two findings: the draft is lost on restart.\nSecond line.'), root))
-      .toEqual(['Changes needed: Two findings: the draft is lost on restart. Kai is fixing it.'])
-    expect(thread(f.status(id, builder, 'review', `Fixed: ${PR}`), root)).toEqual(['Ready for review: PR #7'])
-    const done = f.status(id, builder, 'done', `Checks passed: ${PR}`)
-    expect(thread(done, root)).toEqual([])
-  })
-
-  it('keeps agents\' posts in the task\'s own conversation and repeats no unchanged status', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    f.status(id, builder, 'working', 'Started.')
-    expect(thread(f.status(id, builder, 'working', 'Halfway.'), root)).toEqual([])
+    storedAssignment(f.state, id, builder)
     const posted = f.run({ type: 'message.send', conversationId: id, text: `Please check ${PR}`, replyTo: null, recipientIds: [] }, f.as(builder))
     expect(posted.messages.filter(m => m.conversationId === 'lead')).toEqual([])
-    expect(thread(f.status(id, builder, 'review', 'Ready.'), root)).toEqual(['Ready for review.'])
   })
 
   // What each reply means for the task's row in the chat (threads.ts), so the tag outlives the task's own group.
@@ -104,104 +72,12 @@ describe('ordinary task messages and progress replies', () => {
     const marks = (effects: CommandEffects, root: string) => effects.messages.filter(m => m.thread === root)
       .map(m => (m.source as { ask?: string } | undefined)?.ask)
 
-    it('is on it from the brief to its Done', () => {
+    it('is on it from the brief', () => {
       const f = fixture(), first = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
         f.as(f.pm), { request: f.request() } as Partial<CommandContext>)
       const id = first.result.conversationId as string, root = f.task(id).cards!.line!.messageId
       expect(marks(first, root)).toEqual(['on-it'])
-      const builder = f.add('Kai', id)
-      expect(marks(f.run({ type: 'work.assign', conversationId: id, agentId: builder }), root)).toEqual([])
-      expect(marks(f.status(id, builder, 'review', `Ready: ${PR}`), root)).toEqual(['on-it'])
-      expect(marks(f.status(id, builder, 'done', `Checks passed: ${PR}`), root)).toEqual([])
     })
-
-    it('closes on a cancel, and on a task finished with no pull request', () => {
-      const cancelled = fixture(), a = cancelled.group(), rootA = cancelled.task(a).cards!.line!.messageId, kai = cancelled.add('Kai', a)
-      cancelled.run({ type: 'work.assign', conversationId: a, agentId: kai })
-      expect(marks(cancelled.run({ type: 'work.cancel', conversationId: a, assignmentId: cancelled.task(a).assignment!.id, reason: 'Not needed.' }), rootA))
-        .toEqual(['closed'])
-      const done = fixture(), b = done.group(), rootB = done.task(b).cards!.line!.messageId, lee = done.add('Lee', b)
-      done.run({ type: 'work.assign', conversationId: b, agentId: lee })
-      expect(marks(done.status(b, lee, 'done', 'Answered in the thread.'), rootB)).toEqual(['closed'])
-    })
-
-    it('tags the person\'s own message a task was opened from', () => {
-      const f = fixture(), generation = f.state.people[0]!.generation
-      const request = { id: 'ask', conversationId: 'lead', author: { kind: 'person' as const, id: 'owner', name: owner.email, membershipGeneration: generation },
-        source: null, replyTo: null }
-      const id = f.run({ type: 'conversation.create', title: 'Who answered', brief: 'Show who answered.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'ask' } as Command,
-        f.as(f.pm), { request } as Partial<CommandContext>).result.conversationId as string
-      const builder = f.add('Kai', id)
-      expect(marks(f.status(id, (f.run({ type: 'work.assign', conversationId: id, agentId: builder }), builder), 'review', 'Ready.'), 'ask')).toEqual(['on-it'])
-    })
-
-  })
-
-  it('says what is stuck and what happens next', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    f.status(id, builder, 'working', 'Started.')
-    expect(thread(f.status(id, builder, 'blocked', 'The build machine is offline.\nRestart it to unblock.'), root))
-      .toEqual(['Stuck: The build machine is offline. Next: River is looking at it.'])
-  })
-
-  it('says the PM is looking at what is stuck when its chat has no coordinator, never the agent that is stuck', () => {
-    const f = fixture()
-    const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
-    const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
-    expect(f.state.conversations.find(c => c.id === chat)!.leadId ?? null).toBeNull()
-    const id = f.run({ type: 'conversation.create', projectId: project, title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: 'quiet-ask' } as Command,
-      owner, { request: f.request('quiet-ask', chat) } as Partial<CommandContext>).result.conversationId as string
-    const root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    f.status(id, builder, 'working', 'Started.')
-    expect(thread(f.status(id, builder, 'blocked', 'The build machine is offline.'), root))
-      .toEqual(['Stuck: The build machine is offline. Next: the PM is looking at it.'])
-  })
-
-  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): a builder's question is the PM's crew need.
-  it('says the PM is on a builder\'s question, and tags nobody', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    const asked = f.status(id, builder, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
-      unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual([expect.stringMatching(/^Needs a decision: Keep drafts for a week\? Next: .+ is on it\.$/)])
-  })
-
-  // Review of #3223, Minor 1: the line follows who asked, so the PM's own question on a builder's task still tags. No default:
-  // Swarm v4 opens no decision that could take one (2026-11-10).
-  it('tags the person the PM asks on a builder\'s task', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    const asked = f.status(id, f.pm, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
-      unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week?'])
-  })
-
-  it('tags the person the work waits on, in a project with no PM', () => {
-    const f = fixture()
-    const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
-    const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
-    const id = f.run({ type: 'conversation.create', projectId: project, title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: 'quiet-ask' } as Command,
-      owner, { request: f.request('quiet-ask', chat) } as Partial<CommandContext>).result.conversationId as string
-    const root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    const asked = f.status(id, builder, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
-      unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week?'])
-  })
-
-  it('says it is not building a cancelled task, with the reason', () => {
-    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
-    const builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    const cancelled = f.run({ type: 'work.cancel', conversationId: id, assignmentId: f.task(id).assignment!.id, reason: 'Dee chose the web version.' }, f.as(f.pm))
-    expect(thread(cancelled, root)).toEqual(['Not building this: Dee chose the web version.'])
   })
 
   it('links a proposal root instead of posting a second opening message, and adds no brief under the proposal', () => {
@@ -224,17 +100,6 @@ describe('ordinary task messages and progress replies', () => {
     const id = created.result.conversationId as string
     expect(created.messages.filter(m => m.conversationId === 'lead' && !m.thread)).toEqual([])
     expect(f.task(id)).toMatchObject({ requesterId: 'owner', cards: { line: { messageId: 'ask', conversationId: 'lead' } } })
-    const builder = f.add('Kai', id)
-    expect(thread(f.run({ type: 'work.assign', conversationId: id, agentId: builder }), 'ask')).toEqual([])
-  })
-
-  // The server reacts for no agent any more (anh Dee, 2026-11-09: the 👀 on every message): a task's start and its merge leave
-  // the message that asked for it as it was, and move nothing a reader polls.
-  it('reacts nowhere as the task\'s agent when its work starts', () => {
-    const f = fixture(), id = f.group(), builder = f.add('Kai', id)
-    const seq = () => f.state.conversations.find(c => c.id === 'lead')!.reactionSeq ?? 0, before = seq()
-    expect(f.run({ type: 'work.assign', conversationId: id, agentId: builder })).not.toHaveProperty('reactions')
-    expect(seq()).toBe(before)
   })
 
   it('refuses a request message that is not a person\'s own top-level message in the project chat', () => {
@@ -253,14 +118,6 @@ describe('ordinary task messages and progress replies', () => {
     }
   })
 
-  it('keeps legacy roots readable and appends updates without rewriting their stored words', () => {
-    const f = fixture(), id = f.group(), builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
-    f.task(id).cards!.line!.messageId = 'old-root'
-    const effects = f.status(id, builder, 'review', 'Review this.')
-    expect(effects.messages.filter(m => m.thread === 'old-root')).toHaveLength(1)
-  })
-
   it('puts a private project\'s task only in its own project chat', () => {
     const f = fixture()
     const project = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result.projectId as string
@@ -270,11 +127,9 @@ describe('ordinary task messages and progress replies', () => {
     expect(f.task(parent).cards?.line).toEqual({ messageId: 'secret-ask', conversationId: chat })
   })
 
-  it('never creates a root for a task that has none, on unrelated chat activity or when it moves', () => {
-    const f = fixture(), id = f.group(), builder = f.add('Kai', id)
-    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+  it('never creates a root for a task that has none, on unrelated chat activity', () => {
+    const f = fixture(), id = f.group()
     delete f.task(id).cards
     expect(f.lines(f.run({ type: 'message.send', conversationId: 'lead', text: 'Hello.', replyTo: null, recipientIds: [] }))).toEqual([])
-    expect(f.status(id, builder, 'review', 'Ready.').messages.filter(m => m.conversationId === 'lead')).toEqual([])
   })
 })
