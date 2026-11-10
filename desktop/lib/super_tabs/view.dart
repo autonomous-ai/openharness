@@ -4021,7 +4021,15 @@ class _SuperTabViewState extends State<SuperTabView>
     required bool narrow,
   }) {
     final machine = widget.machineName(agent.machineId);
-    final detail = [machine, ?swarmEngineName(agent)].join(' · ');
+    // A message to it waits while its engine starts (the daemon's message_waiting): its bar says so.
+    final starting =
+        agent.downSince == null &&
+        (widget.app?.engineStarting(agent.machineId, agent.harnessId) ?? false);
+    final detail = [
+      machine,
+      ?swarmEngineName(agent),
+      if (starting) 'starting',
+    ].join(' · ');
     final terminalOpen = _terminalsVisible;
     return Container(
       key: const ValueKey('swarm-agent-header'),
