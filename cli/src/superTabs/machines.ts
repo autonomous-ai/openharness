@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { availableParallelism, homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CoreApi } from '../core/api.js'
@@ -283,6 +283,8 @@ export class ContributedMachines {
   private readingsRefusedUntil = 0
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
+  /** Until when this machine's cores are left out of its resources: a backend before them refused them (sendAlone). */
+  private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
   private tokensRefusedUntil = 0
@@ -717,7 +719,9 @@ export class ContributedMachines {
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
-          resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
+          // Its logical cores, which the PM's Harness plans this machine's work against (assign/crew.ts).
+          resources: { cpuPercent: finite(resources.cpuPercent), ...(began >= this.coresRefusedUntil ? { cpuCores: availableParallelism() } : {}),
+            memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
@@ -1014,18 +1018,37 @@ export class ContributedMachines {
       else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
       else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
     }
-    // The batch sent the newest form, which is the first attempt: it is not sent again.
-    if (refused) {
+    // The machine's cores sit inside its resources, whose schema refuses a key it does not know, and a backend before them
+    // names them in its refusal ('Unrecognized key: "cpuCores"'): that form goes again without them, and they are left out
+    // for a while, as any refused field is. Every other field falls back as before.
+    const coresRefused = (error: unknown) => fieldRefused(error) && /\bcpuCores\b/.test(error instanceof Error ? error.message : '')
+    let coreless = false
+    const formOf = (attempt: Record<string, unknown>): Record<string, unknown> => {
+      if (!coreless || !('cpuCores' in object(attempt.resources))) return attempt
+      const { cpuCores: _cores, ...resources } = object(attempt.resources)
+      return { ...attempt, resources }
+    }
+    // The batch sent the newest form, which is the first attempt: it is not sent again, unless only its cores were refused.
+    if (refused && coresRefused(refused)) {
+      this.coresRefusedUntil = began + FIELD_REFUSED_MS
+      coreless = true
+    } else if (refused) {
       if (attempts.length === 1) throw refused
       refuse(attempts[0]!)
     }
-    for (const [index, attempt] of attempts.entries()) {
-      if (refused && index === 0) continue
+    for (let index = refused && !coreless ? 1 : 0; index < attempts.length; index++) {
+      const attempt = formOf(attempts[index]!)
       try {
         await this.deps.backend(this.core, 'POST', path, attempt)
         this.taken(tab, attempt)
         return
       } catch (error) {
+        if (!coreless && 'cpuCores' in object(attempt.resources) && coresRefused(error)) {
+          this.coresRefusedUntil = began + FIELD_REFUSED_MS
+          coreless = true
+          index--
+          continue
+        }
         if (!fieldRefused(error) || index === attempts.length - 1) throw error
         refuse(attempt)
       }

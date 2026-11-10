@@ -8,7 +8,7 @@ import { ghError, ghRun, type Run } from '../lib/github.js'
 
 export interface GitHubReply { status: number; etag: string | null; body: unknown; resetAt: number | null }
 export type GitHubGet = (path: string, etag: string | null) => Promise<GitHubReply>
-export type GitHubSend = (method: 'POST' | 'PUT' | 'PATCH', path: string, body: unknown) => Promise<GitHubReply>
+export type GitHubSend = (method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown) => Promise<GitHubReply>
 
 export function githubRest(run: Run = ghRun, request: typeof fetch = fetch, now: () => number = Date.now): { get: GitHubGet; send: GitHubSend } {
   let token: string | null = null
@@ -47,6 +47,44 @@ export const PAGE = 100
 const MAX_KEPT = 500
 /** How long to wait before asking again: gh missing or signed out, a repository this login cannot read, a rate limit. */
 const OFF_RETRY_MS = 5 * 60_000, UNREADABLE_RETRY_MS = 10 * 60_000, LIMIT_MAX_MS = 15 * 60_000
+/** How long to wait before asking again after [misses] in a row: 30 seconds, doubling to 15 minutes. A pass every 20 seconds against a
+ *  GitHub or a server that is down is the same failure three times a minute for as long as it lasts (and a revoked login, 180 `gh`
+ *  runs an hour). */
+export const retryIn = (misses: number): number => Math.min(LIMIT_MAX_MS, 30_000 * 2 ** Math.max(0, misses - 1))
+/** [ms] as the log says it: "30 s", "2 min". */
+export const waitWords = (ms: number): string => {
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  return seconds < 90 ? `${seconds} s` : `${Math.round(seconds / 60)} min`
+}
+
+/** What a pass over several repositories remembers of what failed, for the relay and the merger alike: each repository's own misses and
+ *  how long it is left alone, and the passes in a row that stopped for every repository. */
+export class Waits {
+  private readonly until = new Map<string, number>()
+  private readonly misses = new Map<string, number>()
+  private stops = 0
+
+  /** Whether [repo] is left alone at [now]. */
+  held(repo: string, now: number): boolean { return (this.until.get(repo) ?? 0) > now }
+
+  /** [repo] failed: it waits [floor] ms, or the next of 30 s doubling to 15 min if that is longer. The wait. */
+  miss(repo: string, now: number, floor = 0): number {
+    const misses = (this.misses.get(repo) ?? 0) + 1
+    this.misses.set(repo, misses)
+    const wait = Math.max(floor, retryIn(misses))
+    this.until.set(repo, now + wait)
+    return wait
+  }
+
+  /** [repo] was read through: its misses start again. */
+  ok(repo: string): void { this.misses.delete(repo) }
+
+  /** A pass stopped for every repository, [floor] ms at least: the wait before the next. */
+  stop(floor: number): number { return Math.max(floor, retryIn(++this.stops)) }
+
+  /** A pass ran through: its stops start again. */
+  ran(): void { this.stops = 0 }
+}
 /** How long a file found missing is not asked for again: an agent's instructions file is written rarely, and a 404 is not
  *  free against GitHub's limit as a 304 is. */
 const MISSING_MS = 5 * 60_000
@@ -104,7 +142,7 @@ export class GitHubReads {
     for (let page = 1; page <= maxPages; page++) {
       const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep)
       if (body === null) return rows
-      if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', true, this.now())
+      if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
       if (body.length < PAGE) break
     }
@@ -123,10 +161,11 @@ export class GitHubReads {
     })
     if (reply.status === 304) return keep ? last?.body ?? null : null
     if (reply.resetAt !== null) throw new GitHubStop('RATE_LIMITED', 'GitHub is limiting this computer\'s requests.', true, Math.min(reply.resetAt, this.now() + LIMIT_MAX_MS))
-    if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now())
+    if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now() + OFF_RETRY_MS)
     if (reply.status === 404 && fileMissing) return { missing: true }
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
-    if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, true, this.now())
+    // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
+    if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
     if (reply.etag) {
       this.kept.delete(url)
       this.kept.set(url, { etag: reply.etag, body: keep ? reply.body : null })

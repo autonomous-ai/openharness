@@ -99,7 +99,9 @@ export function contributedEngines(pool: ContributedMachine, observation: Machin
 const measure = z.number().finite().nonnegative().nullable()
 const percent = z.number().min(0).max(100).nullable()
 const resource = z.object({
-  cpuPercent: percent, memoryTotalBytes: measure, memoryUsedBytes: measure,
+  // The machine's logical cores, which the PM's Harness plans each machine's work against (cli/src/superTabs/assign/crew.ts).
+  // Optional: a daemon before it reports none, and is planned as an 8-core machine.
+  cpuPercent: percent, cpuCores: z.number().int().min(1).max(4096).nullable().optional(), memoryTotalBytes: measure, memoryUsedBytes: measure,
   diskFreeBytes: measure, diskTotalBytes: measure,
   projectDiskFreeBytes: measure, projectDiskTotalBytes: measure.optional(),
   deviceType: z.string().max(120).nullable(), chip: z.string().max(120).nullable(), os: z.string().max(120).nullable(),

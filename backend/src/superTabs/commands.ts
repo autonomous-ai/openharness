@@ -17,8 +17,8 @@ import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { githubRelaySchema, relayGitHub } from './githubRelay.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
-import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
-import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
+import { keepUsernames, swarmUsernames, usernameOf } from './usernames.js'
+import { agentWrittenNameOf, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -66,7 +66,7 @@ import { shippedAt } from './ship.js'
 import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, regularCodeLine, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
@@ -447,17 +447,13 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
-  z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
   z.object({ type: z.literal('member.approvalMode'), mode: z.enum(['autoApprove', 'review']) }).strict(),
   z.object({ type: z.literal('task.suggest'), conversationId: id, agentId: id }).strict(),
   // The suggested agent the person was shown, null for none (task #4217): compared, never read. Optional only for Desktops
   // from before it, until 2026-12-07.
   z.object({ type: z.literal('task.approve'), conversationId: id, suggestedAgentId: id.nullable().optional() }).strict(),
   z.object({ type: z.literal('task.reject'), conversationId: id, reason: z.string().trim().min(1).max(2000) }).strict(),
-  z.object({ type: z.literal('member.timeZone'), timeZone: z.string().min(1).max(64).nullable() }).strict(),
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
-  z.object({ type: z.literal('member.username'), username: z.string().max(64).nullable() }).strict(),
-  z.object({ type: z.literal('member.name'), name: z.string().max(200).nullable() }).strict(),
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
@@ -549,10 +545,6 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'github.relay': ['text', 'path', 'url'],
   'buddy.propose': ['text', 'title', 'goal', 'scope', 'why', 'doneWhen', 'evidence[]'],
   'proposal.create': ['title', 'text', 'goal', 'why', 'doneWhen', 'evidence[]'],
-  'member.status': ['status.text'],
-  'member.name': ['name'],
-  // A username with a credential in it then fails its shape and is refused (usernames.ts).
-  'member.username': ['username'],
   'agent.add': ['name', 'initialMessage', 'roleName'],
   'agent.new': ['name', 'projectName'],
   'agent.setUp': ['steps[]', 'reason'],
@@ -782,6 +774,9 @@ export interface CommandContext {
 export const notReachedLine = (names: string[]): string => `Your post was delivered, but not to ${names.join(', ')}: a Harness Team agent wrote this task's code, so an agent in the main account may not join it. `
   + 'Nothing is wrong with your post or with you. Ask the PM to hand the work on, or name an agent in a Team account.'
 export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
+/** Told to a post's sender when a recipient's session is down: the post waits in its queue, and it reads it when it is back. */
+export const offlineLine = (names: string[]): string => names.length === 1 ? `${names[0]} is offline; it will read this when it is back.`
+  : `${names.slice(0, -1).join(', ')} and ${names.at(-1)} are offline; they will read this when they are back.`
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
  *  agents talk to each other directly, so nothing else would notice two of them answering each other for ever). */
@@ -894,9 +889,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'swarm.delete' || command.type === 'swarm.restore') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  // So does choosing one's own username (usernames.ts) or name (personNames.ts), and one's app telling one's time zone.
-  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username'
-    || command.type === 'member.name' || command.type === 'member.timeZone') return void author(state, actor)
+  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
   if (personalApprovalCommand(command.type)) {
     authorizeTaskApproval(state, actor, command.type, 'conversationId' in command ? command.conversationId : undefined)
     if ('agentId' in command) readAgent(state, actor, command.agentId)
@@ -978,20 +971,20 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
 /** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. The
- *  open group [actor] may post in: an agent of the group's project that is not in it joins it (joinsProject). An agent with
- *  work in the project posts in its project chat without joining it, so the chat keeps only its coordinator among agents
- *  and opens no second terminal (#2207). */
-export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
+ *  open group [actor] may post in, and the agent that posting there adds to it (`joining`, else null): an agent of the group's
+ *  project that is not in it joins it (joinsProject). An agent with work in the project posts in its project chat without joining
+ *  it, so the chat keeps only its coordinator among agents and opens no second terminal (#2207). It changes nothing: an upload
+ *  asks it of the Swarm as the read cache holds it, which nothing may change, and the command that posts adds the agent. A yes
+ *  to an upload is not a yes to the post that sends it: that asks again, of the Swarm as it is then. */
+export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joining: string | null } {
   const group = open(state, conversationId)
   requireCanChat(state, actor, group)
-  if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) {
-    if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return group
-    if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
-      fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
-    }
-    group.agentIds.push(actor.agentId)
+  if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joining: null }
+  if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joining: null }
+  if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
+    fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
   }
-  return group
+  return { group, joining: actor.agentId }
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
@@ -1239,8 +1232,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // Before any role check: a viewer or an agent is told what anyone without the Swarm is told (deletion.ts).
   if (command.type === 'swarm.delete' && (actor.kind !== 'person' || actor.userId !== state.ownerId)) notThere()
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username'
-    && command.type !== 'member.name' && command.type !== 'member.timeZone' && !personalApprovalCommand(command.type) && !viewerProposal(state, actor, command))
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && !personalApprovalCommand(command.type) && !viewerProposal(state, actor, command))
   authorizeCommandAccess(state, actor, command, context)
   /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
    *  there in the last day, as routing rules are (machine.engineResume). */
@@ -4437,12 +4429,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       owner(state, actor)
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
-    case 'member.status':
-      setStatus(state, actor, command.status, context.now)
-      break
-    case 'member.timeZone':
-      setTimeZone(state, actor, command.timeZone)
-      break
     case 'message.react': {
       // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4), or in its project's
       // chat while it works in the project, joining nothing there either (River, 2026-11-04, #2924).
@@ -4469,12 +4455,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
-      break
-    case 'member.username':
-      setUsername(state, actor, command.username)
-      break
-    case 'member.name':
-      setName(state, actor, command.name)
       break
     case 'agent.avatar':
       setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
@@ -4516,10 +4496,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'message.send': {
-      const joining = actor.kind === 'agent' && !state.conversations.find(c => c.id === command.conversationId)?.agentIds.includes(actor.agentId)
-      const group = postable(state, actor, command.conversationId)
+      const { group, joining } = postable(state, actor, command.conversationId)
       // Posting in its project chat joins it nowhere (postable), so it takes no work there either.
-      if (joining && group.agentIds.includes(actor.agentId)) teamJoin(groupProject(state, group), actor.agentId, group)
+      if (joining) {
+        group.agentIds.push(joining)
+        teamJoin(groupProject(state, group), joining, group)
+      }
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
@@ -4662,6 +4644,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (buddyDown) buddyDownLine(group, buddyDown)
       if ((poster || excludedPm.length) && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
+      // A recipient whose session is down keeps the delivery queued and reads it when it is back, and nothing else tells its sender
+      // the post is waiting. Not an agent-only notice (the sender's own), an agent asleep (it wakes on the message) or one told to stop.
+      const away = command.agentOnly ? [] : recipients.filter(id => !agent(state, id).asleep && agent(state, id).workDecision !== 'stop' && downSince(state, agent(state, id), context.now))
+      if (away.length) effects.result.offline = offlineLine(away.map(id => agentDisplayName(state.agents, id) ?? agent(state, id).name))
       if (excludedPm.length) {
         const names = excludedPm.map(id => agent(state, id).displayName ?? agent(state, id).name).join(', ')
         effects.result.notReached = [effects.result.notReached, `This post did not reach ${names}: the PM takes proposals and proposal answers from cards. Use a proposal card when the PM must act.`].filter(Boolean).join('\n')

@@ -1,4 +1,4 @@
-/** What `harness super-tab route` records (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
+/** What a route decision records, as the CLI's route sent it before Swarm v4 removed it (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
 import { z } from 'zod'
 import type { RouteRun } from './costs/attempts.js'
 import { JOB_KINDS } from './evidence/jobKind.js'
