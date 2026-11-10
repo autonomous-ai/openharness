@@ -5,6 +5,7 @@ import { z, ZodError } from 'zod'
 import { prisma, prismaSecondary } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import { phoneSendersFromEnv, sendPhoneNotices } from '../push/send.js'
+import { redisRingMemory } from '../push/rings.js'
 import multipart from '@fastify/multipart'
 import { attachmentsFromEnv, formFileBody, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, stopUnpacking, unpackFailed } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
@@ -253,11 +254,13 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
     import('./harnessLinks.js'), import('../lib/voiceQuota.js'), import('../lib/deepgramWav.js')])
   const phones = phoneSendersFromEnv(env)
+  // An agent chat sounds once in five minutes on every server (push/rings.ts).
+  const rings = redisRingMemory(bus.pub)
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // Older history pages and the costs report read the secondaries (lib/prisma.ts, task #2970).
     { replica: prismaSecondary,
       // Thread replies and tags reach the phones of whoever they tell, while the app is closed (push/send.ts, task #2905).
-      phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) },
+      phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices, rings) },
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
       workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
