@@ -77,11 +77,13 @@ beforeAll(async () => {
   store = new SuperTabStore(db)
   for (const user of [owner, person]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
-  const machine = (machineId: string, userId: string, computerId: string, sessionKind: string) => db.machine.create({ data: {
-    machineId, userId, computerId, sessionKind, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  const machine = (machineId: string, userId: string, computerId: string, sessionKind: string, hostMachineId?: string) => db.machine.create({ data: {
+    machineId, userId, computerId, sessionKind, ...hostMachineId ? { hostMachineId } : {}, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   await machine('owner-host', owner.sub, 'cccccccccccccccccccccccccccccccc', 'computer')
   await machine('personal-mac', person.sub, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'computer')
-  await machine('team-mac', person.sub, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'team')
+  await machine('team-mac', person.sub, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'team', 'personal-mac')
+  // A person's own computer they turned into a Team machine (`harness team on`): its row names no Mac.
+  await machine('converted-mac', person.sub, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'team')
 }, 120_000)
 afterAll(async () => {
   await db?.$disconnect()
@@ -111,14 +113,41 @@ describe('the one-time job that takes Harness Team accounts\' machines out', () 
     // Its readers are told once, though both pods ran.
     expect(rows.filter(r => r.text.startsWith('Harness Team accounts are gone')).map(r => r.text))
       .toEqual(['Harness Team accounts are gone, so the one on MacBook left the Swarm, and "Helper" with it.'])
-    // The Team session's account row is soft-deleted; the person's own computer's is not.
+    // The Team account's row on the Mac is soft-deleted; the person's own computer's is not, nor a computer of theirs they had
+    // turned into a Team machine, whose own sign-in takes its row back (deleted, that sign-in would be refused and signed out).
     expect((await db.machine.findUnique({ where: { machineId: 'team-mac' } }))!.deletedAt).not.toBeNull()
     expect((await db.machine.findUnique({ where: { machineId: 'personal-mac' } }))!.deletedAt).toBeNull()
+    expect((await db.machine.findUnique({ where: { machineId: 'converted-mac' } }))!.deletedAt).toBeNull()
     // A Swarm with no Team machine is read and never written.
     expect(await headVersion(untouched)).toBe(untouchedVersion)
 
     // Done: the next pass changes nothing, so the job stops.
     expect(await takeOutTeamMachinesOnce(db, store)).toEqual({ swarms: expect.any(Number), machines: 0, rows: 0, failed: 0 })
+  })
+
+  it('keeps guarding the task a Team agent was building, unmarked from before the mark (audit H2)', async () => {
+    const f = await fixture()
+    const state = await storedState(f.tab)
+    state.conversations.find(c => c.id === f.task)!.assignment = { id: 'team-work', agentId: 'team-agent', status: 'working', configuration: config,
+      execution: { machineId: 'team-mac', harnessId: 'team-harness', machineOwnerId: person.sub }, result: null } as never
+    await saveState(f.tab, state)
+    expect((await takeOutTeamMachinesOnce(db, store)).failed).toBe(0)
+    const after = await storedState(f.tab)
+    expect(after.agents.map(a => a.id)).not.toContain('team-agent')
+    expect(after.conversations.find(c => c.id === f.task)).toMatchObject({ teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
+  })
+
+  it('takes out the Team machines of a Swarm whose owner\'s account is gone, so the job can finish', async () => {
+    const gone: AuthUser = { sub: '200000000000000000000003', email: 'gone@example.com', autonomousEnv: 'prod', role: 'user' }
+    await db.user.create({ data: { id: gone.sub, externalId: `fixture-${gone.sub}`, email: gone.email, autonomousEnv: gone.autonomousEnv } })
+    const tab = (await store.create(gone, randomUUID(), 'Owner gone')).id
+    const state = await storedState(tab)
+    ;(state.machines ??= []).push({ machineId: 'gone-team', name: 'Mini', contributorId: gone.sub, membershipGeneration: state.people[0]!.generation,
+      generation: 'g', cwd: '/work', engines: ['codex'], maxAgents: 2, paused: false, hostMachineId: 'gone-mac' } as never)
+    await saveState(tab, state)
+    await db.user.delete({ where: { id: gone.sub } })
+    expect(await store.takeOutTeamMachines(tab)).toBe(1)
+    expect((await storedState(tab)).machines ?? []).toEqual([])
   })
 
   it('refuses a client that sends the store\'s own command', async () => {

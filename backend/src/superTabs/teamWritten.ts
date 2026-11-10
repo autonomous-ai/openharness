@@ -43,6 +43,15 @@ function mark(group: Conversation, cause: Cause): void {
   group.teamWrittenBy = cause.kind === 'pushed' && was?.kind === 'pushed' ? { kind: 'pushed', pulls: [...new Set([...was.pulls, ...cause.pulls])] } : cause
 }
 
+/** Marks each task one of [agentIds], Harness Team agents leaving with their machine (machine.teamGone), was assigned to build:
+ *  a task from before the mark read its assignee, which is gone now. A step or the project's coordinator marks nothing. */
+export function markHeldByTeam(state: SuperTabState, agentIds: ReadonlySet<string>): void {
+  for (const group of state.conversations) {
+    const worker = group.assignment ? state.agents.find(a => a.id === group.assignment!.agentId) : undefined
+    if (worker && agentIds.has(worker.id) && !group.reviewOf && !coordinates(state, group, worker)) mark(group, { kind: 'assigned' })
+  }
+}
+
 /** Refuses an agent for Team-written code. The project's coordinator stays: it never builds or runs it. */
 export function requireTeamWrittenAccount(state: SuperTabState, group: Conversation, worker: Agent): void {
   if (barredFromTeamWritten(state, group, worker)) failTeamWritten()

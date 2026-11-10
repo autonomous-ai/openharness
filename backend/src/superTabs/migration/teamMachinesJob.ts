@@ -2,8 +2,8 @@
  * Once, after the release that removed Harness Team accounts' machines from Swarms (anh Dee, 2026-11-10: "remove all team
  * accounts, clean up v1/2/3 entirely"). Their sign-ins went first (#3837): no Team daemon connects any more, so what a Swarm
  * still records of one is a machine nobody can host. This takes every such machine out of every Swarm, with its agents
- * (store.ts takeOutTeamMachines, the store-only machine.teamGone), and soft-deletes the account rows Team sessions served
- * (`Machine.sessionKind` `team`), a page at a time. It runs in the singleton worker; logs only counts; tries again an hour after
+ * (store.ts takeOutTeamMachines, the store-only machine.teamGone), and soft-deletes the account rows of Team accounts on a Mac
+ * (`Machine.sessionKind` `team` naming its Mac in `hostMachineId`), a page at a time. It runs in the singleton worker; logs only counts; tries again an hour after
  * a pass that failed somewhere and stops once a pass changed nothing and failed nowhere. A worker that starts again walks once
  * more (one read per Swarm, no write when it holds no Team machine). Two runners do no harm: each Swarm is read again in its own
  * transaction, a machine already gone is no write, and a row already deleted is matched by neither. Goes, with the command, the
@@ -36,18 +36,20 @@ export function teamMachineIds(state: Pick<SuperTabState, 'machines' | 'agents'>
 
 export interface TeamMachinesPass { swarms: number; machines: number; rows: number; failed: number }
 
-/** Soft-deletes the account rows Team sessions served, a page at a time, in machine id order (its unique index; `sessionKind`
- *  has none, and a few Team rows are worth no index for a job that runs once); how many. A raw match: Prisma's `deletedAt:
- *  null` misses a row that never had the field. */
+/** Soft-deletes the account rows of Team accounts on a Mac, a page at a time, in machine id order (its unique index; `sessionKind`
+ *  has none, and a few Team rows are worth no index for a job that runs once); how many. Only a row that names its Mac: a person's
+ *  own computer turned into a Team machine (`harness team on`) kept its row and names none, and its own sign-in takes that row
+ *  back (adapterWs.ts); deleted, its next connect would be refused as a removed machine and sign it out. A raw match: Prisma's
+ *  `deletedAt: null` misses a row that never had the field. */
 export async function deleteTeamMachineRows(db: PrismaClient, now: () => Date = () => new Date(), signal?: AbortSignal): Promise<number> {
   let deleted = 0, after: string | undefined
   while (!signal?.aborted) {
     const rows = await db.machine.aggregateRaw({ pipeline: [
-      { $match: { sessionKind: 'team', $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }], ...after ? { machineId: { $gt: after } } : {} } },
+      { $match: { sessionKind: 'team', hostMachineId: { $type: 'string' }, $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }], ...after ? { machineId: { $gt: after } } : {} } },
       { $sort: { machineId: 1 } }, { $limit: PAGE }, { $project: { _id: 0, machineId: 1 } }] }) as unknown as Array<{ machineId: string }>
     // One update per row: an `in` would reach Mongo as $expr. Only a row still a Team session's and still live.
     for (const { machineId } of rows) {
-      deleted += (await db.machine.updateMany({ where: { machineId, sessionKind: 'team', OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] },
+      deleted += (await db.machine.updateMany({ where: { machineId, sessionKind: 'team', hostMachineId: { not: null }, OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] },
         data: { deletedAt: now() } })).count
     }
     if (rows.length < PAGE) break

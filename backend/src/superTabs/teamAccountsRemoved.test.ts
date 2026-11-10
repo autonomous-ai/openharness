@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
+import { barredFromTeamWritten } from './teamWritten.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 const NOW = 50_000_000
@@ -125,5 +126,21 @@ describe('with Team accounts removed', () => {
     Object.assign(f.group(), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
     expect(refusal(() => f.assign(mates))).toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
     expect(refusal(() => f.assign(owners))).toBeNull()
+  })
+
+  it('marks the task a Team agent held, unmarked from before the mark, Team-written when its machine leaves (audit H2)', () => {
+    const f = swarm()
+    const team = f.member('mates-team', 'mate-team', 'mate')
+    f.group().assignment = { id: 'a1', agentId: team, status: 'working', configuration: config, result: null,
+      execution: { machineId: 'mate-team', harnessId: 'harness-mates-team', machineOwnerId: 'mate' } } as never
+    const other = f.group(String(f.run({ type: 'conversation.create', projectId: 'lead', title: 'Other', brief: 'Not its.', priority: 'P2',
+      requesterId: 'owner', checks: [{ description: 'Done.', independent: false }] } as Command, f.as(f.pm)).result.conversationId))
+    f.run({ type: 'machine.teamGone', machineId: 'mate-team' } as Command, owner, { teamMachineGone: true })
+    expect(f.state.agents.map(a => a.id)).not.toContain(team)
+    expect(f.group()).toMatchObject({ teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
+    expect(other.teamWritten).toBeUndefined()
+    // Its own person's agent may not take it over: only the project owner's own agent may.
+    const mates = f.member('mates-own', 'mate-mac', 'mate')
+    expect(barredFromTeamWritten(f.state, f.group(), f.state.agents.find(a => a.id === mates)!)).toBe(true)
   })
 })

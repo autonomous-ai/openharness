@@ -1110,9 +1110,10 @@ export class SuperTabStore {
     const { state } = await loadRow(this.db as unknown as Transaction, requireParts(row), {})
     const ids = teamMachineIds(state)
     if (!ids.length) return 0
-    const owner = await this.db.user.findUnique({ where: { id: state.ownerId }, select: { email: true } })
-    if (!owner) throw new SuperTabError('OWNER_MISSING', 'This Swarm\'s owner has no account.', 409)
-    const user: AuthUser = { sub: state.ownerId, email: owner.email, autonomousEnv: state.environment as AuthUser['autonomousEnv'], role: 'user' }
+    // An owner whose account is gone still owns the Swarm: the email it has there serves, so such a Swarm is no failure every hour.
+    const email = (await this.db.user.findUnique({ where: { id: state.ownerId }, select: { email: true } }))?.email
+      ?? state.people.find(p => p.id === state.ownerId)?.email ?? ''
+    const user: AuthUser = { sub: state.ownerId, email, autonomousEnv: state.environment as AuthUser['autonomousEnv'], role: 'user' }
     for (const machineId of ids) {
       await this.executeOnce(user, tabId, { operationId: `team-gone-${stableId(tabId, machineId)}`, command: { type: 'machine.teamGone', machineId } },
         undefined, undefined, { teamMachineGone: true })
@@ -4355,7 +4356,6 @@ export class SuperTabStore {
     return { held: true }
   }
 
-  /**
   /**
    * A machine its owner renamed (machineRenames.ts): every Swarm it is in shows the name from its owner's account row now
    * (machines.ts followAccountName), as its next reading would. One Swarm at a time, each

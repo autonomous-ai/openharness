@@ -293,9 +293,8 @@ export class SwarmReads {
 
   /**
    * One conversation from its own row by key and the parts its read check reads: the head, members and agents (cachedReads.ts
-   * readAccess), and for an agent its machine's account (onTeamAccount) and, when it is stored with no project, its active
-   * conversations (agentProjectId). Never the whole Swarm: its cached base and machines were refreshed from the Swarm's group,
-   * machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
+   * readAccess), and for an agent stored with no project its active conversations (agentProjectId). Never the whole Swarm: its
+   * cached base and machines were refreshed from the Swarm's group, machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
    * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
    * a Buddy chat an agent reads only as its Buddy. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
    * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
@@ -312,13 +311,11 @@ export class SwarmReads {
       if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
         && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [], progress: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
       const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
-      const [context, machines] = target ? await Promise.all([
-        target.projectId ? Promise.resolve([]) : parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }),
-        parts.loadMachineAccounts(tx, tabId, [target.machineId])]) : [[], []]
+      const context = target && !target.projectId ? await parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }) : []
       // The conversation itself whole; another only as the light row the checks read, once.
       const held = new Set(found ? [found.key] : [])
       const groups = [...found ? [found] : [], ...context.filter(g => !held.has(g.key) && !!held.add(g.key))]
-      const state = parts.reassemble({ ...access, groups, machines, starts: [], progress: [] }, { share: true })
+      const state = parts.reassemble({ ...access, groups, machines: [], starts: [], progress: [] }, { share: true })
       const actor = await this.store.actor(tx, user, state, asAgentId)
       author(state, actor)
       const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)

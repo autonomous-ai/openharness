@@ -4,7 +4,7 @@ import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, startProject, type SwarmProject } from './projects.js'
+import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 import { conversation } from './model.js'
 
@@ -295,21 +295,6 @@ export function followAccountName(pool: ContributedMachine, name: string | null)
   if (!renamedBy(pool, name)) return false
   pool.name = name
   return true
-}
-
-/** The projects with work on [machineId]: its agents' and its pending starts'. */
-export function projectsOnMachine(state: SuperTabState, machineId: string): Set<string> {
-  // A start in an agent's own chat or a Buddy's belongs to no project.
-  const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error)
-    .flatMap(s => s.request.leadFor?.projectId ?? startProject(state, s.request)?.id ?? [])
-  return new Set([...state.agents.filter(a => a.machineId === machineId).map(a => agentProjectId(state, a)), ...pending])
-}
-
-/** The project whose Product Manager runs, or is starting, on [machineId]; null when none does. */
-export function productManagerOn(state: SuperTabState, machineId: string): string | null {
-  const led = state.agents.find(a => a.machineId === machineId && ledProject(state, a.id))
-  if (led) return ledProject(state, led.id)!.id
-  return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
 }
 
 /** The folder a start for [project] uses on [pool]: what admitMachineStart accepts there. */
