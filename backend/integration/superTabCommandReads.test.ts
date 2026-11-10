@@ -160,3 +160,18 @@ describe('a slow command names its phases', () => {
     }
   })
 })
+
+// A person's post in a project's channel is refused (agents only, commands.ts postable) before the store reads the rows
+// above it: a refused post costs no message read.
+describe('a person\'s post in a project\'s channel', () => {
+  it('is refused before any message row is read', async () => {
+    const store = new SuperTabStore(db, Date.now, null)
+    const tab = (await store.create(owner, randomUUID(), 'Agents only', 'public')).id
+    let refused: unknown = null
+    const entries = await profiled(db, () => store.execute(owner, tab, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: 'lead', text: 'Can you look at this?', replyTo: null, recipientIds: [] } as Command })
+      .catch(error => { refused = error }))
+    expect(refused).toMatchObject({ code: 'AGENTS_ONLY' })
+    expect(entries.filter(e => e.ns.endsWith('.SuperTabMessage') && ['query', 'command', 'getmore'].includes(e.op)).length).toBe(0)
+  })
+})
