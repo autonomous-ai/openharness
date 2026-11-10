@@ -6,7 +6,6 @@
 /// daemon's (`grid.note`), in the words of `resting_model_words.dart`.
 library;
 
-
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
@@ -14,6 +13,7 @@ import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/model_start_watch.dart';
 import '../theme/app_theme.dart';
+import 'pane_note.dart';
 import 'resting_model_words.dart';
 
 /// The chip's mark, the gap after it, and its padding — one set of numbers for the chip and for
@@ -24,10 +24,6 @@ const EdgeInsets _kChipPadding = EdgeInsets.symmetric(
   horizontal: 6,
   vertical: 4,
 );
-
-/// The note strip's one line: tall enough for its "Pick another" button, and the same height with
-/// or without one, so a note that loses its action does not resize the terminal again.
-const double _kNoteHeight = 30;
 
 /// The chip's words for [phase].
 String startingChipLabel(ModelStartPhase phase) => switch (phase) {
@@ -124,56 +120,26 @@ class PaneModelNote extends StatelessWidget {
       GridNoteOffline() => null,
     };
     final sentence = noteSentence(note);
-    return Semantics(
-      container: true,
-      liveRegion: true,
-      child: Container(
-        height: _kNoteHeight,
-        padding: const EdgeInsets.only(left: 14, right: 8),
-        decoration: BoxDecoration(
-          color: Color.alphaBlend(
-            AppColors.warning.withValues(alpha: 0.10),
-            grid.AppPalette.panelBg,
-          ),
-          border: Border(bottom: BorderSide(color: AppColors.border)),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              switch (note) {
-                GridNoteOffline() => AppIcons.cloudOff,
-                GridNoteNotServed() => AppIcons.info,
-              },
-              size: _kChipMark,
-              color: AppColors.warning,
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Tooltip(
-                message: pick == null ? sentence : '$sentence — $kPickAnother',
-                child: Text(
-                  pick == null ? sentence : '$sentence —',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.body(color: AppColors.textSoft),
-                ),
+    return PaneNote(
+      icon: switch (note) {
+        GridNoteOffline() => AppIcons.cloudOff,
+        GridNoteNotServed() => AppIcons.info,
+      },
+      text: pick == null ? sentence : '$sentence —',
+      tooltip: pick == null ? sentence : '$sentence — $kPickAnother',
+      action: pick == null
+          ? null
+          : TextButton(
+              onPressed: pick,
+              style: TextButton.styleFrom(
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                padding: _kChipPadding,
+                foregroundColor: AppColors.accent,
+                textStyle: grid.AppType.monoLabel(),
               ),
+              child: const Text(kPickAnother),
             ),
-            if (pick != null)
-              TextButton(
-                onPressed: pick,
-                style: TextButton.styleFrom(
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  padding: _kChipPadding,
-                  foregroundColor: AppColors.accent,
-                  textStyle: grid.AppType.monoLabel(),
-                ),
-                child: const Text(kPickAnother),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

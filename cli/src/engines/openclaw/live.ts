@@ -11,7 +11,8 @@
  *   showing the connection drop, reads idle on two passes with no row between them. Idle alone is no proof: the TUI
  *   reads `connected | idle` through a run it did not start until that run's first delta (another TUI, the Control UI,
  *   a channel message, cron), and its watchdog sets idle 30 s after a reconnect.
- * - The window's header (seq 0, `{type:'session', cwd}`) is handed on for the workspace label.
+ * - The window's header (seq 0, `{type:'session', cwd}`) is handed on for the workspace label. A key with no rows yet
+ *   (`main`, bound before its first message) hands on the agent's newest header instead: the workspace is the agent's.
  * - A pane that read idle, with no turn open and its store unchanged since, has nothing new to show but a Gateway that
  *   dropped: the bind pass reads it every QUIET_PANE_MS instead of every pass (`paneDue`). The pane's captures were
  *   most of what one bound idle pane cost the daemon.
@@ -49,7 +50,8 @@ export interface OpenclawLiveDeps {
   db: string
   key: string
   onEvents(events: LiveEvent[]): void
-  /** The window's header record, each time a window is read from its start. */
+  /** The window's header record, each time a window is read from its start; for a key with no rows yet, the agent's
+   *  newest window's. */
   onHeader?(record: Record<string, unknown>): void
   /** A run failed or timed out and wrote nothing that says so: what to tell the person. */
   onFailed?(message: string): void
@@ -92,6 +94,7 @@ export class OpenclawLive {
       onStatus: (status) => this.status(status),
       onFatal: (reason) => deps.onFatal(reason),
       onRecovered: () => deps.onRecovered?.(),
+      onAgentHeader: (record) => deps.onHeader?.(record),
       busy: () => this.normalizer.turnOpen,
     })
   }

@@ -210,4 +210,25 @@ describe('OpenclawLive', () => {
       vi.useRealTimers()
     }
   })
+
+  // `openclaw tui --session main` binds `main` before the key has a row (E2E, 2026-11-10): the agent's newest window
+  // names the workspace until the key's own header is read, and a store with no window names none.
+  it('a key with no rows yet takes the workspace from the agent\'s newest window; its own header replaces it', async () => {
+    const { path, db } = store('plain')
+    const headers: unknown[] = []
+    const stream = new OpenclawLive({ ...live(path, 'agent:main:main').deps, onHeader: (record) => { headers.push(record.cwd) } })
+    await stream.start()
+    expect(headers).toEqual(['/root/.openclaw/workspace'])
+    const window = windowOf(db, 'agent:main:plain')
+    db.exec(`PRAGMA foreign_keys = OFF; UPDATE transcript_events SET event_json = replace(event_json, '/root/.openclaw/workspace', '/root/own')
+      WHERE session_id = '${window}' AND seq = 0; UPDATE session_nodes SET session_key = 'agent:main:main' WHERE current_session_id = '${window}'`)
+    await vi.waitFor(() => expect(headers).toEqual(['/root/.openclaw/workspace', '/root/own']))
+    stream.stop()
+
+    db.exec('PRAGMA foreign_keys = OFF; DELETE FROM transcript_events; DELETE FROM session_windows; DELETE FROM session_nodes')
+    const none = new OpenclawLive({ ...live(path, 'agent:main:main').deps, onHeader: (record) => { headers.push(record.cwd) } })
+    await none.start()
+    none.stop()
+    expect(headers).toHaveLength(2)
+  })
 })

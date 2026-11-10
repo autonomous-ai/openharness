@@ -34,6 +34,7 @@ import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredS
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 /**
  * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
@@ -73,6 +74,9 @@ export type AgentFrame = {
   closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
   identityHold?: string
+  /** What stops the agent that only the person can fix, in words for them (the spec's named states, OpenClaw's);
+   *  absent when nothing does. The daemon's own waits stay in `identityHold` and are never shown. */
+  namedState?: string
   createdAt: string
   updatedAt: string
   /**
@@ -234,6 +238,7 @@ function frameTitle(s: RegisteredSession): string | null {
  * of the two.
  */
 const gitContexts = new SessionGitContextReader()
+const NAMED_STATES = new Set<string>(Object.values(OPENCLAW_STATES))
 
 export async function agentFrame(
   s: RegisteredSession,
@@ -263,6 +268,7 @@ export async function agentFrame(
     closeSupported: true,
     launch: s.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
+    ...(s.identityHold && NAMED_STATES.has(s.identityHold) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase

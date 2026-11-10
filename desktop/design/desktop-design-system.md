@@ -901,6 +901,9 @@ Deliberate differences from Desktop, and only these:
 - Swarm Home starts a new message from a round, 56-point, accent-filled +
   floating at its bottom right (New message, as Slack Mobile does), not from
   a button in its top bar.
+- An agent row's status line says a named state (`Agent.namedState`) in the
+  attention tone in place of what the agent is doing, below only Waiting for
+  you, where Desktop puts it in a pane note.
 
 The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
 with the same rules as Desktop's Swarm code and an allowlist of its own.
@@ -951,7 +954,8 @@ existing controller and does not add a preview.
 **Cmd-P** — a prominent search field, separate compact scope pills, recognizable
 agent marks and clean results. Harnesses is the default scope. Preserve typed
 words when changing scope. Keep result selection stable through live updates.
-Details remain in the existing optional preview. No second search index or
+Details remain in the existing optional preview; its folder line is followed by
+`Workspace · <path>` for an engine whose tools work elsewhere (OpenClaw). No second search index or
 management implementation. Toolbar controls are secondary to the query. Keep
 the editor and footer stationary while results update; do not resize the panel
 on every keystroke or make short lists stretch their individual rows. On wide
@@ -1077,6 +1081,15 @@ harness; a closed or replaced pane cannot receive a stale selection. Long model
 names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
+
+**Pane notes** (`PaneNote`) — one 30-point line under the header, in flow so it
+covers none of the terminal, on a 10% warning tint with a 14-point warning-ink
+mark and one body line that truncates with its full text on hover. Two say why
+an agent cannot work: its model not answering (`PaneModelNote`, with Pick
+another where the pane has a picker) and a named state the daemon says only the
+person can fix (`Agent.namedState`, triangle mark, the daemon's sentence as it
+is, such as `OpenClaw Gateway is not running. Start it with openclaw gateway.`).
+A note is gone the moment the daemon stops sending it.
 
 **Focused workspace footer** — `Harnesses N`, `Machines N`, `Models N`, then subscription
 icons with remaining percentages at the left; focused machine, project, branch and PR at the right.

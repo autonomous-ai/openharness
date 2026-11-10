@@ -75,6 +75,9 @@ const LIVE_SQL = rowsSql('e.session_id = ? AND e.seq > ?')
 const ACTIVE_SQL = rowsSql('e.session_id = ? AND e.seq > ? AND (e.seq = 0 OR EXISTS (SELECT 1 FROM session_transcript_active_events a WHERE a.session_id = e.session_id AND a.event_seq = e.seq))')
 const NODE_SQL = 'SELECT n.current_session_id AS window_id, n.status AS status, w.generation AS generation FROM session_nodes n ' +
   'LEFT JOIN transcript_rewrite_watermarks w ON w.session_id = n.current_session_id WHERE n.session_key = ?'
+/** The header (seq 0) of the agent's most recently updated window, by `idx_agent_session_windows_updated_at`. */
+const NEWEST_HEADER_SQL = 'SELECT w.session_id AS window_id, e.seq AS seq, 0 AS hidden, e.event_json AS event_json, e.event_zstd AS event_zstd FROM session_windows w ' +
+  'JOIN transcript_events e ON e.session_id = w.session_id AND e.seq = 0 ORDER BY w.updated_at DESC LIMIT 1'
 const PREVIOUS_SQL = 'SELECT previous_session_id AS previous FROM session_windows WHERE session_id = ?'
 const LAST_SEQ_SQL = 'SELECT max(seq) AS seq FROM transcript_events WHERE session_id = ?'
 const IDS_SQL = "SELECT CASE WHEN json_valid(event_json) THEN json_extract(event_json, '$.id') " +
@@ -305,6 +308,11 @@ export interface OpenclawReaderDeps {
   onFatal?(reason: 'unsupported' | 'missing'): void
   onRecovered?(): void
   /**
+   * The header of the agent's newest window, once, when the key has no rows yet: OpenClaw's workspace is the agent's, so
+   * it stands for the key's until the key's own header (seq 0) comes as an event.
+   */
+  onAgentHeader?(record: Record<string, unknown>): void
+  /**
    * While this says so, every poll reads, changed files or not: an open turn is closed by the key's status, which takes
    * a second read to trust (live.ts).
    */
@@ -327,6 +335,8 @@ export class OpenclawReader {
   /** Event ids already emitted (or seen at attach): a row a rewind copied into a new window is not emitted again. */
   private readonly emitted = new Set<string>()
   private said: 'absent' | 'failing' | null = null
+  /** Whether the agent's newest header was looked for, for a key with no rows yet. */
+  private borrowed = false
   /** The store's stamp when the last read left nothing to read again, and when that read was. */
   private settled: string | null = null
   private readAt = 0
@@ -401,6 +411,12 @@ export class OpenclawReader {
       settled = true
       if (!node) {
         if (!this.hydrated) this.born = true
+        if (!this.borrowed) {
+          const row = query(this.deps.db, NEWEST_HEADER_SQL, [])[0]
+          this.borrowed = true
+          const header = row ? decode(this.deps.key, String(row.window_id), row) : null
+          if (header) this.deps.onAgentHeader?.(header)
+        }
         return
       }
       this.said = null

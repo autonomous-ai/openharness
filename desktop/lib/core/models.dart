@@ -511,6 +511,11 @@ class Agent {
   /// the pane's folder and from an older daemon.
   final String? workspace;
 
+  /// What stops this agent that only the person can fix, in the daemon's words (`namedState`:
+  /// `OpenClaw Gateway is not running. Start it with openclaw gateway.`). Null when nothing does,
+  /// and from an older daemon.
+  final String? namedState;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -669,6 +674,7 @@ class Agent {
     this.modelEffort,
     this.modelId,
     this.workspace,
+    this.namedState,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
@@ -844,6 +850,7 @@ class Agent {
       modelEffort: model?.effort,
       modelId: model?.id,
       workspace: _safeDetail(j['workspace']),
+      namedState: _safeDetail(j['namedState']),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
@@ -937,6 +944,7 @@ class Agent {
     modelEffort: modelEffort,
     modelId: modelId,
     workspace: workspace,
+    namedState: namedState,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,

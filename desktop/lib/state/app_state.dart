@@ -11213,6 +11213,8 @@ class AppNotifier extends ChangeNotifier {
           prev.claudeHome != agent.claudeHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
+          prev.workspace != agent.workspace ||
+          prev.namedState != agent.namedState ||
           prev.gridModel != agent.gridModel ||
           prev.gridWebSearch != agent.gridWebSearch ||
           prev.gridBaseUrl != agent.gridBaseUrl ||
