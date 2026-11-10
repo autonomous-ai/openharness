@@ -78,7 +78,8 @@ export class Containers {
       '--name', name, ...labels, '--label', `harness.settings=${hash}`,
       '--network', name,
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
-      '--tmpfs', '/tmp:rw,size=256m', '--tmpfs', '/home/browser:rw,size=256m',
+      // HOME's tmpfs is root's alone without the mode, and Chromium crashes at start (measured in the spike).
+      '--tmpfs', '/tmp:rw,size=256m', '--tmpfs', '/home/browser:rw,size=256m,mode=1777',
       '--tmpfs', '/var/tmp:rw,size=16m', '--tmpfs', '/run:rw,size=16m',
       '-v', `${name}:${PROFILE}`,
       '-e', `TZ=${timeZone}`, '-e', `ACCEPT_LANG=${settings.languages}`, '-e', `SCREEN=${settings.screen}`,

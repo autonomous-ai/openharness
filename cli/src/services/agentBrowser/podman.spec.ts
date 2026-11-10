@@ -162,10 +162,81 @@ describe('createPodman', () => {
 
     fake.reply('machine start', { code: 125, stderr: 'Error: podman-machine-default: VM already running or starting' })
     await podman.startMachine()
+    // Harness's own machine that will not start is Podman down: there is no other machine to make.
+    podman.useConnection('harness')
     fake.reply('machine start', { code: 125, stderr: 'Error: vfkit exited unexpectedly' })
     const error = await failure(podman.startMachine())
     expect(error.state).toBe('podman_down')
     expect(error.message).toContain('vfkit exited unexpectedly')
+  })
+
+  // The spike's Mac: the person's machine had lost its files to another app, and every start failed after 31 s.
+  it('a default machine whose start fails is needs_setup with ownMachine true', async () => {
+    fake.reply('info', { code: 125, stderr: 'Error: unable to connect to Podman socket' })
+    fake.reply('machine list', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Running: false }]) })
+    fake.reply('machine start', { code: 125, stderr: 'Error: unable to connect to "gvproxy" socket' })
+    const podman = found()
+    expect(await podman.available()).toEqual({ state: 'stopped' })
+    const error = await failure(podman.startMachine())
+    expect(error.state).toBe('needs_setup')
+    expect(error.message).toContain('gvproxy')
+    expect(await podman.available()).toEqual({ state: 'needs_setup', restart: false, ownMachine: true })
+    expect(fake.calls().map(call => call.args).filter(args => args[0] === 'machine' && args[1] !== 'list')).toEqual([['machine', 'start']])
+  })
+
+  it('after setup every call carries --connection harness', async () => {
+    const podman = found()
+    expect(podman.connection()).toBeNull()
+    podman.useConnection('harness')
+    expect(podman.connection()).toBe('harness')
+    // The person's default connection still fails; only Harness's own answers.
+    fake.reply('info', { code: 125 })
+    fake.reply('--connection harness info', { stdout: info('5.8.9', 6 * GiB) })
+    expect(await podman.available()).toEqual({ state: 'ready' })
+    await podman.run(['ps', '-a'])
+    const child = podman.spawn(['events', '--format', 'json'])
+    child.stdin!.end()
+    await new Promise(resolve => child.once('close', resolve))
+    // Machine commands act on a machine by its name, not through a connection.
+    await podman.startMachine()
+    expect(fake.calls().map(call => call.args)).toEqual([
+      ['--connection', 'harness', 'info', '--format', 'json'],
+      ['--connection', 'harness', 'ps', '-a'],
+      ['--connection', 'harness', 'events', '--format', 'json'],
+      ['machine', 'start', 'harness'],
+    ])
+  })
+
+  it('a rootful connection names its machine without -root, and a stopped one is read from the list', async () => {
+    fake.reply('--connection harness-root info', { code: 125 })
+    fake.reply('machine list', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Running: true }, { Name: 'harness', Running: false }]) })
+    const podman = createPodman({ resolve: async () => fake.path, platform: 'win32', now: () => 0 })
+    podman.useConnection('harness-root')
+    expect(await podman.available()).toEqual({ state: 'stopped' })
+    await podman.startMachine()
+    expect(fake.calls().at(-1)!.args).toEqual(['machine', 'start', 'harness'])
+  })
+
+  it('Harness\'s own machine gone from the list is needs_setup', async () => {
+    fake.reply('--connection harness info', { code: 125 })
+    fake.reply('machine list', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Running: false }]) })
+    const podman = found()
+    podman.useConnection('harness')
+    expect(await podman.available()).toEqual({ state: 'needs_setup', restart: false })
+  })
+
+  it('memoryBytes reads machine inspect while the machine is stopped', async () => {
+    fake.reply('info', { code: 125, stderr: 'Error: unable to connect to Podman socket' })
+    fake.reply('machine inspect', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Resources: { CPUs: 12, Memory: 8192 } }]) })
+    expect(await found('darwin').memoryBytes()).toBe(8 * GiB)
+    const own = found('win32')
+    own.useConnection('harness-root')
+    fake.reply('--connection harness-root info', { code: 125 })
+    fake.reply('machine inspect harness', { stdout: JSON.stringify([{ Name: 'harness', Resources: { Memory: 4096 } }]) })
+    expect(await own.memoryBytes()).toBe(4 * GiB)
+    expect(fake.calls().map(call => call.args).filter(args => args[0] === 'machine')).toEqual([['machine', 'inspect'], ['machine', 'inspect', 'harness']])
+    // Linux has no machine: an unanswered info is the failure itself.
+    expect((await failure(found('linux').memoryBytes())).state).toBe('podman_failed')
   })
 
   it('run uses the login shell env and ownProcessGroup, and passes stdin', async () => {

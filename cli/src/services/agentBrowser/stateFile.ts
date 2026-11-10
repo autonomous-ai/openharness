@@ -11,6 +11,8 @@ export interface BrowserStateData {
   browsers: Record<string, BrowserSettings>
   deleting: string[]
   setup: { step: SetupStep; bootTime?: number } | null
+  /** Harness's own Podman machine's connection, once setup made one (spec § Podman); absent for the person's. */
+  connection?: string | null
 }
 
 export class StateFile {

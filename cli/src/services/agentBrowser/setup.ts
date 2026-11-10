@@ -25,6 +25,8 @@ const MiB = 1024 ** 2
 const MAX_MACHINE_MEMORY = 16 * GiB
 // Enough of the installer's complaint to act on.
 const MESSAGE_LIMIT = 500
+// Harness's own machine, made when the person's will not start (spec § Podman).
+const OWN_MACHINE = 'harness'
 
 const LINUX_MANAGERS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['apt-get', ['install', '-y', 'podman', 'uidmap', 'slirp4netns']],
@@ -174,18 +176,27 @@ export class Setup {
     }
   }
 
-  /** An existing machine is used as it is: none of its settings change. */
+  /**
+   * An existing machine is used as it is: none of its settings change. One that would not start is left alone, and
+   * Harness makes its own beside it; the person's default connection stays theirs (spec § Podman).
+   */
   private async startPodman(): Promise<void> {
     const { podman, platform, hostMemoryBytes, hostCpus } = this.deps
     this.deps.step('starting_podman')
     try {
       const { stdout } = await podman.run(['machine', 'list', '--format', 'json'])
-      if ((JSON.parse(stdout) as unknown[]).length === 0) {
+      const names = (JSON.parse(stdout) as Array<{ Name?: string }>).map(machine => machine.Name)
+      // A machine of that name is one an earlier setup made and was cut off before it was recorded.
+      const own = podman.connection() !== null || names.includes(OWN_MACHINE)
+        || (names.length > 0 && await podman.available().then(answer => answer.state === 'needs_setup' && answer.ownMachine === true))
+      // A rootful machine is reached as root, through the connection init names `<machine>-root`.
+      if (own) podman.useConnection(platform === 'win32' ? `${OWN_MACHINE}-root` : OWN_MACHINE)
+      if (own ? !names.includes(OWN_MACHINE) : names.length === 0) {
         // A WSL machine ignores sizes, and only a rootful one can apply memory, CPU and process limits on current WSL.
         const init = platform === 'win32'
           ? ['machine', 'init', '--rootful']
           : ['machine', 'init', '--memory', String(Math.floor(Math.min(hostMemoryBytes / 2, MAX_MACHINE_MEMORY) / MiB)), '--cpus', String(Math.max(2, Math.floor(hostCpus / 2)))]
-        await podman.run(init, { timeoutMs: MACHINE_INIT_TIMEOUT_MS })
+        await podman.run(own ? [...init, OWN_MACHINE] : init, { timeoutMs: MACHINE_INIT_TIMEOUT_MS })
       }
     } catch (error) {
       throw new PodmanError('podman_down', (error as Error).message)

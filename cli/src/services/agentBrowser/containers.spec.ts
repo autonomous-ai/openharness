@@ -47,7 +47,7 @@ describe('Containers', () => {
       `--label harness.settings=${applied(base, 'Asia/Ho_Chi_Minh')}`,
       '--network harness-browser-a1',
       '--cap-drop ALL', '--security-opt no-new-privileges',
-      '--tmpfs /tmp:rw,size=256m', '--tmpfs /home/browser:rw,size=256m', '--tmpfs /var/tmp:rw,size=16m', '--tmpfs /run:rw,size=16m',
+      '--tmpfs /tmp:rw,size=256m', '--tmpfs /home/browser:rw,size=256m,mode=1777', '--tmpfs /var/tmp:rw,size=16m', '--tmpfs /run:rw,size=16m',
       '-v harness-browser-a1:/var/lib/harness-browser-profile',
       '--memory 2g', '--cpus 2', '--pids-limit 512', '--shm-size 1g',
       '-e TZ=Asia/Ho_Chi_Minh', '-e ACCEPT_LANG=vi-VN, en-US', '-e SCREEN=1920x1080',
@@ -57,6 +57,12 @@ describe('Containers', () => {
     for (const refused of ['-p', '--publish', '--add-host', '--secret']) expect(args).not.toContain(refused)
     expect(args.some(arg => arg.startsWith('PROXY') || arg.startsWith('DEVICE'))).toBe(false)
     expect(argvs().at(-1)).toEqual(['start', 'harness-browser-a1'])
+  })
+
+  // Measured in the spike: without the mode the tmpfs is root's alone, and Chromium crashes at start.
+  it('the HOME tmpfs has mode=1777', async () => {
+    await containers.start('a1', IMAGE, base, 'Asia/Ho_Chi_Minh')
+    expect(pairs(createArgv()).filter(pair => pair.startsWith('--tmpfs /home/'))).toEqual(['--tmpfs /home/browser:rw,size=256m,mode=1777'])
   })
 
   it('with a proxy', async () => {

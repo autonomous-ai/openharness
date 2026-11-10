@@ -15,6 +15,10 @@ interface Rig {
   installed?: boolean
   wsl2?: boolean
   machines?: unknown[]
+  /** The person's machine would not start (podman.ts remembers it). */
+  ownMachine?: boolean
+  /** The connection Podman already runs on, from the state file. */
+  connection?: string
   checksum?: string
   downloadFails?: string
   runCode?: (cmd: string) => number
@@ -34,6 +38,9 @@ function rig(options: Rig = {}) {
   const runs: Array<{ cmd: string; args: string[]; timeoutMs: number; script?: string }> = []
   const steps: Array<[SetupStep | null, number | undefined]> = []
   const podmanRuns: string[][] = []
+  // The connection each machine start ran on.
+  const startedOn: Array<string | null> = []
+  let connection = options.connection ?? null
   const podman = {
     path: async () => (options.installed ? '/opt/podman/bin/podman' : null),
     run: vi.fn(async (args: string[], _opts?: { timeoutMs?: number }) => {
@@ -41,9 +48,11 @@ function rig(options: Rig = {}) {
       return { stdout: args[1] === 'list' ? JSON.stringify(options.machines ?? []) : '', stderr: '' }
     }),
     spawn: () => { throw new Error('setup never spawns') },
-    available: async (): Promise<Availability> => ({ state: 'needs_setup', restart: platform === 'win32' && !options.wsl2 }),
-    startMachine: vi.fn(async () => { podmanRuns.push(['machine', 'start']) }),
+    available: async (): Promise<Availability> => ({ state: 'needs_setup', restart: platform === 'win32' && !options.wsl2, ...(options.ownMachine ? { ownMachine: true as const } : {}) }),
+    startMachine: vi.fn(async () => { podmanRuns.push(['machine', 'start']); startedOn.push(connection) }),
     memoryBytes: async () => 0,
+    connection: () => connection,
+    useConnection: vi.fn((name: string) => { connection = name }),
   } satisfies Podman
   const setup = new Setup({
     podman,
@@ -68,7 +77,7 @@ function rig(options: Rig = {}) {
     hostCpus: options.hostCpus ?? 8,
     step: (s, bootTime) => { steps.push([s, bootTime]) },
   })
-  return { setup, podman, downloads, runs, steps, podmanRuns }
+  return { setup, podman, downloads, runs, steps, podmanRuns, startedOn }
 }
 
 const failure = async (work: Promise<unknown>): Promise<PodmanError> => {
@@ -251,6 +260,40 @@ describe('Setup', () => {
     const r = rig({ platform: 'darwin', installed: true, machines: [{ Name: 'podman-machine-default', Running: false }] })
     await r.setup.run({ step: null })
     expect(r.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'start']])
+  })
+
+  it('setup then inits and starts a machine named harness, and never runs start, set, rm or reset on the other one', async () => {
+    const person = [{ Name: 'podman-machine-default', Running: false }]
+    const mac = rig({ platform: 'darwin', installed: true, machines: person, ownMachine: true, hostMemoryBytes: 16 * GiB, hostCpus: 10 })
+    expect(await mac.setup.run({ step: null })).toBe('done')
+    expect(mac.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--memory', '8192', '--cpus', '5', 'harness'], ['machine', 'start']])
+    expect(mac.podman.run.mock.calls[1]![1]).toEqual({ timeoutMs: TEN_MINUTES })
+    expect(mac.startedOn).toEqual(['harness'])
+
+    // Windows reaches its rootful machine as root, through the connection init names `<machine>-root`.
+    const windows = rig({ platform: 'win32', installed: true, machines: person, ownMachine: true })
+    await windows.setup.run({ step: null })
+    expect(windows.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--rootful', 'harness'], ['machine', 'start']])
+    expect(windows.startedOn).toEqual(['harness-root'])
+  })
+
+  it('the default connection is not changed', async () => {
+    const r = rig({ platform: 'darwin', installed: true, machines: [{ Name: 'podman-machine-default', Running: false }], ownMachine: true })
+    await r.setup.run({ step: null })
+    expect(r.podmanRuns.filter(args => args[0] === 'system' || ['set', 'rm', 'reset', 'stop'].includes(args[1]!))).toEqual([])
+    expect(r.runs).toEqual([])
+  })
+
+  it('a machine named harness from a setup cut off is used, and one gone is made again', async () => {
+    const cutOff = rig({ platform: 'darwin', installed: true, machines: [{ Name: 'podman-machine-default' }, { Name: 'harness' }] })
+    await cutOff.setup.run({ step: 'starting_podman' })
+    expect(cutOff.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'start']])
+    expect(cutOff.startedOn).toEqual(['harness'])
+
+    const gone = rig({ platform: 'darwin', installed: true, machines: [{ Name: 'podman-machine-default' }], connection: 'harness', hostCpus: 4 })
+    await gone.setup.run({ step: null })
+    expect(gone.podmanRuns[1]).toEqual(['machine', 'init', '--memory', '8192', '--cpus', '2', 'harness'])
+    expect(gone.startedOn).toEqual(['harness'])
   })
 
   it('an installed Podman is never replaced', async () => {

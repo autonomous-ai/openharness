@@ -25,11 +25,24 @@ let context: { dir: string; files: Record<string, string> } | null
 let runs: Promise<unknown>[]
 // When each build started and ended, to see that two never overlap.
 let spans: Array<{ start: number; end: number }>
+// Every call the code made, and whether it has ended. A spec waits on these, never on a clock: the fake is a Node
+// process per call, and under load one took over a second to start (a 1 s waitFor failed 2 of 5 runs).
+let made: Array<{ command: string; ended: boolean }>
+let waiters: Array<() => void>
+const changed = () => { for (const wake of waiters.splice(0)) wake() }
+/** Resolves once `check` holds, looked at again after every call starts or ends and every log line. */
+function until(check: () => boolean): Promise<void> {
+  return check() ? Promise.resolve() : new Promise(done => waiters.push(() => void until(check).then(done)))
+}
+const started = (command: string) => made.filter(call => call.command === command).length
+const ended = (command: string) => made.filter(call => call.command === command && call.ended).length
 beforeEach(() => {
   fake = fakePodman()
   context = null
   runs = []
   spans = []
+  made = []
+  waiters = []
   const real = createPodman({ resolve: async () => fake.path })
   podman = {
     ...real,
@@ -40,6 +53,10 @@ beforeEach(() => {
       }
       const run = real.run(args, opts)
       runs.push(run)
+      const call = { command: args[0]!, ended: false }
+      made.push(call)
+      changed()
+      void run.finally(() => { call.ended = true; changed() }).catch(() => {})
       if (args[0] === 'build') {
         const span = { start: Date.now(), end: Infinity }
         spans.push(span)
@@ -87,11 +104,12 @@ describe('ensureImage', () => {
     fake.reply(LIST, { stdout: images({ name: 'harness-browser:aaaaaaaaaaaa-2026w44', created: 1 }, { name: OLDER, created: 2 }) })
     fake.reply('build', { hangMs: 1000 })
     await expect(ensureImage(podman, NOW, () => {})).resolves.toBe(OLDER)
-    await vi.waitFor(() => expect(builds()).toHaveLength(1))
+    await until(() => started('build') === 1)
     // Answered while the build still runs: its context dir is still there and nothing is pruned yet.
     expect(existsSync(context!.dir)).toBe(true)
-    expect(removals()).toEqual([])
-    await vi.waitFor(() => expect(removals()).toHaveLength(2), { timeout: 5000 })
+    expect(started('rmi')).toBe(0)
+    await until(() => ended('rmi') === 2)
+    expect(removals()).toHaveLength(2)
     await settled()
   })
 
@@ -99,7 +117,7 @@ describe('ensureImage', () => {
     fake.reply(LIST, { stdout: images({ name: 'harness-browser:aaaaaaaaaaaa-2026w44', created: 1 }, { name: OLDER, created: 2, containers: 1 }) })
     const log = vi.fn()
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
-    await vi.waitFor(() => expect(removals()).toHaveLength(1))
+    await until(() => ended('rmi') === 1)
     await settled()
     expect(removals()).toEqual([['rmi', 'harness-browser:aaaaaaaaaaaa-2026w44']])
     expect(log).not.toHaveBeenCalled()
@@ -108,11 +126,12 @@ describe('ensureImage', () => {
   it('a failed background build is logged and the next call still returns the older image', async () => {
     fake.reply(LIST, { stdout: images({ name: OLDER, created: 2 }) })
     fake.reply('build', { code: 1, stderr: 'no network' })
-    const log = vi.fn()
+    const log = vi.fn(changed)
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
-    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('no network')))
+    await until(() => log.mock.calls.length === 1)
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('no network'))
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
-    await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(2))
+    await until(() => log.mock.calls.length === 2)
     expect(removals()).toEqual([])
   })
 
@@ -137,7 +156,7 @@ describe('ensureImage', () => {
     fake.reply('build', { hangMs: 200 })
     const nextWeek = new Date('2026-11-17T12:00:00Z')
     const first = ensureImage(podman, NOW, () => {})
-    await vi.waitFor(() => expect(builds()).toHaveLength(1))
+    await until(() => started('build') === 1)
     const tags = await Promise.all([first, ensureImage(podman, nextWeek, () => {})])
     expect(tags).toEqual([TAG, imageTag(browserAssetsHash(), nextWeek)])
     expect(builds().map(call => call.args[2])).toEqual(tags)
@@ -150,7 +169,7 @@ describe('ensureImage', () => {
     fake.reply(`build -t ${TAG}`, { code: 1, stderr: 'broken', hangMs: 200 })
     const nextWeek = new Date('2026-11-17T12:00:00Z')
     const failing = ensureImage(podman, NOW, () => {})
-    await vi.waitFor(() => expect(builds()).toHaveLength(1))
+    await until(() => started('build') === 1)
     const [first, second] = await Promise.allSettled([failing, ensureImage(podman, nextWeek, () => {})])
     expect(first).toMatchObject({ status: 'rejected', reason: { state: 'image_failed' } })
     expect(second).toEqual({ status: 'fulfilled', value: imageTag(browserAssetsHash(), nextWeek) })

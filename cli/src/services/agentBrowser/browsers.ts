@@ -70,6 +70,14 @@ export class Browsers {
     now?: () => number
   }) {
     this.now = deps.now ?? Date.now
+    // Before anything asks Podman: a browser on Harness's own machine must never start on the person's.
+    let connection: string | null | undefined
+    try {
+      connection = deps.state.read().connection
+    } catch {
+      // resume names the unreadable file, and starts nothing until it is fixed.
+    }
+    if (connection) deps.podman.useConnection(connection)
   }
 
   start(agentId: string): Promise<void> {
@@ -196,6 +204,7 @@ export class Browsers {
       return
     }
     this.deps.measure('agent_browser_setup_ok')
+    this.deps.state.update(s => { s.connection = this.deps.podman.connection() })
     this.setupShown = null
     const waiting = [...this.waiting]
     this.waiting.clear()

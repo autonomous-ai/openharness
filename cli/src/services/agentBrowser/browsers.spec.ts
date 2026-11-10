@@ -39,8 +39,11 @@ function rig() {
   const running = new Set<string>()
   const exitCodes = new Map<string, number>()
   const availability: { value: Availability } = { value: { state: 'ready' } }
+  const connection: { value: string | null } = { value: null }
   const podman = {
     available: vi.fn(async () => availability.value),
+    connection: () => connection.value,
+    useConnection: vi.fn((name: string) => { connection.value = name }),
     startMachine: vi.fn(async () => {}),
     memoryBytes: vi.fn(async () => 17 * GiB),
   }
@@ -86,7 +89,7 @@ function rig() {
     vanish(agentId, code)
     browsers.exited(agentId)
   }
-  return { browsers, podman, containers, setup, image, exitZone, state, availability, running, seen, measured, logged, closed, vanish, crash }
+  return { browsers, podman, containers, setup, image, exitZone, state, availability, connection, running, seen, measured, logged, closed, vanish, crash }
 }
 
 const shown = (r: ReturnType<typeof rig>, agentId: string) => label(r.browsers.state(agentId))
@@ -123,6 +126,27 @@ describe('Browsers', () => {
     expect(r.measured).toContain('agent_browser_setup_ok')
     // Setup just put Podman here: its availability, cached from before the install, is not asked again.
     expect(r.podman.available).toHaveBeenCalledTimes(1)
+  })
+
+  it('the connection name survives a restart through the state file', async () => {
+    const r = rig()
+    r.availability.value = { state: 'needs_setup', restart: false, ownMachine: true }
+    await r.browsers.start('a1')
+    r.setup.run.mockImplementationOnce(async () => {
+      r.connection.value = 'harness'
+      r.browsers.setupStep(null)
+      return 'done'
+    })
+    await r.browsers.setUp()
+    expect(shown(r, 'a1')).toBe('ready')
+    expect(r.state.read().connection).toBe('harness')
+    // The daemon starts again: its new Podman runs on Harness's machine before anything asks it.
+    const again = rig()
+    expect(again.podman.useConnection).toHaveBeenCalledWith('harness')
+    expect(again.podman.available).not.toHaveBeenCalled()
+    // A file that cannot be read names itself at resume; until then Podman keeps the default.
+    writeFileSync(path, '{ broken')
+    expect(rig().podman.useConnection).not.toHaveBeenCalled()
   })
 
   it('a start while setup runs waits for it', async () => {

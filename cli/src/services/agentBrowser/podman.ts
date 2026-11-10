@@ -20,7 +20,8 @@ export class PodmanError extends Error {
 export type Availability =
   | { state: 'ready' }
   | { state: 'stopped' }
-  | { state: 'needs_setup'; restart: boolean }
+  // ownMachine: Podman is here and the person's machine would not start; setup makes Harness's own beside it.
+  | { state: 'needs_setup'; restart: boolean; ownMachine?: true }
   | { state: 'podman_old' }
   | { state: 'podman_memory' }
 
@@ -31,6 +32,10 @@ export interface Podman {
   available(): Promise<Availability>
   startMachine(): Promise<void>
   memoryBytes(): Promise<number>
+  /** The connection every call but `machine` runs on: null for the person's default one. */
+  connection(): string | null
+  /** From now on every call runs on that connection, and machine commands act on its machine. */
+  useConnection(name: string): void
 }
 
 const RUN_TIMEOUT_MS = 30_000
@@ -41,6 +46,7 @@ const WSL_STATUS_TIMEOUT_MS = 10_000
 // One browser is capped at 2 GiB, and Podman's VM needs room beside it.
 const MIN_MEMORY_BYTES = 3 * 1024 ** 3
 const MIN_VERSION: readonly [number, number] = [4, 6]
+const MiB = 1024 ** 2
 // Enough of Podman's complaint to act on, never a whole build log.
 const MESSAGE_LIMIT = 2_000
 // An image build prints a line per package it installs, past execFile's 1 MB default, which kills the child.
@@ -64,6 +70,9 @@ function parsed<T>(stdout: string, command: string): T {
   try { return JSON.parse(stdout) as T } catch { throw new PodmanError('podman_failed', `podman ${command} did not answer in JSON`) }
 }
 
+/** `machine init <name>` makes two connections to it, `<name>` and `<name>-root` (podman-machine-init(1)). */
+const machineOf = (connection: string) => connection.replace(/-root$/, '')
+
 function versionAtLeast(version: string): boolean {
   const [major = 0, minor = 0] = version.split('.').map(part => Number.parseInt(part, 10))
   return major > MIN_VERSION[0] || (major === MIN_VERSION[0] && minor >= MIN_VERSION[1])
@@ -84,6 +93,13 @@ export function createPodman(deps: {
   // Kept once found; looked for again while missing, since setup may have just installed it.
   let found: string | null = null
   let cached: { at: number; answer: Promise<Availability> } | null = null
+  let connection: string | null = null
+  // The person's machine failed to start. Kept in memory only: after a daemon restart one more start is tried.
+  let wontStart = false
+  /** A machine command's own argument: Harness's machine by name, or none for the person's default machine. */
+  const machine = () => (connection ? [machineOf(connection)] : [])
+  // Machine commands act on a machine by name and run on the host, never through a connection.
+  const onConnection = (args: string[]) => (connection && args[0] !== 'machine' ? ['--connection', connection, ...args] : args)
 
   async function path(): Promise<string | null> {
     found ??= (await resolve('podman')) ?? installedPaths(platform).find(candidate => exists(candidate)) ?? null
@@ -97,7 +113,7 @@ export function createPodman(deps: {
     return await new Promise((done, fail) => {
       // The daemon was started by launchd or systemd, not a shell: the login shell's environment is what the
       // person's own `podman` sees (its machine connections, its helpers on PATH).
-      const child = execFile(file, args, { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
+      const child = execFile(file, onConnection(args), { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
         if (!error) return done({ stdout, stderr })
         fail(new PodmanError('podman_failed', error.killed
           ? `podman ${args[0]} timed out after ${timeoutMs} ms`
@@ -124,10 +140,12 @@ export function createPodman(deps: {
     // Only macOS and Windows run Podman in a machine; on Linux an unanswered info is Podman itself down.
     if (platform === 'darwin' || platform === 'win32') {
       const { stdout } = await run(['machine', 'list', '--format', 'json'])
-      const machines = parsed<Array<{ Running?: boolean }>>(stdout, 'machine list')
-      // Podman is here and has no machine: setup's machine steps make one.
+      const listed = parsed<Array<{ Name?: string; Running?: boolean }>>(stdout, 'machine list')
+      const own = machine()[0]
+      const machines = own ? listed.filter(listing => listing.Name === own) : listed
+      // Podman is here and has no machine (or Harness's own is gone): setup's machine steps make one.
       if (machines.length === 0) return { state: 'needs_setup', restart: false }
-      if (!machines.some(machine => machine.Running)) return { state: 'stopped' }
+      if (!machines.some(listing => listing.Running)) return wontStart ? { state: 'needs_setup', restart: false, ownMachine: true } : { state: 'stopped' }
     }
     throw new PodmanError('podman_down', 'Podman is not running')
   }
@@ -137,7 +155,7 @@ export function createPodman(deps: {
     run,
     spawn(args) {
       if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
-      return spawn(found, args, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
+      return spawn(found, onConnection(args), { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
     },
     available() {
       if (cached && now() - cached.at < AVAILABLE_CACHE_MS) return cached.answer
@@ -147,15 +165,31 @@ export function createPodman(deps: {
     async startMachine() {
       cached = null
       try {
-        await run(['machine', 'start'], { timeoutMs: MACHINE_START_TIMEOUT_MS })
+        await run(['machine', 'start', ...machine()], { timeoutMs: MACHINE_START_TIMEOUT_MS })
       } catch (error) {
         // Two browsers can find the machine stopped at once; the second start is then told it already runs.
         if (/already running/i.test((error as Error).message)) return
-        throw new PodmanError('podman_down', (error as Error).message)
+        if (connection) throw new PodmanError('podman_down', (error as Error).message)
+        // Harness never repairs or removes the person's machine: setup makes one of its own instead.
+        wontStart = true
+        throw new PodmanError('needs_setup', (error as Error).message)
       }
     },
     async memoryBytes() {
-      return (await readInfo()).memTotal
+      try {
+        return (await readInfo()).memTotal
+      } catch (error) {
+        if (platform !== 'darwin' && platform !== 'win32') throw error
+        // A stopped machine answers no info: its size is in its own configuration, in MiB (measured in the spike).
+        const { stdout } = await run(['machine', 'inspect', ...machine()])
+        const [inspected] = parsed<Array<{ Resources?: { Memory?: number } }>>(stdout, 'machine inspect')
+        return Number(inspected?.Resources?.Memory ?? 0) * MiB
+      }
+    },
+    connection: () => connection,
+    useConnection(name) {
+      connection = name
+      cached = null
     },
   }
 }
