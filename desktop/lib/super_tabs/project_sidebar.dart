@@ -14,7 +14,8 @@ import 'places.dart' show SwarmPage;
 import 'my_agents.dart';
 import 'personal_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
-import 'buddy_rows.dart';
+import 'count_badge.dart';
+import 'quiet_rows.dart';
 import 'identity.dart';
 import 'leaderboard/reader.dart';
 import 'section_heading.dart';
@@ -839,9 +840,7 @@ int _compareProjects(SuperTabProject a, SuperTabProject b) {
 }
 
 /// The chats in the order the sidebar lists them, for Option+Shift+Down and
-/// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
-/// under Projects), each project's chat from A to Z, then the reader's
-/// project Buddy chats. Tasks are in each project's Tasks view, not here
+/// Up (Slack's next unread): each project's chat from A to Z. Tasks are in each project's Tasks view, not here
 /// (task #2569). The round dial swipes projects in this A to Z order too (cli
 /// superTabs/cards.ts `leadsOf`), less the Personal projects this list hides
 /// (task #3042).
@@ -854,17 +853,11 @@ List<String> superTabSidebarOrder(
   final projects = [...snapshot.projects]..sort(_compareProjects);
   final hidden = superTabHiddenProjects(controller, app: app);
   return [
-    if (controller.oneBuddy)
-      if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
-          case final chat?)
-        chat.id,
     for (final project in projects)
       if (snapshot.conversation(project.leadConversationId) != null &&
           (controller.selectedId == project.leadConversationId ||
               !hidden.contains(project.id)))
         project.leadConversationId,
-    for (final project in projects)
-      if (controller.buddyChat(project.id) case final chat?) chat.id,
   ];
 }
 

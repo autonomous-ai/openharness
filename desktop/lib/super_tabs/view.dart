@@ -50,7 +50,6 @@ import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'composer_tags.dart';
-import 'composer_toggle.dart';
 import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
@@ -81,10 +80,8 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'message_text.dart';
 import 'notifications.dart';
-import 'buddies.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
-import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
 import 'agent_instructions.dart';
@@ -98,7 +95,6 @@ import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
-import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
 import 'ship_row.dart';
@@ -214,9 +210,6 @@ class _SuperTabViewState extends State<SuperTabView>
   final _awayFromEnd = <String>{};
   final _unread = SuperTabUnreadLines();
   final _replies = <String, SuperTabMessage>{};
-
-  /// The Buddy chats whose next message starts its own thread's session.
-  final _chatSessions = <String>{};
 
   String? _selected;
   int _scrollRequest = 0;
@@ -380,28 +373,17 @@ class _SuperTabViewState extends State<SuperTabView>
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
 
-  /// Your own message reads You, in the row and in the quote of it. In your
-  /// Buddy chat the coordinator's private lines read as lines to you, "River
-  /// (PM) → you" with its role's badge: it writes there but cannot read it
-  /// (Lead, 10-29).
+  /// Your own message reads You, in the row and in the quote of it.
   String _shownAuthor(SuperTabController c, SuperTabMessage message) {
     if (message.authorId == c.accountId && !message.fromAgent) return 'You';
     // The controller's own snapshot names the author: a preview may be of
     // another Swarm's message.
     final name = c.snapshot?.authorName(message) ?? message.authorName;
-    final snapshot = c.snapshot;
-    final project = snapshot?.projectFor(message.conversationId);
-    final chat = project == null ? null : c.buddyChat(project.id);
-    return message.fromAgent &&
-            chat?.id == message.conversationId &&
-            snapshot!.conversation(project!.leadConversationId)?.leadId ==
-                message.authorId
-        ? '$name (${snapshot.roleOf(message.authorId)?.badge ?? 'PM'}) → you'
-        : switch (c.stepNameOf(message)) {
-            // A step's row in its task's chat names its step (task steps design).
-            final String step => '$name · $step',
-            null => name,
-          };
+    return switch (c.stepNameOf(message)) {
+      // A step's row in its task's chat names its step (task steps design).
+      final String step => '$name · $step',
+      null => name,
+    };
   }
 
   @override
@@ -1210,14 +1192,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // From here a zip still running belongs to neither this message, which
     // took its files already, nor the next.
     final dropped = _droppedFolders.remove(id);
-    final newSession =
-        _chatSessions.contains(id) &&
-        c.offersChatSessions &&
-        c.threadSessionBlocked == null;
     final result = await c.send(
       replyTo: _replies[id]?.id,
-      newSession: newSession,
-      sessionProjectId: newSession ? _chosenSessionProject() : null,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -1233,21 +1209,6 @@ class _SuperTabViewState extends State<SuperTabView>
       final lead = PersonalLeadStarter.of(app);
       if (lead.wants(c, id)) unawaited(lead.start(c, id));
     }
-    if (newSession && result != null) _chatSessions.remove(id);
-    // Refused for New session, its text is back as the chat's draft: it shows
-    // in the box, ready to send without it, unless another chat is shown or
-    // something was typed meanwhile.
-    if (result == null &&
-        newSession &&
-        c.selectedId == id &&
-        _composer.text.isEmpty &&
-        c.draft(id).isNotEmpty) {
-      final restored = c.draft(id);
-      _composer.value = TextEditingValue(
-        text: restored,
-        selection: TextSelection.collapsed(offset: restored.length),
-      );
-    }
     setState(() {
       if (result == null && dropped != null) {
         // Not sent: its paths are still offered as zips, in a new record
@@ -1259,101 +1220,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ]);
       }
     });
-  }
-
-  /// New session in the reader's own Buddy chat's composer: the message
-  /// starts its own thread's session. Greyed while it can't start, its hover
-  /// saying why, as in a thread's reply box.
-  Widget _chatSessionChoice(bool writable) {
-    final id = c.selectedId;
-    final blocked = c.threadSessionBlocked;
-    return SuperTabComposerToggle(
-      key: const ValueKey('super-chat-new-session'),
-      on: _chatSessions.contains(id) && blocked == null,
-      label: 'New session',
-      hint: blocked ?? 'Starts a separate Buddy session for this message',
-      onChanged: writable && blocked == null
-          ? (on) => setState(
-              () => on ? _chatSessions.add(id) : _chatSessions.remove(id),
-            )
-          : null,
-    );
-  }
-
-  /// The project chosen for a New session, the last one on this device (task
-  /// #2347), while the reader still reads it: one they lost is no longer
-  /// chosen, and the session reads every project (security review 1 of #2437).
-  /// None is a session that reads every project and sends to no PM (spec
-  /// 2026-10-31-one-buddy-per-swarm).
-  String? _chosenSessionProject() {
-    final chosen = c.sessionProjectId;
-    return c.snapshot?.projects.any((p) => p.id == chosen) == true
-        ? chosen
-        : null;
-  }
-
-  /// Where a New session in the reader's one Buddy chat works: every project
-  /// they read, sending to no PM, or one project, whose PM it alone sends to.
-  /// A quiet menu beside New session, shown while it is on.
-  Widget _chatSessionProject(bool writable) {
-    final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
-    final chosen = projects
-        .where((p) => p.id == _chosenSessionProject())
-        .firstOrNull;
-    return AppDropdown(
-      width: 300,
-      children: [
-        Tooltip(
-          message: 'Reads every project you read. Sends no work to a PM.',
-          child: AppMenuItem(
-            key: const ValueKey('super-chat-session-any'),
-            label: 'All projects · ask anything',
-            selected: chosen == null,
-            onPressed: () => c.chooseSessionProject(''),
-          ),
-        ),
-        for (final project in projects)
-          Tooltip(
-            message: 'Reads only ${project.name}, and can hand work to its PM.',
-            child: AppMenuItem(
-              key: ValueKey('super-chat-session-in-${project.id}'),
-              label: '${project.name} · ask and hand off work',
-              selected: chosen?.id == project.id,
-              onPressed: () => c.chooseSessionProject(project.id),
-            ),
-          ),
-      ],
-      builder: (context, menu, _) => Tooltip(
-        message: 'Where this session works',
-        child: InkWell(
-          key: const ValueKey('super-chat-session-project'),
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          onTap: writable
-              ? () => menu.isOpen ? menu.close() : menu.open()
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: grid.AppDesktop.badgeInset,
-              vertical: grid.AppDesktop.listRowGap,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  chosen?.name ?? 'All projects',
-                  style: DesktopChrome.metadata(),
-                ),
-                Icon(
-                  AppIcons.chevronDown,
-                  size: 12,
-                  color: DesktopChrome.muted,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   /// Puts dropped folders' paths into chat [id]'s message at the cursor,
@@ -2914,30 +2780,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  /// The reader's own chat with their Buddy.
-  bool _isBuddyChat(SuperTabConversation group) =>
-      c.buddyChat(group.projectId)?.id == group.id;
-
-  /// The name of the reader's Buddy that [group] is the chat with: the name
-  /// they chose while it has none (removed, or starting), else "your Buddy".
-  /// Null when [group] is no Buddy chat of the reader's.
-  /// The reader's Buddy in [group] by the name it goes by (task #4568): its
-  /// agent's, else the name kept on its chat, else "your agent".
-  String? _buddyName(SuperTabConversation? group) {
-    if (group == null || !_isBuddyChat(group)) return null;
-    final agent = superTabChatBuddy(c, group);
-    return agent == null
-        ? group.buddyName ?? 'your agent'
-        : c.snapshot!.agentName(agent.id, fallback: agent.name);
-  }
-
-  /// [_buddyName] as a label: capitalized when it is no agent's own name.
-  String _shownBuddyName(SuperTabConversation? group) =>
-      switch (_buddyName(group)) {
-        null || 'your agent' => 'Your agent',
-        final name => name,
-      };
-
   /// The open conversation's name, or what the pane shows instead of one,
   /// named as the sidebar names it: "# openharness", or a workgroup's
   /// [SuperTabWorkgroupName].
@@ -3097,14 +2939,7 @@ class _SuperTabViewState extends State<SuperTabView>
       ? switch (c.snapshot!.projectFor(group.id)!) {
           final project => '${project.isPrivate ? '' : '# '}${project.name}',
         }
-      // An older Buddy chat in a project says which, as the menu that opens
-      // it does; the one Buddy chat is the sidebar's # buddy.
-      : c.isEarlierBuddyChat(group)
-      ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
-      // A Buddy chat is named for its agent (task #4568).
-      : _buddyName(group) == null
-      ? null
-      : _shownBuddyName(group);
+      : null;
 
   /// The pictures [messages] show in place, oldest first, each with its
   /// sender as its row shows them and where it was posted, for the viewer.
@@ -3195,7 +3030,6 @@ class _SuperTabViewState extends State<SuperTabView>
       final project = snapshot.projectFor(group.id)!;
       return 'Message ${project.isPrivate ? project.name : '#${project.name}'}';
     }
-    if (_buddyName(group) case final buddy?) return 'Message $buddy';
     // An agent's own chat keeps the title it was opened with; a rename changes the agent (audit finding 8 of #4436).
     if (_ownAgent(group) case final agent?) {
       return 'Message ${snapshot.agentName(agent.id, fallback: agent.name)}';
@@ -3268,14 +3102,13 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The composer's field and its controls, as on the phone (Huy and Scholes,
   /// 11-04): the field on top with the width, and one row under it with
-  /// [attach] (+), [tag] (@ Tag) and [options] (New session) at the left, and
-  /// [trailing] (the mic) and [send] at the right. Send keeps the box's
+  /// [attach] (+) at the left, and [trailing] (the mic) and [send] at the
+  /// right. Send keeps the box's
   /// bottom-right corner however long the message (Scholes, 11-03).
   Widget _composerLayout({
     required double room,
     required Widget field,
     required Widget attach,
-    required List<Widget> options,
     required List<Widget> trailing,
     required Widget send,
     Widget? voice,
@@ -3323,7 +3156,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           ),
                         ),
                       ),
-                      ...options,
                     ],
                   ),
                 ),
@@ -3361,7 +3193,6 @@ class _SuperTabViewState extends State<SuperTabView>
             children: [
               Expanded(child: field),
               attach,
-              ...options,
               ...trailing,
               send,
             ],
@@ -3388,12 +3219,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   // Only the paperclip on the left: an @ typed tags
                   // (River, 11-07, #4467).
                   attach,
-                  Expanded(
-                    child: Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: options,
-                    ),
-                  ),
+                  const Spacer(),
                   ...trailing,
                   send,
                 ],
@@ -3695,9 +3521,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (chatAgent != null) return _agentHeader(group!, chatAgent);
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
-    // The one Buddy has one chat, as a project does; it has no pull requests.
-    final oneBuddy = group?.isSwarmBuddyChat == true;
-    final restsOnChat = isProject || oneBuddy;
+    final restsOnChat = isProject;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -3815,7 +3639,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ],
             if (!isProject) ...[
-              if (!_menuNamesViews && !oneBuddy) ...[
+              if (!_menuNamesViews) ...[
                 const SizedBox(width: 4),
                 AppIconButton(
                   key: const ValueKey('super-pull-requests'),
@@ -4021,21 +3845,7 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Pull requests', _openPullRequests),
           const AppMenuDivider(),
         ],
-        if (_isBuddyChat(group)) ...[
-          // The one Buddy's chat lists the person's older chats in projects
-          // they still read, each read only (spec: history).
-          if (group.isSwarmBuddyChat)
-            for (final project
-                in c.snapshot?.projects ?? const <SuperTabProject>[])
-              // One with nothing in it has no history to keep (security
-              // review 1 of #2437).
-              if (c.buddyChat(project.id) case final earlier?
-                  when earlier.lastMessageSequence > 0)
-                item(
-                  'Earlier chat in ${project.name}',
-                  () => unawaited(c.select(earlier.id)),
-                ),
-        ] else ...[
+        ...[
           // A private conversation is chat only: it has no work.
           if (group.audience == null)
             item('Work details', () => _groupAction('work', group)),
@@ -4065,9 +3875,7 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsis,
-        tooltip: _isBuddyChat(group)
-            ? 'Chat options'
-            : _ownAgent(group) != null
+        tooltip: _ownAgent(group) != null
             ? 'Agent options'
             : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
@@ -4323,14 +4131,9 @@ class _SuperTabViewState extends State<SuperTabView>
         c.selected?.archived == false &&
         !c.isEarlierBuddyChat(c.selected);
     final root = message.thread;
-    // A message that started a session has its line before any reply comes,
-    // so the session is found again after its pane closes.
     final thread = inThread || root != message.id
         ? null
-        : c.thread(message.conversationId, message.id) ??
-              (c.threadSession(message.id) != null
-                  ? SuperTabThread.empty(message.id)
-                  : null);
+        : c.thread(message.conversationId, message.id);
     final group = inThread
         ? null
         : c.snapshot?.conversation(message.conversationId);
@@ -4433,29 +4236,6 @@ class _SuperTabViewState extends State<SuperTabView>
       threadFresh: thread == null
           ? 0
           : SuperTabAttention.of(c).newRepliesIn(c.selectedId, thread.id),
-      // A thread its own Buddy session answers says so on its line.
-      threadTrailing: switch (thread == null || inThread
-          ? null
-          : c.threadSession(thread.id)) {
-        final session? => SuperTabThreadSessionMark(
-          key: ValueKey('super-thread-session-mark-${thread!.id}'),
-          activity: superTabSessionActivity(c, widget.app, session),
-          alone: thread.replies == 0,
-        ),
-        null => null,
-      },
-      threadEnd:
-          thread == null ||
-              inThread ||
-              !c.canWrite ||
-              c.threadSession(thread.id) == null
-          ? null
-          : SuperTabSessionEnd(
-              key: ValueKey('super-thread-session-end-${thread.id}'),
-              controller: c,
-              root: thread.id,
-              metadata: true,
-            ),
       onOpenThread:
           !inThread && root != null && (thread != null || message.threadReply)
           ? () => c.openThread(root)
@@ -4521,8 +4301,6 @@ class _SuperTabViewState extends State<SuperTabView>
             _message(message, grouped, byId, inThread: true),
         // The thread panel groups its own rows; one on its way keeps its name.
         outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
-        sessionActivity: (session) =>
-            superTabSessionActivity(c, widget.app, session),
         machineName: widget.machineName,
         onScroll: (list) => _threadScroll = list,
         voice: _voice,
@@ -4766,8 +4544,7 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
-  /// [underHeader]: the chat is under the middle's one-row header, which carries the Buddy's pickers.
-  Widget _conversation(bool narrow, {bool underHeader = false}) {
+  Widget _conversation(bool narrow) {
     // The Desktop keeps an agent's chat open in a Swarm with no projects; with none open, there is nothing to load and
     // the way to start shows instead (task #4219).
     if (c.selected == null &&
@@ -4833,7 +4610,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final group = c.selected;
     // An older Buddy chat in a project reads, but is no longer written to
-    // here, where one Buddy answers in # buddy.
+    // here, where one Buddy answers in its one chat.
     final writable =
         c.canWrite &&
         group != null &&
@@ -4987,14 +4764,6 @@ class _SuperTabViewState extends State<SuperTabView>
     ]);
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
-    // The reader's own Buddy chat shows what the PM asked them.
-    final decisions = group != null && _isBuddyChat(group)
-        ? ({required bool edge}) => SuperTabDecisionsPanel(
-            decisions: SuperTabDecisions.of(c),
-            projectId: group.projectId,
-            edge: edge,
-          )
-        : null;
     return Column(
       children: [
         if (search != null)
@@ -5005,33 +4774,6 @@ class _SuperTabViewState extends State<SuperTabView>
             onClose: _closeFind,
           ),
         if (!unread) _connectionLine(c),
-        if (group != null && decisions != null && !c.isEarlierBuddyChat(group))
-          // The list stops at an edge under the Buddy's line, as it does under
-          // the header: without one, a message scrolled up to the line read as
-          // cut off under it (Huy, 11-03).
-          DecoratedBox(
-            key: const ValueKey('super-buddy-edge'),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SuperTabBuddyBar(
-                  controller: c,
-                  chat: group,
-                  app: widget.app,
-                  line: !underHeader,
-                ),
-                decisions(edge: false),
-              ],
-            ),
-          )
-        // An earlier Buddy chat has no Buddy line: its decisions, when it has
-        // any, end at the same edge.
-        else if (decisions != null)
-          decisions(edge: true),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
@@ -5054,9 +4796,6 @@ class _SuperTabViewState extends State<SuperTabView>
                     ? 'Conversation unavailable.'
                     : group == null
                     ? 'Loading conversation…'
-                    : _buddyName(group) != null
-                    // One short line that helps the reader act (anh Dee's copy rules, task #4465).
-                    ? "Say what to build, then 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}'."
                     // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
                     : null) {
                   final words? => Padding(
@@ -5466,15 +5205,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     style: DesktopChrome.metadata(),
                   ),
                 ),
-                if (c.isEarlierBuddyChat(group))
-                  TextButton(
-                    key: const ValueKey('super-open-swarm-buddy'),
-                    onPressed: () => unawaited(
-                      c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
-                    ),
-                    child: const Text('Open # buddy'),
-                  )
-                else if (c.canWrite)
+                if (!c.isEarlierBuddyChat(group) && c.canWrite)
                   TextButton(
                     key: const ValueKey('super-group-reopen'),
                     onPressed: c.saving
@@ -5509,21 +5240,6 @@ class _SuperTabViewState extends State<SuperTabView>
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (c.offersChatSessions &&
-                            _chatSessions.contains(chatId) &&
-                            c.threadSessionBlocked == null)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              bottom: grid.AppDesktop.controlGap,
-                            ),
-                            child: Text(
-                              'Starts its own thread and Buddy session',
-                              key: const ValueKey('super-chat-session-note'),
-                              style: DesktopChrome.metadata(
-                                color: DesktopChrome.muted,
-                              ),
-                            ),
-                          ),
                         KeyedSubtree(
                           key: const ValueKey('super-message-composer-box'),
                           child: field!,
@@ -5660,24 +5376,6 @@ class _SuperTabViewState extends State<SuperTabView>
                                 enabled: writable && !busy,
                               ),
                             ),
-                            options: [
-                              if (c.offersChatSessions)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: grid.AppDesktop.controlGap,
-                                  ),
-                                  child: _chatSessionChoice(writable),
-                                ),
-                              if (c.offersChatSessions &&
-                                  c.selected?.isSwarmBuddyChat == true &&
-                                  _chatSessions.contains(c.selectedId))
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: grid.AppDesktop.controlGap,
-                                  ),
-                                  child: _chatSessionProject(writable),
-                                ),
-                            ],
                             trailing: [
                               if (_voice case final voice?)
                                 fingerTarget(
@@ -5736,31 +5434,6 @@ class _SuperTabViewState extends State<SuperTabView>
                     ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        // While New session can be chosen here, its line's place is kept, so
-        // the box never moves as the choice is toggled. Not on a phone, where
-        // that line held the box off the keyboard: it shows above the box.
-        if (c.offersChatSessions && !_phone)
-          Container(
-            alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.only(
-              left: grid.AppDesktop.panelPadding,
-              right: grid.AppDesktop.panelPadding,
-              bottom: grid.AppDesktop.controlGap,
-            ),
-            child: Visibility(
-              visible:
-                  _chatSessions.contains(chatId) &&
-                  c.threadSessionBlocked == null,
-              maintainSize: true,
-              maintainAnimation: true,
-              maintainState: true,
-              child: Text(
-                'Starts its own thread and Buddy session',
-                key: const ValueKey('super-chat-session-note'),
-                style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),
             ),
           ),

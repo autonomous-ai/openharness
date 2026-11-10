@@ -532,10 +532,6 @@ class SuperTabConversation {
   /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
   /// every other conversation and from older backends.
   final List<SuperTabBuddySession> buddySessions;
-
-  /// The live or starting session answering [thread], if any.
-  SuperTabBuddySession? sessionFor(String thread) =>
-      buddySessions.where((s) => s.thread == thread).firstOrNull;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -1897,15 +1893,6 @@ class SuperTabDelivery {
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for.
 class SuperTabThread {
-  /// A thread with no reply yet: a session's, started from the main chat.
-  SuperTabThread.empty(this.id)
-    : ask = null,
-      replies = 0,
-      lastSequence = 0,
-      lastAt = null,
-      authors = const [],
-      people = const [];
-
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       ask = row['ask'] as String?,
@@ -1996,17 +1983,10 @@ class SuperTabMessage {
   /// session (spec 2026-10-30-buddy-thread-sessions).
   final bool buddySession;
 
-  /// The line the server writes in a thread when its session ends.
-  bool get sessionEnded => source['kind'] == 'buddy-session-ended';
-
   /// A task's own message, the server keeps current as the task moves (Quiet
   /// Swarm 2/6): its text is the task's name.
   bool get isTaskLine => source['kind'] == 'task-line';
 
-  /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
-  /// `stopped` or `failed`.
-  String? get sessionEndReason =>
-      sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
 
   /// A Buddy chat message that started its own thread's session from the

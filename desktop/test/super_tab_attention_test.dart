@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/count_badge.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';

@@ -17,7 +17,7 @@ import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';

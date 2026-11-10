@@ -15,9 +15,6 @@
   "desktop/lib/super_tabs/confetti.dart": {
     "hex-color": 6
   },
-  "desktop/lib/super_tabs/decisions_view.dart": {
-    "edge-insets": 6
-  },
   "desktop/lib/super_tabs/local_models.dart": {
     "edge-insets": 7,
     "border-radius": 3

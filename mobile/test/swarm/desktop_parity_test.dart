@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/swarm/swarm_buddy.dart';
 
 /// The Swarm models the phone carries as copies of the desktop's
 /// (`../desktop/lib/super_tabs`): phone path → desktop path. The phone is a
@@ -58,22 +57,6 @@ void main() {
     final desktop = fields('../desktop/${_model.$2}');
     expect(desktop, isNotEmpty);
     expect(desktop.difference(fields(_model.$1)), isEmpty);
-  });
-
-  test('the phone offers a Buddy the desktop\'s engines, none turned off', () {
-    // Codex is offered as Claude is since #2832 (Ken, 11-04): neither side
-    // keeps a list of refused engines.
-    final desktop = File(
-      '../desktop/lib/super_tabs/buddies.dart',
-    ).readAsStringSync();
-    final engines = RegExp(
-      r"kBuddyEngines = \{((?:\s*'\w+':\s*'[^']*',?)*)\s*\}",
-    ).firstMatch(desktop)!.group(1)!;
-    expect(swarmBuddyEngines, {
-      for (final m in RegExp(r"'(\w+)':\s*'([^']*)'").allMatches(engines))
-        m.group(1)!: m.group(2)!,
-    });
-    expect(desktop, isNot(contains('kBuddyEngineRefusals')));
   });
 
   test('the phone names a sent message as the desktop does', () {

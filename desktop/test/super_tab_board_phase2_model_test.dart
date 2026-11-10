@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -71,48 +70,6 @@ void main() {
         SuperTabConversation.fromJson(conversationFixture('t', 'Task')).paused,
         isNull,
       );
-    });
-  });
-
-  group('Buddies', () {
-    Map<String, dynamic> buddy(String id, String name, {bool? isDefault}) => {
-      ...conversationFixture(id, name),
-      'kind': 'swarm-buddy',
-      'buddyOwnerId': 'owner',
-      'buddyDefault': ?isDefault,
-    }..remove('projectId');
-
-    test('the reader\'s Buddies list default first; one flagged default wins, else the first', () async {
-      final server = ConversationServer();
-      server.state['swarmBuddy'] = true;
-      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
-        buddy('b-code', 'Code'),
-        buddy('b-plan', 'Planning', isDefault: true),
-        {...buddy('b-other', "Sam's Buddy"), 'buddyOwnerId': 'sam'},
-      ]);
-      final c = server.controller();
-      await c.refresh();
-      expect([for (final b in c.buddies()) b.id], ['b-plan', 'b-code']);
-      expect(c.buddies().first.buddyDefault, isTrue);
-      // The one Buddy chat the rest of the app opens is the default.
-      expect(c.buddyChat(SuperTabController.kSwarmBuddyKey)?.id, 'b-plan');
-      await c.flush();
-      c.dispose();
-    });
-
-    test('with no chat flagged (an older backend) the first is the default, as today', () async {
-      final server = ConversationServer();
-      server.state['swarmBuddy'] = true;
-      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
-        buddy('b-code', 'Code'),
-        buddy('b-plan', 'Planning'),
-      ]);
-      final c = server.controller();
-      await c.refresh();
-      expect([for (final b in c.buddies()) b.id], ['b-code', 'b-plan']);
-      expect(c.buddyChat(SuperTabController.kSwarmBuddyKey)?.id, 'b-code');
-      await c.flush();
-      c.dispose();
     });
   });
 }

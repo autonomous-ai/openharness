@@ -8,7 +8,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
-import 'buddy_rows.dart' show SuperTabCountBadge;
+import 'count_badge.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
 import 'personal_machines.dart';
@@ -345,9 +345,9 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 }
 
-/// What a Swarm's tab badge counts: its tags and unread Buddy chat lines.
+/// What a Swarm's tab badge counts: its tags.
 int swarmWaiting(AppNotifier app, String id) =>
-    app.superTabs.waitingTags(id) + app.superTabs.waitingBuddy(id);
+    app.superTabs.waitingTags(id);
 
 /// The Swarm tab showing [c]'s Swarm moves to Personal when that Swarm is
 /// taken away, once the person has picked Personal here (read from this

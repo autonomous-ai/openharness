@@ -16,10 +16,9 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
 
-/// The thread reply box's options (Scholes, 10-31): one row, options left and
-/// attach and send right; Also send names where it posts, shortened only
-/// where the pane is too narrow; both options read as on/off choices, with a
-/// one-line hover hint.
+/// The thread reply box (Scholes, 10-31): attach and send on one row; Also
+/// send under it names where it posts, shortened only where the pane is too
+/// narrow, and reads as an on/off choice, with a one-line hover hint.
 void main() {
   // The Mac's own face, where there is one: what the default width is chosen
   // for. Every other test here measures whatever face it draws in.
@@ -33,11 +32,9 @@ void main() {
     }
   });
 
-  final newSession = find.byKey(const ValueKey('super-thread-new-session'));
   final alsoSend = find.byKey(const ValueKey('super-thread-also-send'));
   final send = find.byKey(const ValueKey('super-thread-send'));
   final surface = find.byKey(const ValueKey('super-thread-composer-surface'));
-  final note = find.byKey(const ValueKey('super-thread-session-note'));
 
   late SuperTabController shown;
 
@@ -63,10 +60,9 @@ void main() {
   }
 
   /// The reader's own Buddy chat ('offline') with their Buddy running and a
-  /// thread on message-1; New session is offered unless [sessions] is false.
-  ConversationServer buddyChat({bool sessions = true}) {
+  /// thread on message-1.
+  ConversationServer buddyChat() {
     final server = ConversationServer()..threads = true;
-    if (sessions) server.state['threadSessions'] = true;
     (server.state['conversations'] as List)[1] as Map
       ..['kind'] = 'buddy'
       ..['buddyOwnerId'] = 'owner'
@@ -159,24 +155,6 @@ void main() {
     expect(rect.right, lessThanOrEqualTo(bounds.right));
   }
 
-  /// Every option sits on the send button's row, vertically centred with it,
-  /// left of send, inside the box.
-  void expectOneRow(WidgetTester tester, List<Finder> chips) {
-    final sendRect = tester.getRect(send);
-    final box = tester.getRect(surface);
-    double? right;
-    for (final chip in chips) {
-      final rect = tester.getRect(chip);
-      expect((rect.center.dy - sendRect.center.dy).abs(), lessThan(1));
-      // Never past send: in a pane narrower than the app allows, New session
-      // ends in "…" against it.
-      expect(rect.right, lessThanOrEqualTo(sendRect.left));
-      expect(rect.left, greaterThanOrEqualTo(box.left));
-      if (right != null) expect(rect.left, greaterThan(right));
-      right = rect.right;
-    }
-  }
-
   final alsoLine = find.byKey(const ValueKey('super-thread-also-line'));
 
   /// [label] drawn whole inside [chip]: one line, no "…".
@@ -257,11 +235,6 @@ void main() {
           } else {
             expectWholeUnderBox(tester, full);
           }
-          if (buddy) {
-            expect(box(tester, newSession).label, 'New session');
-            expectOneRow(tester, [newSession]);
-            expectMark(tester, newSession, on: false);
-          }
           expectMark(tester, alsoSend, on: false);
           expect(tester.takeException(), isNull);
           await tester.pumpWidget(const SizedBox());
@@ -271,9 +244,8 @@ void main() {
     }
   });
 
-  group('the options read as on/off choices', () {
-    // Scholes, 11-03: an outlined pill with a circle read as a radio, so New
-    // session and Also send looked like an either-or choice.
+  group('Also send reads as an on/off choice', () {
+    // Scholes, 11-03: an outlined pill with a circle read as a radio.
     testBox('a checkbox with no pill around it, off or on', (tester) async {
       await panel(tester, projectChat(), 'lead', width: 800);
       DesktopPill pill() => tester.widget<DesktopPill>(
@@ -287,25 +259,6 @@ void main() {
       expectMark(tester, alsoSend, on: true);
       expect(pill().quiet, isTrue);
       expect(pill().selected, isNull);
-    });
-
-    testBox('a New session that can\'t start now is a greyed empty square', (
-      tester,
-    ) async {
-      final server = buddyChat()..state['paused'] = true;
-      await panel(tester, server, 'offline', width: 800);
-      expectMark(tester, newSession, on: false);
-      final mark = tester.widget<Icon>(
-        find.descendant(
-          of: newSession,
-          matching: find.byKey(const ValueKey('composer-toggle-off')),
-        ),
-      );
-      expect(mark.color!.a, lessThan(.5));
-      expect(
-        find.byTooltip('New work is paused in this Swarm'),
-        findsOneWidget,
-      );
     });
 
     testBox('off is an empty square, on a checked square; tapping toggles it', (
@@ -335,41 +288,6 @@ void main() {
       expect(box(tester, alsoSend).on, isFalse);
       expectMark(tester, alsoSend, on: false);
     });
-
-    testBox('New session reads the same way, and while on it hides Also '
-        'send and shows the note; the box never moves', (tester) async {
-      await panel(tester, buddyChat(), 'offline');
-      final before = tester.getRect(surface);
-      expectMark(tester, newSession, on: false);
-      expect(
-        find.byTooltip('Starts a separate Buddy session for this thread'),
-        findsOneWidget,
-      );
-
-      await tester.tap(alsoSend);
-      await tester.pump();
-      expect(tester.getRect(surface), before);
-
-      await tester.tap(newSession);
-      await tester.pump();
-      expectMark(tester, newSession, on: true);
-      // Hidden, its place kept.
-      expect(alsoSend.hitTestable(), findsNothing);
-      expect(
-        tester
-            .widget<Visibility>(
-              find.ancestor(of: note, matching: find.byType(Visibility)),
-            )
-            .visible,
-        isTrue,
-      );
-      expect(tester.getRect(surface), before);
-
-      await tester.tap(newSession);
-      await tester.pump();
-      expect(alsoSend, findsOneWidget);
-      expect(tester.getRect(surface), before);
-    });
   });
 
   group('at any width and text size', () {
@@ -383,10 +301,8 @@ void main() {
       // end in "…".
       (SuperTabPaneLayout.rightWidth, 2.0),
     ]) {
-      testBox('${width.round()}px at ${scale}x: no overflow, New session on '
-          'the send row, both squares showing, Also send under the box', (
-        tester,
-      ) async {
+      testBox('${width.round()}px at ${scale}x: no overflow, Also send under '
+          'the box', (tester) async {
         await panel(
           tester,
           buddyChat(),
@@ -395,58 +311,21 @@ void main() {
           textScale: scale,
         );
         expect(tester.takeException(), isNull);
-        expectOneRow(tester, [newSession]);
-        expectMark(tester, newSession, on: false);
         expectMark(tester, alsoSend, on: false);
         expect(box(tester, alsoSend).label, 'Also send to the main chat');
         expectUnderBox(tester);
         expectWholeUnderBox(tester, 'Also send to the main chat');
       });
     }
-
-    testBox('a project thread in a wide pane has no New session, and Also '
-        'send under the box', (tester) async {
-      await panel(tester, projectChat(), 'lead', width: 800);
-      expect(newSession, findsNothing);
-      expectUnderBox(tester);
-    });
-
-    testBox('in the narrow layout, turning New session on and off never moves '
-        'the box', (tester) async {
-      await panel(
-        tester,
-        buddyChat(),
-        'offline',
-        width: SuperTabPaneLayout.rightWidth,
-      );
-      expectUnderBox(tester);
-      final before = tester.getRect(surface);
-      final line = tester.getRect(alsoLine);
-      await tester.tap(newSession);
-      await tester.pump();
-      // Hidden, its place kept.
-      expect(alsoSend.hitTestable(), findsNothing);
-      expect(tester.getRect(surface), before);
-      // The note takes Also send's line: the two never show together, so no
-      // empty band opens between the box and the note.
-      expect(tester.getRect(note).top, lessThan(line.bottom));
-      expect(tester.getRect(note).top, greaterThanOrEqualTo(before.bottom));
-      await tester.tap(newSession);
-      await tester.pump();
-      expectUnderBox(tester);
-      expect(tester.getRect(surface), before);
-    });
   });
 
   // The row's order, then Also send under the box (Huy and Scholes, 11-04).
   for (final width in [800.0, SuperTabPaneLayout.rightWidth]) {
-    testBox('Tab goes from the reply to the paperclip, New session, send and '
-        'Also '
-        'send at ${width.round()}px', (tester) async {
+    testBox('Tab goes from the reply to the paperclip, send and Also send at '
+        '${width.round()}px', (tester) async {
       await panel(tester, buddyChat(), 'offline', width: width);
       final order = [
         find.byKey(const ValueKey('new-harness-attach')),
-        newSession,
         send,
         alsoSend,
       ];
@@ -476,11 +355,11 @@ void main() {
   }
 
   testBox('at the thread\'s default width, in the Mac\'s face, a Buddy '
-      'thread shows "New session" on the send row and "Also send to the main '
-      'chat" whole under the box, and a project thread names #openharness in '
-      'full under the box', (tester) async {
+      'thread shows "Also send to the main chat" whole under the box, and a '
+      'project thread names #openharness in full under the box', (
+    tester,
+  ) async {
     await panel(tester, buddyChat(), 'offline');
-    expectWhole(tester, newSession, 'New session');
     expectUnderBox(tester);
     expectWhole(tester, alsoSend, 'Also send to the main chat');
     await tester.pumpWidget(const SizedBox());

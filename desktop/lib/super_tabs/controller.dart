@@ -19,7 +19,6 @@ import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'task_groups.dart';
-import 'buddy_chat.dart';
 import 'parts.dart';
 import 'tasks/personal_tasks.dart';
 import 'read_marks.dart';
@@ -96,11 +95,6 @@ const _closedSincePages = 40;
 /// and show it; this one knows it by [_unsentKey] and shows Not sent alone.
 const _unsentReason = 'Not sent before this window closed.';
 const _unsentKey = 'unsent';
-
-/// What a thread reply refused for New session says: the server does not
-/// take it yet (an older backend, or one of its servers during a release).
-const superTabSessionsUnavailable =
-    "New sessions aren't available yet; send without it?";
 
 /// What a message refused for its form says, in place of the schema's own
 /// words ('command: Unrecognized key: ...'), which name fields, not causes.
@@ -246,7 +240,6 @@ class SuperTabController extends ChangeNotifier {
       );
       devicesSelected = initial['devicesSelected'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
-      buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       agentsGroupOpen = initial['agentsGroupOpen'] as bool? ?? true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       yourMachinesGroupOpen =
@@ -254,7 +247,6 @@ class SuperTabController extends ChangeNotifier {
       topTeamsGroupOpen = initial['topTeamsGroupOpen'] as bool? ?? false;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
-      sessionProjectId = initial['sessionProjectId'] as String? ?? '';
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -1132,9 +1124,9 @@ class SuperTabController extends ChangeNotifier {
   bool devicesSelected = false;
   bool machinesGroupOpen = true;
 
-  /// The sidebar's Buddies and Models, collapsed and remembered like Projects
-  /// and Machines (Dee, 2026-10-30: every section the same).
-  bool buddiesGroupOpen = true, modelsGroupOpen = true;
+  /// The sidebar's Models, collapsed and remembered like Projects and Machines
+  /// (Dee, 2026-10-30: every section the same).
+  bool modelsGroupOpen = true;
 
   /// Whether the left pane's sections are open (Swarm v4, anh Dee 2026-11-09): Your Team and Projects open until the reader
   /// folds them, Your Machines and Top Teams folded until the reader opens them.
@@ -1168,18 +1160,6 @@ class SuperTabController extends ChangeNotifier {
 
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
-
-  /// The project last chosen for a New session in the reader's Buddy chat on
-  /// this device, `''` for All projects (task #2347). The next New session
-  /// starts on it, while the reader can still read it.
-  String sessionProjectId = '';
-
-  void chooseSessionProject(String projectId) {
-    if (sessionProjectId == projectId) return;
-    sessionProjectId = projectId;
-    _saveSoon();
-    _changed();
-  }
 
   /// Open decisions the reader set aside in their Buddy chat (Not now, Hide):
   /// saved on this computer for this reader, so they stay folded after a
@@ -1231,12 +1211,6 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleTopTeamsGroup() {
     topTeamsGroupOpen = !topTeamsGroupOpen;
-    _saveSoon();
-    _changed();
-  }
-
-  void toggleBuddiesGroup() {
-    buddiesGroupOpen = !buddiesGroupOpen;
     _saveSoon();
     _changed();
   }
@@ -1851,7 +1825,6 @@ class SuperTabController extends ChangeNotifier {
   /// which is after its files have gone up.
   Future<Map<String, dynamic>?> sendThreadReply({
     bool alsoSend = false,
-    bool newSession = false,
     VoidCallback? onSending,
     ({String conversationId, String root})? to,
     bool plain = false,
@@ -1880,11 +1853,6 @@ class SuperTabController extends ChangeNotifier {
     // that may not be the one selected, or none may be.
     final failure = addressed.any((id) => !group.agentIds.contains(id))
         ? 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.'
-        // Only its own session hears a session's thread (backend
-        // routeBuddySession): another agent's tag there would be refused.
-        : addressed.isNotEmpty &&
-              (newSession || threadSession(open.root) != null)
-        ? 'Only this thread\'s session hears a reply here. Remove the agent\'s mention.'
         : null;
     if (failure != null) {
       _failOperation(
@@ -1906,9 +1874,7 @@ class SuperTabController extends ChangeNotifier {
       'replyTo': plain ? null : open.root,
       'recipientIds': addressed.isEmpty ? recipients : addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
-      // A session's thread stays in the thread: never also sent.
-      if (alsoSend && !newSession) 'alsoSend': true,
-      if (newSession) 'newSession': true,
+      if (alsoSend) 'alsoSend': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
       // As the chat's own send: the server refuses it in an earlier chat.
       if (oneBuddy) 'oneBuddy': true,
@@ -1926,134 +1892,7 @@ class SuperTabController extends ChangeNotifier {
     }
     final result = await sending;
     _forgetRefusedUploads(result);
-    if (result == null && newSession) {
-      _restoreSessionRefusal(open.conversationId, open.root, operationId);
-    }
     return result;
-  }
-
-  /// A message the server refused only for New session goes back into its
-  /// box (the thread of [root], or the chat's own when null), ready to send
-  /// without it, when nothing was typed there since and it carries no files;
-  /// else it stays Not sent, and its Retry goes without New session.
-  void _restoreSessionRefusal(
-    String conversationId,
-    String? root,
-    String operationId,
-  ) {
-    final kept = _refused[conversationId];
-    final i = kept?.indexWhere((r) => r.operationId == operationId) ?? -1;
-    if (i < 0) return;
-    final refused = kept![i];
-    final files = refused.command['attachmentIds'];
-    if (refused.error != superTabSessionsUnavailable ||
-        (files is List && files.isNotEmpty) ||
-        (root == null ? draft(conversationId) : threadDraft(root))
-            .trim()
-            .isNotEmpty) {
-      return;
-    }
-    kept.removeAt(i);
-    if (kept.isEmpty) _refused.remove(conversationId);
-    _sendOrder.remove(operationId);
-    final text = refused.command['text'] as String? ?? '';
-    if (root == null) {
-      _drafts[conversationId] = text;
-      if (refused.mentions.isNotEmpty) {
-        _mentions[conversationId] = refused.mentions;
-      }
-    } else {
-      _threadDrafts[root] = text;
-      _threadDraftConversations[root] = conversationId;
-      if (refused.mentions.isNotEmpty) {
-        _threadMentions[(conversationId, root)] = refused.mentions;
-      }
-    }
-    unawaited(
-      _persist().catchError((Object _) {
-        error = 'Could not save this change on this computer.';
-        _changed();
-      }),
-    );
-    _changed();
-  }
-
-  // ── Buddy thread sessions (spec 2026-10-30-buddy-thread-sessions) ───────
-
-  /// When the server last refused a reply's New session as a field it does not
-  /// know, though it said it takes them (one of its servers older during a
-  /// release): New session is not offered for [_sessionsRefusedFor] after.
-  DateTime? _sessionsRefusedAt;
-  static const _sessionsRefusedFor = Duration(minutes: 10);
-
-  /// Whether this Swarm's server takes New session: it says so in its reads,
-  /// and has not just refused one.
-  bool get _serverTakesThreadSessions {
-    if (snapshot?.threadSessions != true) return false;
-    final refused = _sessionsRefusedAt;
-    return refused == null ||
-        clock.now().difference(refused) >= _sessionsRefusedFor;
-  }
-
-  /// The open thread's chat when it is the reader's own Buddy chat, where a
-  /// thread may have a session of its own; null anywhere else.
-  SuperTabConversation? get _ownBuddyChat =>
-      _ownBuddyChatOf(openedThread?.conversationId ?? selectedId);
-
-  /// Chat [id] when it is the reader's own Buddy chat; null anywhere else.
-  SuperTabConversation? _ownBuddyChatOf(String id) {
-    final chat = snapshot?.conversation(id);
-    return chat != null &&
-            chat.isBuddyChat &&
-            chat.buddyOwnerId == accountId &&
-            !accessRevoked
-        ? chat
-        : null;
-  }
-
-  /// Whether the selected chat's own composer shows New session: the reader's
-  /// own Buddy chat, with a Buddy, on a server that takes New session on a
-  /// top-level message. It may still show disabled, saying why
-  /// ([threadSessionBlocked]).
-  bool get offersChatSessions {
-    final chat = _ownBuddyChatOf(selectedId);
-    return chat != null &&
-        snapshot?.sessionsFromChat == true &&
-        _serverTakesThreadSessions &&
-        buddy(chat.projectId) != null;
-  }
-
-  /// Whether the open chat's thread composer shows New session: the reader's
-  /// own Buddy chat, with a Buddy, or in [root]'s thread that had a session
-  /// (its reply must start a new one). It may still show disabled, saying why
-  /// ([threadSessionBlocked]).
-  bool offersThreadSessions([String? root]) {
-    final chat = _ownBuddyChat;
-    if (chat == null || !_serverTakesThreadSessions) return false;
-    return buddy(chat.projectId) != null || (root != null && _hadSession(root));
-  }
-
-  /// Why the open Buddy chat cannot start a session now, as the disabled
-  /// choice says it; null when it can, as far as this computer can tell (the
-  /// server still decides, and its refusal shows in the composer).
-  String? get threadSessionBlocked {
-    final chat = _ownBuddyChat;
-    if (chat == null) return null;
-    if (snapshot?.paused == true) return 'New work is paused in this Swarm';
-    final main = buddy(chat.projectId);
-    if (main == null || main.downSince != null) return 'Start your Buddy first';
-    if (main.engine != 'claude') return 'Sessions need a Claude Code Buddy';
-    // The host says what it can run in its report; a machine this computer
-    // has no report of is left to the server.
-    final pool = snapshot?.pool(main.machineId);
-    final observation = pool?['observation'];
-    if (observation is Map) {
-      final capabilities = observation['capabilities'];
-      if (capabilities is! List || !capabilities.contains('buddySessions')) {
-        return 'Update Harness on ${sessionMachineName(main.machineId) ?? 'your Buddy\'s computer'} to start sessions';
-      }
-    }
-    return null;
   }
 
   /// The Swarm's name for [machineId], as people read it; null when unknown.
@@ -2062,55 +1901,9 @@ class SuperTabController extends ChangeNotifier {
     return name is String && name.isNotEmpty ? superTabMachineName(name) : null;
   }
 
-  /// Whether [root]'s thread has a reply from or to a thread session.
-  bool _hadSession(String root) =>
-      threadMessages(root).any((m) => m.buddySession);
-
-  /// The live or starting session answering [root] in the reader's own Buddy
-  /// chat; null when none does, or anywhere else.
-  SuperTabBuddySession? threadSession(String root) =>
-      _ownBuddyChat?.sessionFor(root);
-
-  /// The session agent of [session], once it started.
-  SuperTabAgent? sessionAgent(SuperTabBuddySession session) =>
-      session.agentId == null ? null : snapshot?.agent(session.agentId!);
-
-  /// The row saying [root]'s last session ended (its ended line, else its
-  /// last session reply), while no session answers there: a plain reply
-  /// would be refused, so a new one must start. Any session reply locks it,
-  /// ended line or not.
-  SuperTabMessage? threadSessionEnded(String root) {
-    if (_ownBuddyChat == null || threadSession(root) != null) return null;
-    final messages = threadMessages(root);
-    return messages.where((m) => m.sessionEnded).lastOrNull ??
-        messages.where((m) => m.buddySession).lastOrNull;
-  }
-
-  /// Ends [root]'s session in the reader's own Buddy chat. Closing the thread
-  /// pane only hides it; this stops it. False when refused or not sent.
-  Future<bool> endThreadSession(String root) async {
-    final chat = _ownBuddyChat;
-    if (chat == null || chat.sessionFor(root) == null) return false;
-    return await command({
-          'type': 'buddy.sessionEnd',
-          'conversationId': chat.id,
-          'thread': root,
-          'reason': 'ended',
-        }) !=
-        null;
-  }
-
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
     (_messages[id] ?? const <SuperTabMessage>[]).where(_listed),
   );
-
-  /// What [messages] lists, newest first, read lazily from what is held: no
-  /// copy, so a caller that stops at the first it needs reads only that far.
-  /// For a read on every build (the Buddy bar's Start again, task #3256): a
-  /// copy of a long held history there made each rebuild slower. Read it
-  /// before the next change to what is held, as within one build.
-  Iterable<SuperTabMessage> newestFirst(String id) =>
-      (_messages[id] ?? const <SuperTabMessage>[]).reversed.where(_listed);
 
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request' &&
@@ -2771,14 +2564,12 @@ class SuperTabController extends ChangeNotifier {
     'decisionsAside': _decisionsAside.toList(),
     'devicesSelected': devicesSelected,
     'machinesGroupOpen': machinesGroupOpen,
-    'buddiesGroupOpen': buddiesGroupOpen,
     'agentsGroupOpen': agentsGroupOpen,
     'projectsGroupOpen': projectsGroupOpen,
     'yourMachinesGroupOpen': yourMachinesGroupOpen,
     'topTeamsGroupOpen': topTeamsGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
-    'sessionProjectId': sessionProjectId,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 
@@ -3106,19 +2897,19 @@ class SuperTabController extends ChangeNotifier {
     );
   }
 
-  /// The key the reader's one Buddy for the whole Swarm goes by in [buddyChat],
-  /// [buddy], [buddyStart], [addBuddy] and [removeBuddy]: its chat and agent
+  /// The key the reader's one Buddy for the whole Swarm goes by in [buddyChat]
+  /// and [buddy]: its chat and agent
   /// belong to no project, as the Product Managers' conversation does (spec
   /// 2026-10-31-one-buddy-per-swarm).
   static const kSwarmBuddyKey = '';
 
-  /// Whether this Swarm gives each person one Buddy for the whole Swarm: the
-  /// sidebar's # buddy row in place of a Buddies section.
+  /// Whether this Swarm gives each person one Buddy for the whole Swarm, whose
+  /// one chat the round dial opens.
   bool get oneBuddy => snapshot?.swarmBuddy == true;
 
   /// Whether [group] is the reader's older Buddy chat in a project, where the
   /// Swarm gives one Buddy for the whole Swarm: its history reads here, and
-  /// its person talks to their Buddy in # buddy (spec: history).
+  /// its person talks to their Buddy in its one chat (spec: history).
   bool isEarlierBuddyChat(SuperTabConversation? group) =>
       oneBuddy && group != null && group.isBuddyChat && !group.isSwarmBuddyChat;
 
@@ -3129,18 +2920,6 @@ class SuperTabController extends ChangeNotifier {
   SuperTabConversation? buddyChat(String projectId) =>
       _indexed()?.buddyChats[projectId];
 
-  /// The signed-in person's Buddies, each its own chat (#3818), the default first ([buddyChat]); one, or none, from
-  /// a backend before several Buddies.
-  List<SuperTabConversation> buddies([String projectId = kSwarmBuddyKey]) {
-    final first = buddyChat(projectId);
-    return [
-      ?first,
-      for (final g in projectConversations(projectId))
-        if (g.isBuddyChat && g.buddyOwnerId == accountId && g.id != first?.id)
-          g,
-    ];
-  }
-
   /// The signed-in person's Buddy in [projectId]; null when they have none.
   /// Its main session only: a thread's own session is never "the Buddy".
   SuperTabAgent? buddy(String projectId) => snapshot?.agents
@@ -3149,91 +2928,6 @@ class SuperTabController extends ChangeNotifier {
             a.isMainBuddy && a.buddyOf == accountId && a.projectId == projectId,
       )
       .firstOrNull;
-
-  /// The newest start of the reader's Buddy in [projectId]: under way while
-  /// it has neither a harness nor an error, failed with an error.
-  Map<String, dynamic>? buddyStart(String projectId) {
-    // The index itself: the sidebar has asked [buddyChat] once already.
-    final chat = _indexed()?.buddyChats[projectId]?.id;
-    return snapshot?.buddyStarts.reversed.where((start) {
-      final request = superTabMap(start['request']);
-      // A thread session's start is its thread's, never the Buddy's own.
-      if (request['buddySession'] != null) return false;
-      return superTabMap(request['buddyOf'])['personId'] == accountId &&
-          (request['projectId'] == projectId ||
-              (chat != null && request['conversationId'] == chat) ||
-              // The one Buddy's start, before its chat is read here.
-              (projectId == kSwarmBuddyKey &&
-                  request['buddyScope'] == 'swarm'));
-    }).firstOrNull;
-  }
-
-  /// Adds the reader's Buddy in [projectId] on [machineId] with [engine], and
-  /// opens its chat. [setup] is sent for one of their own machines outside the
-  /// Swarm (prepareBuddyMachine). False when refused: [operationError] says
-  /// why.
-  Future<bool> addBuddy({
-    required String projectId,
-    required String machineId,
-    required String engine,
-    Map<String, dynamic>? setup,
-    String? name,
-  }) async {
-    final result = await command({
-      'type': 'buddy.create',
-      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
-      'machineId': machineId,
-      'engine': engine,
-      'setup': ?setup,
-      // A name and no chat: a new Buddy in a chat of its own (#3818).
-      'name': ?name,
-    });
-    if (result == null) return false;
-    final id = result['conversationId'];
-    if (id is String) await select(id);
-    return true;
-  }
-
-  /// Removes the reader's Buddy in [projectId], or the one of [conversationId] of several (#3818); its chat stays.
-  Future<bool> removeBuddy(String projectId, {String? conversationId}) async =>
-      await command({
-        'type': 'buddy.remove',
-        if (conversationId != null)
-          'conversationId': conversationId
-        else if (projectId != kSwarmBuddyKey)
-          'projectId': projectId,
-      }) !=
-      null;
-
-  /// Makes the Buddy of [conversationId] the reader's default of several (#3818): it opens first and takes what is
-  /// addressed to them. False when refused: [operationError] says why.
-  Future<bool> setDefaultBuddy(String conversationId) async =>
-      await command({
-        'type': 'buddy.default',
-        'conversationId': conversationId,
-      }) !=
-      null;
-
-  /// Names the reader's Buddy in [projectId] from its chat, or clears the
-  /// name for the default when [name] is empty. Everyone in the Swarm sees it.
-  /// False when refused: [operationError] says why.
-  Future<bool> renameBuddy(
-    String projectId,
-    String name, {
-    String? conversationId,
-  }) async {
-    final chat = conversationId == null
-        ? buddyChat(projectId)
-        : snapshot?.conversation(conversationId);
-    if (chat == null) return false;
-    final trimmed = name.trim();
-    return await command({
-          'type': 'buddy.rename',
-          'conversationId': chat.id,
-          'name': trimmed.isEmpty ? null : trimmed,
-        }) !=
-        null;
-  }
 
   /// Renames the agent [agentId] for everyone in the Swarm (backend
   /// `agent.rename`): only the person who runs it, or its machine's owner, may.
@@ -3381,26 +3075,6 @@ class SuperTabController extends ChangeNotifier {
     return task.requesterId == accountId && priority != SuperTabTaskPriority.p0;
   }
 
-  /// Moves the reader's one Buddy onto [gridModel], a model shared in the
-  /// Swarm, or back to their own subscription when null (backend
-  /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
-  /// shows it under way. False when refused: [operationError] says why.
-  Future<bool> switchBuddyModel(String? gridModel) async =>
-      await command({'type': 'buddy.model', 'gridModel': gridModel}) != null;
-
-  /// Requests a handoff on the Buddy's own machine, keeping its chat and
-  /// folder. The host's switchRequest remains visible until it settles.
-  Future<bool> switchBuddyEngine(
-    String engine, {
-    String? conversationId,
-  }) async =>
-      await command({
-        'type': 'buddy.engine',
-        'engine': engine,
-        'conversationId': ?conversationId,
-      }) !=
-      null;
-
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.
@@ -3424,8 +3098,7 @@ class SuperTabController extends ChangeNotifier {
 
   /// How many of [group]'s messages from others came after the reader's read
   /// mark: exact once the messages held reach back to the mark
-  /// ([_heldSinceRead]), else a lower bound, one at least, while more are read
-  /// ([_readUnreadBuddyChats]).
+  /// ([_heldSinceRead]), else a lower bound, one at least.
   int unreadCount(SuperTabConversation group) {
     if (!unread(group)) return 0;
     final readAt = readMark(group.id);
@@ -3465,85 +3138,6 @@ class SuperTabController extends ChangeNotifier {
     if (held == null || held.isEmpty) return false;
     return held.last.sequence >= group.lastMessageSequence &&
         (held.first.sequence <= readMark(group.id) || !hasOlder(group.id));
-  }
-
-  /// The reader's Buddy chats that count toward the Swarm badge: the one
-  /// Buddy's chat where the Swarm gives one Buddy for the whole Swarm (its
-  /// older project Buddy chats are copies of its lines, so they never count
-  /// twice), else each project's.
-  Iterable<SuperTabConversation> get _countedBuddyChats sync* {
-    if (oneBuddy) {
-      if (buddyChat(kSwarmBuddyKey) case final chat?) yield chat;
-      return;
-    }
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
-      if (buddyChat(project.id) case final chat?) yield chat;
-    }
-  }
-
-  /// The unread messages in the reader's own Buddy chats, the PM's private
-  /// lines among them, for the Swarm badge.
-  int get buddyUnread => [
-    for (final chat in _countedBuddyChats)
-      // A muted chat never counts (Slack).
-      if (notifyOf(chat.id) != SuperTabNotify.muted) unreadCount(chat),
-  ].fold(0, (a, b) => a + b);
-
-  /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
-  /// page, so the count is exact up to [kCountCap]; nothing once every chat's
-  /// count is known.
-  void _readUnreadBuddyChats() {
-    for (final chat in _countedBuddyChats) {
-      if (!_countOpen(chat) || !_counting.add(chat.id)) continue;
-      unawaited(
-        _countChat(chat.id).whenComplete(() {
-          _counting.remove(chat.id);
-        }),
-      );
-    }
-  }
-
-  final _counting = <String>{};
-
-  /// A Buddy chat off screen, unread, under [kCountCap] and not held back to its
-  /// read mark: past the cap the badge says "99+" whatever the rest holds, so
-  /// a device with no read mark never reads the whole history.
-  bool _countOpen(SuperTabConversation chat) =>
-      chat.id != selectedId &&
-      unread(chat) &&
-      unreadCount(chat) < kCountCap &&
-      !_heldSinceRead(chat);
-
-  /// Newer pages until the newest message is held, then older ones back to
-  /// the read mark; stops when a read brings nothing (no more, or it failed:
-  /// the next state read tries again).
-  Future<void> _countChat(String id) async {
-    while (!_disposed) {
-      final chat = snapshot?.conversation(id);
-      if (chat == null || !_countOpen(chat)) return;
-      final held = _messages[id];
-      final before = (held?.firstOrNull?.sequence, held?.lastOrNull?.sequence);
-      final newer =
-          held == null ||
-          held.isEmpty ||
-          held.last.sequence < chat.lastMessageSequence;
-      await _readMessages(id, older: !newer, light: newer);
-      final after = _messages[id];
-      if ((after?.firstOrNull?.sequence, after?.lastOrNull?.sequence) ==
-          before) {
-        return;
-      }
-    }
-  }
-
-  /// The project of the conversation on screen, else the first one.
-  String? get currentProjectId {
-    final state = snapshot;
-    if (state == null) return null;
-    final selected = state.conversation(selectedId)?.projectId;
-    return state.projects.any((p) => p.id == selected)
-        ? selected
-        : state.projects.firstOrNull?.id;
   }
 
   /// A tag or decision the menu bar asked to open ([openNotice]), until the
@@ -3637,13 +3231,6 @@ class SuperTabController extends ChangeNotifier {
   /// Set by the Swarm view on screen: opens a project's Buddy chat in front
   /// of whatever covers the conversation, Notifications or a terminal.
   Future<bool> Function(String projectId)? buddyChatOpener;
-
-  /// Opens the [currentProjectId]'s Buddy chat, through the view on screen
-  /// ([buddyChatOpener]) when there is one, else [openBuddyChat].
-  Future<bool> openCurrentBuddyChat() async {
-    final project = currentProjectId;
-    return project != null && await (buddyChatOpener ?? openBuddyChat)(project);
-  }
 
   /// Opens the reader's [buddyChat] in [projectId], opening it on the server
   /// first when they have none: every person has one in each project before
@@ -4179,10 +3766,7 @@ class SuperTabController extends ChangeNotifier {
           loading: before.loading,
         );
       }
-      // Every state read, a quiet one too: a count a failed read left open is
-      // finished; one that is known reads nothing.
       _dropLeft();
-      _readUnreadBuddyChats();
       _partsReadAt = clock.now();
       error = null;
       // Counters that did not move have no news for the conversation,
@@ -5374,20 +4958,7 @@ class SuperTabController extends ChangeNotifier {
             !const {408, 429}.contains(failure.statusCode)) {
           // A definitive rejection made no change. Keep the message for the
           // person to correct; a lost reply retains its exact receipt ID.
-          // One refused for New session is kept without it: its Retry, or
-          // its text back in the box, sends a plain reply.
-          final unsupported = operationError == superTabSessionsUnavailable;
-          if (unsupported) _sessionsRefusedAt = clock.now();
-          _refuse(
-            unsupported
-                ? {
-                    ...pending,
-                    'command': Map<String, dynamic>.of(command)
-                      ..remove('newSession'),
-                  }
-                : pending,
-            operationError!,
-          );
+          _refuse(pending, operationError!);
           _pending = null;
           try {
             await _persist();
@@ -5430,8 +5001,7 @@ class SuperTabController extends ChangeNotifier {
 
   /// What a person reads for [failure] of [command]: the server's own words,
   /// except where a message was refused for its form (`VALIDATION_ERROR`, the
-  /// schema naming fields): a reply whose New session the server does not know
-  /// says so; any other says it plainly.
+  /// schema naming fields): it says so plainly.
   static String _refusalText(
     SuperTabFailure failure,
     Map<String, dynamic> command,
@@ -5440,13 +5010,7 @@ class SuperTabController extends ChangeNotifier {
         failure.code != 'VALIDATION_ERROR') {
       return failure.message;
     }
-    // Only the field itself unknown means the server can't start sessions;
-    // a reply refused for anything else (too many files) keeps New session.
-    return command['newSession'] == true &&
-            failure.message.contains('Unrecognized key') &&
-            failure.message.contains('newSession')
-        ? superTabSessionsUnavailable
-        : superTabRefusedAsSent;
+    return superTabRefusedAsSent;
   }
 
   static String _excerpt(String text) {
@@ -5522,16 +5086,10 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends the selected conversation's draft. [onSending] is told when the
   /// message is on its way and shows in [outgoing].
-  ///
-  /// With [newSession], in the reader's own Buddy chat, the message starts its
-  /// own thread's session (a top-level one roots that thread), and the thread
-  /// opens once the server took it, if this chat is still the one shown.
   Future<Map<String, dynamic>?> send({
     String? replyTo,
     List<String> recipients = const [],
     VoidCallback? onSending,
-    bool newSession = false,
-    String? sessionProjectId,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -5540,9 +5098,7 @@ class SuperTabController extends ChangeNotifier {
         selected!.archived ||
         !canWrite ||
         uploading ||
-        (newSession && !offersChatSessions) ||
-        ((saving || _pending != null) &&
-            (files.isNotEmpty || newSession || !canQueueText))) {
+        ((saving || _pending != null) && (files.isNotEmpty || !canQueueText))) {
       return null;
     }
     final said = _tagsSaid(mentions(selectedId), text);
@@ -5557,9 +5113,8 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     final conversationId = selectedId;
-    // A text alone waits in the queue; one that starts a session goes now,
-    // so its answer can open its thread.
-    if (files.isEmpty && !newSession) {
+    // A text alone waits in the queue.
+    if (files.isEmpty) {
       final operationId = superTabOperationId();
       _sendOrder.add(operationId);
       final result = Completer<Map<String, dynamic>?>();
@@ -5586,9 +5141,6 @@ class SuperTabController extends ChangeNotifier {
       unawaited(_drainSends());
       return result.future;
     }
-    // Read before the upload's wait: another chat may be open by its end, and
-    // this session belongs to the chat it was sent from.
-    final inSwarmBuddyChat = selected?.isSwarmBuddyChat == true;
     final ids = await _uploadAll(
       conversationId,
       attachments(conversationId),
@@ -5608,15 +5160,10 @@ class SuperTabController extends ChangeNotifier {
       'recipientIds': addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
-      if (newSession) 'newSession': true,
       // An app that knows one Buddy per Swarm says so: the server then
       // refuses its write into an older Buddy chat (security review 1 of
       // #2435). Older apps and phones say nothing and still write there.
       if (oneBuddy) 'oneBuddy': true,
-      // A New session in one project of the reader's one Buddy chat (spec
-      // 2026-10-31-one-buddy-per-swarm).
-      if (newSession && sessionProjectId != null && inSwarmBuddyChat)
-        'sessionProjectId': sessionProjectId,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.
@@ -5631,17 +5178,6 @@ class SuperTabController extends ChangeNotifier {
     }
     final result = await sending;
     _forgetRefusedUploads(result);
-    if (newSession && result == null) {
-      _restoreSessionRefusal(conversationId, null, operationId);
-    } else if (result?['messageId'] case final String id
-        when newSession &&
-            !_disposed &&
-            !accessRevoked &&
-            selectedId == conversationId) {
-      // Its thread opens beside the chat: the session answers there. A top-
-      // level message is its own thread's root.
-      openThread(_threadOf(conversationId, replyTo) ?? replyTo ?? id);
-    }
     return result;
   }
 

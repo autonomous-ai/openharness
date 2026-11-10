@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/count_badge.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm, wait;
 import 'super_tab_mentions_test.dart' show showView;

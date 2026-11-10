@@ -9,8 +9,7 @@ import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// One Buddy per person per Swarm (Dee, 10-31; spec
-/// 2026-10-31-one-buddy-per-swarm): `Buddy` is the row over
-/// Projects, with no Buddies section; New session picks a project; older
+/// 2026-10-31-one-buddy-per-swarm): the round dial opens its chat; older
 /// project Buddy chats read only.
 void main() {
   List<Map<String, dynamic>> commands(ConversationServer server, String type) =>
@@ -64,45 +63,30 @@ void main() {
   }
 
   group('the controller', () {
-    test('keys the one Buddy and its chat by the empty id, and adds and removes it naming no project', () async {
-      final server = oneBuddySwarm();
-      final c = server.controller(account: 'peer');
-      addTearDown(c.dispose);
-      await c.refresh();
-      expect(c.oneBuddy, isTrue);
-      expect(c.buddyChat(SuperTabController.kSwarmBuddyKey), isNull);
+    test(
+      'keys the one Buddy\'s chat by the empty id, naming no project',
+      () async {
+        final server = oneBuddySwarm();
+        final c = server.controller(account: 'peer');
+        addTearDown(c.dispose);
+        await c.refresh();
+        expect(c.oneBuddy, isTrue);
+        expect(c.buddyChat(SuperTabController.kSwarmBuddyKey), isNull);
 
-      expect(await c.openBuddyChat(SuperTabController.kSwarmBuddyKey), isTrue);
-      expect(commands(server, 'buddy.chat'), [
-        {'type': 'buddy.chat'},
-      ]);
-      expect(c.selectedId, 'swarm-buddy-peer');
-      expect(
-        c.buddyChat(SuperTabController.kSwarmBuddyKey)?.isSwarmBuddyChat,
-        isTrue,
-      );
-
-      expect(
-        await c.addBuddy(
-          projectId: SuperTabController.kSwarmBuddyKey,
-          machineId: 'ken-mac',
-          engine: 'claude',
-        ),
-        isTrue,
-      );
-      expect(commands(server, 'buddy.create'), [
-        {'type': 'buddy.create', 'machineId': 'ken-mac', 'engine': 'claude'},
-      ]);
-      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNotNull);
-      // No project's Buddy: the one Buddy belongs to none.
-      expect(c.buddy('lead'), isNull);
-
-      expect(await c.removeBuddy(SuperTabController.kSwarmBuddyKey), isTrue);
-      expect(commands(server, 'buddy.remove'), [
-        {'type': 'buddy.remove'},
-      ]);
-      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
-    });
+        expect(
+          await c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
+          isTrue,
+        );
+        expect(commands(server, 'buddy.chat'), [
+          {'type': 'buddy.chat'},
+        ]);
+        expect(c.selectedId, 'swarm-buddy-peer');
+        expect(
+          c.buddyChat(SuperTabController.kSwarmBuddyKey)?.isSwarmBuddyChat,
+          isTrue,
+        );
+      },
+    );
 
     test(
       'never lists the one Buddy chat among a project\'s conversations',

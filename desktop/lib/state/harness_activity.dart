@@ -1,6 +1,5 @@
 import '../core/models.dart';
 import '../notify/alert_sounds.dart';
-import '../super_tabs/buddy_chat.dart' show buddyUnreadLabel;
 import '../widgets/engine_identity.dart' show isTerminalEngine;
 import 'app_state.dart';
 import 'swarm.dart';
@@ -103,24 +102,13 @@ int tabMentionsWaiting(AppNotifier app, Swarm tab) =>
 String tabMentionsLabel(int count) =>
     'Tagged in $count ${count == 1 ? 'message' : 'messages'}';
 
-/// The unread messages in this account's own Buddy chats in a Swarm tab,
-/// the PM's private lines among them.
-int tabBuddyWaiting(AppNotifier app, Swarm tab) =>
-    tab.superTabId == null ? 0 : app.superTabs.waitingBuddy(tab.superTabId!);
+/// What a Swarm tab's badge counts: its tags.
+int tabWaiting(AppNotifier app, Swarm tab) => tabMentionsWaiting(app, tab);
 
-/// What a Swarm tab's badge counts: its tags and its unread Buddy chat messages.
-int tabWaiting(AppNotifier app, Swarm tab) =>
-    tabMentionsWaiting(app, tab) + tabBuddyWaiting(app, tab);
-
-/// What a Swarm tab's badge says, or null when it counts nothing:
-/// "Tagged in 1 message · 2 new in your Buddy chat".
+/// What a Swarm tab's badge says, or null when it counts nothing: "Tagged in 1 message".
 String? tabWaitingLabel(AppNotifier app, Swarm tab) {
-  final tags = tabMentionsWaiting(app, tab), pm = tabBuddyWaiting(app, tab);
-  final parts = [
-    if (tags > 0) tabMentionsLabel(tags),
-    if (pm > 0) buddyUnreadLabel(pm),
-  ];
-  return parts.isEmpty ? null : parts.join(' · ');
+  final tags = tabMentionsWaiting(app, tab);
+  return tags > 0 ? tabMentionsLabel(tags) : null;
 }
 
 /// A viewer refers to its owner; showing the same harness twice adds no vote.

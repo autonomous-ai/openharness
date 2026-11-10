@@ -3,24 +3,6 @@ import 'dart:async';
 import '../core/machine_resources.dart';
 import 'controller.dart';
 
-/// A join waiting for the person to bring their own agent. Never persisted;
-/// closing the prompt starts nothing and never enrolls a machine.
-class SwarmJoinAccountRequest {
-  SwarmJoinAccountRequest(
-    this.swarmName,
-    this.accountId, {
-    required this.tabId,
-  });
-  final String tabId;
-  final String swarmName, accountId;
-  final _answer = Completer<bool?>();
-  bool get answered => _answer.isCompleted;
-  Future<bool?> get answer => _answer.future;
-  void complete(bool? ownAccount) {
-    if (!answered) _answer.complete(ownAccount);
-  }
-}
-
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
 const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
@@ -45,17 +27,6 @@ bool superTabOldJoinSuggestion(int stored, MachineResources? resources) {
       total >= 2 * _agentMemoryBytes &&
       stored == superTabSuggestedAgentSlots(resources);
 }
-
-/// The role [answer] says this account just became a member as: the
-/// server's own answer to the join that asked, a link join (store.ts
-/// `joinSwarm`) or an invitation's accept (commands.ts `invite.accept`). Null
-/// when the person was a member already, whatever an earlier preview said (they
-/// may have joined on another device meanwhile), or when an older server does
-/// not say: this computer is added only to a membership this request made.
-String? swarmNewMemberRole(Map<String, dynamic> answer) =>
-    answer['alreadyMember'] == false && answer['role'] is String
-    ? answer['role'] as String
-    : null;
 
 /// Accepting a Swarm invitation from this computer. Each attempt has its own
 /// operation, kept only for that attempt's retries (a lost reply is asked

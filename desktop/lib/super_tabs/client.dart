@@ -118,10 +118,6 @@ class SuperTabClient {
   int waitingDecisions(String id) =>
       _loaded[id]?.snapshot?.decisionsWaiting ?? 0;
 
-  /// The unread messages in this account's own Buddy chats in a Swarm open
-  /// here ([SuperTabController.buddyUnread]); none for one not open.
-  int waitingBuddy(String id) => _loaded[id]?.buddyUnread ?? 0;
-
   /// Open here, but not polling: not on screen while the reading pauses.
   bool _paused(String id) =>
       _reading.pausesAway && (_loaded[id]?.away ?? false);
@@ -948,7 +944,6 @@ class SuperTabClient {
       lastChangedAt: -1,
       mentionsWaiting: -1,
       decisionsWaiting: -1,
-      buddyUnread: -1,
     );
     var seenSelected = controller.selectedId;
     var seenThread = controller.threadOnScreen;
@@ -979,8 +974,6 @@ class SuperTabClient {
           mentionsWaiting: snapshot.mentionsWaiting,
           // What needs the person moves the Dock's badge.
           decisionsWaiting: snapshot.decisionsWaiting,
-          // A read mark or a PM chat's messages move the Swarm badge too.
-          buddyUnread: controller.buddyUnread,
         );
         if (change != seenChange) {
           seenChange = change;

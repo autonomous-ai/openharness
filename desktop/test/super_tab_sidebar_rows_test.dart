@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
@@ -144,37 +143,6 @@ void main() {
       await close(tester, controller);
     },
   );
-
-  testWidgets('an unread Buddy row is bold with no dot, and heard as unread', (
-    tester,
-  ) async {
-    final semantics = tester.ensureSemantics();
-    Future<void> row({required bool unread}) => tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: SuperTabBuddyRow(
-            key: const ValueKey('pm'),
-            agentId: null,
-            name: 'Buddy',
-            tooltip: 'Your Buddy · Pilot',
-            unread: unread,
-            onTap: () {},
-          ),
-        ),
-      ),
-    );
-    final pm = find.byKey(const ValueKey('pm'));
-    final tappable = find.descendant(of: pm, matching: find.byType(InkWell));
-    await row(unread: false);
-    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.regular);
-    expect(spoken(tester, tappable), isNot(contains('Unread messages')));
-    await row(unread: true);
-    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.semibold);
-    expect(unreadDot(pm), findsNothing);
-    expect(spoken(tester, tappable), contains('Unread messages'));
-    semantics.dispose();
-  });
 
   testWidgets('an arrow a project name cannot use moves focus as usual', (
     tester,

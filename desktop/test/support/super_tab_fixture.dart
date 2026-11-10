@@ -1391,21 +1391,6 @@ class ConversationServer {
           messages.last['id'] = id;
         }
         output['messageId'] = messages.last['id'];
-        // New session starts the thread's own session (backend commands.ts
-        // routeBuddySession): a top-level message roots its own thread.
-        if (command['newSession'] == true) {
-          final sent = messages.last;
-          final thread = (sent['thread'] ?? sent['id']) as String;
-          sent['buddySession'] = true;
-          final chat = (state['conversations'] as List).cast<Map>().firstWhere(
-            (c) => c['id'] == command['conversationId'],
-          );
-          chat['buddySessions'] = [
-            ...(chat['buddySessions'] as List? ?? const []),
-            {'thread': thread, 'startId': operationId, 'at': 1},
-          ];
-          output['startId'] = operationId;
-        }
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.timeZone' ||
           command['type'] == 'member.username' ||

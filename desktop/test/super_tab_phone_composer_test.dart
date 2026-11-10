@@ -1,6 +1,5 @@
 // The message box on a phone's browser (Huy, 2026-11-02, IMG_4431): the field
-// had about 40% of the width, sharing its row with New session, attach and
-// send, its hint wrapped, and a line kept free under the box held it off the
+// had about 40% of the width, sharing its row with its actions, its hint wrapped, and a line kept free under the box held it off the
 // keyboard. On a phone the field has the width and the actions a row below.
 
 import 'dart:typed_data';
@@ -18,15 +17,10 @@ final _field = find.byKey(const ValueKey('super-message-composer'));
 final _actions = find.byKey(const ValueKey('super-message-composer-actions'));
 final _send = find.byTooltip('Send message');
 
-final _session = find.byKey(const ValueKey('super-chat-new-session'));
-final _note = find.byKey(const ValueKey('super-chat-session-note'));
-
-/// The reader's own Buddy chat ('offline' in the fixture), with New session on
-/// offer and a long Buddy name, as in Huy's screenshot.
+/// The reader's own Buddy chat ('offline' in the fixture), as in Huy's
+/// screenshot.
 ConversationServer _buddyChat() {
   final server = ConversationServer()..threads = true;
-  server.state['threadSessions'] = true;
-  server.state['sessionsFromChat'] = true;
   final chat =
       (server.state['conversations'] as List)[1] as Map<String, dynamic>
         ..['kind'] = 'buddy'
@@ -49,7 +43,7 @@ ConversationServer _buddyChat() {
 
 void main() {
   testWidgets(
-    'in a Buddy chat: a one-line hint, New session below the field, its note above the box, nothing under it',
+    'in a Buddy chat: a one-line hint, send below the field, nothing under the box',
     (tester) async {
       final (_, c) = await mountPhoneSuperTab(
         tester,
@@ -57,34 +51,17 @@ void main() {
         server: _buddyChat(),
         initial: 'offline',
       );
-      // A Buddy goes by a real, short name now (task #4568), so the phone names it too.
-      expect(find.text('Message Rowan'), findsOneWidget);
       expect(tester.widget<TextField>(_field).decoration!.hintMaxLines, 1);
+      await tester.enterText(_field, 'a draft');
+      await tester.pump();
       expect(
-        tester.getRect(_session).top,
+        tester.getRect(_send).top,
         greaterThanOrEqualTo(tester.getRect(_field).bottom),
       );
       expect(
-        tester.getRect(_session).right,
-        lessThan(tester.getRect(_send).left),
-      );
-      expect(_note, findsNothing);
-      expect(
         _phone.height - tester.getRect(_surface).bottom,
         lessThanOrEqualTo(8),
       );
-      await tester.enterText(_field, 'a draft');
-      await tester.tap(_session);
-      await tester.pump();
-      expect(
-        tester.getRect(_note).bottom,
-        lessThanOrEqualTo(tester.getRect(_surface).top),
-      );
-      expect(
-        _phone.height - tester.getRect(_surface).bottom,
-        lessThanOrEqualTo(8),
-      );
-      // The field kept its input through the line coming in above it.
       expect(tester.widget<TextField>(_field).controller!.text, 'a draft');
       expect(tester.testTextInput.isVisible, isTrue);
       expect(tester.takeException(), isNull);
@@ -116,7 +93,7 @@ void main() {
     (667.0, 260.0),
   ]) {
     testWidgets(
-      'a long draft with New session on fits a 320x$height phone with a ${keyboard}px keyboard',
+      'a long draft fits a 320x$height phone with a ${keyboard}px keyboard',
       (tester) async {
         final (_, c) = await mountPhoneSuperTab(
           tester,
@@ -128,7 +105,6 @@ void main() {
         addTearDown(tester.view.resetViewInsets);
         await tester.pumpAndSettle();
         await tester.enterText(_field, List.filled(12, 'line').join('\n'));
-        await tester.tap(_session);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         expect(
@@ -140,27 +116,24 @@ void main() {
     );
   }
 
-  testWidgets(
-    'a short screen with a file, the note and a long draft does not overflow',
-    (tester) async {
-      final (_, c) = await mountPhoneSuperTab(
-        tester,
-        const Size(390, 320),
-        server: _buddyChat(),
-        initial: 'offline',
-      );
-      c.attachments('offline').add([
-        HarnessAttachment('notes.txt', Uint8List(4)),
-      ]);
-      await tester.tap(_session);
-      await tester.enterText(_field, List.filled(12, 'line').join('\n'));
-      await tester.pumpAndSettle();
-      expect(_note, findsOneWidget);
-      expect(find.text('notes.txt'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await unmountPhoneSuperTab(tester, c);
-    },
-  );
+  testWidgets('a short screen with a file and a long draft does not overflow', (
+    tester,
+  ) async {
+    final (_, c) = await mountPhoneSuperTab(
+      tester,
+      const Size(390, 320),
+      server: _buddyChat(),
+      initial: 'offline',
+    );
+    c.attachments('offline').add([
+      HarnessAttachment('notes.txt', Uint8List(4)),
+    ]);
+    await tester.enterText(_field, List.filled(12, 'line').join('\n'));
+    await tester.pumpAndSettle();
+    expect(find.text('notes.txt'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await unmountPhoneSuperTab(tester, c);
+  });
 
   testWidgets(
     'a narrow phone with under 280 px left keeps one row, squeezed but whole',
@@ -175,7 +148,6 @@ void main() {
       addTearDown(tester.view.resetViewInsets);
       await tester.pumpAndSettle();
       await tester.enterText(_field, List.filled(12, 'line').join('\n'));
-      await tester.tap(_session);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(tester.getRect(_send).right, lessThanOrEqualTo(320));

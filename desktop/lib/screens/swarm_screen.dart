@@ -86,7 +86,6 @@ import '../state/harness_launch_integration.dart';
 import '../super_tabs/new_agent.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
-import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
@@ -7929,7 +7928,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     for (var i = 1; i <= 9; i++)
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
-    'swarm.chat_with_pm': () => unawaited(openActiveBuddyChat(app)),
     'agent_messages.show': () => _showAgentMessages(app.activeSwarmId),
     'agent_messages.activity': _toggleTabActivity,
     'agent_messages.make_leader': _toggleFocusedLeader,

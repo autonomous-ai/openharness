@@ -28,12 +28,9 @@ void main() {
       'Five things for today:\nmeasure prod CPU\ncheck the '
       'release notes\nanswer Diego\nand plan the next batch';
 
-  /// The reader's own Buddy chat with its Buddy running: the main chat offers
-  /// New session beside attach and send.
+  /// The reader's own Buddy chat with its Buddy running, a chat they write in.
   ConversationServer buddyChat() {
     final server = ConversationServer()..threads = true;
-    server.state['threadSessions'] = true;
-    server.state['sessionsFromChat'] = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
       ..['kind'] = 'buddy'
@@ -122,11 +119,8 @@ void main() {
   }
 
   group('the main chat', () {
-    final chips = [
-      find.byKey(const ValueKey('super-chat-new-session')),
-      find.byKey(const ValueKey('new-harness-attach')),
-      find.byTooltip('Send message'),
-    ];
+    final attach = find.byKey(const ValueKey('new-harness-attach'));
+    final sendButton = find.byTooltip('Send message');
     final surface = find.byKey(
       const ValueKey('super-message-composer-surface'),
     );
@@ -142,12 +136,10 @@ void main() {
         await type(tester, box, text);
         final line = lastLine(tester, box);
         final pill = tester.getRect(surface);
-        for (final chip in chips.take(2)) {
-          final rect = tester.getRect(chip);
-          expect(rect.bottom, lessThanOrEqualTo(pill.bottom), reason: '$chip');
-          expect(rect.bottom, greaterThanOrEqualTo(line.bottom - 1));
-        }
-        final send = tester.getRect(chips.last);
+        final clip = tester.getRect(attach);
+        expect(clip.bottom, lessThanOrEqualTo(pill.bottom));
+        expect(clip.bottom, greaterThanOrEqualTo(line.bottom - 1));
+        final send = tester.getRect(sendButton);
         expect(send.left, greaterThanOrEqualTo(pill.right));
         expect((send.bottom - pill.bottom).abs(), lessThanOrEqualTo(4));
       });

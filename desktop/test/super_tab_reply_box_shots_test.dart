@@ -15,9 +15,8 @@ final shots = Platform.environment['SUPER_TAB_REPLY_BOX_SHOTS'];
 
 /// The thread reply box's options as the PR shows them (Scholes, 11-03), in
 /// both appearances: square checkboxes at rest, on and on hover (with its
-/// hint), in a project thread and a Buddy thread, at the thread's default
-/// width (Also send on its own line), widened (one row), and dragged to the
-/// 280px minimum. The main chat's New session: super_tab_session_chips_shots.
+/// hint), in a project thread, at the thread's default width, and dragged to
+/// the 280px minimum.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -34,60 +33,18 @@ void main() {
     return server;
   }
 
-  ConversationServer buddyChat() {
-    final server = ConversationServer()..threads = true;
-    server.state['threadSessions'] = true;
-    (server.state['conversations'] as List)[1] as Map
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
-      ..['title'] = 'Wren'
-      ..['agentIds'] = ['buddy-main'];
-    (server.state['agents'] as List).add({
-      'id': 'buddy-main',
-      'name': 'Wren',
-      'displayName': 'Wren',
-      'machineId': 'mac',
-      'harnessId': 'h-main',
-      'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
-      'configuration': {'engine': 'claude'},
-    });
-    server.append(
-      'Measure prod CPU for the last day',
-      conversationId: 'offline',
-    );
-    server.append(
-      'On it: reading the last 24 hours.',
-      conversationId: 'offline',
-    );
-    server.messages.last
-      ..['thread'] = 'message-1'
-      ..['replyTo'] = 'message-1';
-    return server;
-  }
-
   for (final brightness in Brightness.values) {
     for (final scene in [
       'project-off',
       'project-on',
       'project-hint',
       'project-280-off',
-      'buddy-off',
-      'buddy-on',
-      'buddy-hint',
-      'buddy-session-on',
-      'buddy-wide-off',
-      'buddy-wide-on',
-      'buddy-280-off',
-      'buddy-280-on',
-      'buddy-280-hint',
     ]) {
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
         tester,
       ) async {
         final picture = GlobalKey();
-        final buddy = scene.startsWith('buddy');
-        final server = buddy ? buddyChat() : projectChat();
+        final server = projectChat();
         final c = server.controller();
         addTearDown(c.dispose);
         await c.refresh();
@@ -110,16 +67,16 @@ void main() {
             ),
           ),
         );
-        await c.select(buddy ? 'offline' : 'lead');
+        await c.select('lead');
         await tester.pumpAndSettle();
         c.openThread('message-1');
         await tester.pumpAndSettle();
-        if (scene.contains('wide') || scene.contains('280')) {
-          // Resize the thread pane by its divider, as a person drags it:
-          // wider, or to its narrowest.
+        if (scene.contains('280')) {
+          // Resize the thread pane by its divider, as a person drags it, to
+          // its narrowest.
           await tester.drag(
             find.byKey(const ValueKey('super-resize-right')),
-            Offset(scene.contains('wide') ? -220 : 200, 0),
+            const Offset(200, 0),
           );
           await tester.pumpAndSettle();
         }
@@ -129,12 +86,7 @@ void main() {
         );
         await tester.pump();
         final also = find.byKey(const ValueKey('super-thread-also-send'));
-        if (scene == 'buddy-session-on') {
-          await tester.tap(
-            find.byKey(const ValueKey('super-thread-new-session')),
-          );
-          await tester.pump();
-        } else if (scene.endsWith('-on')) {
+        if (scene.endsWith('-on')) {
           await tester.tap(also);
           await tester.pump();
         }
