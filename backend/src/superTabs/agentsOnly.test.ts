@@ -94,6 +94,26 @@ describe('a project\'s channel and its tasks\' chats', () => {
   })
 })
 
+// Every other way a person's words land there asks the same: the first line recorded with an agent they add, and an edit.
+describe('a person\'s words there by another way', () => {
+  it('refuse the first line recorded with an agent they add to a task', () => {
+    const f = swarm()
+    const added = refusal(() => f.run({ type: 'agent.add', conversationId: f.task, machineId: 'owner-mac', harnessId: 'h-kai', name: 'Kai', lead: false,
+      configuration: config, initialMessage: 'Fix the login.' } as Command, owner, own('owner')))
+    expect(added).toMatchObject({ code: 'AGENTS_ONLY' })
+    expect(f.state.agents.map(a => a.name)).not.toContain('Kai')
+  })
+
+  it('refuse a person\'s edit of their own earlier words there, and leave its delete to them', () => {
+    const f = swarm()
+    const mine = { messageChange: { messageId: 'm1', author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false,
+      hasReplies: false, text: 'Build it.', sequence: 1 } } as Partial<CommandContext>
+    expect(refusal(() => f.run({ type: 'message.edit', conversationId: 'lead', messageId: 'm1', text: 'Build it all.' }, owner, mine)))
+      .toMatchObject({ code: 'AGENTS_ONLY' })
+    expect(f.run({ type: 'message.delete', conversationId: 'lead', messageId: 'm1' }, owner, mine).result.changed).toBe(true)
+  })
+})
+
 // Exempt for now: a Personal Swarm. Its Desktop still starts a project's PM on the person's first message in the project's chat:
 // the message waits for the PM (leadWaiting) and the first lead.claim starts it on the person's machine (leadWaiting.test.ts).
 // The exemption goes when the Personal Swarm v4 (every pane an agent under Your Team) lands; then these two cases become one refusal.

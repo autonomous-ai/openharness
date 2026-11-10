@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -74,5 +75,21 @@ describe('New project\'s opening request in a Team Swarm', () => {
     const read = await f.store.messages(owner, f.tab, f.games.conversationId, {}, lead)
     expect(read.messages.find(m => m.id === request)).toMatchObject({ text: 'make the landing page dark', author: { kind: 'person', id: owner.sub } })
     await expect(f.send('thanks')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
+  })
+
+  // As Desktop sends it (launch.dart startInSwarm): each file uploaded to the channel first, then one post naming them all.
+  it('takes its files first and then the post that names them, and the PM reads both', async () => {
+    const f = await personal(randomUUID())
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000201a5d6f0f60000000049454e44ae426082', 'hex')
+    const ids: string[] = []
+    for (const name of ['sketch.png', 'notes.txt']) {
+      const body = name.endsWith('.png') ? png : Buffer.from('Dark, with round buttons.\n')
+      ids.push((await f.store.upload(owner, f.tab, f.games.conversationId, { name, mime: name.endsWith('.png') ? 'image/png' : 'text/plain', body: Readable.from([body]) })).attachment.id)
+    }
+    const request = String((await f.execute({ type: 'message.send', conversationId: f.games.conversationId, text: 'make the landing page dark', replyTo: null,
+      recipientIds: [], attachmentIds: ids })).result.messageId)
+    const lead = await f.join()
+    const read = (await f.store.messages(owner, f.tab, f.games.conversationId, {}, lead)).messages.find(m => m.id === request)
+    expect(read?.attachments?.map(a => a.name)).toEqual(['sketch.png', 'notes.txt'])
   })
 })

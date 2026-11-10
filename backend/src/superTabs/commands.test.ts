@@ -1332,17 +1332,6 @@ describe('any agent of the project', () => {
     expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(engineer)
   })
 
-  it('joins a shared agent and records its first message with distinct stable rows', () => {
-    const { f } = project()
-    const joined = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'shared-with-first-message', name: 'Shared',
-      configuration: config, lead: false, initialMessage: 'Fix the bug' }, owner, { contribution: f.contribution })
-    const initial = joined.messages.find(message => message.text === 'Fix the bug')!
-    const notice = joined.messages.find(message => message.text.includes('added "Shared" to the project'))!
-    expect(f.state.agents.map(agent => agent.id)).toContain(joined.result.agentId)
-    expect(initial.id).toBe(joined.result.messageId)
-    expect(notice.id).not.toBe(initial.id)
-  })
-
   // Ken, 2026-11-02: a Reviewer was a member of the project chat next to the PM, so Desktop opened two terminals there and the
   // Reviewer posted an announcement in it. The project chat holds only its coordinator among agents, whoever adds one and by
   // whichever path; an announcement goes in its task, for the coordinator or its requester to repost.

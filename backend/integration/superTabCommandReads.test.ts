@@ -167,6 +167,9 @@ describe('a person\'s post in a project\'s channel', () => {
   it('is refused before any message row is read', async () => {
     const store = new SuperTabStore(db, Date.now, null)
     const tab = (await store.create(owner, randomUUID(), 'Agents only', 'public')).id
+    // The channel's opening request is kept (agentsOnly.test.ts); the next post is refused.
+    await store.execute(owner, tab, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: 'lead', text: 'Build the landing page.', replyTo: null, recipientIds: [] } as Command })
     let refused: unknown = null
     const entries = await profiled(db, () => store.execute(owner, tab, { operationId: randomUUID(),
       command: { type: 'message.send', conversationId: 'lead', text: 'Can you look at this?', replyTo: null, recipientIds: [] } as Command })

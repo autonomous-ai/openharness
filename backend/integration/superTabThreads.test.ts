@@ -209,11 +209,11 @@ describe('thread summaries (spec 5 phase D)', () => {
     expect(Object.keys(folded[0]!).sort()).toEqual(['_id', 'conversationId', 'mentions', 'parts', 'tabId'])
   })
 
-  it('leaves the full rebuild\'s summary after folded replies are edited and deleted, and none once the last reply goes (task #2974)', async () => {
+  it('leaves the full rebuild\'s summary after folded replies are deleted, and none once the last reply goes (task #2974)', async () => {
     const s = await scene()
     await backfillThreads(db, Date.now())
     // A person's replies there from before only agents posted in a project's channel, folded in as a send folds them: their author
-    // still edits and deletes them.
+    // still deletes them; an edit is new words there, refused as a post is (agentsOnly.test.ts).
     let replied = 0
     const send = async (replyTo: string, as: AuthUser, mentions: string[] = []) => {
       const id = s.id(`w-c-reply-${++replied}`)
@@ -235,7 +235,7 @@ describe('thread summaries (spec 5 phase D)', () => {
     const root = s.id('w-c')
     const first = await send(root, owner, [peer.sub]), second = await send(root, peer), third = await send(root, owner, [outsider.sub])
     await same(root)
-    await run(owner, { type: 'message.edit', messageId: first, text: 'edited' })
+    await expect(run(owner, { type: 'message.edit', messageId: first, text: 'edited' })).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
     await same(root)
     // The newest of its part, the only reply of its part, then the oldest of what is left: each moves what the summary holds.
     for (const [messageId, as] of [[third, owner], [second, peer], [first, owner]] as const) {

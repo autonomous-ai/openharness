@@ -1574,6 +1574,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A new PM's first request is its person's first line in their chat with it (Swarm v4: only agents post in the channel).
       if (command.initialMessage) {
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
+        // Elsewhere it is the person's post there, which agents only refuses as any other (postable).
+        if (!pmChat) postable(state, actor, group.id)
         message(pmChat ?? group.id, command.initialMessage)
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
@@ -2139,6 +2141,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'message.edit':
       // `command` is the cleaned one (withoutCredentials): the store writes this text, never the one it was sent.
       result.changed = editMessage(open(state, command.conversationId), actor, command.messageId, command.text, context.messageChange)
+      // The author's new words where only agents post are refused as a post is (postable); a delete only takes words away.
+      postable(state, actor, command.conversationId)
       if (result.changed) effects.messageEdit = { messageId: command.messageId, text: command.text }
       break
     case 'message.delete':

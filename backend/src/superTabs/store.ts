@@ -1096,8 +1096,13 @@ export class SuperTabStore {
         // Whoever is refused on the way to deleting or restoring the Swarm, a stranger to it included, is told what a missing one tells.
         try { author(original, actor) } catch (error) { if (DELETION_COMMANDS.has(command.type)) notThere(); throw error }
       }
-      // A person's post where only agents post is refused (commands.ts postable) before the message reads below.
-      if (command.type === 'message.send' && actor.kind === 'person') postable(original, actor, command.conversationId)
+      // A person's post where only agents post is refused (commands.ts postable) before the message reads below; access first, as an
+      // upload asks it (poster), so a refusal tells nothing of a conversation the person cannot read.
+      if (command.type === 'message.send' && actor.kind === 'person') {
+        author(original, actor, true)
+        readConversation(original, actor, command.conversationId)
+        postable(original, actor, command.conversationId)
+      }
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true

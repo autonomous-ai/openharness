@@ -1588,44 +1588,15 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(history.json().data.messages.map((m: { text: string }) => m.text)).toEqual(['A shared conversation.'])
   })
 
-  // Tony, 2026-11-03 (#2458): New Harness from a project chat records the person's first message beside the row naming who
-  // added the harness. Both took the operation id, so the join answered 500 and the harness never joined.
-  it('joins a harness started from the project chat with a first message, through the HTTP API', async () => {
-    // Not a Lead whose member name is already "Kai": that one is taken, so the harness would join under another (task #3078).
-    const { tab } = await fixture(leadHarness('Kai', false))
-    const headers = { authorization: `Bearer ${owner.sub}` }
-    const operationId = randomUUID()
-    const join = () => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
-      payload: { operationId, command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm-personal',
-        name: 'Kai', configuration: config, lead: false, initialMessage: 'Hi New PM Personal' } } })
-    const joined = await join()
-    expect(joined.statusCode, joined.body).toBe(200)
-    const agentId = joined.json().data.result.agentId as string
-    expect((await storedState(tab)).agents.map(a => a.id)).toContain(agentId)
-    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as
-      Array<{ id: string; text: string; source?: unknown }>
-    const first = rows.find(m => m.text === 'Hi New PM Personal'), added = rows.find(m => / added "Kai" to the project\./.test(m.text))
-    // The person's message is the one the receipt names; the row naming who added the harness has its own id.
-    expect(first?.id).toBe(joined.json().data.result.messageId)
-    expect(added?.id).toBeDefined()
-    expect(added?.id).not.toBe(first?.id)
-    // The same request again answers the same and writes nothing twice.
-    const again = await join()
-    expect(again.statusCode).toBe(200)
-    expect(again.json().data.result.agentId).toBe(agentId)
-    const after = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as Array<{ text: string }>
-    expect(after.filter(m => m.text === 'Hi New PM Personal')).toHaveLength(1)
-  })
-
-  // Task #3078: the test above failed about one run in 32 (CI runs 41962752144 and 41966667786). The Lead's member name is
-  // drawn from 32 by its id, and a harness added under a name another member holds joins under a different one.
+  // Task #3078: a join failed about one run in 32 (CI runs 41962752144 and 41966667786). The Lead's member name is drawn from 32
+  // by its id, and a harness added under a name another member holds joins under a different one.
   it('joins a harness under another member name when the Lead already holds the one it asked for', async () => {
     const { tab, lead } = await fixture(leadHarness('Kai'))
     const headers = { authorization: `Bearer ${owner.sub}` }
     expect((await storedState(tab)).agents.find(a => a.id === lead)?.displayName).toBe('Kai')
     const joined = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
       payload: { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm-personal',
-        name: 'Kai', configuration: config, lead: false, initialMessage: 'Hi New PM Personal' } } })
+        name: 'Kai', configuration: config, lead: false } } })
     expect(joined.statusCode, joined.body).toBe(200)
     const agents = (await storedState(tab)).agents
     const added = agents.find(a => a.id === joined.json().data.result.agentId)!

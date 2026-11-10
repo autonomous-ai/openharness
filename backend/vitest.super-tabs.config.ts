@@ -37,6 +37,7 @@ export default defineConfig({ test: {
     'integration/schemaRelease.test.ts',
     'integration/superTabNotAvailable.test.ts',
     'integration/superTabPersonalLead.test.ts',
+    'integration/superTabProjectChatWorkers.test.ts',
     'integration/harnessSharesList.test.ts',
     'integration/harnessSharesIndexPlan.test.ts',
     'integration/atlasSnapshot.test.ts',

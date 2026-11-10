@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from '../commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
+import { PERSONAL_SWARM_OPERATION } from '../deletion.js'
+import { createSuperTab, stableId, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
+import { MAX_UNBLOCKS } from './record.js'
 import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -8,8 +10,9 @@ const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const checks = [{ description: 'Works', independent: false }]
 
-function fixture() {
-  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
+/** [personal]: the owner's Personal Swarm, the one place a person still posts in a project's chat (agentsOnly.test.ts). */
+function fixture(personal = false) {
+  let state = createSuperTab(personal ? stableId('super-tab', 'prod', 'owner', PERSONAL_SWARM_OPERATION) : 'tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0, now = 1_000
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
     const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
@@ -43,7 +46,9 @@ function fixture() {
       agentId: worker, harnessId: agent.harnessId, machineId: agent.machineId }]
     return { worker, assignmentId: assignment.id }
   }
-  return { run, invitePeer, add, asAgent, create, group, privateChat, stored,
+  const say = (id: string, actor: Actor, text = 'Go with the flag.', replyTo: string | null = null, reply?: CommandContext['reply']) =>
+    run({ type: 'message.send', conversationId: id, text, replyTo, recipientIds: [] }, actor, reply ? { reply } : {})
+  return { run, invitePeer, add, asAgent, create, group, privateChat, stored, say,
     get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -103,6 +108,74 @@ describe('who asked for a group', () => {
     expect(f.group(id).requesterId).toBeUndefined()
     expect(f.group(id).ledger).toBeUndefined()
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: 'owner' })).toThrow('chat only')
+  })
+})
+
+// A person's GO in a project's chat: only in a Personal Swarm while agents only exempts it (agentsOnly.test.ts); the credit is
+// kept for the leaderboard ledger until the v4 leaderboard is built, and these go with that exemption.
+describe('how a person unblocks work: approvals', () => {
+  const HOUR = 3_600_000
+  /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
+  const leadAsk = (f: ReturnType<typeof fixture>, askedAt = HOUR) => {
+    const lead = f.add('lead', 'lead', true)
+    f.at(askedAt)
+    const asked = f.say('lead', f.asAgent(lead), 'Plan: three steps. Reply GO to start.').messages[0]!
+    return { lead, reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: askedAt } }
+  }
+  const posted = (f: ReturnType<typeof fixture>, id: string, text: string) =>
+    f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] }, owner)
+
+  for (const word of ['GO', 'go ahead', 'Approve', 'approved, thanks', 'Duyệt', 'duyet nhe', 'DUYỆT nhé', '  Go!']) {
+    it(`counts "${word}" in reply to the Lead's ask as an approval, with how long the ask waited`, () => {
+      const f = fixture(true), { reply } = leadAsk(f, HOUR)
+      f.at(4 * HOUR)
+      f.say('lead', owner, word, reply.id, reply)
+      expect(f.group('lead').ledger?.unblocks).toEqual([{ personId: 'owner', at: 4 * HOUR, waitedMs: 3 * HOUR, kind: 'approval', item: reply.id }])
+    })
+  }
+
+  for (const word of ['ok', 'OK, go', 'goal: ship Friday', 'approves nothing yet', 'no, not GO']) {
+    it(`does not count "${word}" as an approval`, () => {
+      const f = fixture(true), { reply } = leadAsk(f)
+      f.say('lead', owner, word, reply.id, reply)
+      expect(f.group('lead').ledger?.unblocks).toBeUndefined()
+    })
+  }
+
+  it('counts an approval only in reply to the project\'s Lead, never to another agent', () => {
+    const f = fixture(true), id = f.create(), worker = f.add('worker', id)
+    const said = f.say(id, f.asAgent(worker), 'Shall I start?').messages[0]!
+    f.say(id, owner, 'GO', said.id, { id: said.id, conversationId: id, author: said.author, createdAt: 1_000 })
+    expect(f.group(id).ledger?.unblocks).toBeUndefined()
+  })
+
+  it('counts one approval per ask, however many people or times reply GO', () => {
+    const f = fixture(true)
+    f.invitePeer()
+    const { reply } = leadAsk(f)
+    f.say('lead', owner, 'GO', reply.id, reply)
+    f.say('lead', owner, 'GO again', reply.id, reply)
+    f.say('lead', peer, 'Approved', reply.id, reply)
+    expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
+  })
+
+  it('never credits a private conversation', () => {
+    const f = fixture(true)
+    const chat = f.privateChat()
+    posted(f, chat, 'GO')
+    expect(f.group(chat).ledger?.unblocks).toBeUndefined()
+  })
+
+  it(`keeps at most ${MAX_UNBLOCKS} credits on one conversation, the newest`, () => {
+    const f = fixture(true), { lead } = leadAsk(f)
+    for (let i = 0; i <= MAX_UNBLOCKS; i++) {
+      f.at(10_000 + 2 * i)
+      const ask = f.say('lead', f.asAgent(lead), `Plan ${i}. Reply GO.`).messages[0]!
+      f.say('lead', owner, 'GO', ask.id, { id: ask.id, conversationId: 'lead', author: ask.author, createdAt: 10_000 + 2 * i })
+    }
+    const kept = f.group('lead').ledger!.unblocks!
+    expect(kept).toHaveLength(MAX_UNBLOCKS)
+    expect(kept.every(u => u.kind === 'approval')).toBe(true)
   })
 })
 
