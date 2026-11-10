@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Files — a folder with an open page</title>
+  <path d="M6 16C6 12.7 8.7 10 12 10H25L31 16H52C55.3 16 58 18.7 58 22V48C58 51.3 55.3 54 52 54H12C8.7 54 6 51.3 6 48Z" fill="#c98a2b"/>
+  <rect x="18" y="20" width="28" height="30" rx="3" fill="#fff7e8"/>
+  <path d="M24 29H40M24 36H40M24 43H33" stroke="#c98a2b" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M6 28C6 25.8 7.8 24 10 24H54C56.2 24 58 25.8 58 28V48C58 51.3 55.3 54 52 54H12C8.7 54 6 51.3 6 48Z" fill="#e7a84a" fill-opacity="0.55"/>
+</svg>
