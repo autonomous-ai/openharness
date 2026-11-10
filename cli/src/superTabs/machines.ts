@@ -826,7 +826,7 @@ export class ContributedMachines {
               else this.preparing.delete(String(start.id))
               // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it. So
               // with a join the server refused (backend leadStart.ts leadOvertaken): the start's own close deletes nothing, and
-              // this close runs a Team account's confidential purge, and tries again until it has (security review 1 of #2668).
+              // this close tries again until it has (security review 1 of #2668).
               if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
               // A start the Swarm failed is listed for one more pass, which reads the failure with no agent named. Kept for [abandoned]:

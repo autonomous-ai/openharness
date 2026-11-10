@@ -12,6 +12,7 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
+import { isTeamAccount } from '../team/config.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -120,12 +121,13 @@ export const BUDDY_CLAUDE_SIGNED_OUT = 'Sign in to Claude Code on this computer 
  * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
  * like their own Claude Code or Codex session, so it launches only where those rights are its owner's own. The Swarm starts a
  * Buddy only on its owner's own machine (backend commands.ts buddy.create, BUDDY_OWN_MACHINE); here the machine checks again,
- * by what it knows itself: the account signed in to Harness here is the Buddy's owner. The
+ * by what it knows itself: it is not an old Harness Team account (whose launch refuses a Buddy too, lib/swarmSkills.ts), and the
+ * account signed in to Harness here is the Buddy's owner. The
  * start's record must say the same: the machine is its owner's, contributed by them, and not lent to them. Anything missing refuses.
  */
 export function buddyOnOwnMachine(input: Json, start: Json, buddyOf: Json): boolean {
   const owner = buddyOf.personId
-  return identifier(owner) && input.signedIn === owner
+  return identifier(owner) && !isTeamAccount() && input.signedIn === owner
     && start.machineOwnerId === owner && start.contributorId === owner && !start.hostGrant
 }
 
