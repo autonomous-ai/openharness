@@ -2,12 +2,11 @@
  * Swarm v3 removes Team accounts (task #4120, anh Dee 2026-11-07; gone for good 2026-11-10). The PM's rulings in the task: an
  * agent a person brought works on any task of a project that person can read, in their own account, and a new agent starts
  * only on its own person's computer; a task whose code a Team agent pushed stays guarded, and only the project owner's own
- * agent may take it over.
+ * agent may take it over. Since 2026-11-10 no Team account is left, and that guard went with them.
  */
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
-import { barredFromTeamWritten } from './teamWritten.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 const NOW = 50_000_000
@@ -96,19 +95,23 @@ describe('with Team accounts removed', () => {
     expect(refusal(startOn('strangers-mac', { machineOwnerId: 'stranger', contributorId: 'mate', hostGrant: 'share-1' }))).toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
   })
 
-  it('marks the task a Team agent held, unmarked from before the mark, Team-written when its machine leaves (audit H2)', () => {
+  // The Team-written guard went with Team accounts (2026-11-10): a mark a task kept from before is no longer read, and a Team
+  // machine leaving marks nothing.
+  it('starts a person\'s own agent on a task marked Team-written from before, with its project settings on', () => {
+    const f = swarm(), byId = (id: string) => f.state.conversations.find(c => c.id === id)!
+    Object.assign(byId(f.task), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
+    f.start('mate-mac', mate)
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'mate-mac' })
+    expect(f.state.starts!.at(-1)!.request).not.toHaveProperty('projectSettings')
+  })
+
+  it('marks no task when a Team machine leaves', () => {
     const f = swarm(), byId = (id: string) => f.state.conversations.find(c => c.id === id)!
     const team = f.member('mates-team', 'mate-team', 'mate')
     byId(f.task).assignment = { id: 'a1', agentId: team, status: 'working', configuration: config, result: null,
       execution: { machineId: 'mate-team', harnessId: 'harness-mates-team', machineOwnerId: 'mate' } } as never
-    const other = byId(String(f.run({ type: 'conversation.create', projectId: 'lead', title: 'Other', brief: 'Not its.', priority: 'P2',
-      requesterId: 'owner', checks: [{ description: 'Done.', independent: false }] } as Command, f.as(f.pm)).result.conversationId))
     f.run({ type: 'machine.teamGone', machineId: 'mate-team' } as Command, owner, { teamMachineGone: true })
     expect(f.state.agents.map(a => a.id)).not.toContain(team)
-    expect(byId(f.task)).toMatchObject({ teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
-    expect(other.teamWritten).toBeUndefined()
-    // Its own person's agent may not take it over: only the project owner's own agent may.
-    const mates = f.member('mates-own', 'mate-mac', 'mate')
-    expect(barredFromTeamWritten(f.state, byId(f.task), f.state.agents.find(a => a.id === mates)!)).toBe(true)
+    expect(byId(f.task).teamWritten).toBeUndefined()
   })
 })

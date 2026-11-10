@@ -33,6 +33,7 @@ export const OLD_PAYLOADS = {
   'work.lane': { conversationId: 'task-1', lane: 'Backend' },
   'member.start': { conversationId: 'task-1' },
   'member.helper': { conversationId: 'task-1' },
+  'work.teamWritten': { conversationId: 'task-1' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */
