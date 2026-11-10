@@ -39,7 +39,7 @@ import { SwarmReads } from '../superTabs/read/service.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
-import { PICTURES_RETIRED, REMINDERS_RETIRED, RETIRED_READS, RETIRED_WRITES } from '../superTabs/retired.js'
+import { PICTURES_RETIRED, REMINDERS_RETIRED, RETIRED_READS, RETIRED_WRITES, retiredCatchUp } from '../superTabs/retired.js'
 import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
@@ -70,7 +70,8 @@ const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000)
 const emptyBody = z.object({}).strict().optional()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
-// `mentions=1` asked an older Desktop's tag counts, which Swarm v4 has none of (2026-11-10): taken and answered with none.
+// `mentions=1` asked an older Desktop's tag counts, which Swarm v4 has none of (2026-11-10): taken and answered with none. It goes
+// with the retired reads (superTabs/retired.ts), not before 2026-12-09.
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 // `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
@@ -593,6 +594,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // whatever query it sent, and names no Swarm, as `updateRequired` does for the retired full-state reads.
   for (const [url, empty] of Object.entries(RETIRED_READS)) app.get(url, (_req, reply) => sendSuccess(reply, empty))
   for (const [url, done] of Object.entries(RETIRED_WRITES)) app.post(url, (_req, reply) => sendSuccess(reply, done))
+  app.get<{ Querystring: { after?: unknown } }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+    (req, reply) => sendSuccess(reply, retiredCatchUp(req.query.after)))
   // An older Desktop's Remind me: clearing one answers that none was cleared; setting one is refused in words, which the app shows
   // where it was set, rather than answered as if a reminder were kept (superTabs/retired.ts REMINDERS_RETIRED).
   app.post<{ Body: { at?: unknown } }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', (req, reply) =>

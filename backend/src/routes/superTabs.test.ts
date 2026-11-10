@@ -224,7 +224,10 @@ describe('the retired reads', () => {
       ['/api/super-tabs/tab-1/mentions?state=waiting', { mentions: [] }], ['/api/super-tabs/tab-2/mentions?state=earlier', { mentions: [] }],
       ['/api/super-tabs/tab-1/activity', { items: [], more: false }], ['/api/super-tabs/tab-1/reminders', { due: [], next: null }],
       ['/api/super-tabs/tab-1/threads?read=50', { unread: [], read: [], more: false }], ['/api/super-tabs/tab-1/inbox', { threads: [], latest: [], more: false }],
-      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=4', { after: 0, through: 0, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
+      // Catch-up's span ends where it started, at the mark it was sent: never behind it.
+      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=4', { after: 4, through: 4, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
+        needsYou: none }],
+      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=x', { after: 0, through: 0, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
         needsYou: none }],
     ] as const) {
       const res = await app.inject({ method: 'GET', url })

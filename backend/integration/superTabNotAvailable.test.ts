@@ -166,6 +166,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     // they are tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
     expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', ...Object.keys(RETIRED_READS).map(url => `GET ${url}`),
       ...Object.keys(RETIRED_WRITES).map(url => `POST ${url}`), 'POST /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
+      'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
       'POST /api/super-tabs/:tabId/native',
       'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/avatars'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
@@ -260,6 +261,8 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
           const res = await app.inject({ method: 'POST', url: url(path, tab), headers: { 'x-user': as.sub }, payload: {} })
           expect({ status: res.statusCode, body: res.body }, `${as.email} ${path}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data }) })
         }
+        const caughtUp = await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/catch-up?after=7`, headers: { 'x-user': as.sub } })
+        expect(caughtUp.json().data).toMatchObject({ after: 7, through: 7, unread: 0 })
         const reminder = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/conversations/lead/messages/${MISSING}/reminder`,
           headers: { 'x-user': as.sub }, payload: { at: new Date(Date.now() + 60_000).toISOString() } })
         expect({ status: reminder.statusCode, code: reminder.json().error.code }).toEqual({ status: 410, code: 'REMINDERS_RETIRED' })

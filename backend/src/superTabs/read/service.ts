@@ -368,8 +368,8 @@ export class SwarmReads {
 
   /** The person's Mark unread from the message at `sequence`: their mark of a conversation they can read goes to just before it,
    *  never forward (readMarks.ts lowerReadMark), and never past the conversation's newest message. Checked as markRead: only a
-   *  person reading as themselves, and every chat they cannot read is the same refusal. Tags it resolved and Activity it read
-   *  a reply only in a thread keeps its thread's mark. */
+   *  person reading as themselves, and every chat they cannot read is the same refusal. A reply only in a thread keeps its thread's
+   *  mark. */
   async markUnread(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group } = await this.readGroup(user, tabId, conversationId)

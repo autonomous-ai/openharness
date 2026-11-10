@@ -42,8 +42,14 @@ export const RETIRED_READS: Readonly<Record<string, object>> = {
   '/api/super-tabs/:tabId/reminders': { due: [], next: null },
   '/api/super-tabs/:tabId/threads': { unread: [], read: [], more: false },
   '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
-  '/api/super-tabs/:tabId/conversations/:conversationId/catch-up': { after: 0, through: 0, unread: 0, more: false, decisions: 0,
-    landed: { total: 0, items: [] }, blocked: { total: 0, items: [] }, needsYou: { total: 0, items: [] } },
+}
+
+/** An older Desktop's catch-up of a chat since its mark (GET .../conversations/:conversationId/catch-up?after=N): nothing missed,
+ *  its span ending where it started, so it never reads back past the mark it sent. Goes with the reads above. */
+export const retiredCatchUp = (after: unknown): object => {
+  const at = Number.isSafeInteger(Number(after)) && Number(after) >= 0 ? Number(after) : 0
+  const none = { total: 0, items: [] }
+  return { after: at, through: at, unread: 0, more: false, decisions: 0, landed: none, blocked: none, needsYou: none }
 }
 
 /** Writes of the same reads an older app still sends, each answered as done and changing nothing: Activity read up to a time, and a
