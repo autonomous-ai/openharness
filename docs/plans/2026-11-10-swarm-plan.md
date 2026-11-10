@@ -136,9 +136,11 @@ Nothing else is started on Swarm until its gate is passed.
 
 ### 0. Stop and cut
 
-- Land the wipe (#3882) and the open removal slices (#3859; the CLI's #3831, #3870, #3876, #3878; Desktop's #3711 to
-  #3796 and #3758). Close the v3-era pull requests still open.
-- The panes, the leaderboard and the phone stay as they are.
+- The cut has its own builders, one each for the backend, the CLI and Desktop. At 00:05 on 11 November the wipe and
+  most of the removal were released (backend 1.4.65, CLI 0.6.6, Desktop 1.4.22). Left: the backend's S7 (#3893), S8,
+  S18 and S19; the CLI's Buddy, old skills and request fields; Desktop's last leftovers. The phone app is not
+  started.
+- No new pane, leaderboard or phone work.
 - One person owns this plan. A Swarm pull request names the line here it serves.
 
 ### 1. Nothing stops unseen
@@ -316,6 +318,17 @@ The seam, agreed before code:
   out of quota, idle, not running) and gives it by one function. The train agent and the reader asks use it.
 - **Shared files** (`command.ts`, `service.ts`): a change there is small and lands alone.
 - **The real test.** The two sessions sit on two computers, which is what allocation's first test and the gate need.
+
+The cut is a third party's, and three of its changes touch these halves:
+
+- `cli/src/lib/swarmSkills.ts`: the cut's CLI builder takes the Buddy text and the installed skills out first. Item 7
+  starts after that has landed.
+- `githubMerge.ts` and `githubAssign.ts`: #3708 (an author cannot read its own pull request under another spelling
+  of its name) is open and green. It lands or is closed before either half changes those files.
+- The backend: S7 (#3893) changes `turnEnd.ts`, `liveness.ts` and the schema, and S19 changes the schema again. The
+  working side starts in the CLI and changes the backend's delivery files after S7 has landed. The landing side adds
+  no collection before S19 has landed; it starts from the record the backend already keeps of which agent wrote each
+  GitHub comment.
 
 ## Next
 
