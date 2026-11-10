@@ -4465,7 +4465,8 @@ describe('Swarm parts under concurrent writes', () => {
     expect(c.attempts).toBe(waiting.length + 1)
   })
 
-  it('gives a machine\'s last slot to exactly one of two concurrent starts', async () => {
+  // Its last room is memory since saved counts went (2026-11-10): 28 GB free holds one 15 GiB start, not two.
+  it('gives a machine\'s last room to exactly one of two concurrent starts', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Slots')).id
     await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
       .then(r => run(tab, { type: 'invite.accept', inviteId: r.result.inviteId as string }, host))
@@ -4477,11 +4478,11 @@ describe('Swarm parts under concurrent writes', () => {
     // Started in a task: the project chat holds only its coordinator among agents (#2207).
     const group = String((await run(tab, { type: 'conversation.create', title: 'Slots work', brief: '', checks: [] })).result.conversationId)
     const request = (name: string) => ({ conversationId: group, machineId: 'test-host', engine: 'codex', name, cwd: '/fixture/repo', worktree: false,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+      requirements: { memoryBytes: 15 * 1024 ** 3, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
     const results = await Promise.allSettled([run(tab, { type: 'agent.start', request: request('One') }, host),
       run(tab, { type: 'agent.start', request: request('Two') }, host)])
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL' } })
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL', details: { reason: 'memory' } } })
   })
 
   it('never keeps a message from a person removed while it was being sent', async () => {

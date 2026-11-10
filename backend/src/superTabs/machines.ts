@@ -19,11 +19,11 @@ export interface ContributedMachine {
   cwd: string
   scope?: 'swarm'
   engines: string[]
-  /** The count a Buddy-only machine holds its Buddies to (agentLimit). On any other machine, what its owner last saved: kept
-   *  as a number every client reads, never a limit since capacity settings went (2026-11-10). */
+  /** The count its owner last saved, which older clients send and read back: never a limit since capacity settings went
+   *  (2026-11-10). Goes with `machine.contribute`'s field on or after 2026-12-10. */
   maxAgents: number
-  /** Its Agents setting as an owner last saved it (Dee, 11-04): `memory` or `atMost`. Read by nothing since capacity settings
-   *  went (2026-11-10): every machine takes agents as memory allows. */
+  /** Its Agents setting as an owner last saved it (Dee, 11-04), `memory` or `atMost`: read by nothing since capacity settings
+   *  went (2026-11-10). Goes on or after 2026-12-10, with `maxAgents`. */
   agents?: 'memory' | 'atMost'
   paused: boolean
   /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
@@ -719,12 +719,6 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
 export const AGENT_MEMORY_BYTES = 2 * 1024 ** 3
 /** The most agents any machine runs, as machine.contribute's own bound: a ceiling on growth, never a setting. */
 export const MACHINE_AGENTS_CEILING = 1024
-/** The count a Buddy-only machine holds its own Buddies to (commands.ts), or null: every other machine takes agents as memory
- *  allows. A count its owner saved before is no limit (the lead, 2026-11-10: capacity settings are gone); an older client still
- *  sends one with each save, and it is kept as the number it reads back. */
-export function agentLimit(pool: Pick<ContributedMachine, 'maxAgents' | 'buddyOnly'>): number | null {
-  return pool.buddyOnly ? pool.maxAgents : null
-}
 
 /** Its measured free memory, from its last reading; null with none. */
 export function freeMemoryBytes(pool: Pick<ContributedMachine, 'observation'>): number | null {
@@ -754,25 +748,20 @@ export function startableMemoryBytes(state: SuperTabState, pool: ContributedMach
   return Math.max(0, Math.min(...readings) - held)
 }
 
-/** How many more agents it takes now, for the route and Desktop: a Buddy-only machine's count less what runs, or, as memory
- *  allows, one per AGENT_MEMORY_BYTES of startable memory (none with no reading). Its host checks free memory and disk again at
- *  each launch. */
+/** How many more agents it takes now, for the route and Desktop: as memory allows, one per AGENT_MEMORY_BYTES of startable
+ *  memory (none with no reading), whatever count its owner saved before (capacity settings went, 2026-11-10). Its host checks
+ *  free memory and disk again at each launch. */
 export function availableSlots(state: SuperTabState, pool: ContributedMachine, used: number): number {
-  const limit = agentLimit(pool)
-  const ceiling = Math.max(0, (limit ?? MACHINE_AGENTS_CEILING) - used)
-  if (limit !== null) return ceiling
+  const ceiling = Math.max(0, MACHINE_AGENTS_CEILING - used)
   const free = startableMemoryBytes(state, pool)
   return free === null ? 0 : Math.min(ceiling, Math.floor(free / AGENT_MEMORY_BYTES))
 }
 
 const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 100) / 100} GB`
-/** A new start's room on [pool], said in words its owner can act on: a Buddy-only machine's own count, or its free memory. */
-export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number, who = 'an agent') {
-  const limit = agentLimit(pool)
-  if (limit !== null) {
-    if (used >= limit) fail('MACHINE_FULL', `${pool.name} already runs ${used} agent${used === 1 ? '' : 's'}, the most it takes. Try again when one finishes.`)
-    return
-  }
+/** A new start's room on [pool], said in words its owner can act on: its free memory, for what the start asks or, asking none,
+ *  an agent's (as startableMemoryBytes holds it). */
+export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, asked: number, who = 'an agent') {
+  const memoryBytes = asked || AGENT_MEMORY_BYTES
   if (used >= MACHINE_AGENTS_CEILING) fail('MACHINE_FULL', `${pool.name} already runs ${used} agents, the most any machine runs.`)
   const free = startableMemoryBytes(state, pool)
   if (free !== null && free < memoryBytes) {

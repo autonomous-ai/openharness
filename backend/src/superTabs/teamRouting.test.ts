@@ -19,7 +19,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
-const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 type Reading = NonNullable<ContributedMachine['observation']>
 /** A reading as the store keeps it: stamped with the reporting session's kind and, from a team session, its privacy. */
@@ -296,8 +296,7 @@ describe('one machine: a Mac and its Harness Team account', () => {
 describe('one machine: the Mac\'s agent slots', () => {
   it('are shared by the Mac and its Harness Team account while an agent is still there', () => {
     const f = swarm()
-    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm', maxAgents: 2 })
-    f.machine('mate-mac').maxAgents = 2
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm' })
     f.member('mine', 'mate-mac', 'mate', f.mine)
     f.member('team-agent', 'mate-team', 'mate')
     // One on the owner's daemon and one left in the team account: the Mac counts both, whichever side asks.
@@ -430,6 +429,14 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     expect(refusal(() => start(g, other))).toBeNull()
   })
 
+  // Review of #3865: with no saved count left to bound it, a start that asks for no memory is held to an agent's.
+  it('holds a start that asks for no memory to an agent\'s', () => {
+    const f = swarm(), group = f.group()
+    measured(f, 'owner-mac', 128, 1)
+    const none = refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'owner-mac'), requirements: { ...twoGiB, memoryBytes: 0 } } }, owner, f.pooled('owner-mac')))
+    expect(none?.message).toBe('Owner Mac is out of free memory: 1 GB free, and an agent needs 2 GB. Try again when an agent there finishes, or pick another machine.')
+  })
+
   it('a start refused for memory says so plainly', () => {
     const f = swarm(), group = f.group()
     Object.assign(f.machine('owner-mac'), { maxAgents: 16 })
@@ -482,16 +489,13 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     expect([room('mate-mac'), room('mate-team')]).toEqual([0, 0])
   })
 
-  it('keeps an owner\'s At most when an older client saves the machine again with the same count', () => {
+  it('stores the Agents setting a client sends, for it to read back, and none when it sends none', () => {
     const f = swarm()
     const save = (extra: Record<string, unknown>) => f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm',
       engines: ['codex'], maxAgents: 16, ...extra } as Command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
     save({ agents: 'atMost' })
+    expect(f.machine('owner-mac')).toMatchObject({ agents: 'atMost', maxAgents: 16 })
     save({})
-    expect(f.machine('owner-mac').agents).toBe('atMost')
-    // A new count from an older client is its own: the setting is read from the number again.
-    f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 6 } as Command,
-      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
     expect(f.machine('owner-mac').agents).toBeUndefined()
   })
 

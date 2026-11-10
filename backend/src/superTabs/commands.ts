@@ -189,7 +189,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('proposal.answer'), conversationId: id, questionId: id, text }).strict(),
   z.object({ type: z.literal('proposal.merge'), conversationId: id, intoConversationId: id, reason: text }).strict(),
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
-    // Its Agents setting (machines.ts agentLimit): an older client leaves it out.
+    // Its Agents setting, which nothing enforces since capacity settings went (2026-11-10): stored as an older client sends it,
+    // with `maxAgents`, for it to read back. Both go on or after 2026-12-10.
     agents: z.enum(['memory', 'atMost']).optional(),
     ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional(),
     // With ifMissing: not if its person took it out (Swarm removedMachines). A Personal Swarm's own sync sends it (#2181).
@@ -1383,8 +1384,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!pool?.observation?.capabilities?.includes(BUDDY_SESSION_CAPABILITY)) {
         fail('BUDDY_SESSION_UNSUPPORTED', `Update Harness on ${pool?.name ?? 'your Buddy\'s computer'} to start sessions.`)
       }
-      // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
-      // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
+      // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's free
+      // memory, said in words a person can act on. A Buddy-only machine has none (below).
       if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes, 'a Buddy')
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
@@ -1407,7 +1408,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // A project session of the one chat names its project: it reads that project alone and no excerpt.
         buddySession: { thread, from: chat.messageSeq ?? chat.lastMessageSequence, ...(swarm && project ? { projectId: project.id } : {}) } }
       // A slot for it on a Buddy-only machine, as for its main Buddy (buddy.create).
-      if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const admitted = admitMachineStart(state, request, context.now)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
@@ -1477,7 +1477,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
       name: main.displayName ?? main.name, cwd: projectFolder(pool, project), worktree: true, requirements: BUDDY_REQUIREMENTS,
       buddyOf: { personId: owner.id, generation: owner.generation }, buddyNarrow: true, buddyWaiting: [operationId] }
-    if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
     // A machine that cannot take it now (full, offline, paused) starts nothing: the phone's message is still kept, as it was
     // before any Buddy answered there (security review 2 of #2435: its slots are counted, touches.ts).
     let admitted: ReturnType<typeof admitMachineStart>
@@ -2330,9 +2329,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
       // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
       const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
-      // Its Agents setting: a client that does not send one (older than #2860) keeps the stored one while the count is the same.
       const previous = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)
-      const agents = command.agents ?? (previous?.agents && previous.maxAgents === command.maxAgents ? previous.agents : undefined)
+      const agents = command.agents
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -3136,7 +3134,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('BUDDY_UPDATE_HOST', `Update Harness on ${pool.name ?? 'your computer'} to start your Buddy.`)
       }
       // A slot for its person's Buddy there and its sessions: it takes nothing else.
-      if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
       const named = chosenBuddyName(state, chat, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
