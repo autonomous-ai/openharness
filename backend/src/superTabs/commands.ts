@@ -59,6 +59,7 @@ import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { askBuddyEngine, buddyEngineChat, buddyEngineName, checkBuddyRebind } from './buddyEngine.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { defaultAccountOnly, SWITCH_CAPABILITY } from './pmAccount.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { isProjectChat, inMainChat, requireChatContent, requireChatPost, recordChatAsk, recordChatPost, requireChatAnswer, recordChatAnswer } from './chatLimits.js'
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
@@ -85,8 +86,6 @@ export const SWARM_INVITATION_MS = 7 * 86_400_000
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
-/** What a host reports it can do for a Product Manager's switch; a host from before it is never asked (HOST_OUTDATED). */
-const SWITCH_CAPABILITY = 'leadSwitch'
 const SWITCH_LEASE_MS = 15 * 60_000
 /** The engines as people read them in a switch's line. */
 const ENGINE_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
@@ -1945,18 +1944,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
       }
       if (!contributedEngines(destination).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${destination.name}.`, 403)
-      // The default account has one id per destination machine (a literal 'default' is the same account).
-      const profileId = command.profileId === 'default' ? defaultProfileId(destination.machineId, command.engine) : command.profileId
-      if (profileId !== defaultProfileId(destination.machineId, command.engine) && !destination.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
-        fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
-      }
-      // Another person's move onto the machine owner's other account is told to the owner by their own Buddy (agent.switchResult):
-      // with none to tell them, their quota is never used without their knowing (security review of #4558).
-      const machineOwner = state.people.find(p => p.id === pm.machineOwnerId)
-      if (machineOwner && machineOwner.id !== actor.userId && profileId !== defaultProfileId(destination.machineId, command.engine)
-        && !ownAgentAuthor(state, machineOwner)) {
-        fail('OWNER_NOT_TOLD', `${usernameOf(state, machineOwner.id) ?? 'The machine\'s owner'} has no Buddy to tell them the ${name} runs on their account. Ask them to move it, or to add a Buddy first.`, 409)
-      }
+      // A PM runs on its machine's default account alone (pmAccount.ts): nobody can see or take back an account they offered once
+      // Desktop dropped its accounts page, so a CLI of the last 30 days that still reports one is not believed. The default account
+      // has one id per destination machine (a literal 'default' is the same account).
+      const profileId = defaultProfileId(destination.machineId, command.engine)
+      if (command.profileId !== 'default' && command.profileId !== profileId) defaultAccountOnly(name, destination.name)
       if (destination.machineId !== pool.machineId) {
         const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
         start.request.profileId = profileId
@@ -3197,10 +3189,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
             || !destination.observation.capabilities.includes(LEAD_CAPABILITY)) {
             fail('HOST_OUTDATED', `Update Harness on ${destination?.name ?? 'that machine'} to move the ${coordinatorNameOf(project)}.`, 409)
           }
-          const profileId = switchSource.switchRequest.profileId
-          if (profileId !== defaultProfileId(destination.machineId, switchSource.switchRequest.engine)
-            && !destination.observation.profiles?.some(p => p.engine === switchSource.switchRequest!.engine && p.id === profileId)) {
-            fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
+          // A switch asked before the server took the default account alone may still name another one. A destination host never
+          // started a PM on another account (cli superTabs/machines.ts takes no account from a start), so it is the default one.
+          const profileId = defaultProfileId(destination.machineId, switchSource.switchRequest.engine)
+          if (switchSource.switchRequest.profileId !== profileId && start.request.profileId === switchSource.switchRequest.profileId) {
+            switchSource.switchRequest.profileId = profileId
+            start.request.profileId = profileId
           }
           if (start.request.profileId !== profileId) fail('STALE_SWITCH', 'This PM switch no longer names this account.')
           if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.harnessId
@@ -3554,7 +3548,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const landed = target.switchLanded?.id === command.switchId ? target.switchLanded : undefined
       const promoted = landed?.candidateAgentId ? state.agents.find(candidate => candidate.id === landed.candidateAgentId) : undefined
       const project = ledProject(state, target.id) ?? (promoted ? ledProject(state, promoted.id) : undefined)
-      const asked = (landed ?? target.switchRequest)?.requestedBy
       // A rebind already moved the PM: a failure the host reported as it landed is not what happened.
       const moved = command.ok || !!landed
       if (isBuddy(target)) {
@@ -3575,22 +3568,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
       const running = moved && promoted ? promoted : target
       const engine = ENGINE_NAMES[running.configuration?.engine ?? ''] ?? 'its engine'
-      const label = running.profileId && state.machines?.find(m => m.machineId === running.machineId)?.observation?.profiles
-        ?.find(p => p.engine === running.configuration?.engine && p.id === running.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
-        text: moved ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.`
+        text: moved ? `PM moved to ${engine}.`
           : `Couldn't switch the PM: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
-      // The machine owner hears when their non-default account runs another person's PM; the project line may be out of their reach.
-      const owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
-      // Written by the owner's own agent: only they and it post in their private chat (task #4558).
-      const ownVoice = owner && ownAgentAuthor(state, owner)
-      if (moved && label && asked && owner && ownVoice && asked !== owner.id) {
-        // The owner's Buddy reads it: by name, never email (review of #2954).
-        const who = agentWrittenNameOf(state, asked) ?? 'Someone'
-        effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: defaultBuddyChat(state, owner).id, author: ownVoice, replyTo: null, recipients: [],
-          source: { kind: 'pm-switch-notice', machineId: target.machineId },
-          text: `${who} moved the PM of ${project.name} on ${pool?.name ?? target.machineId} to your ${engine} account "${label}".` })
-      }
       break
     }
     case 'agent.stopLease': {

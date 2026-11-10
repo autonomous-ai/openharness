@@ -10,6 +10,7 @@ import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
 import { staleModelRequests, staleSwitches } from './tidy.js'
+import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -277,9 +278,11 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 
 /** The time checks, run on any machine's report once per Swarm sweep: every start dispatched over 3 minutes ago that is not running
  *  fails, unless its machine is still preparing it; a Product Manager switch nobody answered, a model request nobody answered and a
- *  removed confidential session whose data is not deleted say so once. Swarm v4 loses no task and nudges no worker. */
+ *  removed confidential session whose data is not deleted say so once; a PM on another account of its machine is moved back to
+ *  the default one (pmAccount.ts). Swarm v4 loses no task and nudges no worker. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now),
+    ...pmsToDefaultAccount(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
