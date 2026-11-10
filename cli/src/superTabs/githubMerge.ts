@@ -87,6 +87,9 @@ type NoteKind = keyof typeof NOTES
 const CHECKS_SETTLE_MS = 3 * 60_000
 /** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
 const TOLD_MAX = 5_000
+/** Records asked for in one request (the backend takes at most 100 ids), how many are remembered, and how long after a comment
+ *  was written one with no record is taken as typed by hand: the command records it within seconds of posting it. */
+const AUTHORS_PAGE = 100, RECORDED_MAX = 5_000, RECORD_SETTLE_MS = 2 * 60_000
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -139,7 +142,10 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     const login = String(object(comment.user).login ?? '')
     const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
     const pattern = SIGNATURE.exec(first)?.[1]
-    const signature = people.writers.find(writer => signedAs(first, writer))
+    // The agent the backend recorded as this comment's writer (GitHubMerge recordedNames) is its reader, whatever the comment
+    // opens with: the command that made it knew the agent from its session, and a name can be typed by anyone.
+    const recorded = typeof comment.recorded === 'string' && comment.recorded.trim() ? comment.recorded.trim() : undefined
+    const signature = recorded ?? people.writers.find(writer => signedAs(first, writer))
       ?? (pattern && !VERDICT_FIRST.test(pattern) && (!fromOpener || team.has(sameKey(pattern))) ? pattern : undefined)
     const reader = signature ?? login
     if (!reader || reader === SELF) continue
@@ -293,8 +299,16 @@ export class GitHubMerge {
   private readonly now: () => number
   private readonly log: (line: string) => void
 
+  /** Who the backend recorded as the writer of a verdict's comment, by `<repo>#<comment id>`; null for one it has no record of
+   *  (typed by hand). A record never changes, so each comment is asked about once. */
+  private readonly recorded = new Map<string, string | null>()
+  private authorsDown = false
+
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>; get: GitHubGet
-    send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number }) {
+    send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
+    /** The agents the backend recorded as the writers of a project's GitHub comments, by `issue:<id>` (backend
+     *  superTabs/githubComments.ts): a verdict made by command (githubVerdict.ts) is its agent's. */
+    authors?: (project: LedProject, ids: string[]) => Promise<Record<string, { name: string }>> }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -365,7 +379,7 @@ export class GitHubMerge {
       const at = `${repo}#${number}@${head}`
       open.add(at)
       if (!this.seenAt.has(at)) this.seenAt.set(at, this.now())
-      const comments = await pullTalk(this.reads, repo, number)
+      const comments = await this.recordedNames(project, await pullTalk(this.reads, repo, number))
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
@@ -414,6 +428,43 @@ export class GitHubMerge {
       this.reads.forget(repo)
     }
     this.forgetHeads(repo, open)
+  }
+
+  /**
+   * [comments] with the agent the backend recorded for each verdict among them (`recorded`), which `verdicts` counts as its
+   * reader. Only a comment that gives a verdict is asked about, once: a record is made as the comment is, so one with none two
+   * minutes after it was written was typed by hand. While the backend cannot be asked, names are read as typed, as before, and
+   * that is said once.
+   */
+  private async recordedNames(project: LedProject, comments: Json[]): Promise<Json[]> {
+    if (!this.deps.authors) return comments
+    const key = (comment: Json) => `${project.repo}#${String(comment.id)}`
+    const given = comments.filter(comment => Number.isSafeInteger(comment.id) && comment.review !== true
+      && ownVerdict(String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''))
+    const unknown = given.filter(comment => !this.recorded.has(key(comment)))
+    for (let from = 0; from < unknown.length; from += AUTHORS_PAGE) {
+      const page = unknown.slice(from, from + AUTHORS_PAGE)
+      try {
+        const authors = await this.deps.authors(project, page.map(comment => `issue:${String(comment.id)}`))
+        for (const comment of page) {
+          const name = authors[`issue:${String(comment.id)}`]?.name
+          const settled = this.now() - Date.parse(String(comment.created_at ?? '')) >= RECORD_SETTLE_MS
+          if (typeof name === 'string' && name.trim()) this.recorded.set(key(comment), name)
+          else if (settled) this.recorded.set(key(comment), null)
+        }
+        if (this.authorsDown) this.log('[super-tab] verdicts are read by their record again')
+        this.authorsDown = false
+      } catch (error) {
+        if (!this.authorsDown) this.log(`[super-tab] verdicts are read as typed · AUTHORS_UNREAD ${error instanceof Error ? error.message : 'the server did not answer'}`)
+        this.authorsDown = true
+        break
+      }
+    }
+    while (this.recorded.size > RECORDED_MAX) this.recorded.delete(this.recorded.keys().next().value!)
+    return comments.map(comment => {
+      const name = Number.isSafeInteger(comment.id) ? this.recorded.get(key(comment)) : undefined
+      return name ? { ...comment, recorded: name } : comment
+    })
   }
 
   /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's
