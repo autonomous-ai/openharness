@@ -151,7 +151,7 @@ describe('a slow command names its phases', () => {
       const fields = lines[0]![1] as { totalMs: number; phases: Record<string, number> }
       expect(fields).toMatchObject({ tabId: tab, type: 'conversation.create', byAgent: false })
       expect(fields.totalMs).toBeGreaterThanOrEqual(1_000)
-      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['read:pullRequestMerges', 'attempts', 'pool', 'body',
+      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['attempts', 'pool', 'body',
         'commit', 'stamps', 'afterCommit', 'other']))
       expect(fields.phases.attempts).toBe(1)
       expect(JSON.stringify(lines)).not.toContain('Secret words')

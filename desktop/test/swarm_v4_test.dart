@@ -636,7 +636,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.textContaining('No instructions yet'), findsOneWidget);
+      expect(find.textContaining('Empty for now'), findsOneWidget);
       final edge =
           tester.getRect(find.byType(SwarmAgentInstructions)).right -
           SwarmLayout.barSide;
@@ -934,7 +934,7 @@ void main() {
     await openInstructions(tester);
     expect(
       find.text(
-        'No instructions yet. Tell first builder how you want it to work, and it writes them here.',
+        'Empty for now. Tell first builder how you want it to work, and it writes it down here.',
       ),
       findsOneWidget,
     );
@@ -951,7 +951,7 @@ void main() {
   });
 
   testWidgets(
-    'Instructions show the agent\'s folder too, read only under its own file: Edit and Save change the agent\'s own file alone',
+    'Instructions show the agent\'s folder too, folded and read only under its own file: Edit and Save change the agent\'s own file alone',
     (tester) async {
       // As lampOS's Faye is: no file of its own yet, and an AGENTS.md and a CLAUDE.md in its folder.
       final computer = SwarmV4Computer()
@@ -969,9 +969,17 @@ void main() {
       await show(tester, computer: computer);
       await openInstructions(tester);
       expect(find.text('agents/first builder.md'), findsOneWidget);
-      // Nothing of its own, so no empty words: its folder's files are what there is to read.
-      expect(find.textContaining('No instructions yet'), findsNothing);
+      // Nothing of its own, and it says so: the folder's files below are the project's, not its own (anh Dee, 2026-11-10).
+      expect(find.textContaining('Empty for now'), findsOneWidget);
+      expect(find.text('From its folder'), findsOneWidget);
       expect(find.text('AGENTS.md'), findsOneWidget);
+      expect(find.text('2 lines'), findsOneWidget);
+      // Folded: a click on each opens it.
+      expect(find.text('Ship small.\nSay what you checked.'), findsNothing);
+      await tester.tap(find.text('AGENTS.md'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('CLAUDE.md'));
+      await tester.pumpAndSettle();
       expect(find.text('Ship small.\nSay what you checked.'), findsOneWidget);
       expect(find.text('CLAUDE.md'), findsOneWidget);
       expect(find.text('Cut at 64 KB.'), findsOneWidget);

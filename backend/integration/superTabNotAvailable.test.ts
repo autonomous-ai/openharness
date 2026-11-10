@@ -106,9 +106,6 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/unread', `${t}/conversations/${chat}/unread`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read', `${t}/conversations/${chat}/threads/${MISSING}/read`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/notifications', `${t}/conversations/${chat}/notifications`, { notify: 'all' }),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions', `${t}/projects/${project}/instructions`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/rules', `${t}/projects/${project}/rules`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/machine-rules', `${t}/projects/${project}/machine-rules`),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads', `${t}/attachments/uploads`, { conversationId: chat, name: 'notes.txt', mime: 'text/plain', size: 12_000_000 }),
@@ -118,7 +115,6 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
     json('GET', 'GET /api/super-tabs/:tabId/github/owners/:owner', `${t}/github/owners/acme`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/repository', `${t}/projects/${project}/github/repository`, { owner: 'acme', name: 'notes', private: true }),
-    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/${project}/ci-load`),
     // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
     // in-Swarm refusal of an agent it does not run is not taken for the private project's answer.

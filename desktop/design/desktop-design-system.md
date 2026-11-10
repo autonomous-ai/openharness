@@ -480,13 +480,21 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Dee, 2026-11-09: some people keep it out of git). Its person reads it in
   `AppType.mono` and changes it here: `Edit` (a compact `DesktopPill`) turns
   the text into a field, and `Save` and `Cancel` take its place; Save waits for
-  a change. Under the agent's own file, read only, is what else instructs it
-  in its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
-  `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each with its name
-  in 13 medium (its path when it sends one), its text in `AppType.mono`,
-  selectable, and `Cut at 64 KB.` in metadata grey after a text it cut, a
-  hairline between them. A file with the text of one above it (a `CLAUDE.md`
-  linked to `AGENTS.md`) says `Same as AGENTS.md.` instead of repeating it. A
+  a change. An empty own file says so in one metadata line, whatever else the
+  folder holds: `Empty for now. Tell Faye how you want it to work, and it
+  writes it down here.`, and its field, typed into, starts on the hint `Rules
+  for Faye, as you would tell it. It reads them at every start.` (anh Dee,
+  2026-11-10: Arlo's empty file read as the project's long AGENTS.md, and Edit
+  as a blank page). Under the agent's own file, after a hairline and the
+  metadata heading `From its folder`, read only, is what else instructs it in
+  its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
+  `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each folded to a
+  row of its name in 13 medium (its path when it sends one) and its size in
+  metadata grey (`212 lines`) with a `chevronRight`; a click opens it to its
+  text in `AppType.mono`, selectable, with `Cut at 64 KB.` in metadata grey
+  after a text it cut, and folds it again. A file with the text of one above
+  it (a `CLAUDE.md` linked to `AGENTS.md`) says `Same as AGENTS.md.` in place
+  of its size and has nothing to open. A
   file it did not show gets one metadata line (`CLAUDE.md is a link.`,
   `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`). An older computer sends
   none: the agent's own file alone. Edit, Save and the 64 KB limit are for the
@@ -495,9 +503,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agent's own file still shows them, under its one line. A save names the
   version it read, so a change the agent made
   meanwhile is refused (`It changed on Mac 3. Close it and open it again.`)
-  and the typed text stays. Nothing to show (no file of its own, and none of
-  the others has text): `No instructions yet. Tell Faye how
-  you want it to work, and it writes them here.` A computer that cannot be
+  and the typed text stays. A computer that cannot be
   asked says what to do in one line, with a retry icon: `Update Harness on
   Mac 3.`, `Update Harness on this computer.`, `Mac 3 is offline.`, `Faye isn't
   running on Mac 3.`, `agents/Faye.md on Mac 3 isn't a plain file.` Nothing is
@@ -812,7 +818,7 @@ dropdowns plain text until hovered; nothing that does not help you decide.
 Top to bottom:
 
 ```text
- autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
+ autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover; its menu: Personal, your Swarms, Rename (one you may change), New Swarm
  Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◌  Faye            starting  first: a New agent going on after its form closed, a grey face; a click opens nothing yet
  ◌  Ivy               failed  its start failed: `failed` in red; a click opens its form again with why, and Try again
