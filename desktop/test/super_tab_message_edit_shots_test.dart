@@ -25,7 +25,8 @@ void main() {
   for (final brightness in Brightness.values) {
     testWidgets('screenshots for review (${brightness.name})', (tester) async {
       final picture = GlobalKey();
-      final server = ConversationServer()..threads = true;
+      // A chat that is not a project's channel: there only agents post, and a person's own post has no Edit.
+      final server = ConversationServer.chat()..threads = true;
       server
         ..append('Kicking off the release notes for 1.4.')
         ..append('Draft is in the doc, please have a look.')
