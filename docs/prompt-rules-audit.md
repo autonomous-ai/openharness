@@ -120,7 +120,7 @@ and unsigned, while a task's own record stays on its issue or pull request. It s
 is judgment. The code half is already code: an `@Name` in the channel wakes that agent (backend `recipientIds`), and the
 app shows the post's author and time, and a task's pull request talk in the task's chat.
 
-**Every agent's basics are held under 200 words (Swarm plan, step 1 item 7, 2026-11-11):** `SWARM_BASICS` held 507 words and
+**Every agent's basics are held under 200 words (Swarm plan, step 1 item 7, 2026-11-10):** `SWARM_BASICS` held 507 words and
 grew with each incident; `cli/src/lib/swarmSkills.spec.ts` now fails at 200. What left, and where it lives:
 
 | Line that left | Where it is now |
