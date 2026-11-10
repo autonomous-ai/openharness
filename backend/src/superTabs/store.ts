@@ -1286,8 +1286,10 @@ export class SuperTabStore {
       const loaded = await loadRow(tx, requireParts(row), {})
       const ids = loaded.state.people.map(p => p.id).filter(id => personId === undefined || id === personId)
       if (!ids.length) return 0
-      // A Swarm holds at most a few hundred people (AUTO_JOIN_CAP): one read by id.
-      const accounts = new Map((await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(u => [u.id, u.name]))
+      // One read by id each, at most a few hundred (AUTO_JOIN_CAP), one for a rename: an `in` filter is sent as $expr, which no
+      // index bounds (hotFilters.test.ts).
+      const accounts = new Map<string, string | null>()
+      for (const id of ids) accounts.set(id, await accountNameOf(tx, id))
       const state = cloneData(loaded.state), changed = state.people.filter(p => ids.includes(p.id) && nameFromAccount(p, accounts.get(p.id)))
       if (changed.length) await this.save(tx, loaded, state, clock.next(), changed.map(p => ({ kind: 'member' as const, key: p.id })))
       return changed.length

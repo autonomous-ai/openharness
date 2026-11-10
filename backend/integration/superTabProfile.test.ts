@@ -274,7 +274,8 @@ describe('reactions', () => {
   const react = (tab: string, messageId: string, on: boolean, user = owner, emoji: 'tada' | 'heart' = 'tada') =>
     run(tab, { type: 'message.react', conversationId: 'lead', messageId, emoji, on }, user)
   const page = async (tab: string, user = owner, conversationId = 'lead') =>
-    (await read(tab, user, `conversations/${conversationId}/messages`)).body.data as { messages: Array<{ id: string; reactions: unknown[] }>; reactionSeq: number }
+    (await read(tab, user, `conversations/${conversationId}/messages`)).body.data as {
+      messages: Array<{ id: string; reactions: unknown[]; deliveries: Array<{ agentId: string; status: string }> }>; reactionSeq: number }
 
   it('answers a person\'s reaction as ignored, anyone\'s, and stores and moves nothing', async () => {
     const tab = await swarm()
@@ -309,7 +310,11 @@ describe('reactions', () => {
     const before = await page(tab, peer)
     for (const emoji of ['eyes', 'check'] as const) expect((await agentReact(tab, 'lead', messageId, builder, emoji)).result).toMatchObject({ changed: true })
     expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
-    expect(await page(tab, peer)).toEqual(before)
+    const after = await page(tab, peer)
+    expect(after.reactionSeq).toBe(before.reactionSeq)
+    expect(after.messages.map(m => m.reactions)).toEqual(before.messages.map(() => []))
+    // What it still does: it acknowledged the message, so Kai's delivery of it is settled.
+    expect(after.messages.find(m => m.id === messageId)!.deliveries).toEqual([expect.objectContaining({ agentId: builder, status: 'answered' })])
   })
 
   it('privacy: refuses an agent\'s reaction where it takes no part, and on another agent\'s private notice', async () => {
