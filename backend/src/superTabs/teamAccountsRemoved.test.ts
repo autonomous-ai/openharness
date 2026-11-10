@@ -7,7 +7,6 @@
  */
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { DISPATCH_RULES, freeCrew } from './dispatch.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
@@ -60,8 +59,7 @@ function swarm() {
   const start = (machineId: string, actor: Actor) => run({ type: 'agent.start', request: { conversationId: task, machineId, engine: 'claude', name: 'Builder',
     cwd: '/swarm/lead', worktree: true, requirements } } as Command, actor, { contribution: { machineOwnerId: machine(machineId).contributorId,
     contributorId: machine(machineId).contributorId, hostGrant: null } as never })
-  const assign = (agentId: string, conversationId = task) => run({ type: 'work.assign', conversationId, agentId } as Command, as(pm))
-  return { run, member, machine, start, assign, as, pm, task, group: (id = task) => state.conversations.find(c => c.id === id)!, get state() { return state } }
+  return { run, member, start, as, pm, task, get state() { return state } }
 }
 
 describe('with Team accounts removed', () => {
@@ -95,33 +93,6 @@ describe('with Team accounts removed', () => {
     expect(record.excluded[0]!.reason).toContain('Team accounts')
   })
 
-  it('gives a Team-account agent no new work, and leaves it the task it holds', () => {
-    const f = swarm()
-    const team = f.member('mates-team', 'mate-team', 'mate')
-    expect(refusal(() => f.assign(team))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
-    expect(freeCrew(f.state, 'lead', DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(team)
-    // What it already holds stays with it.
-    const held = f.group()
-    held.assignment = { id: 'a1', agentId: team, status: 'working', configuration: config, execution: { machineId: 'mate-team', harnessId: 'harness-mates-team',
-      machineOwnerId: 'mate' }, result: null } as never
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: 'a1', status: 'working', result: 'Still on it.' } as Command, f.as(team))
-    expect(f.group().assignment).toMatchObject({ agentId: team, status: 'working' })
-  })
-
-  it('lets a teammate\'s own agent take any task of a project they read, in their own account', () => {
-    const f = swarm()
-    const own = f.member('mates-own', 'mate-mac', 'mate')
-    expect(refusal(() => f.assign(own))).toBeNull()
-  })
-
-  // Security review 1 of #3446: reading a project is not enough to work in it; a viewer's agent takes none of its work.
-  it('gives no task to the agent of a person who is only a viewer', () => {
-    const f = swarm()
-    const own = f.member('mates-own', 'mate-mac', 'mate')
-    f.state.people.find(p => p.id === 'mate')!.role = 'viewer'
-    expect(refusal(() => f.assign(own))).toMatchObject({ code: 'READ_ONLY' })
-  })
-
   // Security review 2 of #3446: off the Machines list, or through a machine share, the grant's contributor is not the machine's
   // owner; the start must be its owner's own, with no share, no Team account and no Team session, as agent.new checks.
   it('starts nothing on a computer shared through a machine share, or an unlisted Team sign-in', () => {
@@ -131,22 +102,5 @@ describe('with Team accounts removed', () => {
     expect(refusal(startOn('strangers-mac', { machineOwnerId: 'stranger', contributorId: 'mate', hostGrant: 'share-1' }))).toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
     expect(refusal(startOn('mates-team', { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null, teamSession: true }))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
     expect(refusal(startOn('mates-team', { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null, hostMachineId: 'mate-mac' }))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
-  })
-
-  it('never lets the owner\'s agent on a machine shared with them take a task a Team agent wrote', () => {
-    const f = swarm()
-    // A machine off the Machines list that its owner, mate, shared with the project owner: the agent runs in mate's account.
-    const shared = f.member('owners-shared', 'strangers-mac', 'owner')
-    Object.assign(f.state.agents.find(a => a.id === shared)!, { machineOwnerId: 'mate', hostGrant: 'share-1' })
-    Object.assign(f.group(), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
-    expect(refusal(() => f.assign(shared))).toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
-  })
-
-  it('lets only the project owner\'s own agent take over a task a Team agent wrote', () => {
-    const f = swarm()
-    const mates = f.member('mates-own', 'mate-mac', 'mate'), owners = f.member('owners-own', 'owner-mac', 'owner')
-    Object.assign(f.group(), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
-    expect(refusal(() => f.assign(mates))).toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
-    expect(refusal(() => f.assign(owners))).toBeNull()
   })
 })

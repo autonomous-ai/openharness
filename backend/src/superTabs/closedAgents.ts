@@ -33,7 +33,7 @@ const provedStopped = (state: SuperTabState, target: Agent, report: Pick<Machine
 }
 
 /** Whether [target]'s machine, reading now, proves its idle cleanup closed its session: a fresh reading that lists it closed
- *  and stopped, not running. Such an agent takes no task (commands.ts work.assign): on 11-04 the idle cleanup closed Tern on
+ *  and stopped, not running. Such an agent was given no task (work.assign, retired with Swarm v4): on 11-04 the idle cleanup closed Tern on
  *  the Mac Studio and the PM assigned it six seconds later, so the task was lost at once (task #2744). A session merely
  *  listed stopped may be a Change agent before its rebind, or a host mid-restart, and keeps taking work (review of #2953). */
 export function sessionClosed(state: SuperTabState, target: Agent, now: number): boolean {

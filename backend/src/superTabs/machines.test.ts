@@ -3,6 +3,7 @@ import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest,
 import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, removalPreview, servedLocalModels, storedObservation, type ContributedMachine,
   type MachineObservation } from './machines.js'
 import { owner, peer, richSwarm } from './read/fixture.test-support.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -333,7 +334,7 @@ it('the removal preview names only the agents and projects its owner reads', () 
   const secretLead = s.state.projects!.find(project => project.id === s.secret)!.leadConversationId
   const secretPm = s.add('hidden-pm-harness', secretLead, true)
   const secretWorker = s.add('hidden-builder-harness', secretTask)
-  s.run({ type: 'work.assign', conversationId: secretTask, agentId: secretWorker })
+  storedAssignment(s.state, secretTask, secretWorker, NOW)
   s.edit(state => {
     // The peer owns this machine but is not a member of the owner's private project.
     const machine = state.machines!.find(item => item.machineId === 'host')!

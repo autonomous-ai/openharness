@@ -4,6 +4,7 @@ import { cloneData } from './cloneData.js'
 import { reassemble, split } from './parts/index.js'
 import { fullSwarm, NOW, richSwarm, swarm } from './read/fixture.test-support.js'
 import type { SuperTabState } from './model.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null
 
@@ -29,7 +30,7 @@ function benchSized(): SuperTabState {
   const groups = Array.from({ length: 200 }, (_, i) => s.group(`Group ${i}`))
   for (let i = 0; i < 20; i++) {
     const worker = s.add(`worker-${i}`, groups[i]!)
-    s.run({ type: 'work.assign', conversationId: groups[i]!, agentId: worker })
+    storedAssignment(s.state, groups[i]!, worker, NOW)
   }
   return s.state
 }

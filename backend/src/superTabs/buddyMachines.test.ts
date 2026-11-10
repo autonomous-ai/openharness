@@ -411,18 +411,15 @@ describe('a Buddy-only machine after its reviews', () => {
       it(`takes no work of another person's project, Team account enforcement ${value ? 'on' : 'off'}`, () => withSwitch(value, () => {
         const f = setup()
         running(f, f.app.projectId)
-        f.run({ type: 'work.define', conversationId: f.group, brief: 'Save edits.', checks: [{ description: 'Edits survive a reload.', independent: false }] })
         const pane = paneIn(f, f.group)
         const [created] = f.run({ type: 'route.record', conversationId: f.group, decision: decision(pane) } as unknown as Command, pmActor(f))
           .routeDecisions as Array<{ record: { candidates: Array<{ id: string }>; pick?: string } }>
         expect(created!.record.candidates.map(c => c.id)).toEqual(['c1'])
         expect(created!.record.pick).toBeUndefined()
-        expect(() => f.run({ type: 'work.assign', conversationId: f.group, agentId: pane })).toThrow('This machine is not one of the Swarm\'s machines')
-        expect(f.state.conversations.find(c => c.id === f.group)!.assignment).toBeNull()
       }))
     }
 
-    it('takes its own person\'s project work, routed and assigned', () => {
+    it('takes its own person\'s project work, routed', () => {
       const f = setup()
       running(f, f.app.projectId)
       const own = f.run({ type: 'project.create', name: 'Peer work', visibility: 'public', brief: '' }, peer).result as { projectId: string; conversationId: string }
@@ -434,8 +431,7 @@ describe('a Buddy-only machine after its reviews', () => {
       const routed = f.run({ type: 'route.record', conversationId: work, decision: decision(pane) } as unknown as Command,
         { kind: 'agent', agentId: lead, machineOwnerId: 'owner' })
       expect(routed.result.routeDecisionId).toBeTruthy()
-      f.run({ type: 'work.assign', conversationId: work, agentId: pane }, peer)
-      expect(f.state.conversations.find(c => c.id === work)!.assignment).toMatchObject({ agentId: pane })
+      expect((routed.routeDecisions as Array<{ record: { pick?: string } }>)[0]!.record.pick).toBe('c0')
     })
   })
 })
