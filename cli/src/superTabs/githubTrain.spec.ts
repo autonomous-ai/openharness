@@ -703,7 +703,7 @@ describe('what the train never does', () => {
       expect(['POST', 'DELETE']).toContain(sent.method)
       expect(sent.method === 'POST' ? String(sent.body.ref) : sent.path).toMatch(/^(?:refs\/heads|\/git\/refs\/heads)\/harness-train\/\d+$/)
     }
-    expect([...f.state.branches.keys()]).toEqual(['pip/4', 'harness-trains'])
+    expect([...f.state.branches.keys()]).toEqual(['pip/4', 'harness-trains', 'harness-train/%2e%2e/pip/4'])
   })
 
   it('stops every repository while GitHub limits this computer\'s writes, and builds once the limit is over', async () => {

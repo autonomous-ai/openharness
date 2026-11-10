@@ -7,10 +7,15 @@
  * carrying 80 pull requests. lampOS's train landed 2 to 3 a run, and its one run caught 6 breaks no pull request's own checks
  * could show (docs/research/2026-11-10-swarm-study).
  *
- * Nothing is stored. An open train is an open pull request from a `harness-train/` branch of this repository into the base,
- * whose body names the tip the train built and each member as `#N at <head>`; a red one is that pull request closed with
- * `Train, red:` in its title; a landed one is it merged. A daemon restart (each release is one, seven on 2026-11-10) reads them
- * back from GitHub. One train is open at a time.
+ * Nothing is stored. An open train is an open pull request this computer's login opened from a `harness-train/` branch of
+ * this repository into the base, whose body names the tip the train built and each member as `#N at <head>`; a red one is that
+ * pull request closed with `Train, red:` in its title; a landed one is it merged. A daemon restart (each release is one, seven
+ * on 2026-11-10) reads them back from GitHub. One train is open at a time.
+ *
+ * Anyone who can write to the repository can write that body, so before it lands a train is read from its branch: one merge
+ * commit for each member the body names, the member's head its second parent, down to the base's tip (`holds`). What that
+ * does not catch: a merge commit made by hand with those same parents and other content, pushed in the train's place with the
+ * body's tip changed to it. That takes a record only this login can write, and there is none yet.
  *
  * It never force-pushes, writes no ref outside `harness-train/`, and merges nothing on an answer it does not expect: any other
  * answer is a GitHubStop, which stops this repository's pass until the merger's next try (githubRest.ts Waits). The GitHub
@@ -18,7 +23,7 @@
  * for #3226), now as this computer's own gh login.
  */
 import type { GitHubReply, GitHubSend } from './githubRest.js'
-import { COMPARE_FILES_MAX, GitHubReads, GitHubStop, PAGE } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { TEAM } from './githubMentions.js'
 import { object } from './wire.js'
 
@@ -34,9 +39,6 @@ const TRAIN_MAX = 20
 const TRAIN_WAIT_MS = 90 * 60_000
 const TITLE = 'Train: ', RED_TITLE = 'Train, red: '
 const SHA = /^[0-9a-f]{40}$/
-/** What changes nothing a check reads: documentation. Not scripts/, which holds the CI planner and the release scripts
- *  (review 2 of #3226). */
-const DOCS: readonly RegExp[] = [/^docs\//, /\.md$/i]
 /** A member as a train's body names it. Its readers are there for the note that it landed, which a restart must write the same. */
 const MEMBER = /^#([1-9]\d{0,9}) at ([0-9a-f]{40}), READ-OK by ([\w -]{1,200})$/
 const BUILT = /\bbuilt to ([0-9a-f]{40})\b/
@@ -46,16 +48,19 @@ const CLOSES = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#([1-9]\d{0,9})\
 const CLOSES_MAX = 100
 
 /** A ready pull request, as the merger hands it over: `fork` when its branch is in another repository. */
-export interface TrainPull { number: number; head: string; title: string; body: string; readers: readonly string[]; fork: boolean }
+export interface TrainPull { number: number; head: string; title: string; body: string; readers: readonly string[]; fork: boolean
+  /** Whether its head had a check of its own. */
+  checked: boolean }
 export interface TrainMember { number: number; head: string; readers: string }
 /** One of the repository's trains, open or closed, as its pull request says it. `tip` is empty and `members` none when its body
  *  does not read as one the train wrote. */
-interface Train { number: number; branch: string; head: string; tip: string; members: TrainMember[]; red: boolean; mergedAs: string | null; openedAt: number }
+interface Train { number: number; branch: string; head: string; tip: string; members: TrainMember[]; red: boolean; mergedAs: string | null; openedAt: number; opener: string }
 
-/** What the train asks of the merger: a head's checks as the merger reads a pull request's (passed only once they hold still),
- *  its notes to a pull request's author, each said once for a head, and how a comment of Harness's begins ("Harness, 14:20"). */
+/** What the train asks of the merger: a head's checks as the merger reads a pull request's (passed only once they hold still;
+ *  `none` when it has no check at all), this computer's GitHub login, its notes to a pull request's author, each said once for a head, and how a comment of Harness's begins ("Harness, 14:20"). */
 export interface TrainHost<T extends TrainPull> {
-  checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed' }>
+  checks(number: number, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; none: boolean }>
+  login(): Promise<string>
   conflicts(pull: T): Promise<void>
   failedAlone(pull: T, train: number): Promise<void>
   stamp(): string
@@ -120,14 +125,9 @@ export function landingMessage(pulls: ReadonlyArray<{ number: number; title: str
       ...closes.length ? ['', ...closes.map(issue => `Closes #${issue}`)] : []].join('\n') }
 }
 
-/** A compare's file names, a rename's old name too; null when it is no list or may be cut short. */
-function filesOf(files: unknown): string[] | null {
-  if (!Array.isArray(files) || files.length >= COMPARE_FILES_MAX) return null
-  return files.map(object).flatMap(file => [String(file.filename ?? ''), ...typeof file.previous_filename === 'string' ? [file.previous_filename] : []])
-}
-
-/** A branch the train may write or delete: under its prefix, and a plain name. */
-const own = (branch: string): boolean => branch.startsWith(TRAIN_BRANCH) && branch.length > TRAIN_BRANCH.length && !/\.\.|[\s~^:?*[\\]/.test(branch)
+/** A branch the train may write or delete: under its prefix, and a plain name. Not one with a percent sign: `%2e%2e` is a
+ *  name git takes and a path reads as `..`, so a delete of `harness-train/%2e%2e/pip/12` would be a delete of `pip/12`. */
+const own = (branch: string): boolean => branch.startsWith(TRAIN_BRANCH) && branch.length > TRAIN_BRANCH.length && !/\.\.|[\s~^:?*[\\%]/.test(branch)
 
 /** One repository's train for one pass of the merger: `landed` before the merger reads the open pull requests, `carry` with the
  *  ones it found ready. */
@@ -150,15 +150,23 @@ export class GitHubTrain<T extends TrainPull> {
   /** The repository's closed trains among the hundred pull requests closed last: a split runs over a few trains and a landing
    *  is finished on the next pass, both well within them. One page, so the read does not grow with the repository. */
   private async closed(): Promise<Train[]> {
-    return (await this.deps.reads.current(this.repo, `/repos/${this.repo}/pulls?state=closed&base=${encodeURIComponent(this.base)}&sort=updated&direction=desc&per_page=${PAGE}`, 1))
-      .map(pull => this.trainOf(pull)).filter(train => train !== null)
+    return this.mine(await this.deps.reads.current(this.repo, `/repos/${this.repo}/pulls?state=closed&base=${encodeURIComponent(this.base)}&sort=updated&direction=desc&per_page=${PAGE}`, 1))
+  }
+
+  /** The trains among [pulls]: the ones this computer's login opened. A builder can push a branch under the train's prefix
+   *  and write its pull request as a train's; only the login that builds trains is asked for when one reads as a train. */
+  private async mine(pulls: readonly Json[]): Promise<Train[]> {
+    const trains = pulls.map(pull => this.trainOf(pull)).filter(train => train !== null)
+    if (!trains.length) return []
+    const login = (await this.host.login()).toLowerCase()
+    return trains.filter(train => train.opener === login)
   }
 
   /** One step for the repository's train with the [ready] pull requests: the open one waits, lands or is closed; with none
    *  open, the next is built. [waiting]: each pull request, as `<number>@<head>`, that is read and may yet be ready at this
    *  head. Returns the ones to merge directly, as before the train: nothing was built then. */
   async carry(ready: readonly T[], waiting: ReadonlySet<string>): Promise<T[]> {
-    const [train, ...others] = this.pulls.map(pull => this.trainOf(pull)).filter(found => found !== null).sort((a, b) => a.number - b.number)
+    const [train, ...others] = (await this.mine(this.pulls)).sort((a, b) => a.number - b.number)
     // One train at a time: a second would be tested on a base the first is about to move.
     for (const other of others) await this.close(other, false, `#${train!.number} is open`)
     if (train) { await this.attend(train, ready, waiting); return [] }
@@ -181,9 +189,16 @@ export class GitHubTrain<T extends TrainPull> {
   private async attend(train: Train, ready: readonly T[], waiting: ReadonlySet<string>): Promise<void> {
     // Its branch is not at the tip its body says the train built: someone pushed to it, or wrote the body.
     if (train.head !== train.tip) return this.close(train, false, 'its branch is not at the tip the train built')
+    // What it was tested on is the base as it is: a run on a base that moved lands nothing, so it is not waited for. Not even
+    // when the base gained only documentation: suites read some of it (scripts/ci-plan.py).
+    const ahead = await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${train.head}`)
+    if (ahead.behind_by !== 0) return this.close(train, false, `${this.base} moved under it`)
     const checks = await this.host.checks(train.number, train.head)
     if (checks.state === 'failed') return this.close(train, true, 'its checks failed')
-    if (checks.state === 'running') {
+    // No check of its own where a member had its own: CI has not started on it (Actions can take minutes to make a run), and
+    // none at all would read as passed.
+    const unstarted = checks.none && ready.some(pull => pull.checked && train.members.some(member => member.number === pull.number))
+    if (checks.state === 'running' || unstarted) {
       if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) await this.close(train, false, 'its checks did not finish in 90 min')
       return
     }
@@ -196,28 +211,43 @@ export class GitHubTrain<T extends TrainPull> {
       if (waits && this.deps.now() - train.openedAt < TRAIN_WAIT_MS) return
       return this.close(train, false, 'a pull request it carries is no longer ready at its head')
     }
-    if (!await this.tested(train)) return this.close(train, false, `${this.base} moved under it`)
+    if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, false, 'its branch does not hold what its body names')
     // Squashed where the repository allows it, as each pull request was; else a merge commit, else a rebase, which takes no message.
     const settings = await this.deps.reads.one(this.repo, `/repos/${this.repo}`)
     const method = settings.allow_squash_merge !== false ? 'squash' : settings.allow_merge_commit !== false ? 'merge' : 'rebase'
     // Pinned to the head its checks passed: a push since is a 409, and nothing lands.
-    const merged = object((await this.sent('PUT', `/pulls/${train.number}/merge`, [200],
-      { sha: train.head, merge_method: method, ...method === 'rebase' ? {} : landingMessage(riders) })).body)
+    const reply = await this.sent('PUT', `/pulls/${train.number}/merge`, [200, 405],
+      { sha: train.head, merge_method: method, ...method === 'rebase' ? {} : landingMessage(riders) })
+    if (reply.status === 405) {
+      // A rule of the repository the train does not meet. It stays open, as building the next would only run the checks to be
+      // refused again; said once on the train itself, for a person, and tried again with the merger's waits.
+      const said = 'GitHub refuses to merge this train'
+      const comments = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${train.number}/comments?per_page=${PAGE}`, 1)
+      if (!comments.some(comment => TEAM.has(comment.author_association) && String(comment.body ?? '').slice(0, 200).includes(said))) {
+        await this.sent('POST', `/issues/${train.number}/comments`, [201],
+          { body: `${this.host.stamp()}: ${said} (405). Nothing else lands in ${this.base} while it is open: lift what blocks it, or close it and the next is built.` })
+      }
+      throw this.stop('TRAIN_REFUSED', `GitHub answered PUT /pulls/${train.number}/merge with 405.`)
+    }
+    const merged = object(reply.body)
     // Merged or not, an answer that does not say so writes nothing more: a merged train is finished on the next pass (landed).
     if (merged.merged !== true || !SHA.test(String(merged.sha))) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to the merge of #${train.number} is not one the train reads.`)
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} landed ${train.members.map(m => `#${m.number}`).join(' ')} as ${String(merged.sha).slice(0, 7)}`)
     await this.finish(train, String(merged.sha))
   }
 
-  /** Whether the base is as [train] was tested on it: it gained nothing, or only documentation in files the train does not
-   *  change. Anything else, or a list GitHub may have cut short, is no: nothing lands that was not tested as it lands. */
-  private async tested(train: Train): Promise<boolean> {
-    const ahead = await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${train.head}`)
-    if (ahead.behind_by === 0) return true
-    const from = String(object(ahead.merge_base_commit).sha ?? ''), carried = filesOf(ahead.files)
-    if (!SHA.test(from) || !carried) return false
-    const gained = filesOf((await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${from}...${this.base}`)).files)
-    return !!gained && gained.every(file => DOCS.some(docs => docs.test(file)) && !carried.includes(file))
+  /** Whether [train]'s branch is what its body names and nothing else: from its head down, one merge commit for each member,
+   *  the member's head its second parent, and under the first the commit of the base it stands on ([from]). A commit is
+   *  read once: it never changes. */
+  private async holds(train: Train, from: string): Promise<boolean> {
+    let at = train.head
+    for (const member of train.members.toReversed()) {
+      const commit = await this.deps.reads.one(this.repo, `/repos/${this.repo}/git/commits/${at}`)
+      const parents = Array.isArray(commit.parents) ? commit.parents.map(parent => String(object(parent).sha ?? '')) : []
+      if (parents.length !== 2 || parents[1] !== member.head) return false
+      at = parents[0]!
+    }
+    return SHA.test(from) && at === from
   }
 
   /** Builds the next train of [riders] on the base's tip with the merges API (no checkout, so no branch's code runs here), and
@@ -254,7 +284,7 @@ export class GitHubTrain<T extends TrainPull> {
     if (!members.length) return this.drop(branch)
     const opened = object((await this.sent('POST', '/pulls', [201], { head: branch, base: this.base, draft: false, title: `${TITLE}${members.map(m => `#${m.number}`).join(' ')}`,
       body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') }))) })).body)
-    const train = this.trainOf(opened)
+    const [train] = await this.mine([opened])
     if (!train) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to opening the train on ${branch} is not one the train reads.`)
     // Opened at another head than the tip built: someone pushed onto the branch between the last merge and here.
     if (train.head !== tip) return this.close(train, false, 'its branch is not at the tip the train built')
@@ -301,7 +331,7 @@ export class GitHubTrain<T extends TrainPull> {
     const built = trainOfBody(String(pull.body ?? ''))
     return { number, branch, head: String(head.sha ?? ''), tip: built?.tip ?? '', members: built?.members ?? [], red: String(pull.title ?? '').startsWith(RED_TITLE),
       mergedAs: typeof pull.merged_at === 'string' && SHA.test(String(pull.merge_commit_sha)) ? String(pull.merge_commit_sha) : null,
-      openedAt: Date.parse(String(pull.created_at ?? '')) }
+      openedAt: Date.parse(String(pull.created_at ?? '')), opener: String(object(pull.user).login ?? '').toLowerCase() }
   }
 
   /** A write to [repo], answered with one of [statuses]: any other answer stops the repository's pass. What was read before it

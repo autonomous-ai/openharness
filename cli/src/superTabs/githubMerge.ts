@@ -24,7 +24,7 @@
 import { createHash } from 'node:crypto'
 import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { COMPARE_FILES_MAX, GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { GitHubTrain, type TrainPull } from './githubTrain.js'
 import { identifier, object } from './wire.js'
@@ -101,6 +101,8 @@ const RECORD_AGAIN_MS = 10 * 60_000
 
 /** A ready pull request, with what a note to its author takes (tellOnce). */
 interface Ready extends TrainPull { author: string; comments: Json[] }
+/** The label a person puts on a pull request to keep Harness from landing it (AGENTS.md). */
+const HOLD_LABEL = 'hold'
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -187,6 +189,8 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
 }
 
 
+/** The most files GitHub lists in one compare: a change of that many or more cannot be read whole. */
+const COMPARE_FILES_MAX = 300
 /** Changes kept by each merger and assigner: what a commit changes since its merge base does not change. */
 const PATCHES_MAX = 1_000
 
@@ -309,6 +313,7 @@ export class GitHubMerge {
   private readonly waits = new Waits()
   /** The notes said, as `<repo>#<number> <kind> <head>` (NOTES), so each is said once. */
   private readonly told = new Set<string>()
+  private me: string | null = null
   /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
    *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
   private readonly seenAt = new Map<string, number>()
@@ -397,6 +402,7 @@ export class GitHubMerge {
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
     const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, repo, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
+      login: () => this.login(repo),
       conflicts,
       failedAlone: (pull, carried) => this.tellOnce(repo, pull.number, pull.head, pull.author, 'red',
         `#${carried} carried it alone on ${base}, and its checks failed there. Fix it and push.`, pull.comments),
@@ -413,6 +419,7 @@ export class GitHubMerge {
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
+      if ((Array.isArray(pull.labels) ? pull.labels : []).some(label => object(label).name === HOLD_LABEL)) continue
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
       const at = this.see(open, `${repo}#${number}@${head}`)
       const comments = await this.recordedNames(project, await pullTalk(this.reads, repo, number))
@@ -453,7 +460,7 @@ export class GitHubMerge {
       // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
       if (this.said(comments, head, 'red')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), checked: !checks.none, author, comments })
     }
     for (const pull of await train.carry(ready, waiting)) await this.mergeAlone(repo, pull)
     this.forgetHeads(repo, open)
@@ -470,6 +477,16 @@ export class GitHubMerge {
     this.log(`[super-tab] merged ${repo}#${pull.number} on ${pull.head.slice(0, 7)} (READ-OK by ${by})`)
   }
 
+  /** This computer's GitHub login, asked once: the train takes only the pull requests it opened for its own (githubTrain.ts). */
+  private async login(repo: string): Promise<string> {
+    if (!this.me) {
+      const login = (await this.reads.one(repo, '/user')).login
+      if (typeof login !== 'string' || !login) throw new GitHubStop('LOGIN_UNREAD', 'GitHub did not say this computer\'s login.', false, this.now())
+      this.me = login
+    }
+    return this.me
+  }
+
   /** Notes that head [at] (`<repo>#<number>@<head>`) is open now, and first seen now if never before. Returns [at]. */
   private see(open: Set<string>, at: string): string {
     open.add(at)
@@ -479,14 +496,16 @@ export class GitHubMerge {
 
   /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
    *  A pull request's and a train's alike. */
-  private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[] }> {
+  private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
     const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
     const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
-    if (checks.state !== 'passed') return checks
+    // No check and no status at all: a repository with no CI, or CI that has not started on this head.
+    const none = checks.summary === ''
+    if (checks.state !== 'passed') return { ...checks, none }
     // Passed, or none yet.
     const before = this.looked.get(at)
     this.looked.set(at, checks.summary)
-    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [] } : checks
+    return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none } : { ...checks, none }
   }
 
   /**
