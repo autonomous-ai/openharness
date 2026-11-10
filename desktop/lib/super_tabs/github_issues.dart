@@ -4,7 +4,6 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
-import 'package:collection/collection.dart' show mergeSort;
 
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
@@ -92,41 +91,20 @@ class SwarmIssue {
   }
 }
 
-/// What a post in a task's chat is: a comment on its issue, or what a pull request that closes it said (a comment, a review, a
-/// line comment) and when it was opened and merged (anh Dee, 2026-11-10: "github pr comments need to have their own thread
-/// chat or part of the task chat").
-enum SwarmTalk { comment, review, line, opened, merged }
-
 /// One comment on an issue: an agent's post, signed by its name in its first words ("Migrate, 09:3x GMT+7: …"), as
-/// lampOS's builders sign theirs, under its person's GitHub account. Or one on a pull request that closes it ([pull]).
+/// lampOS's builders sign theirs, under its person's GitHub account.
 class SwarmIssueComment {
   const SwarmIssueComment({
     required this.body,
     this.author,
     this.createdAt,
     this.url,
-    this.pull,
-    this.talk = SwarmTalk.comment,
-    this.verdict,
-    this.path,
-    this.line,
   });
 
   final String body;
   final String? author;
   final DateTime? createdAt;
   final String? url;
-
-  /// The pull request it is on; null for a comment on the issue itself.
-  final int? pull;
-  final SwarmTalk talk;
-
-  /// A review's verdict in GitHub's words: `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`.
-  final String? verdict;
-
-  /// The file and line a line comment is on.
-  final String? path;
-  final int? line;
 
   /// The name it is signed with: the words before its first comma, when they read as a name. Null otherwise.
   String? get signedBy {
@@ -136,8 +114,7 @@ class SwarmIssueComment {
   }
 }
 
-/// An issue opened beside its project's channel: its text and its comments, oldest first, and what the pull requests that
-/// close it said.
+/// An issue opened beside its project's channel: its text and its comments, oldest first.
 class SwarmIssueThread {
   const SwarmIssueThread({
     required this.issue,
@@ -146,7 +123,6 @@ class SwarmIssueThread {
     required this.open,
     this.createdAt,
     this.earlier,
-    this.pullTalk = const [],
   });
 
   final SwarmIssue issue;
@@ -159,11 +135,6 @@ class SwarmIssueThread {
 
   /// Where the comments before [comments] start, or null when it holds them all.
   final String? earlier;
-
-  /// What the pull requests that close it said, oldest first: when each was opened, its newest [SwarmGitHub.pullComments]
-  /// comments and [SwarmGitHub.pullReviews] reviews, each with its first [SwarmGitHub.reviewLines] line comments, and when it
-  /// was merged. Its chat shows them among the issue's comments, each with its pull request's number.
-  final List<SwarmIssueComment> pullTalk;
 }
 
 /// A page of the comments before the ones a thread holds, oldest first.
@@ -206,12 +177,6 @@ class SwarmGitHub {
 
   /// How many comments one "earlier" read brings.
   static const earlierComments = 100;
-
-  /// How many pull requests that close an issue its chat reads: an issue's work is one, now and then a second that replaced it.
-  static const closingPulls = 2;
-
-  /// How many of such a pull request's newest comments and reviews its issue's chat reads, and line comments of each review.
-  static const pullComments = 20, pullReviews = 10, reviewLines = 5;
 
   /// How many threads are kept to open again at once.
   static const threadsKept = 60;
@@ -410,7 +375,6 @@ class SwarmGitHub {
       createdAt: issue.createdAt,
       comments: comments.comments,
       earlier: comments.earlier,
-      pullTalk: _pullTalkOf(map['closedByPullRequestsReferences']),
     );
     final key = '$repository#$number';
     _threads.remove(key);
@@ -520,95 +484,6 @@ class SwarmGitHub {
     );
   }
 
-  /// What the pull requests in [value] (an issue's `closedByPullRequestsReferences`) said, oldest first: each one's opening, its
-  /// comments, its reviews and their line comments, and its merge. A review with no words of its own that holds line comments
-  /// is its line comments alone; one with no words and no verdict is left out.
-  static List<SwarmIssueComment> _pullTalkOf(Object? value) {
-    final talk = <SwarmIssueComment>[];
-    for (final pull in _nodes(value)) {
-      if (pull is! Map || pull['number'] is! int) continue;
-      final number = pull['number'] as int;
-      final by = _login(pull['author']);
-      if (_time(pull['createdAt']) case final at?) {
-        talk.add(
-          SwarmIssueComment(
-            body: '',
-            author: by,
-            createdAt: at,
-            pull: number,
-            talk: SwarmTalk.opened,
-          ),
-        );
-      }
-      for (final row in _nodes(pull['comments'])) {
-        if (row is! Map || row['body'] is! String) continue;
-        talk.add(
-          SwarmIssueComment(
-            body: row['body'] as String,
-            author: _login(row['author']),
-            createdAt: _time(row['createdAt']),
-            url: row['url'] is String ? row['url'] as String : null,
-            pull: number,
-          ),
-        );
-      }
-      for (final review in _nodes(pull['reviews'])) {
-        if (review is! Map) continue;
-        final body = review['body'] is String
-            ? (review['body'] as String).trim()
-            : '';
-        final verdict = review['state'] is String
-            ? review['state'] as String
-            : null;
-        final lines = [
-          for (final row in _nodes(review['comments']))
-            if (row is Map && row['body'] is String)
-              SwarmIssueComment(
-                body: row['body'] as String,
-                author: _login(row['author']),
-                createdAt: _time(row['createdAt']),
-                url: row['url'] is String ? row['url'] as String : null,
-                pull: number,
-                talk: SwarmTalk.line,
-                path: row['path'] is String ? row['path'] as String : null,
-                line: row['line'] is int ? row['line'] as int : null,
-              ),
-        ];
-        if (body.isNotEmpty || (verdict != 'COMMENTED' && verdict != null)) {
-          talk.add(
-            SwarmIssueComment(
-              body: body,
-              author: _login(review['author']),
-              createdAt: _time(review['submittedAt']),
-              url: review['url'] is String ? review['url'] as String : null,
-              pull: number,
-              talk: SwarmTalk.review,
-              verdict: verdict,
-            ),
-          );
-        }
-        talk.addAll(lines);
-      }
-      if (_time(pull['mergedAt']) case final at?) {
-        talk.add(
-          SwarmIssueComment(
-            body: '',
-            createdAt: at,
-            pull: number,
-            talk: SwarmTalk.merged,
-          ),
-        );
-      }
-    }
-    final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
-    // Stable, so two posts of one second keep GitHub's order.
-    mergeSort(
-      talk,
-      compare: (a, b) => (a.createdAt ?? epoch).compareTo(b.createdAt ?? epoch),
-    );
-    return talk;
-  }
-
   /// The value [path] names in a GraphQL answer's `data`; unreadable when the answer, or it, is not what was asked for.
   static Map<Object?, Object?> _data(String answer, List<String> path) {
     Object? value;
@@ -660,18 +535,11 @@ class SwarmGitHub {
   static const _commentFields =
       'pageInfo{hasPreviousPage startCursor} nodes{body createdAt url author{login}}';
 
-  static const _talkFields = 'body createdAt url author{login}';
-
   static const _threadQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!){'
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       '$_issueFields body state '
-      'comments(last:\$last){totalCount $_commentFields} '
-      'closedByPullRequestsReferences(first:$closingPulls,includeClosedPrs:true){nodes{'
-      'number createdAt mergedAt author{login} '
-      'comments(last:$pullComments){nodes{$_talkFields}} '
-      'reviews(last:$pullReviews){nodes{state submittedAt body url author{login} '
-      'comments(first:$reviewLines){nodes{$_talkFields path line}}}}}}}}}';
+      'comments(last:\$last){totalCount $_commentFields}}}}';
 
   static const _earlierQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!,$before:String){'

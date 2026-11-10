@@ -597,15 +597,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   request as a row (the chip, its title and branch, and Open, which goes to it
   on GitHub), then its text and
   comments as posts, each under the face and name its first words sign it with
-  (`Migrate, 09:3x: …`) and its GitHub login. Among them, by their time, is what
-  the pull requests that close it said (anh Dee, 2026-11-10: a task's chat holds
-  its pull request's talk, the channel none of it): their comments, reviews (with
-  their verdict: `Approved`, `Changes requested`, `Review`) and line comments
-  (`rows.py, line 40`), each marked `PR #5770` after its login, and when each was
-  opened and merged as one quiet centred line (`PR #5770 opened · 09:40`,
-  `PR #5770 merged · 10:30`). The same read brings them: the first two such pull
-  requests, open or merged, their newest 20 comments and 10 reviews, and each
-  review's first 5 line comments. It reads the newest 30
+  (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
   comments; the rest are one tap away (`1,546 earlier comments` and Show,
   100 at a time), because reading all of lampOS #5385's 1,576 took 22 s. A
   later read joins what is held when its newest comments start at one of them,
