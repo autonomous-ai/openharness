@@ -24,13 +24,6 @@ export const WINDOWS_TEAM_STATUS_FILE = `${WINDOWS_TEAM_STATUS_DIR}\\status.json
  * owner cannot write into the team account's profile.
  */
 export const WINDOWS_TEAM_HANDOFF_DIR = `${WINDOWS_TEAM_STATUS_DIR}\\handoff`
-export const WINDOWS_TEAM_HANDOFF_FILE = `${WINDOWS_TEAM_HANDOFF_DIR}\\team-handoff`
-/** The scheduled task that runs the team daemon, the Windows form of the LaunchDaemon. */
-export const WINDOWS_TEAM_TASK_PATH = '\\Harness\\'
-export const WINDOWS_TEAM_TASK_NAME = 'Harness Team'
-export const WINDOWS_TEAM_TASK = `${WINDOWS_TEAM_TASK_PATH}${WINDOWS_TEAM_TASK_NAME}`
-/** The owner's folder where an older setup's subscription relay left its grant; setup and removal take it away (#4137). */
-export const windowsTeamRelayDir = (owner: string) => `${WINDOWS_TEAM_SHARED_DIR}\\team-relay-${owner}`
 
 /** Well-known SIDs, by number: the names are translated on a German or French Windows ("Administratoren"). */
 export const SID = {

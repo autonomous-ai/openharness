@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  WINDOWS_GH_BUILDS, parseWindowsAccountExists, parseWindowsJobState, runWindowsPrivacyCheck, windowsAccountExistsScript, windowsGroupSids,
-  takeWindowsHandoffFile, windowsJobStateScript, windowsPrivacyProbes, windowsStartTaskScript,
-  windowsUnzipScript, windowsUserSid, writeWindowsHandoff, type WindowsPrivacyDeps,
+  WINDOWS_GH_BUILDS, runWindowsPrivacyCheck, windowsGroupSids, windowsPrivacyProbes,
+  windowsUnzipScript, windowsUserSid, type WindowsPrivacyDeps,
 } from './windowsTeam.js'
 
 const config = { ownerHome: 'C:\\Users\\DELL', sentinel: 'C:\\Users\\DELL\\.harness-team-privacy' }
@@ -63,54 +62,6 @@ describe('runWindowsPrivacyCheck', () => {
   })
 })
 
-describe('the sign-in hand-over on Windows', () => {
-  const CODE = `hnh_${'c'.repeat(43)}`
-  const FILE = 'C:\\ProgramData\\Harness\\Team\\handoff\\team-handoff'
-  const entry = (kind: 'file' | 'dir' | 'link', size = 10) => ({
-    isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link', size,
-  })
-  const missing = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
-  function memoryFs(files: Record<string, ReturnType<typeof entry>>, text: Record<string, string> = {}) {
-    const written: Record<string, string> = {}
-    const unlinked: string[] = []
-    return {
-      written, unlinked,
-      fs: {
-        lstat: (path: string) => files[path] ?? missing(),
-        write: (path: string, value: string) => { written[path] = value },
-        read: (path: string) => text[path] ?? '',
-        unlink: (path: string) => { unlinked.push(path) },
-      },
-    }
-  }
-
-  it('the owner writes the code into the handover folder, never through a link', () => {
-    const ok = memoryFs({ 'C:\\ProgramData\\Harness\\Team\\handoff': entry('dir') })
-    writeWindowsHandoff(CODE, FILE, ok.fs)
-    expect(ok.written).toEqual({ [FILE]: `${CODE}\n` })
-    expect(() => writeWindowsHandoff(CODE, FILE, memoryFs({ 'C:\\ProgramData\\Harness\\Team\\handoff': entry('link') }).fs)).toThrow(/not a plain folder/)
-    expect(() => writeWindowsHandoff(CODE, FILE, memoryFs({ 'C:\\ProgramData\\Harness\\Team\\handoff': entry('dir'), [FILE]: entry('link') }).fs)).toThrow(/not a plain file/)
-    expect(() => writeWindowsHandoff('not a code!', FILE, ok.fs)).toThrow()
-  })
-
-  it('the team account reads it once and deletes it, and refuses anything but a plain file holding a code', () => {
-    const ok = memoryFs({ [FILE]: entry('file') }, { [FILE]: `${CODE}\r\n` })
-    expect(takeWindowsHandoffFile(FILE, ok.fs)).toBe(CODE)
-    expect(ok.unlinked).toEqual([FILE])
-    expect(takeWindowsHandoffFile(FILE, memoryFs({}).fs)).toBeNull()
-    const link = memoryFs({ [FILE]: entry('link') }, { [FILE]: CODE })
-    expect(() => takeWindowsHandoffFile(FILE, link.fs)).toThrow(/not a plain file/)
-    expect(link.unlinked).toEqual([FILE])
-    expect(() => takeWindowsHandoffFile(FILE, memoryFs({ [FILE]: entry('file', 9999) }).fs)).toThrow(/not a plain file/)
-    expect(() => takeWindowsHandoffFile(FILE, memoryFs({ [FILE]: entry('file') }, { [FILE]: 'x' }).fs)).toThrow(/did not hold a sign-in code/)
-  })
-
-  it('starts the task by its path and name, given as inputs', () => {
-    expect(windowsStartTaskScript()).toEqual({ script: 'Start-ScheduledTask -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME',
-      inputs: { HARNESS_TASK_PATH: '\\Harness\\', HARNESS_TASK_NAME: 'Harness Team' } })
-  })
-})
-
 describe('windowsUserSid', () => {
   it('reads the SID whoami /user prints, a name with a comma included, and nothing else', () => {
     expect(windowsUserSid('"desktop-0tfh0oj\\dell","S-1-5-21-3073114020-2660841771-734626734-1001"\r\n')).toBe('S-1-5-21-3073114020-2660841771-734626734-1001')
@@ -151,31 +102,5 @@ describe('the gh builds for Windows', () => {
     const unzip = windowsUnzipScript('C:\\Users\\harnessteam\\.harness\\runtime\\.gh-staging-1\\gh.zip', 'C:\\Users\\harnessteam\\.harness\\runtime\\gh_2.103.3_windows_amd64')
     expect(unzip.script).toBe('Expand-Archive -LiteralPath $env:HARNESS_ARCHIVE -DestinationPath $env:HARNESS_INTO -Force')
     expect(unzip.inputs).toEqual({ HARNESS_ARCHIVE: 'C:\\Users\\harnessteam\\.harness\\runtime\\.gh-staging-1\\gh.zip', HARNESS_INTO: 'C:\\Users\\harnessteam\\.harness\\runtime\\gh_2.103.3_windows_amd64' })
-  })
-})
-
-describe('what harness team status reads on Windows', () => {
-  it('asks Get-LocalUser whether the account exists, the name as an input', () => {
-    const query = windowsAccountExistsScript('harnessteam')
-    expect(query.script).toContain('Get-LocalUser -Name $env:HARNESS_TEAM_USER -ErrorAction SilentlyContinue')
-    expect(query.inputs).toEqual({ HARNESS_TEAM_USER: 'harnessteam' })
-    expect(parseWindowsAccountExists({ status: 0, stdout: 'yes\r\n', stderr: '' })).toBe(true)
-    expect(parseWindowsAccountExists({ status: 0, stdout: 'no\r\n', stderr: '' })).toBe(false)
-    expect(parseWindowsAccountExists({ status: 1, stdout: '', stderr: 'boom' })).toBe(false)
-  })
-
-  it('reads the task through Get-ScheduledTask and Get-ScheduledTaskInfo, and its process from Task Scheduler', () => {
-    const query = windowsJobStateScript()
-    expect(query.script).toContain('Get-ScheduledTask -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME -ErrorAction SilentlyContinue')
-    expect(query.script).toContain('Get-ScheduledTaskInfo -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME')
-    expect(query.script).toContain('GetInstances(0)')
-    expect(query.inputs).toEqual({ HARNESS_TASK_PATH: '\\Harness\\', HARNESS_TASK_NAME: 'Harness Team' })
-    expect(parseWindowsJobState({ status: 0, stdout: '{"loaded":true,"state":"Running","pid":4242,"lastResult":267009}\r\n', stderr: '' }))
-      .toEqual({ loaded: true, pid: 4242, state: 'Running' })
-    expect(parseWindowsJobState({ status: 0, stdout: '{"loaded":true,"state":"Ready","pid":null,"lastResult":0}', stderr: '' }))
-      .toEqual({ loaded: true, pid: null, state: 'Ready' })
-    expect(parseWindowsJobState({ status: 0, stdout: '{"loaded":false}', stderr: '' })).toEqual({ loaded: false, pid: null, state: null })
-    expect(parseWindowsJobState({ status: 1, stdout: '', stderr: 'x' })).toEqual({ loaded: false, pid: null, state: null })
-    expect(parseWindowsJobState({ status: 0, stdout: 'not json', stderr: '' })).toEqual({ loaded: false, pid: null, state: null })
   })
 })

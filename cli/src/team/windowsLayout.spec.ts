@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  WINDOWS_TEAM_CONFIG_FILE, WINDOWS_TEAM_HANDOFF_DIR, WINDOWS_TEAM_HANDOFF_FILE, WINDOWS_TEAM_HOME, WINDOWS_TEAM_SHARED_DIR,
-  WINDOWS_TEAM_SHARED_MARK, WINDOWS_TEAM_STATUS_DIR, WINDOWS_TEAM_STATUS_FILE, WINDOWS_TEAM_TASK, WINDOWS_TEAM_TASK_NAME,
-  WINDOWS_TEAM_TASK_PATH, checkSid, checkWindowsPath, checkWindowsUser, windowsTeamPaths, windowsTeamRelayDir,
+  WINDOWS_TEAM_CONFIG_FILE, WINDOWS_TEAM_HANDOFF_DIR, WINDOWS_TEAM_HOME, WINDOWS_TEAM_SHARED_DIR,
+  WINDOWS_TEAM_SHARED_MARK, WINDOWS_TEAM_STATUS_DIR, WINDOWS_TEAM_STATUS_FILE, checkSid, checkWindowsPath, checkWindowsUser, windowsTeamPaths,
 } from './windowsLayout.js'
 
 describe('the Windows layout', () => {
@@ -14,11 +13,6 @@ describe('the Windows layout', () => {
     expect(WINDOWS_TEAM_STATUS_DIR).toBe('C:\\ProgramData\\Harness\\Team')
     expect(WINDOWS_TEAM_STATUS_FILE).toBe('C:\\ProgramData\\Harness\\Team\\status.json')
     expect(WINDOWS_TEAM_HANDOFF_DIR).toBe('C:\\ProgramData\\Harness\\Team\\handoff')
-    expect(WINDOWS_TEAM_HANDOFF_FILE).toBe('C:\\ProgramData\\Harness\\Team\\handoff\\team-handoff')
-    expect(WINDOWS_TEAM_TASK_PATH).toBe('\\Harness\\')
-    expect(WINDOWS_TEAM_TASK_NAME).toBe('Harness Team')
-    expect(WINDOWS_TEAM_TASK).toBe('\\Harness\\Harness Team')
-    expect(windowsTeamRelayDir('DELL')).toBe('C:\\ProgramData\\Harness\\team-relay-DELL')
   })
 
   it('keeps the team account\'s own files in its profile, as on a Mac', () => {
