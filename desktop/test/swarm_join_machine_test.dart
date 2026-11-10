@@ -3,20 +3,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/join_machine.dart';
 import 'package:harness/super_tabs/model.dart';
 
-import 'support/super_tab_fixture.dart';
-
 void main() {
-  final server = ConversationServer();
-  test(
-    'a snapshot reads whether the Swarm uses Team accounts, absent meaning yes',
-    () {
-      SuperTabSnapshot read(Map<String, dynamic> extra) =>
-          SuperTabSnapshot.fromJson({...server.state, ...extra});
-      expect(read({}).teamAccounts, isTrue);
-      expect(read({'teamAccounts': false}).teamAccounts, isFalse);
-    },
-  );
-
   // Re-check of #2188: every computer sent one fixed operation for an
   // invitation, so a stale accept on computer B got A's answer back, "not a
   // member before".

@@ -379,16 +379,14 @@ class SuperTabLaunch {
 
   /// The Swarm's machines, one row per computer, then the person's others,
   /// best first. A new project's Product Manager starts on any of them (Ken,
-  /// 10-29): a teammate's Mac runs it in its Harness Team account when that
-  /// takes it now, else itself, as its owner (backend leadStart.ts).
+  /// 10-29; backend leadStart.ts).
   List<LeadMachine> leadMachinesOf(SuperTabSnapshot snapshot, {DateTime? now}) {
     final at = (now ?? DateTime.now()).millisecondsSinceEpoch;
     // A machine reports readiness and resources only once it has them.
     Map<String, dynamic> part(Object? value) =>
         value is Map ? superTabMap(value) : const {};
     LeadMachine row(String id, Map<String, dynamic> pool) {
-      final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
-      final observation = part(reading['observation']);
+      final observation = part(pool['observation']);
       // As Add machine names it ("Studio", not "Studio.local").
       final name = superTabMachineName(pool['name'] as String? ?? id);
       final own = pool['contributorId'] == accountId;
@@ -396,40 +394,12 @@ class SuperTabLaunch {
       // Its host says it can start a Product Manager (backend leadStart.ts).
       final capable =
           (observation['capabilities'] as List?)?.contains('leadStart') == true;
-      // Another person's Mac runs one in its Harness Team account when that
-      // takes it now, else itself; a Team account listed as its own machine
-      // only in itself.
-      final teamReading =
-          !own &&
-          (reading['hostMachineId'] != null ||
-              observation['sessionKind'] == 'team');
-      final teamRefusal = !teamReading
-          ? null
-          : switch (reading['teamWork']) {
-              {'allowed': false, 'reason': final String reason} => reason,
-              _ when !capable =>
-                'Update Harness on $name to run a Product Manager there.',
-              _ => null,
-            };
       bool fresh(Map<String, dynamic> observation) =>
           switch (observation['receivedAt']) {
             final num received =>
               at - received < kSuperTabMachineOfflineAfter.inMilliseconds,
             _ => false,
           };
-      final team =
-          teamReading &&
-          teamRefusal == null &&
-          fresh(observation) &&
-          reading['paused'] != true;
-      final mac = part(pool['observation']);
-      // A Mac added as its person joined takes teammates' work only in its
-      // Team account (backend machines.ts teamAccountOnly).
-      final macTakes =
-          pool['teamAccountOnly'] != true &&
-          pool['hostMachineId'] == null &&
-          mac['sessionKind'] != 'team' &&
-          (mac['capabilities'] as List?)?.contains('leadStart') == true;
       // On a teammate's machine the server decides, by engine, where it runs
       // (backend leadStart.ts leadChoices), as the start itself does: Desktop
       // shows that rather than working it out (security reviews 1 and 2 of
@@ -454,17 +424,13 @@ class SuperTabLaunch {
       final shownHost = [for (final engine in kLeadEngines) ?decided[engine]]
           .firstOrNull;
       // Where it would run: the server's machine for its first engine that
-      // runs; else the Mac itself when its Team account cannot.
-      final host = server
-          ? (shownHost == null
-                ? pool
-                : snapshot.machines
-                          .where((m) => m['machineId'] == shownHost)
-                          .firstOrNull ??
-                      pool)
-          : teamReading && !team
-          ? pool
-          : reading;
+      // runs; else the machine itself.
+      final host = server && shownHost != null
+          ? snapshot.machines
+                    .where((m) => m['machineId'] == shownHost)
+                    .firstOrNull ??
+                pool
+          : pool;
       final hostReading = part(host['observation']);
       final online = fresh(hostReading);
       final running = hostReading['runningHarnessIds'];
@@ -511,8 +477,8 @@ class SuperTabLaunch {
         id: id,
         name: name,
         online: online,
-        // The server's count: it also holds pending starts and the Team
-        // account sharing a Mac. A backend without it: slots minus running.
+        // The server's count: it also holds pending starts. A backend without
+        // it: slots minus running.
         freeAgents: switch (host['availableSlots']) {
           final num slots => math.max(0, slots.toInt()),
           _ => math.max(
@@ -558,7 +524,6 @@ class SuperTabLaunch {
                   .where((person) => person.id == pool['contributorId'])
                   .firstOrNull,
         native: own && connected,
-        team: server ? shownHost != null && shownHost != id : team,
         engineRefusals: engineRefusals,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused
@@ -573,21 +538,15 @@ class SuperTabLaunch {
             ? null
             : host['paused'] == true
             ? 'Paused in this Swarm'
-            : team || macTakes
+            : capable
             ? null
-            : teamRefusal ??
-                  switch (pool['teamWork']) {
-                    {'allowed': false, 'reason': final String reason} => reason,
-                    _ =>
-                      'Update Harness on $name to run a Product Manager there.',
-                  },
+            : 'Update Harness on $name to run a Product Manager there.',
       );
     }
 
     final listed = [
       for (final pool in snapshot.machines)
-        if (pool['machineId'] case final String id
-            when snapshot.placeOf(id) == id && pool['removal'] == null)
+        if (pool['machineId'] case final String id when pool['removal'] == null)
           row(id, pool),
     ];
     return rankLeadMachines([

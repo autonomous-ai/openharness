@@ -114,7 +114,7 @@ void main() {
   }
 
   // Swarm v4 (anh Dee 2026-11-08): the org name, Your Team, Projects, Top Teams; Manage at the foot. No Decisions, Mentions,
-  // Threads, Projects grid or Buddy, and an agent's row is its face and name only.
+  // Threads or Projects grid, and an agent's row is its face and name only.
   group('the v4 left pane', () {
     void lead(ConversationServer server) {
       (server.state['conversations'] as List)

@@ -3,7 +3,7 @@ import 'model.dart';
 /// The "waiting at a prompt" notes of [messages] that no longer say anything,
 /// by id: each agent's but its newest, and that one too once [agent] no longer
 /// alerts about a prompt, or is gone. The backend stores one note per prompt
-/// and has no way to take it back, so Scholes's Buddy showed one long after it
+/// and has no way to take it back, so Scholes's agent showed one long after it
 /// was answered, and a new one under every message after it (10-29).
 Set<String> answeredPromptAlerts(
   Iterable<SuperTabMessage> messages,

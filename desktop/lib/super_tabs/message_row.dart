@@ -515,8 +515,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     return InkWell(onTap: widget.onOpenAgent, child: name);
   }
 
-  /// The reader's own message, a task line or proposal sent in their name
-  /// too: drawn as their bubble on the right.
+  /// The reader's own message: drawn as their bubble on the right.
   bool get _own {
     final message = widget.message;
     return widget.readerId.isNotEmpty &&
@@ -715,22 +714,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             padding: grid
                                                 .AppDesktop
                                                 .bubbleNamePadding,
-                                            child: Wrap(
-                                              spacing: 8,
-                                              crossAxisAlignment:
-                                                  WrapCrossAlignment.center,
-                                              children: [
-                                                _name(nameStyle, finger),
-                                                if (widget.thread?.askTag
-                                                    case final tag?)
-                                                  Text(
-                                                    tag,
-                                                    style: SwarmType.time(
-                                                      context,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
+                                            child: _name(nameStyle, finger),
                                           ),
                                         if (message.threadReply &&
                                             widget.onOpenThread != null)
