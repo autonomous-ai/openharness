@@ -1413,6 +1413,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
   const input = inputs.input
+  // A window that connects while a message waits for its engine reads it off the agent's frame.
+  backend.waitingForProvider = (s) => input.waitingFor(s.sessionId)
   const deviceInput = inputs.deviceInput
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).

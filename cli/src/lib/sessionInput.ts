@@ -199,6 +199,8 @@ function fingerprint(content: string): string {
 /** Engine-aware prompt injection. Terminal TUIs get a bounded per-session FIFO while a turn is busy. */
 export class SessionInputController {
   private states = new Map<string, InputState>()
+  /** The messages waiting for each agent's engine's reader to start (`engineReady`), by session. */
+  private readonly waitingEngine = new Map<string, number>()
 
   constructor(private readonly deps: SessionInputDeps) {}
 
@@ -246,7 +248,11 @@ export class SessionInputController {
     console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
     if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
     const since = (this.deps.now ?? Date.now)()
+    this.waitingEngine.set(sessionId, (this.waitingEngine.get(sessionId) ?? 0) + 1)
     const up = await starting
+    const left = (this.waitingEngine.get(sessionId) ?? 1) - 1
+    if (left > 0) this.waitingEngine.set(sessionId, left)
+    else this.waitingEngine.delete(sessionId)
     console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
     return true
   }
@@ -259,6 +265,11 @@ export class SessionInputController {
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
    */
+  /** What a message to [sessionId] waits for now: `engine` while one waits for its engine's reader (the agent's frame says so). */
+  waitingFor(sessionId: string): 'engine' | null {
+    return this.waitingEngine.has(sessionId) ? 'engine' : null
+  }
+
   private async injectWhenLeased(
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
