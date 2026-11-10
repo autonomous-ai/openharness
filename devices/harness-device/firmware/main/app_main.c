@@ -177,6 +177,7 @@ static void refresh_task(void *arg)
 
 void app_main(void)
 {
+    ram_telemetry_init();   // PSRAM-first cJSON allocator; before any cJSON use
     ram_telemetry_checkpoint("boot");
     last_words_boot();   // before the first log line, so the previous boot's ring is read, not overwritten
     board_detect();      // which dial this is — the panel's reset pin comes from here, so before display_init
