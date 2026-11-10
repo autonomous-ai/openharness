@@ -64,7 +64,7 @@ describe('how many machines one person adds to a Swarm', () => {
 describe('which hosts are asked to join', () => {
   const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
   const hostUser = (sub: string) => ({ sub, email: `${sub}@example.com`, role: 'user', autonomousEnv: 'test' }) as never
-  const lookups = () => ({ people: [], confidential: new Set<string>(), agentGrant: async () => {}, githubApp: false })
+  const lookups = () => ({ people: [], confidential: new Set<string>(), agentGrant: async () => {} })
   /** [state] with the owner's Lead on [machineId], which is not one of the Swarm's machines. */
   function leadOn(start: ReturnType<typeof swarm>, machineId: string) {
     let state = start

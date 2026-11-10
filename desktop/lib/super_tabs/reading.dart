@@ -56,7 +56,7 @@ class SuperTabReading {
 
   /// True reads the open conversation's messages only when its own counters
   /// say something happened there: a first read, a saved view, a message
-  /// after those read, a changed reaction (spec 2026-11-02-poll-cost, Part
+  /// after those read, an edit or a delete (spec 2026-11-02-poll-cost, Part
   /// 2). A poll whose state read moves neither then asks for the state alone,
   /// whatever else in the Swarm changed.
   final bool messagesWhenChanged;

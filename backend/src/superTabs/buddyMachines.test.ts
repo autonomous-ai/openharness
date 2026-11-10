@@ -172,7 +172,7 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     const added = addOwn(f, f.app.projectId)
     buddyOnly(f)!.observation = { ...reading(1000), localModels: [{ grid: 'swarm-grid', model: 'qwen', kind: 'served', starting: false }] } as never
     expect(servedLocalModels(f.state, 1000)).toEqual([])
-    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [{ machineId: 'peer-team' }], githubApp: false }
+    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [{ machineId: 'peer-team' }] }
     const user = { sub: 'peer', email: peer.email, role: 'user', autonomousEnv: 'test' } as never
     const rows = await hostTab('swarm', f.state, 'peer-laptop', user, null, lookups)
     expect(rows.pool!.buddyStarts!.map(s => s.id)).toEqual([added.result.startId])
@@ -273,7 +273,7 @@ describe('a Buddy-only machine\'s end', () => {
 // Security reviews 1 and 2 of #2234.
 describe('a Buddy-only machine after its reviews', () => {
   const hostUser = (sub: string) => ({ sub, email: `${sub}@example.com`, role: 'user', autonomousEnv: 'test' }) as never
-  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [] }
 
   it('ends when its Buddy is never picked up while the machine reports (review 1)', () => {
     const f = setup()

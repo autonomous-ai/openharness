@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/project_folder.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
@@ -39,6 +40,10 @@ Future<SuperTabLaunchFixture> mountSwarm(
   bool reader = false,
   // The title bar and menus are AppKit's, reached through their channel.
   bool native = false,
+  // How this computer makes a new folder for an agent; without it, the app's own.
+  Future<String> Function(ProjectFolderRequest request)? prepareFolder,
+  // What the Swarm and this computer hold before the Swarm is first read.
+  void Function(SuperTabLaunchFixture f)? before,
 }) async {
   if (native) {
     final messenger = tester.binding.defaultBinaryMessenger;
@@ -48,7 +53,8 @@ Future<SuperTabLaunchFixture> mountSwarm(
   final oldEntry = newHarnessOpensInBox;
   newHarnessOpensInBox = true;
   addTearDown(() => newHarnessOpensInBox = oldEntry);
-  final f = SuperTabLaunchFixture();
+  final f = SuperTabLaunchFixture(prepareFolder: prepareFolder);
+  before?.call(f);
   if (reader) {
     (f.connection.server.state['people'] as List).first['role'] = 'viewer';
   }

@@ -16,6 +16,7 @@ import 'controller.dart';
 import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'identity.dart';
+import 'model.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'pull_chip.dart';
 import 'swarm_type.dart';
@@ -59,8 +60,9 @@ class SwarmTaskBoard extends StatefulWidget {
   final Duration? refreshEvery;
   final DateTime Function() now;
 
-  /// The least a column is wide: a narrower pane scrolls sideways.
-  static const columnMinWidth = 220.0;
+  /// The least a column is wide: a narrower pane scrolls sideways. Three of them fit beside the channel in the window the
+  /// app opens in (1280 wide: a pane of 490, 147 a column), so On it, the column people look for, is never out of sight.
+  static const columnMinWidth = 140.0;
 
   /// The project's repository as `owner/name`, or null when it has none on GitHub: its record's, else, in the person's
   /// Personal Swarm, the repo its panes work in, read on [app]'s Desktop (personal_projects.dart).
@@ -203,7 +205,10 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
       });
       // Their pull requests after them: the cards show first, and a read of these that fails keeps the last chips.
       try {
-        final pulls = await widget.github.pulls(repository);
+        final pulls = await widget.github.pulls(
+          repository,
+          team: SwarmPull.teamOf(widget.controller.snapshot, repository),
+        );
         if (mounted && repository == _repository) {
           setState(() => _pulls = pulls);
         }
@@ -250,7 +255,8 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
                     child: Text(
                       stale,
                       key: const ValueKey('swarm-tasks-stale'),
-                      maxLines: 1,
+                      // Two lines: at the 1280 window the bar has about 175 px for it, and what to do is its end.
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: DesktopChrome.metadata(),
                     ),
@@ -411,8 +417,12 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(bottom: SwarmLayout.capsuleGap),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                // The pull request sits at the top right, or under the task's number when the column has no room for both
+                // whole: a chip cut to "#7…" said neither which pull request nor where it stands.
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
                     Container(
                       padding: SwarmLayout.capsulePadding,
@@ -427,11 +437,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
                         style: DesktopChrome.metadata(),
                       ),
                     ),
-                    // A narrow column shortens the chip's words, never the task's number.
-                    if (pull != null) ...[
-                      const SizedBox(width: 8),
-                      Flexible(child: SwarmPullChip(pull: pull)),
-                    ],
+                    ?(pull == null ? null : SwarmPullChip(pull: pull)),
                   ],
                 ),
               ),
@@ -577,22 +583,39 @@ class _BoardSkeleton extends StatelessWidget {
   );
 }
 
-/// The face of the agent named [name] in this Swarm (a `builder:<name>` label, or the name a comment is signed with),
-/// matched without case; a face drawn from the name when the Swarm has no such agent.
+/// The agent of this Swarm named [name] (a `builder:<name>` label, or the name a comment is signed with), by [swarmSameKey]:
+/// "First builder" is `builder:first-builder`. Null when the Swarm has no such agent.
+SuperTabAgent? swarmAgentNamed(SuperTabController controller, String name) {
+  final snapshot = controller.snapshot;
+  if (snapshot == null) return null;
+  // Keyed once per snapshot: a board draws a face on every card and comment.
+  final byKey = _agentsByKey[snapshot] ??= {
+    for (final agent in snapshot.agents.reversed)
+      // Its name as its label is made from it (cli githubMentions.ts): the first of its two names that is not blank.
+      swarmSameKey(
+        (agent.displayName?.trim().isNotEmpty ?? false)
+            ? agent.displayName!
+            : agent.name,
+      ): agent,
+  };
+  return byKey[swarmSameKey(name)];
+}
+
+final _agentsByKey = Expando<Map<String, SuperTabAgent>>();
+
+/// The face of the agent named [name] in this Swarm ([swarmAgentNamed]); a face drawn from the name when the Swarm has no such
+/// agent, the same for every way of writing it.
 Widget swarmAgentFace(
   SuperTabController controller,
   String name, {
   double size = 22,
 }) {
-  final key = name.toLowerCase();
-  final agent = controller.snapshot?.agents
-      .where((a) => (a.displayName ?? a.name).toLowerCase() == key)
-      .firstOrNull;
+  final agent = swarmAgentNamed(controller, name);
   if (agent != null) {
     return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
   }
   return SuperTabAvatar(
-    identity: 'agent:$key',
+    identity: 'agent:${swarmSameKey(name)}',
     name: name,
     size: size,
     face: true,
