@@ -32,9 +32,6 @@ class BrowserMenuGuard {
 
   static bool get _web => debugWeb ?? kIsWeb;
 
-  /// Whether this runs in a browser, where a right-click is not sure to reach the app.
-  static bool get inBrowser => _web;
-
   /// Whether this runs in a phone's or tablet's browser, where nothing can hover.
   static bool get onTouchScreen =>
       _web &&

@@ -95,21 +95,21 @@ void main() {
     expect(
       find.descendant(
         of: _key('super-machines-group-yours'),
-        matching: find.text('Yours · 1'),
+        matching: find.text('YOUR MACHINE'),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: _key('super-machines-group-online'),
-        matching: find.text('Online · 1'),
+        matching: find.text('ONLINE · 1'),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: _key('super-machines-group-offline'),
-        matching: find.text('Offline · 2'),
+        matching: find.text('OFFLINE · 2'),
       ),
       findsOneWidget,
     );
@@ -197,8 +197,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Online · 2'), findsOneWidget);
-    expect(find.text('Offline · 1'), findsOneWidget);
+    expect(find.text('ONLINE · 2'), findsOneWidget);
+    expect(find.text('OFFLINE · 1'), findsOneWidget);
 
     // Bravo goes quiet: the rows still read Alpha, Bravo, Charlie.
     final machines = (server.state['machines'] as List)
@@ -214,8 +214,42 @@ void main() {
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 50));
     }
-    expect(find.text('Online · 1'), findsOneWidget);
-    expect(find.text('Offline · 2'), findsOneWidget);
+    expect(find.text('ONLINE · 1'), findsOneWidget);
+    expect(find.text('OFFLINE · 2'), findsOneWidget);
+    await _end(tester, c);
+  });
+
+  testWidgets('an offline row\'s last seen moves on with the clock', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    server.state['machines'] = [
+      _machine('c', 'Charlie', 'peer', seen: const Duration(minutes: 2)),
+    ];
+    final c = server.controller();
+    await c.refresh();
+    var now = DateTime.now();
+    await tester.binding.setSurfaceSize(const Size(900, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(
+            controller: c,
+            onAddAgent: (_) {},
+            ticks: true,
+            now: () => now,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    Finder seen(String age) =>
+        find.textContaining('last seen $age', findRichText: true);
+    expect(seen('2 min ago'), findsOneWidget);
+    now = now.add(const Duration(minutes: 1));
+    await tester.pump(const Duration(seconds: 1));
+    expect(seen('3 min ago'), findsOneWidget);
     await _end(tester, c);
   });
 

@@ -29,6 +29,7 @@ Future<SuperTabController> mount(
   ConversationServer? fixture,
   double width = 1200,
   String? name,
+  double textScale = 1,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = Size(width, 900);
@@ -64,15 +65,16 @@ Future<SuperTabController> mount(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: Scaffold(
         body: ListenableBuilder(
           listenable: c,
-          builder: (context, _) => SuperTabMachines(
-            controller: c,
-            onAddAgent: (_) {},
-            manage: true,
-            ticks: false,
-          ),
+          builder: (context, _) =>
+              SuperTabMachines(controller: c, onAddAgent: (_) {}, ticks: false),
         ),
       ),
     ),
@@ -244,7 +246,6 @@ void main() {
           body: SuperTabMachines(
             controller: c,
             onAddAgent: (_) {},
-            manage: true,
             ticks: false,
           ),
         ),
@@ -302,4 +303,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('at twice the text size the disk figures grow with the text '
+      'and stay whole and aligned', (tester) async {
+    await mount(tester, textScale: 2);
+    for (final id in ['mine', 'build', 'sleep', 'old']) {
+      final texts = find.descendant(
+        of: key('machines-disk-$id'),
+        matching: find.byType(RichText),
+      );
+      expect(texts, findsNWidgets(2));
+      for (final text in texts.evaluate()) {
+        expect(
+          (text.renderObject! as RenderParagraph).didExceedMaxLines,
+          isFalse,
+          reason: id,
+        );
+      }
+      expect(
+        tester.getTopLeft(key('machines-disk-$id')).dx,
+        tester.getTopLeft(key('machines-disk-mine')).dx,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
 }
