@@ -162,7 +162,6 @@ export function createAgentRetargeter({
       : (session.subscriptionModel ?? null)
     // The relaunch reopens the row's own conversation; '' (none bound yet) starts a new one (restartAgent).
     const onGrid = !!(session.grid || session.gridLaunch)
-    const reopens = session.sessionId
     // What this machine cannot do at all is said first, before the pane is even looked at.
     const target: LaunchSource = {
       gridLaunch: grid,
@@ -186,7 +185,7 @@ export function createAgentRetargeter({
     // the remembered model carries its provider (`subscriptionModel.ts`), and otherwise the engine
     // decides, as it always did. v2 switches the model through OpenCode's own API instead and needs no
     // sqlite3 (`applyOpencodeSessionModel`).
-    const rewritesOpencodeSession = session.engine === 'opencode' && !!reopens
+    const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
     const opencodeMajor = native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
@@ -281,7 +280,7 @@ export function createAgentRetargeter({
         if (model) {
           nativeEffect = 'uncertain'
           const written = await opencode.applyOpencodeSessionModel({
-            opencodeMajor, dbPath: native ? nativeOpencodeStore(native.environment) : opencodeDb, sessionId: reopens, model, cwd: session.cwd ?? undefined,
+            opencodeMajor, dbPath: native ? nativeOpencodeStore(native.environment) : opencodeDb, sessionId: session.sessionId, model, cwd: session.cwd ?? undefined,
             // (A model of opencode's own is looked for in its catalogue; a grid's provider lives in
             // the pane's own config, which the service never reads.)
             checkCatalog: !grid,
@@ -311,9 +310,9 @@ export function createAgentRetargeter({
       // A Codex conversation is bound to its provider (`providerBoundConversations`): moved between a grid and the
       // own login it goes on in a fork, its whole history with it; grid to grid is one provider and resumes.
       const movesProvider = !!launchContract(session.engine)?.providerBoundConversations
-        && !!reopens && onGrid !== !!grid
+        && !!session.sessionId && onGrid !== !!grid
       const outcome = await restartAgent(
-        { engine: session.engine, sessionId: reopens, ...(session.resumeOnly ? { resumeOnly: true as const } : {}),
+        { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}),
           ...(movesProvider ? { continueInFork: true as const } : {}) },
         retargetPermission.bypassPermission === true,
         { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
@@ -322,7 +321,7 @@ export function createAgentRetargeter({
             const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: sessionCodexHome(session), ...built.overrides.env, ...built.overrides.native?.environment }
             if (!grid) for (const name of gridEnvVarNames(session.engine)) delete env[name]
             return moveCodexConversation({
-              sessionId: reopens, toGrid: !!grid, args: built.overrides.extraArgs ?? [], env,
+              sessionId: session.sessionId, toGrid: !!grid, args: built.overrides.extraArgs ?? [], env,
               argv: (codexArgs) => windowsEngineArgv(session.engine, [built.overrides.native?.executable?.command ?? engineBin(session.engine), ...codexArgs]),
               ...(session.cwd ? { cwd: session.cwd } : {}),
             })

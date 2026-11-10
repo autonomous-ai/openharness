@@ -742,9 +742,9 @@ describe('createInput', () => {
     inputs.submitAgent('cc', '/loop fix it')
     inputs.submitAgent('nobody', 'hi')
     expect(submit.mock.calls).toEqual([
-      ['a1', 'hello', 'd1'],
-      ['cc', 'fix it', undefined],
-      ['nobody', 'hi', undefined],
+      ['a1', 'hello', 'd1', undefined],
+      ['cc', 'fix it', undefined, undefined],
+      ['nobody', 'hi', undefined, undefined],
     ])
     expect(log.mock.calls.flat().filter((line) => String(line).includes('slash-command adapted'))).toHaveLength(1)
   })
@@ -783,7 +783,7 @@ describe('message', () => {
     inputs.input.forget('a1')
     const plain = vi.fn(), request = createMessageRequest(plain)
     request({ agentId: 'a1', content: 'Unscoped', inputContext: { user: 'untrusted' } })
-    expect(plain.mock.calls).toEqual([['a1', 'Unscoped']])
+    expect(plain.mock.calls).toEqual([['a1', 'Unscoped', undefined]])
     // An observer is optional.
     expect(await messageWriter(deps().deps)('a1', 'Without observer')).toEqual(ok)
   })
@@ -794,7 +794,7 @@ describe('message', () => {
     const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     inputs.messageRequest({ content: 'hello', agentId: 's1', tabId: 'swarm-a' })
-    expect(submit.mock.calls).toEqual([['a1', 'hello', undefined]])
+    expect(submit.mock.calls).toEqual([['a1', 'hello', undefined, undefined]])
     // The person sent it: a harness another agent started is theirs from then on (services/agentCleanup.ts).
     expect(typed).toHaveBeenCalledWith('s1')
   })
@@ -807,7 +807,7 @@ describe('message', () => {
     message({ content: 'in a tab', agentId: 'a1', tabId: 'swarm-a' })
     message({ content: '', agentId: 'a1' })
     message({ content: 'nobody to type into' })
-    expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab']])
+    expect(submit.mock.calls).toEqual([['a1', 'hi', undefined], ['s1', 'hi', undefined], ['a1', 'in a tab', undefined]])
   })
 
   it('hands what became of it to its measurement: a dropped frame is invalid, a kept one carries the receipt down', () => {

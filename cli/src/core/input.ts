@@ -360,8 +360,7 @@ export function createInput(deps: InputDeps) {
     }
     if (log) console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     const target = record?.agentId ?? sessionId
-    if (receipt) input.submit(target, adapted, deliveryId, receipt)
-    else input.submit(target, adapted, deliveryId)
+    input.submit(target, adapted, deliveryId, receipt)
   }
   const messageRequest = createMessageRequest((id, content, receipt) => submitAgent(id, content, undefined, receipt), deps.typed)
   /** What holds a typed delivery from [id]'s pane now, read as its write reads it (`beforeTeamWrite`, `injectTeam`), with nothing
@@ -394,8 +393,7 @@ export function createMessageRequest(submit: (id: string, content: string, recei
     typed?.(target)
     // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
     // in the clear.
-    if (receipt) submit(target, content, receipt)
-    else submit(target, content)
+    submit(target, content, receipt)
   }
 }
 
