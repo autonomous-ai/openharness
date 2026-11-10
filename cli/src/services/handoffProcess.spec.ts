@@ -156,7 +156,8 @@ describe('the handoff in the edge host', () => {
       // The eager SQLite module does not open a database for a file-backed conversation.
       expect(core.transcripts.databaseHistory(agents.claude as never)).toBeUndefined()
       expect(core.transcripts.databaseHistory({ ...agents.claude, engine: 'codex' } as never)).toBeUndefined()
-      const prepare = startHandoff(core).agent_handoff_prepare!
+      // Long enough for a loaded machine: its deadlines are the product's to keep (services/handoff.spec.ts).
+      const prepare = startHandoff(core, undefined, undefined, undefined, { deadlineMs: 60_000, gitTimeoutMs: 60_000 }).agent_handoff_prepare!
       const asker = { local: true, owner: true }
       await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
       expect(binding.loads).toBe(1)
@@ -181,8 +182,8 @@ describe('the handoff in the edge host', () => {
       expect(readFileSync(join(ws, handed2.file!), 'utf8')).toContain('add a search box')
     } finally { rmSync(ws, { recursive: true, force: true }) }
   // A real git repository and SQLite store: 1.6 s alone, 5.5 s in a full test:core run on a busy Mac (2026-11-07, #4252),
-  // past vitest's 5 s default.
-  }, 20_000)
+  // past vitest's 5 s default, and past the handoff's own 5 s deadline at load 30 (the release gates, 2026-11-10).
+  }, 120_000)
 })
 
 it('refuses malformed read/publication replies and never sends a revoked publication', async () => {

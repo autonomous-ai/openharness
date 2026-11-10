@@ -395,8 +395,14 @@ it('bounds discovery and by-ID selection witnesses without evicting a fresh sele
   publish.observed(row, null)
   now += 5_001
   await expect(publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
-  publish.observed(row, null)
-  expect(await publish(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)
+  // Kept for the request's deadline: one a test on a loaded machine raises keeps them as long.
+  const patient = createHandoffPublisher({ ...ctx.deps, now: () => now, deadlineMs: 60_000 })
+  patient.observed(row, null)
+  now += 60_001
+  await expect(patient(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  patient.observed(row, null)
+  now += 60_000
+  expect(await patient(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)
 })
 
 it('holds an unserializable inline preparation without filesystem effects', async () => {

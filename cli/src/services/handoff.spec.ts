@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks'
 import { describe, expect, it, vi } from 'vitest'
 import { emptyPorts } from '../core/api.js'
 import type { HandoffDeps } from '../lib/agentHandoff.js'
@@ -85,6 +86,26 @@ describe('the change-agent handoff service', () => {
     expect(await deps.transcriptOk!('claude', '/s.jsonl', null)).toBe(true)
     expect(core.conversations.transcriptOk).toHaveBeenCalledWith('claude', '/s.jsonl', null)
   })
+})
+
+// A test on a loaded machine raises the limits; as shipped the request's permit, the preparation's deadline
+// and each git command keep theirs (5 s, 5 s and 2 s in lib/agentHandoff.ts).
+it('holds its request to the preparation deadline, 5 s as shipped and the limits it is given', async () => {
+  const result = { file: null, cwd: '/work', gitRepo: false, degraded: [] }
+  const now = vi.spyOn(performance, 'now').mockReturnValue(1_000)
+  try {
+    for (const [limits, deadline] of [[undefined, 5_000], [{ deadlineMs: 60_000, gitTimeoutMs: 30_000, discoverMs: 20_000 }, 60_000]] as const) {
+      let deps!: HandoffDeps
+      const prepare = vi.fn(async (given: HandoffDeps) => { deps = given; return result })
+      now.mockReturnValue(1_000)
+      await startHandoff(fakeCore(), undefined, prepare, undefined, limits).agent_handoff_prepare!(request, owner)
+      expect([deps.deadlineMs, deps.gitTimeoutMs, deps.discoverMs]).toEqual([limits?.deadlineMs, limits?.gitTimeoutMs, limits?.discoverMs])
+      now.mockReturnValue(1_000 + deadline)
+      expect(deps.permit!.current(request)).toBe(true)
+      now.mockReturnValue(1_001 + deadline)
+      expect(deps.permit!.current(request)).toBe(false)
+    }
+  } finally { now.mockRestore() }
 })
 
 it('retains the exact owner request and revokes publication when its connection closes', async () => {

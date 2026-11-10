@@ -3,14 +3,17 @@
 import { performance } from 'node:perf_hooks'
 import { HANDOFF_REQUESTS, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { prepareAgentHandoff, type HandoffDeps } from '../lib/agentHandoff.js'
+import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 import { createHandoffRequest } from './handoffRequest.js'
 import type { recordReplacement } from '../superTabs/replacements.js'
 
 export { HANDOFF_REQUESTS }
 
 /** `replacements`: a Super Tab member's replacement, recorded for its host (superTabs/replacements.ts, through
- *  superTabs/inServices.ts). Absent while the Swarm is off (`HARNESS_SWARM`), when a completed change records nothing. */
-export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff, replacements?: typeof recordReplacement): ServiceRequests {
+ *  superTabs/inServices.ts). Absent while the Swarm is off (`HARNESS_SWARM`), when a completed change records nothing.
+ *  `limits`: longer ones for a test on a loaded machine; as shipped, lib/agentHandoff.ts's. */
+export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff, replacements?: typeof recordReplacement,
+  limits: Pick<HandoffDeps, 'deadlineMs' | 'gitTimeoutMs' | 'discoverMs'> = {}): ServiceRequests {
   const reads = core.conversations
   const deps: HandoffDeps = {
     resolve: (id) => reads.resolve(id),
@@ -21,9 +24,10 @@ export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepar
     discoverSession: (session) => reads.discover(session.agentId),
     findTranscript: (engine, id, options) => reads.findTranscript(engine, id, options),
     transcriptOk: (engine, path, home) => reads.transcriptOk(engine, path, home),
+    ...limits,
   }
   return { agent_handoff_prepare: (payload, asker, closed) => {
-    const expires = performance.now() + 5_000
+    const expires = performance.now() + (limits.deadlineMs ?? HANDOFF_DEADLINE_MS)
     const permit = { requestId: typeof payload.requestId === 'string' ? payload.requestId : undefined,
       current: (request: { agentId: string; changeId: string; targetEngine: string }) => asker.owner && !closed?.aborted
         && performance.now() <= expires && request.agentId === payload.agentId && request.changeId === payload.changeId && request.targetEngine === payload.targetEngine }
