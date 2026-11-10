@@ -54,10 +54,12 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
   // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
   it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
-    const line = '- Stop only processes you started, by their process id; no sudo or system-wide installs; temp files in a folder from mktemp -d; never remove a worktree another process uses.'
     for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
-      const rows = prepareSwarmSkill(fixture(), saved).instructions.split('\n')
-      expect(rows.filter(row => row === line), saved.key).toHaveLength(1)
+      const rows = prepareSwarmSkill(fixture(), saved).instructions.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
+      expect(rows, saved.key).toHaveLength(1)
+      // By id, never by name; no privilege; a template a Mac's mktemp honours, and Windows' own folder; no other agent's worktree.
+      for (const part of ['by the process id you recorded, never by name (pkill, killall, taskkill /IM)', 'no sudo or system-wide installs',
+        'mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX"', '$env:TEMP', 'never remove another agent\'s worktree']) expect(rows[0], part).toContain(part)
     }
   })
 
