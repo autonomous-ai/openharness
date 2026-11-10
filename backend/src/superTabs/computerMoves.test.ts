@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import type { ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const kelvin: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'kelvin', email: 'kelvin@example.com' }
@@ -38,7 +39,7 @@ function setup({ ttMember = true, kelvinOnline = false } = {}) {
     observation: reading(kelvinOnline ? NOW - 1000 : NOW - 3_000_000), teamAccountOnly: true, ...LEGACY_RECORDS,
     lent: [{ week: 1, ms: 5000 }] as unknown as ContributedMachine['lent'], engineFailures: { codex: 1 } }
   state.machines = [kelvinMac]
-  const group = run({ type: 'conversation.create', projectId: 'lead', title: 'Offline edits', brief: 'Save edits.', checks: [] }).result.conversationId as string
+  const group = storedTask(state, { projectId: 'lead', title: 'Offline edits', brief: 'Save edits.', requesterId: 'owner' })
   const builder = run({ type: 'agent.add', conversationId: group, harnessId: 'h-builder', machineId: 'kelvin-mac', name: 'Birch3', configuration, lead: false },
     kelvin, { contribution: own('kelvin') }).result.agentId as string
   return { run, group, builder, get state() { return state } }

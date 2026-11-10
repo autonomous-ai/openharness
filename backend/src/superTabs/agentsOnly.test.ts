@@ -3,6 +3,7 @@ import { applyCommand, postable, type Command, type CommandContext } from './com
 import { PERSONAL_SWARM_OPERATION } from './deletion.js'
 import { createSuperTab, stableId, SuperTabError, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
@@ -23,7 +24,8 @@ function swarm() {
   const pm = run({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: 'h-pm', name: 'Faye', lead: true, configuration: config } as Command,
     owner, own('owner')).result.agentId as string
   const asPm: Actor = { kind: 'agent', agentId: pm, machineOwnerId: 'owner' }
-  const task = run({ type: 'conversation.create', title: 'Login bug', brief: 'Fix it.', checks: [] }).result.conversationId as string
+  // A task as older Swarms stored one: no command opens one in v4.
+  const task = storedTask(state, { title: 'Login bug' })
   /** + New agent: its 1:1 chat with its person, and the session joined into it. */
   const newAgent = (person: Extract<Actor, { kind: 'person' }>, name: string) => {
     const chat = run({ type: 'agent.new', kind: 'regular', name, machineId: `${person.userId}-mac`, engine: 'claude', local: true } as Command,
@@ -193,7 +195,7 @@ describe('New project\'s opening request, until lead.start makes the PM\'s own c
   it('is refused from anyone but the project\'s creator, and in a task\'s chat', () => {
     const f = fresh()
     expect(refusal(() => f.run(post(f.conversationId, 'Build the landing page.'), mate))).toMatchObject({ code: 'AGENTS_ONLY' })
-    const task = f.run({ type: 'conversation.create', projectId: f.projectId, title: 'Landing', brief: 'Build it.', checks: [] } as Command).result.conversationId as string
+    const task = storedTask(f.state, { projectId: f.projectId, title: 'Landing' })
     expect(refusal(() => f.run(post(task, 'Build the landing page.')))).toMatchObject({ code: 'AGENTS_ONLY' })
   })
 })

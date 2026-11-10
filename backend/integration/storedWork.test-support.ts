@@ -1,7 +1,16 @@
 import type { PrismaClient } from '@prisma/client'
-import type { Assignment, WorkStatus } from '../src/superTabs/model.js'
+import type { Actor, Assignment, WorkStatus } from '../src/superTabs/model.js'
+import { storedCreate, type StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
 import { rewriteParts } from './storedParts.test-support.js'
+
+/** A task or step of [tab] that [user], or with [agentId] that agent, opened with conversation.create before Swarm v4 removed it,
+ *  stored as that command stored it (storedCreate), with that command's answer. */
+export async function storeCreate(db: PrismaClient, tab: string, command: StoredCreate, user: { sub: string; email: string }, agentId?: string) {
+  const actor: Actor = agentId ? { kind: 'agent', agentId, machineOwnerId: user.sub } : { kind: 'person', userId: user.sub, email: user.email }
+  const { result } = await rewriteParts(db, tab, state => storedCreate(state, command, actor))
+  return { result }
+}
 
 /** [agentId] working on task [conversationId] of [tab], as work.assign stored it before Swarm v4, with the run record that keeps
  *  the agent on one task at a time. v4 assigns no work (2026-11-10). */

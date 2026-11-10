@@ -13,11 +13,12 @@ import { superTabRoutes } from '../src/routes/superTabs.js'
 import type { Approvals, GitHubSignIn } from '../src/github/approvals.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
 import { OWNER_CHECKS_PER_MINUTE, resetOwnerChecks } from '../src/github/repositoryCreate.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
 import { poolRows } from './hostRows.test-support.js'
-import { storeAssignment } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate } from './storedWork.test-support.js'
 import { logger } from '../src/utils/logger.js'
 
 // The Harness GitHub App's token endpoint on the real control API: a fresh loopback MongoDB and a fake GitHub. This suite
@@ -89,8 +90,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   }
   await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens, approvals, signIn: options.signIn ?? null })
   await app.ready()
-  const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
-    store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+  const run = (tab: string, command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, user, asAgentId) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const settled = async () => { await Promise.all(releases.splice(0)) }
   return { github, log, tokens, store, app, run, settled, approved }
 }
@@ -117,7 +118,7 @@ async function working(env: Env, repositoryUrl: string | null = 'https://github.
   await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'gh-host', harnessId: randomUUID(), name: 'Lead',
     configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
   const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-    checks: [{ description: 'Search works', independent: false }] } as Command)).result.conversationId)
+    checks: [{ description: 'Search works', independent: false }] })).result.conversationId)
   const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'gh-host', harnessId: randomUUID(),
     name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
   const assignmentId = (await storeAssignment(db, tab, group, worker)).id
@@ -159,7 +160,7 @@ describe('the GitHub token endpoint', () => {
       configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl: 'https://github.com/example/app.git' } } as Command)
     await invited(env, tab, host)
     const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field', checks: [],
-      requesterId: host.sub } as Command)).result.conversationId)
+      requesterId: host.sub })).result.conversationId)
     const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
     await storeAssignment(db, tab, group, worker)
@@ -268,7 +269,7 @@ describe('approving a repository', () => {
     // A group of the project, its start's conversation: no agent but the coordinator starts into the project chat (#2207).
     // [requester] asked for it, where given. The contributor joined above.
     const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-      checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
+      checks: [], ...(requester ? { requesterId: requester.sub } : {}) })).result.conversationId)
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command,
       contributor)).result.startId)

@@ -3,7 +3,7 @@ import { storeOldLeads } from '../leads.test-support.js'
 import * as store from '../parts/index.js'
 import { groupView, readerView } from './views.js'
 import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
-import type { Actor, Conversation } from '../model.js'
+import { visibleState, type Actor, type Conversation } from '../model.js'
 
 const R = 9_000
 const MINUTE = 60_000
@@ -106,8 +106,8 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const { s, parts } = scene()
     const view = readerView(parts, peer, NOW, {})
     const worker = view.parts.agents.find(a => a.key === s.worker)!
-    for (const hidden of ['downNamed', 'downSince', 'limitedUntil', 'roleId']) expect(worker.data).not.toHaveProperty(hidden)
-    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false, role: 'member', mainProjectId: null })
+    for (const hidden of ['downNamed', 'downSince', 'limitedUntil']) expect(worker.data).not.toHaveProperty(hidden)
+    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, kind: 'regular', chatId: null, myAgent: false, role: 'member', mainProjectId: null })
     expect(Object.keys(view.derived.agents).sort()).toEqual([s.lead, s.worker].sort())
   })
 
@@ -207,13 +207,19 @@ describe('reader view over what the read cache holds', () => {
   })
 })
 
-describe('role names in the reader\'s view', () => {
-  it('gives every agent a role name, the PM\'s by what it is', () => {
+// An avatar stored before the avatar read path went (S18) keeps its object key on the server: readers get none of it. Goes with
+// the avatar objects' removal (S19).
+describe('a stored avatar', () => {
+  it('reaches no reader, on a person or an agent', () => {
     const s = richSwarm()
-    s.edit(state => { state.agents.find(a => a.id === s.worker)!.roleName = 'Tester' })
-    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {})
-    expect(view.derived.agents[s.lead]!.roleName).toBe('PM')
-    expect(view.derived.agents[s.worker]!.roleName).toBe('Tester')
+    const picture = { kind: 'upload', key: 'avatars/tab/0123/avatar' }
+    s.edit(state => {
+      Object.assign(state.people.find(p => p.id === owner.userId)!, { avatar: picture })
+      Object.assign(state.agents.find(a => a.id === s.worker)!, { avatar: picture })
+    })
+    const { parts, derived } = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, {})
+    expect(JSON.stringify({ parts, derived })).not.toContain(picture.key)
+    expect(JSON.stringify(visibleState(s.state, peer, NOW))).not.toContain(picture.key)
   })
 })
 
