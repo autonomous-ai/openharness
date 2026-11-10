@@ -10,9 +10,8 @@ import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
-import { sweepActivity } from './activity.js'
 import { sweepChatSettings } from './chatSettings.js'
-import { sweepReminders } from './reminders.js'
+import { sweepActivity, sweepReminders } from './retiredRows.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -155,7 +154,8 @@ export async function threadMarks(db: PrismaClient, now: number) {
   }
 }
 
-/** The Activity and chat setting sweeps (activity.ts, chatSettings.ts), each failure said and kept to itself, as thread marks. */
+/** The sweep of Activity Swarm v4 no longer writes (retiredRows.ts), and the chat settings' (chatSettings.ts), each failure said
+ *  and kept to itself, as thread marks. */
 export async function activityRows(db: PrismaClient, now: number) {
   try {
     return { expired: await sweepActivity(db, now) }
@@ -173,7 +173,7 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
-/** The reminder sweep (reminders.ts), its failure said and kept to itself, as Activity's. */
+/** The sweep of reminders Swarm v4 no longer writes (retiredRows.ts), its failure said and kept to itself, as Activity's. */
 export async function reminderRows(db: PrismaClient, now: number) {
   try {
     return { expired: await sweepReminders(db, now) }

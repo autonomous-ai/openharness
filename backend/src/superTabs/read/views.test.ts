@@ -192,12 +192,10 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(expired).not.toHaveProperty('suspendedEngines')
   })
 
-  it('gives a Lead the other projects\' work and a person the mentions waiting', () => {
+  it('gives a Lead the other projects\' work, and nobody a tag count since Swarm v4', () => {
     const { s, parts } = scene()
     expect(readerView(parts, agentActor(s.lead), NOW, {}).derived).toHaveProperty('otherProjectsWork', [])
-    expect(readerView(parts, agentActor(s.lead), NOW, {}).derived).not.toHaveProperty('mentionsWaiting')
-    expect(readerView(parts, peer, NOW, { mentionsWaiting: 2, mentionsDigest: 'd' }).derived).toMatchObject({ mentionsWaiting: 2, mentionsDigest: 'd' })
-    expect(readerView(parts, agentActor(s.lead), NOW, { mentionsWaiting: 2, mentionsDigest: 'd' }).derived).not.toHaveProperty('mentionsDigest')
+    for (const reader of [agentActor(s.lead), peer]) expect(readerView(parts, reader, NOW, {}).derived).not.toHaveProperty('mentionsWaiting')
     expect(readerView(parts, peer, NOW, {}).derived).not.toHaveProperty('otherProjectsWork')
   })
 

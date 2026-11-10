@@ -3797,12 +3797,13 @@ describe('Lead mentions', () => {
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
 
-  it('holds a tag for a notice that says a task has no worker, and only a tag can be held', () => {
+  // Tags were held while a task had no worker, in the tag lists Swarm v4 removed (2026-11-10): an older CLI still asks, and the post
+  // goes out with its tags as any other.
+  it('takes an older CLI\'s held tag as a plain post with its tags', () => {
     const { f, lead } = swarm(), group = f.group()
     const held = (mentions: string[]): Command => ({ ...send(group, mentions), mentionsIfNoWorker: true } as Command)
-    expect(f.run(held(['peer']), as(lead)).messages[0]).toMatchObject({ mentions: ['peer'], holdMentions: true })
-    expect(f.run(send(group, ['peer']), as(lead)).messages[0]).not.toHaveProperty('holdMentions')
-    expect(() => f.run(held([]), as(lead))).toThrow('Hold a tag only for a message that tags someone.')
+    expect(f.run(held(['peer']), as(lead)).messages[0]).toMatchObject({ mentions: ['peer'] })
+    expect(f.run(held([]), as(lead)).messages[0]).not.toHaveProperty('mentions')
     expect(commandSchema.safeParse({ ...send(group, ['peer']), mentionsIfNoWorker: false }).success).toBe(false)
   })
 
@@ -3811,16 +3812,6 @@ describe('Lead mentions', () => {
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e', 'f'])).success).toBe(false)
   })
 
-  it('lets only the tagged person mark a mention done, a viewer included', () => {
-    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
-    f.invite('viewer')
-    const mention = { id: 'mention-1', personId: 'peer', conversationId: 'lead' }
-    const done: Command = { type: 'mention.done', mentionId: 'mention-1' }
-    expect(f.run(done, peer, { mention }).result).toEqual({ mentionId: 'mention-1' })
-    expect(() => f.run(done, owner, { mention })).toThrow('This mention is unavailable.')
-    expect(() => f.run(done, peer)).toThrow('This mention is unavailable.')
-    expect(() => f.run(done, as(lead), { mention })).toThrow('This mention is unavailable.')
-  })
 })
 
 describe('credentials in Swarm chat', () => {

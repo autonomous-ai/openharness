@@ -296,7 +296,7 @@ export interface AgentStart {
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
  * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
 export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
-/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts); catchUp.ts reads it back. */
+/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts). */
 export const STATUS_LABELS = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done',
   stopped: 'Stopped' } as const satisfies Partial<Record<WorkStatus, string>>
 export interface Check {
@@ -760,8 +760,6 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
-  /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
-  holdMentions?: true
   /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
    *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
   post?: true

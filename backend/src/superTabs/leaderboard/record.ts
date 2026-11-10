@@ -105,22 +105,18 @@ export function waitedOn(state: SuperTabState, group: Conversation): string {
   return requester ?? groupProject(state, group).ownerId
 }
 
-/** What a person's post can answer besides waiting work: the message it replies to, and the tags waiting on the poster in
- *  this conversation (mentions.ts), both read by the store. */
-export interface PostContext { replyTo: string | null; text: string; reply?: { id: string; author: Author; createdAt: number }
-  openTags?: Array<{ messageId: string; createdAt: number }> }
+/** What a person's post can answer besides waiting work: the message it replies to, read by the store. */
+export interface PostContext { replyTo: string | null; text: string; reply?: { id: string; author: Author; createdAt: number } }
 
-/** A person's post earns one credit at most, for the first it answers of: the work waiting on them, the Lead's ask it approves,
- *  the oldest tag waiting on them here (Lead's rulings, 2026-10-28). Private chats never count. */
+/** A person's post earns one credit at most, for the first it answers of: the work waiting on them, the Lead's ask it approves
+ *  (Lead's rulings, 2026-10-28; tags waiting on them earned too until Swarm v4 removed them, 2026-11-10). Private chats never count. */
 export function recordPost(state: SuperTabState, group: Conversation, actor: Actor, post: PostContext, now: number): void {
   if (actor.kind !== 'person' || group.audience || isLeads(group)) return
   if (recordAnswer(state, group, actor.userId, post.replyTo, now)) return
   const reply = post.reply
   if (reply && reply.author.kind === 'agent' && approves(post.text) && ledProject(state, reply.author.id)?.id === groupProject(state, group).id) {
-    if (credit(group, { personId: actor.userId, at: now, waitedMs: now - reply.createdAt, kind: 'approval', item: reply.id })) return
+    credit(group, { personId: actor.userId, at: now, waitedMs: now - reply.createdAt, kind: 'approval', item: reply.id })
   }
-  const oldest = [...post.openTags ?? []].sort((a, b) => a.createdAt - b.createdAt)[0]
-  if (oldest) credit(group, { personId: actor.userId, at: now, waitedMs: now - oldest.createdAt, kind: 'tag_reply', item: oldest.messageId })
 }
 
 /** A reply that starts with GO, approve(d) or duyệt, in any case, with or without accents; a bare "ok" is too ambiguous

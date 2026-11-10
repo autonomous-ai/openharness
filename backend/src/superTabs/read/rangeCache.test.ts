@@ -65,15 +65,15 @@ describe('the range cache', () => {
 })
 
 describe('a range\'s key', () => {
-  const base = { tabId: 't', conversationId: 'c', thread: 'r', sequence: { $gt: 5, $lte: 9 }, limit: 101, version: 2 }
-  const key = (over: Partial<typeof base> & { namedBy?: string; fields?: string } = {}) => {
+  const base = { tabId: 't', conversationId: 'c', sequence: { $gt: 5, $lte: 9 }, limit: 101, version: 2 }
+  const key = (over: Partial<typeof base> = {}) => {
     const k = { ...base, ...over }
-    return rangeKey(k.tabId, k.conversationId, k.thread, k.sequence, k.limit, k.version, k.fields ?? 'scan', k.namedBy)
+    return rangeKey(k.tabId, k.conversationId, k.sequence, k.limit, k.version)
   }
 
   it('differs whenever anything that decides the range\'s rows differs', () => {
-    const keys = [key(), key({ tabId: 'u' }), key({ conversationId: 'd' }), key({ thread: 's' }), key({ sequence: { $gt: 5, $lte: 10 } }),
-      key({ sequence: { $gt: 6, $lte: 9 } }), key({ limit: 100 }), key({ version: 3 }), key({ namedBy: 'p' }), key({ fields: 'preview' })]
+    const keys = [key(), key({ tabId: 'u' }), key({ conversationId: 'd' }), key({ sequence: { $gt: 5, $lte: 10 } }),
+      key({ sequence: { $gt: 6, $lte: 9 } }), key({ limit: 100 }), key({ version: 3 })]
     expect(new Set(keys).size).toBe(keys.length)
   })
 

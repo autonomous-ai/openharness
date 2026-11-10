@@ -14,6 +14,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { NOT_AVAILABLE, superTabRoutes } from '../src/routes/superTabs.js'
+import { RETIRED_READS, RETIRED_WRITES } from '../src/superTabs/retired.js'
 
 // The person routes through the real store and read service (Huy, 10-30, the follow-up of #2306): a Swarm, chat, project,
 // decision, file or link the caller cannot reach gets one answer, whether it is missing, refused, revoked or in another
@@ -86,14 +87,8 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts`),
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/changes', `${t}/changes?cursor=abc`),
-    json('GET', 'GET /api/super-tabs/:tabId/activity', `${t}/activity`),
-    json('POST', 'POST /api/super-tabs/:tabId/activity/read', `${t}/activity/read`, { through: '2026-11-01T00:00:00.000Z' }),
-    json('GET', 'GET /api/super-tabs/:tabId/reminders', `${t}/reminders`),
-    json('GET', 'GET /api/super-tabs/:tabId/inbox', `${t}/inbox`),
-    json('GET', 'GET /api/super-tabs/:tabId/threads', `${t}/threads`),
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
       { operationId: op(), command: { type: 'message.send', conversationId: chat, text: 'hello', replyTo: null, recipientIds: [] } }),
-    json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/shipping', `${t}/shipping`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
@@ -108,17 +103,12 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/join', `${t}/join`, { operationId: op(), token: 'a'.repeat(43) }),
     json('POST', 'POST /api/super-tabs/:tabId/join/preview', `${t}/join/preview`, { token: 'a'.repeat(43) }),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', `${t}/conversations/${chat}/messages`),
-    json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up', `${t}/conversations/${chat}/catch-up?after=0`),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
       `${t}/conversations/${chat}/messages/${MISSING}/attachments/${MISSING}`),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/read', `${t}/conversations/${chat}/read`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/unread', `${t}/conversations/${chat}/unread`, { sequence: 1 }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read', `${t}/conversations/${chat}/threads/${MISSING}/read`, { sequence: 1 }),
-    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', `${t}/conversations/${chat}/messages/${MISSING}/reminder`,
-      { at: new Date(Date.now() + 60 * 60_000).toISOString() }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/notifications', `${t}/conversations/${chat}/notifications`, { notify: 'all' }),
-    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow', `${t}/conversations/${chat}/threads/${MISSING}/follow`,
-      { follow: true }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions', `${t}/projects/${project}/instructions`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
@@ -171,10 +161,13 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, the retired scorecard and decisions reads answer none, the retired
-    // terminal recording answers ok and ignored and the retired picture upload refuses in words, each without reading a Swarm: they are
-    // tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
-    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard', 'GET /api/super-tabs/:tabId/decisions', 'POST /api/super-tabs/:tabId/native',
+    // The retired full-state read always asks every client to update, the retired reads and their writes answer none (retired.ts), the
+    // retired terminal recording answers ok and ignored and the retired picture upload refuses in words, each without reading a Swarm:
+    // they are tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
+    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', ...Object.keys(RETIRED_READS).map(url => `GET ${url}`),
+      ...Object.keys(RETIRED_WRITES).map(url => `POST ${url}`), 'POST /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
+      'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+      'POST /api/super-tabs/:tabId/native',
       'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/avatars'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
@@ -252,14 +245,27 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     }
   })
 
-  // Decisions are gone with Swarm v4: an older Desktop, phone or host still reads its list, and gets none, whoever asks and whatever
-  // Swarm it names, even a missing one, so the answer says nothing of any of them.
-  it('answers the retired decisions read with none, alike to everyone, naming nothing of the Swarm', async () => {
+  // Decisions, tags, Activity, reminders, followed threads, the inbox and catch-up are gone with Swarm v4: an older Desktop, phone or
+  // host still reads and marks them, and gets the same answer whoever asks and whatever Swarm it names, even a missing one, so the
+  // answer says nothing of any of them.
+  it('answers the retired reads and writes alike to everyone, naming nothing of the Swarm', async () => {
     const f = await swarm()
+    const url = (path: string, tab: string) => path.replace(':tabId', tab).replace(':conversationId', 'lead').replace(':threadId', MISSING).replace(':messageId', MISSING)
     for (const as of [owner, member, outsider, removed]) {
       for (const tab of [f.tab, MISSING]) {
-        const res = await app.inject({ url: `/api/super-tabs/${tab}/decisions?state=open`, headers: { 'x-user': as.sub } })
-        expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { more: false, decisions: [] } }) })
+        for (const [path, data] of Object.entries(RETIRED_READS)) {
+          const res = await app.inject({ url: url(path, tab), headers: { 'x-user': as.sub } })
+          expect({ status: res.statusCode, body: res.body }, `${as.email} ${path}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data }) })
+        }
+        for (const [path, data] of Object.entries(RETIRED_WRITES)) {
+          const res = await app.inject({ method: 'POST', url: url(path, tab), headers: { 'x-user': as.sub }, payload: {} })
+          expect({ status: res.statusCode, body: res.body }, `${as.email} ${path}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data }) })
+        }
+        const caughtUp = await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/catch-up?after=7`, headers: { 'x-user': as.sub } })
+        expect(caughtUp.json().data).toMatchObject({ after: 7, through: 7, unread: 0 })
+        const reminder = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/conversations/lead/messages/${MISSING}/reminder`,
+          headers: { 'x-user': as.sub }, payload: { at: new Date(Date.now() + 60_000).toISOString() } })
+        expect({ status: reminder.statusCode, code: reminder.json().error.code }).toEqual({ status: 410, code: 'REMINDERS_RETIRED' })
       }
     }
   })

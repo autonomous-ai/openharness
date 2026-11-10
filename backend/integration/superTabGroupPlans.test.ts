@@ -258,19 +258,6 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectOnlyReturned(reads)
   })
 
-  it('the mentions panel reads a tagged quiet conversation by id, never every quiet conversation', async () => {
-    const tagged = s.quietLead[3]!.key
-    await db.superTabMention.create({ data: { id: `${s.tabId}-tag`, tabId: s.tabId, personId: owner.sub, projectId: 'lead', conversationId: tagged,
-      messageId: `${s.tabId}-tagged`, authorAgentId: s.lead, createdAt: new Date(Date.now() - 60_000) } })
-    let listed: Array<{ conversationId: string }> = []
-    const reads = await profiled(async () => { listed = (await store.mentions(owner, s.tabId, 'waiting')).mentions })
-    expect(listed.map(m => m.conversationId)).toEqual([tagged])
-    expectIndexed(reads)
-    expectOnlyReturned(reads)
-    // The open conversations and the tagged one, at most: never the Swarm's QUIET_LEAD + QUIET_OTHER quiet ones.
-    expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(s.active.length + 1)
-  })
-
   // Folded from #1964: a later page started at no bound, so each page read every newer quiet conversation again.
   it('a Buddy rename or add reads the names chosen in the Swarm\'s Buddy chats by key, quiet ones included, and nothing else (review of #2094)', async () => {
     const state = parts.reassemble(await db.$transaction(tx => parts.loadActive(tx, s.tabId)))

@@ -1,7 +1,6 @@
 /**
- * What two per-request reads cost (task #2674, Ken's prod scan of 2026-11-04 12:00 VN): the leaderboard and the mentions
- * list. Each answers exactly what a read straight from Mongo answers (a store without the read cache), and
- * reads only what changed since its Swarm's last stamp.
+ * What a per-request read costs (task #2674, Ken's prod scan of 2026-11-04 12:00 VN): the leaderboard. It answers exactly what a
+ * read straight from Mongo answers (a store without the read cache), and reads only what changed since its Swarm's last stamp.
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -14,12 +13,12 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
-import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
+import { type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
-import { filterOf, planDatabase, profiled } from './plans.test-support.js'
+import { planDatabase } from './plans.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
 
 let replica: MongoMemoryReplSet
@@ -71,31 +70,7 @@ async function scene() {
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 50 })
   const report = await migrateSwarm(db, tabId, { now: () => NOW - 60_000 })
   if (!report.ok) throw new Error(report.error)
-  const agent: Author = { kind: 'agent', id: worker, name: 'Worker', membershipGeneration: 'fixture' }
-  const root = await say(tabId, waiting, agent, [owner])
-  await say(tabId, waiting, agent, [owner], root)
-  await say(tabId, fresh, agent, [owner])
   return { tabId, lead, worker, fresh, old, lastWeek, waiting }
-}
-
-/** Stores a message tagging `tags` as the store stores one (numbered after the chat's newest), with its tags; answers its id. */
-async function say(tabId: string, conversationId: string, author: Author, tags: AuthUser[], thread?: string) {
-  const id = `m-${randomUUID()}`
-  await swarmTransaction(db, async tx => {
-    const current = (await parts.loadActive(tx, tabId, { groupIds: [conversationId] })).groups.find(g => g.key === conversationId)!
-    const data = structuredClone(current.data!) as Conversation
-    const sequence = (data.messageSeq ?? 0) + 1
-    data.messageSeq = data.lastMessageSequence = sequence
-    if (!thread) data.lastMainSequence = sequence
-    await tx.superTabMessage.create({ data: { id, tabId, conversationId, sequence, author: author as never, text: `Please look ${sequence}.`,
-      thread: thread ?? id, recipientIds: [], mentions: tags.map(t => t.sub), createdAt: new Date(NOW - sequence * 60_000) } })
-    await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: conversationId, seen: current.version, data }, Date.now())
-    for (const tagged of tags) {
-      await tx.superTabMention.create({ data: { id: stableId(tabId, id, tagged.sub), tabId, personId: tagged.sub, projectId: 'lead', conversationId,
-        messageId: id, authorAgentId: author.id, createdAt: new Date(NOW - sequence * 60_000), resolvedAt: null, resolvedBy: null } })
-    }
-  })
-  return id
 }
 
 /** Changes one conversation's stored data as a command would, in a transaction that moves the Swarm's stamp. */
@@ -140,23 +115,5 @@ describe('the leaderboard (GET /leaderboard)', () => {
       await guardedWrite(tx, s.tabId, { op: 'remove', kind: 'group', key: s.lastWeek, seen: row!.version, data: row!.data }, Date.now())
     })
     await same('a quiet one was removed')
-  })
-})
-
-describe('the mentions list (GET /mentions)', () => {
-  it('reads the tagged messages by one plain $in on their ids, through the id index, and answers as before', async () => {
-    const s = await scene()
-    const expected = await direct.mentions(owner, s.tabId, 'waiting')
-    expect(expected.mentions).toHaveLength(3)
-    let answer: Awaited<ReturnType<SuperTabStore['mentions']>> | undefined
-    const entries = await profiled(db, async () => { answer = await cached.mentions(owner, s.tabId, 'waiting') })
-    expect(answer).toEqual(expected)
-    // The tagged messages' read: Prisma's `id: { in }` went as an `$expr` OR of one branch per id (slow planning on prod).
-    const byId = entries.filter(e => e.ns.endsWith('.SuperTabMessage') && JSON.stringify(filterOf(e)).includes(expected.mentions[0]!.messageId))
-    expect(byId).toHaveLength(1)
-    const filter = JSON.stringify(filterOf(byId[0]!))
-    expect(filter).not.toMatch(/\$expr|\$or/)
-    expect(filter).toMatch(/"_id":\{"\$in":/)
-    expect(byId[0]!.planSummary).toMatch(/^IXSCAN/)
   })
 })

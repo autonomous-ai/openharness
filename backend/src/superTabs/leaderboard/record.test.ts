@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
-import { LEDGER_WEEKS, MAX_UNBLOCKS } from './record.js'
+import { MAX_UNBLOCKS } from './record.js'
 import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -109,7 +109,7 @@ describe('who asked for a group', () => {
   })
 })
 
-describe('how a person unblocks work: approvals and tags', () => {
+describe('how a person unblocks work: approvals', () => {
   const HOUR = 3_600_000
   /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
   const leadAsk = (f: ReturnType<typeof fixture>, askedAt = HOUR) => {
@@ -118,8 +118,8 @@ describe('how a person unblocks work: approvals and tags', () => {
     const asked = f.say('lead', f.asAgent(lead), 'Plan: three steps. Reply GO to start.').messages[0]!
     return { lead, reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: askedAt } }
   }
-  const tagged = (f: ReturnType<typeof fixture>, id: string, text: string, openTags: CommandContext['openTags']) =>
-    f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] }, owner, { openTags })
+  const posted = (f: ReturnType<typeof fixture>, id: string, text: string) =>
+    f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] }, owner)
 
   for (const word of ['GO', 'go ahead', 'Approve', 'approved, thanks', 'Duyệt', 'duyet nhe', 'DUYỆT nhé', '  Go!']) {
     it(`counts "${word}" in reply to the Lead's ask as an approval, with how long the ask waited`, () => {
@@ -155,41 +155,23 @@ describe('how a person unblocks work: approvals and tags', () => {
     expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
   })
 
-  it('credits a reply to the tags waiting on the person once, timed from the oldest', () => {
-    const f = fixture(), id = f.create()
-    f.at(5 * HOUR)
-    tagged(f, id, 'Here you go.', [{ messageId: 'tag-new', createdAt: 3 * HOUR }, { messageId: 'tag-old', createdAt: HOUR }])
-    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 5 * HOUR, waitedMs: 4 * HOUR, kind: 'tag_reply', item: 'tag-old' }])
-    tagged(f, id, 'And again.', [{ messageId: 'tag-old', createdAt: HOUR }])
-    expect(f.group(id).ledger?.unblocks).toHaveLength(1)
-  })
-
-  it(`keeps only the last ${LEDGER_WEEKS} weeks of credits, so a group part stays small`, () => {
-    const f = fixture(), id = f.create()
-    const week = 7 * 86_400_000
-    for (const at of [0, 4 * week, 6 * week]) {
-      f.at(at + 2_000)
-      tagged(f, id, 'Here.', [{ messageId: `tag-${at}`, createdAt: at + 1_000 }])
-    }
-    expect(f.group(id).ledger?.unblocks?.map(u => u.at)).toEqual([4 * week + 2_000, 6 * week + 2_000])
-  })
-
   it('never credits a private conversation', () => {
     const f = fixture()
     const chat = f.buddyChat()
-    tagged(f, chat, 'Hi.', [{ messageId: 'tag', createdAt: 0 }])
+    posted(f, chat, 'GO')
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
 
   it(`keeps at most ${MAX_UNBLOCKS} credits on one conversation, the newest`, () => {
-    const f = fixture(), id = f.create()
+    const f = fixture(), { lead } = leadAsk(f)
     for (let i = 0; i <= MAX_UNBLOCKS; i++) {
-      f.at(10_000 + i)
-      tagged(f, id, `Reply ${i}`, [{ messageId: `tag-${i}`, createdAt: 0 }])
+      f.at(10_000 + 2 * i)
+      const ask = f.say('lead', f.asAgent(lead), `Plan ${i}. Reply GO.`).messages[0]!
+      f.say('lead', owner, 'GO', ask.id, { id: ask.id, conversationId: 'lead', author: ask.author, createdAt: 10_000 + 2 * i })
     }
-    const kept = f.group(id).ledger!.unblocks!
+    const kept = f.group('lead').ledger!.unblocks!
     expect(kept).toHaveLength(MAX_UNBLOCKS)
-    expect(kept[0]!.item).toBe('tag-1')
+    expect(kept.every(u => u.kind === 'approval')).toBe(true)
   })
 })
 

@@ -1148,8 +1148,9 @@ model SuperTabMessage {
   @@index([tabId, conversationId, thread, sequence])
 }
 
-/// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
-/// Kept out of the tab state so an older backend still reads it; removed 30 days after createdAt by a TTL index.
+/// A tag of a person, waiting until they replied there or marked it done, of Swarm v1-v3. Swarm v4 keeps no tag list (anh Dee,
+/// 2026-11-10): nothing writes or reads a row since. Removed 30 days after createdAt by a TTL index (superTabs/mentions.ts), so
+/// the last is gone by 2026-12-10; the model and its index go then.
 model SuperTabMention {
   id             String    @id @map("_id")
   tabId          String
@@ -1190,7 +1191,9 @@ model SuperTabReaction {
 /// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
 /// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
 /// derived from all three, so one row per person and conversation; it only ever moves forward.
-/// A person's Activity row (superTabs/activity.ts): a reply to their message or a reaction to it, for them alone.
+/// A person's Activity row of Swarm v1-v3: a reply to their message or a reaction to it, for them alone. Swarm v4 has no Activity
+/// (anh Dee, 2026-11-10): nothing writes or reads a row since. The worker's hourly sweep deletes each 30 days after it was written
+/// (superTabs/retiredRows.ts), and a Swarm's purge its rows; the last is gone by 2026-12-10, and the model goes then.
 model SuperTabActivity {
   id             String    @id @map("_id")
   tabId          String
@@ -1226,7 +1229,7 @@ model SuperTabActivity {
   /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
   /// index above it examined every row of 30 days to find the unread (task #3146).
   @@index([tabId, personId, readAt, createdAt])
-  /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
+  /// The sweep's rows past their expiry (retiredRows.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
   @@index([createdAt])
 }
 /// A person's notification setting for one chat (superTabs/chatSettings.ts): all | mentions | muted. Their own, never shown to others.
@@ -1261,10 +1264,9 @@ model SuperTabReadMark {
   @@index([updatedAt], map: "read_mark_expiry")
 }
 
-/// A person's reminder of one message (superTabs/reminders.ts): bring it back to them at `dueAt`, in Activity's Reminders. Their
-/// own, never shown to others. One row per person and message: setting it again replaces its time, and opening it deletes it.
-/// At most REMINDER_CAP pending per person and Swarm; the worker's hourly sweep deletes those due more than REMINDER_EXPIRY_MS
-/// (30 days) ago, and a Swarm's purge its rows.
+/// A person's reminder of one message, of Swarm v1-v3. Swarm v4 has no reminders (anh Dee, 2026-11-10): nothing writes or reads
+/// a row since. The worker's hourly sweep deletes each 30 days after it was due (superTabs/retiredRows.ts), and a Swarm's purge
+/// its rows; the last is gone by 2027-01-09, and the model goes then.
 model SuperTabReminder {
   /// stableId(tabId, personId, messageId).
   id             String   @id @map("_id")
@@ -1277,7 +1279,7 @@ model SuperTabReminder {
 
   /// A person's reminders: the due list, the next one after now, the digest and the cap's count (parts/indexed.ts NAMED_INDEX).
   @@index([tabId, personId, dueAt])
-  /// The sweep's reminders due more than 30 days ago (reminders.ts sweepReminders); no TTL option, which the app user cannot set.
+  /// The sweep's reminders due more than 30 days ago (retiredRows.ts sweepReminders); no TTL option, which the app user cannot set.
   @@index([dueAt])
 }
 

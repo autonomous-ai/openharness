@@ -18,7 +18,6 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { recordPulse } from '../src/superTabs/pulse.js'
-import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -128,60 +127,6 @@ async function writeGroup(tabId: string, key: string, at: number, change: (group
 }
 
 describe('first load (design 4.3)', () => {
-  it('counts waiting tags from quiet groups without fetching unrelated group payloads', async () => {
-    const quiet: string[] = []
-    const s = await scene(state => {
-      for (let i = 0; i < 21; i++) {
-        const id = state.group(`Quiet ${i}`)
-        state.edit(current => {
-          const group = current.conversations.find(each => each.id === id)!
-          group.dormant = true
-          group.brief = 'unused task detail '.repeat(220)
-        })
-        quiet.push(id)
-      }
-      return quiet
-    })
-    await db.superTabMention.createMany({ data: quiet.map((conversationId, i) => ({
-      id: `${s.tabId}-quiet-tag-${i}`, tabId: s.tabId, personId: peer.sub, projectId: 'lead', conversationId,
-      messageId: `${s.tabId}-quiet-message-${i}`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null,
-    })) })
-
-    const { state } = await new SuperTabStore(db, () => NOW).read(peer, s.tabId)
-    const stateWithoutQuietGroups = { ...state, conversations: state.conversations.filter(group => !quiet.includes(group.id)) }
-    const match = { tabId: s.tabId, deleted: false, key: { $in: quiet } }
-    const fullPipeline = [{ $match: match }, { $project: { _id: 0, key: 1, data: 1 } }]
-    await db.$runCommandRaw({ profile: 2 })
-    try {
-      await db.swarmGroup.aggregateRaw({ pipeline: fullPipeline, options: { batchSize: 200, hint: { tabId: 1, key: 1 } } })
-      const count = await waitingMentions(db as never, s.tabId, stateWithoutQuietGroups, { kind: 'person', userId: peer.sub, email: peer.email }, NOW)
-      expect(count.count).toBe(quiet.length)
-    } finally { await db.$runCommandRaw({ profile: 0 }) }
-
-    const profile = await db.$runCommandRaw({ find: 'system.profile', filter: { ns: { $regex: '\\.SwarmGroup$' } },
-      projection: { _id: 0, command: 1, responseLength: 1, nreturned: 1, docsExamined: 1, planSummary: 1 }, batchSize: 10_000 }) as unknown as
-      { cursor: { firstBatch: Array<{ command?: { pipeline?: Array<Record<string, any>>; hint?: Record<string, number> }; responseLength?: number;
-        nreturned?: number; docsExamined?: number; planSummary?: string }> } }
-    const rows = profile.cursor.firstBatch.filter(row => row.command?.pipeline?.some(stage =>
-      (stage.$match as { key?: { $in?: string[] } } | undefined)?.key?.$in?.includes(quiet[0]!)))
-    expect(rows).toHaveLength(2)
-    const baseline = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: unknown } | undefined)?.data === 1))!
-    const projected = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: { kind?: number } } | undefined)?.data?.kind === 1))!
-    expect(baseline.nreturned).toBe(quiet.length)
-    expect(projected.nreturned).toBe(quiet.length)
-    expect(baseline.planSummary).toMatch(/IXSCAN/)
-    expect(projected.planSummary).toMatch(/IXSCAN/)
-    expect(baseline.docsExamined).toBeLessThanOrEqual(baseline.nreturned!)
-    expect(projected.docsExamined).toBeLessThanOrEqual(projected.nreturned!)
-    expect(projected.responseLength, `full=${baseline.responseLength} bytes; projected=${projected.responseLength} bytes for ${projected.nreturned} groups`)
-      .toBeLessThan(baseline.responseLength! / 10)
-    for (const pipeline of [fullPipeline, projected.command!.pipeline!]) {
-      const explain = await db.$runCommandRaw({ explain: { aggregate: 'SwarmGroup', pipeline, cursor: {}, hint: { tabId: 1, key: 1 } },
-        verbosity: 'executionStats' }) as unknown as { executionStats: { totalDocsExamined: number; nReturned: number; executionStages: unknown } }
-      expect(JSON.stringify(explain.executionStats.executionStages)).toContain('IXSCAN')
-      expect(explain.executionStats.totalDocsExamined).toBeLessThanOrEqual(explain.executionStats.nReturned)
-    }
-  })
 
   it('pages the person\'s Tasks feed by its cursor, and refuses a cursor it never gave (task #4203)', async () => {
     const s = await scene()
@@ -206,7 +151,8 @@ describe('first load (design 4.3)', () => {
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])
     expect(keys(body.data.groups)).toEqual(['lead', s.web, s.buddyId])
-    expect(body.data.derived).toMatchObject({ agents: { [s.lead]: { downSince: null }, [s.worker]: { workDecision: null } }, mentionsWaiting: 0 })
+    expect(body.data.derived).toMatchObject({ agents: { [s.lead]: { downSince: null }, [s.worker]: { workDecision: null } } })
+    expect(body.data.derived).not.toHaveProperty('mentionsWaiting')
   })
 
   it('keeps a Buddy chat and the private project from every reader outside them, the PM included, and a closed Chat with PM from all', async () => {
@@ -311,13 +257,10 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
       await guardedWrite(tx, tabId, { op: 'update', kind: 'agent', key: agentId, seen: agent.version, data }, MIGRATED + 1)
     })
   }
-  const mention = (tabId: string, conversationId: string, personId: string) => db.superTabMention.create({ data: { id: `${tabId}-${conversationId}-m`,
-    tabId, conversationId, messageId: `${tabId}-msg`, personId, projectId: 'lead', authorAgentId: 'lead-agent', createdAt: new Date() } })
 
   it('derives the same decisions from a change read as from a first load after a task was lost, then cancelled', async () => {
     const s = await scene((f, ids) => f.edit(state => lostThenCancelled(state, ids.web, state.agents.find(a => a.name === 'worker-harness')!.id)))
     await noDecision(s.tabId, s.worker)
-    await mention(s.tabId, s.web, peer.sub)
     const { full, light } = await derivedBoth(s.tabId, peer)
     expect(full.agents[s.worker].workDecision).toBeNull()
     expect(light).toEqual(full)
@@ -778,72 +721,6 @@ describe('a real command through the store by parts (design 4.7)', () => {
   })
 })
 
-describe('tags waiting for one person', () => {
-  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser = owner, asAgentId?: string) => {
-    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
-      payload: { operationId: randomUUID(), command, ...(asAgentId ? { asAgentId } : {}) } })
-    return { status: response.statusCode, body: response.json() as { data: { result: Record<string, unknown> }; error?: { code: string } } }
-  }
-  it('marks which tags wait, so an answer and a new tag read again though the count stays, an unrelated post not', async () => {
-    const s = await scene()
-    clock = Date.now()
-    const tag = async (conversationId: string) => expect((await post(s.tabId, { type: 'message.send', conversationId, text: 'Please look.', replyTo: null,
-      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)).status).toBe(200)
-    const derived = async (as: AuthUser = peer) => (await get(`/api/super-tabs/${s.tabId}/parts`, as)).body.data
-    await tag(s.web)
-    const before = await derived()
-    expect(before.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: expect.any(String) })
-    const [mention] = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ id: string }>
-    expect(before.derived.mentionsDigest).not.toContain(mention!.id)
-    // Someone else's post changes the Swarm and no tag.
-    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Unrelated.', replyTo: null, recipientIds: [] })).status).toBe(200)
-    const changes = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.cursor}`, peer)).body.data
-    expect(changes.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.derived.mentionsDigest })
-    // Answered by the person's reply, and tagged in another conversation: still one waiting, another one.
-    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
-    await tag('lead')
-    const replaced = (await derived()).derived
-    expect(replaced.mentionsWaiting).toBe(1)
-    expect(replaced.mentionsDigest).not.toBe(before.derived.mentionsDigest)
-    // 30 days on it expires; with none left it is the same as for anyone with none.
-    clock = Date.now() + 30 * DAY + 1000
-    const expired = (await derived()).derived
-    expect(expired.mentionsWaiting).toBe(0)
-    expect(expired.mentionsDigest).not.toBe(replaced.mentionsDigest)
-    expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
-  })
-
-  it('keeps quiet conversation titles in waiting and earlier tag lists', async () => {
-    const s = await scene()
-    const tag = await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Please look.', replyTo: null,
-      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)
-    expect(tag.status).toBe(200)
-    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
-
-    const waiting = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
-    expect(waiting.map(row => row.conversationTitle)).toContain('Web')
-
-    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
-    const earlier = (await get(`/api/super-tabs/${s.tabId}/mentions?state=earlier`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
-    expect(earlier.map(row => row.conversationTitle)).toContain('Web')
-  })
-
-  it('reads waiting tags once in a changes poll while keeping its count and digest', async () => {
-    const s = await scene()
-    clock = NOW
-    await db.superTabMention.create({ data: { id: `${s.tabId}-quiet-tag`, tabId: s.tabId, personId: peer.sub, projectId: 'lead',
-      conversationId: s.done, messageId: `${s.tabId}-quiet-message`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null } })
-    const before = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
-    expect(before.body.data.derived).toMatchObject({ mentionsWaiting: 1 })
-
-    const measured = await profiledReads(db, /\.SuperTabMention$/, () => get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.body.data.cursor}`, peer))
-    expect(measured.value.status).toBe(200)
-    expect(measured.value.body.data.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.body.data.derived.mentionsDigest })
-    expect(measured.reads).toBe(1)
-  })
-
-})
-
 // Swarm v4 has no decisions (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat. An older agent's ask is taken
 // and ignored, and a person's read derives nothing of decisions and reads no decision row.
 describe('no decisions in Swarm v4', () => {
@@ -880,11 +757,14 @@ describe('the summary only when it changed (derivedEtag)', () => {
   const read = async (url: string, as: AuthUser) => { clock = Date.now(); return (await get(url, as)).body.data }
   const poll = (tabId: string, cursor: string, as: AuthUser, etag?: string) =>
     read(`/api/super-tabs/${tabId}/changes?cursor=${cursor}${etag ? `&derivedEtag=${etag}` : ''}`, as)
-  /** A tag of peer still waiting, written as a row: a command would leave its notices and wakes running into the next tests,
-   *  whose database-byte counts (group 3b) then count them. */
-  const ask = async (tabId: string, conversationId: string, lead: string) => {
-    await db.superTabMention.create({ data: { id: `etag-${randomUUID()}`, tabId, personId: peer.sub, projectId: 'lead', conversationId,
-      messageId: `etag-message-${randomUUID()}`, authorAgentId: lead, createdAt: new Date(), resolvedAt: null, resolvedBy: null } })
+  /** The agent marked down, written to its part as a reading would: a command would leave its notices and wakes running into the
+   *  next tests, whose database-byte counts (group 3b) then count them. */
+  const down = async (tabId: string, agentId: string) => {
+    await swarmTransaction(db, async tx => {
+      const agent = (await parts.loadActive(tx, tabId)).agents.find(a => a.key === agentId)!
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'agent', key: agentId, seen: agent.version,
+        data: { ...agent.data!, downSince: new Date().toISOString() } }, Date.now())
+    })
   }
 
   it('stamps a first load and a change read alike, and an echoed etag gets no summary', async () => {
@@ -910,14 +790,14 @@ describe('the summary only when it changed (derivedEtag)', () => {
   it('a summary change after an unchanged poll sends it whole, with a new etag', async () => {
     const s = await scene()
     const first = await read(`/api/super-tabs/${s.tabId}/parts`, peer)
-    expect(first.derived.mentionsWaiting).toBe(0)
+    expect(first.derived.agents[s.lead].downSince).toBeNull()
     const quiet = await poll(s.tabId, first.cursor, peer, first.derivedEtag)
     expect(quiet.derivedUnchanged).toBe(true)
-    await ask(s.tabId, s.web, s.lead)
+    await down(s.tabId, s.lead)
     const moved = await poll(s.tabId, quiet.cursor, peer, quiet.derivedEtag)
     expect(moved.derivedUnchanged).toBeUndefined()
     expect(moved.derivedEtag).not.toBe(first.derivedEtag)
-    expect(moved.derived).toMatchObject({ mentionsWaiting: 1, agents: first.derived.agents })
+    expect(moved.derived.agents[s.lead].downSince).toEqual(expect.any(String))
     expect((await poll(s.tabId, moved.cursor, peer, moved.derivedEtag)).derivedUnchanged).toBe(true)
   })
 
@@ -932,12 +812,11 @@ describe('the summary only when it changed (derivedEtag)', () => {
 
   it('an etag is the reader\'s own: another reader\'s summary never matches it', async () => {
     const s = await scene()
-    await ask(s.tabId, s.web, s.lead)
     const [mine, theirs] = [await read(`/api/super-tabs/${s.tabId}/parts`, peer), await read(`/api/super-tabs/${s.tabId}/parts`, owner)]
     expect(mine.derivedEtag).not.toBe(theirs.derivedEtag)
     const reply = await poll(s.tabId, mine.cursor, peer, theirs.derivedEtag)
     expect(reply.derivedUnchanged).toBeUndefined()
-    expect(reply.derived).toMatchObject({ mentionsWaiting: 1 })
+    expect(reply.derived).toEqual(mine.derived)
   })
 })
 
@@ -1386,9 +1265,6 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
     /** A reply's derived values without what differs by design: a first load sends every read mark (and avatar link), a
      *  change read only the marks moved since its cursor. */
     const derivedOf = ({ readMarks: _marks, threadMarks: _threads, avatars: _avatars, ...rest }: Record<string, unknown>) => rest
-    const tagged = (tabId: string, conversationId: string, personId: string, resolved = false) => db.superTabMention.create({ data: {
-      id: `${tabId}-${conversationId}-${personId}`, tabId, conversationId, messageId: `${conversationId}-msg`, personId, projectId: 'lead',
-      authorAgentId: 'lead-agent', createdAt: new Date(), ...(resolved ? { resolvedAt: new Date(), resolvedBy: 'reply' } : {}) } })
     /** The agent's part as prod still holds some (6 of 66 live agents, 10-30): no stored project (projects.ts agentProjectId). */
     async function withoutProject(tabId: string, agentId: string) {
       await swarmTransaction(db, async tx => {
@@ -1433,12 +1309,6 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
       for (const key of [more.oldStarts, more.quietSecret]) await writeGroup(tabId, key, Date.now(), g => { g.dormant = true })
       await withoutProject(tabId, more.legacy)
       await withoutDecision(tabId, more.member)
-      // Waiting tags in an active and a quiet conversation; peer's in the private project, which peer cannot read; one answered.
-      await tagged(tabId, s.web, owner.sub)
-      await tagged(tabId, s.done, owner.sub)
-      await tagged(tabId, more.secretTalk, owner.sub, true)
-      await tagged(tabId, s.done, peer.sub)
-      await tagged(tabId, more.secretTalk, peer.sub)
 
       const readers = [['owner', owner, undefined], ['peer', peer, undefined], ['buddy', owner, more.buddy], ['worker', owner, s.worker],
         ['legacy agent', owner, more.legacy]] as const
@@ -1484,28 +1354,11 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         // A quiet conversation is in no first load, so neither its starts nor their harnesses are, the private one's included.
         expect(JSON.stringify(changes), name).not.toMatch(/quiet-secret|changing-harness/)
         expect(changes.progress, name).toEqual(full.progress.filter((p: { key: string }) => p.key === 'lead'))
-        if (name === 'owner') expect(changes.derived.mentionsWaiting).toBe(2)
-        // peer's tag in the private project is not counted, though its conversation was read to tell.
-        if (name === 'peer') expect(changes.derived.mentionsWaiting).toBe(1)
         // Its project is the private one, read from its conversation: only the owner and the agent itself see it.
         expect(Object.keys(changes.derived.agents).includes(more.legacy), name).toBe(name === 'owner' || name === 'legacy agent')
         if (name === 'owner') expect(changes.derived.agents[more.member].workDecision).toBe('awaiting')
         if (name === 'buddy') expect(changes.starts.length + changes.machines.length).toBe(0)
       }
-    })
-
-    it('names only the conversations of a person\'s waiting tags', async () => {
-      const tabId = `tab-${randomUUID()}`
-      clock = Date.now()
-      const tag = (conversationId: string, at: number, resolved = false, personId = owner.sub) => db.superTabMention.create({ data: {
-        id: `${tabId}-${conversationId}-${personId}`, tabId, conversationId, messageId: `${conversationId}-msg`, personId, projectId: 'lead',
-        authorAgentId: 'lead-agent', createdAt: new Date(at), ...(resolved ? { resolvedAt: new Date(at + 1), resolvedBy: 'reply' } : {}) } })
-      await tag('waiting', clock - 60_000)
-      await tag('answered', clock - 60_000, true)
-      await tag('expired', clock - 31 * DAY)
-      await tag('someone-else', clock - 60_000, false, peer.sub)
-      await tag('waiting-too', clock - 1_000)
-      expect(await waitingTagConversations(db, tabId, owner.sub, clock)).toEqual(['waiting-too', 'waiting'])
     })
   })
 })
