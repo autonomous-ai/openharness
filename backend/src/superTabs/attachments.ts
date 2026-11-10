@@ -105,8 +105,12 @@ export interface AttachmentStore {
   /** Removes the object. One that is already gone counts as removed. */
   delete(objectKey: string): Promise<void>
 }
-/** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
-export interface AvatarStore extends AttachmentStore {}
+/** Where avatars are kept. Avatars went in Swarm v4 (S18): `list` serves only the job that removes those still stored
+ *  (migration/avatarRemoval.ts), and goes with it. */
+export interface AvatarStore extends AttachmentStore {
+  /** Up to [max] object keys under [prefix], in the bucket's order: the first that are left. */
+  list(prefix: string, max: number): Promise<string[]>
+}
 /** `avatars`: where avatars are kept and how they are linked (AvatarStore); without it, avatar uploads are refused and presets
  *  still work. `avatarPrefix`: the folder avatar keys start with, and the only one a link is signed for (avatarLinks.ts);
  *  `prefix` when unset. */
@@ -280,6 +284,10 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   async delete(objectKey: string) {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
   }
+  async list(prefix: string, max: number) {
+    const [files] = await (await this.files()).getFiles({ prefix, maxResults: max, autoPaginate: false })
+    return files.map(file => file.name)
+  }
   /** A V4 signed GET, on Cloud Storage's own host. Signed with the service account key when one is set, else through the
    *  cloud's signing API, a network call: fileLinks.ts and avatarLinks.ts reuse each link through its window. */
   async signedUrl(objectKey: string, expiresAt: number) {
@@ -296,10 +304,11 @@ export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
 /** Avatars in the attachments bucket's avatar folder (prod, Ken 2026-10-28 option B1), linked as chat files are: by signed
  *  links, so a removed member's copied link stops opening and nothing breaks once the bucket is no longer public. */
 export class SharedAvatarStore implements AvatarStore {
-  constructor(readonly store: AttachmentStore) {}
+  constructor(readonly store: AttachmentStore & Pick<AvatarStore, 'list'>) {}
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
   signedUrl(objectKey: string, expiresAt: number) { return this.store.signedUrl(objectKey, expiresAt) }
   delete(objectKey: string) { return this.store.delete(objectKey) }
+  list(prefix: string, max: number) { return this.store.list(prefix, max) }
 }
 
 export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
@@ -359,6 +368,7 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
   async head(objectKey: string, bytes: number, signal?: AbortSignal) { signal?.throwIfAborted(); return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
   async read(objectKey: string, signal?: AbortSignal) { signal?.throwIfAborted(); return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
   async delete(objectKey: string) { this.objects.delete(objectKey) }
+  async list(prefix: string, max: number) { return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort().slice(0, max) }
 }
 
 /** Avatars for tests and the local rig: links carry their expiry and an HMAC of it, and `open` honours both as the bucket would. */

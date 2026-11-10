@@ -1140,22 +1140,6 @@ model SuperTabMessage {
   @@index([tabId, conversationId, thread, sequence])
 }
 
-/// One reactor's emoji on one message, written until reactions went (2026-11-09) and read by nothing. A Swarm's purge
-/// (superTabs/purge.ts) removes its rows.
-model SuperTabReaction {
-  id             String   @id @map("_id")
-  tabId          String
-  conversationId String
-  messageId      String
-  /// person | agent
-  actorKind      String
-  actorId        String
-  emoji          String
-  createdAt      DateTime @default(now())
-
-  @@index([tabId, messageId])
-}
-
 /// A person's notification setting for one chat (superTabs/chatSettings.ts): all | mentions | muted. Their own, never shown to others.
 model SuperTabChatSetting {
   id             String   @id @map("_id")
@@ -1214,25 +1198,6 @@ model SuperTabThreadMark {
   @@index([tabId, personId, updatedAt])
   /// The sweep's marks untouched for 180 days (readMarks.ts sweepThreadMarks); no TTL option, which the app user cannot set.
   @@index([updatedAt])
-}
-
-/// A project chat's Buddy proposal roots not yet seen answered (superTabs/proposals.ts), read by the Tasks view's Proposals in place
-/// of a walk of the whole chat (task #2777). Written in the transaction that inserts each root (store.ts writeMessages), and by
-/// a chat's first reads, which seed it from the chat's rows; a row id `seeded:<tabId>:<conversationId>`, sequence -1, marks a
-/// chat seeded. Removed by the read once it finds a root answered or gone, and with its Swarm (purge.ts). Under 10 per project.
-/// A root closed by hand (proposal.close, task #2926) stays, with sequence -2 and `closed` { reason, by, at }, out of every
-/// read, so no seed opens it again: one row per closed proposal (about 50 per project at first), removed with its Swarm.
-model SuperTabOpenProposal {
-  /// The root message's id, or the chat's seed mark.
-  id             String   @id @map("_id")
-  tabId          String
-  conversationId String
-  /// The root's sequence in its chat; -1 for the seed mark.
-  sequence       Int
-  createdAt      DateTime @default(now())
-
-  /// A chat's open roots, newest first (proposals.ts databaseProposalReads listed).
-  @@index([tabId, conversationId, sequence])
 }
 
 /// One thread with at least one reply, summed up as pageThreads' $facet gives it (pageReads.ts refreshThreads): rewritten in the
@@ -1430,110 +1395,6 @@ model SuperTabRun {
   @@index([tabId])
 }
 
-// One routing policy document per account and environment (superTabs/routingPolicy.ts).
-model RoutingPolicy {
-  id            String   @id @map("_id")
-  userId        String
-  autonomousEnv String
-  revision      Int      @default(0)
-  policy        Json
-  updatedAt     DateTime @updatedAt
-
-  @@unique([userId, autonomousEnv])
-}
-
-/// A task's earlier attempt, as work.define and work.assign replaced it. Written no more since those commands went (Swarm v4,
-/// 2026-11-10), read no more since routing went (S8, 2026-11-11). Its rows go with the old collections
-/// (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
-model SuperTabAttempt {
-  id              String   @id @map("_id")
-  tabId           String
-  conversationId  String
-  snapshot        Json
-  createdAt       DateTime @default(now())
-
-  @@index([tabId, conversationId, createdAt])
-}
-
-/// One `harness super-tab route` decision, as v3 routing stored it (trimmed). Written and read no more since routing went (Swarm v4 S8, 2026-11-11); nothing removes its rows now: they go with the
-/// old collections (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
-model SuperTabRouteDecision {
-  id             String    @id @map("_id")
-  tabId          String
-  conversationId String
-  record         Json
-  final          Json?
-  override       Json?
-  assignmentId   String?
-  outcome        String?
-  outcomeAt      DateTime?
-  /// Its attempt's run: what it ran on, how it was paid, its session's token totals at start and end (superTabs/costs/attempts.ts).
-  run            Json?
-  /// What its attempt added to its model's evidence, so a later change adds only the difference (superTabs/evidence/store.ts).
-  evidence       Json?
-  createdAt      DateTime  @default(now())
-
-  @@index([tabId, createdAt])
-  @@index([tabId, conversationId, outcome])
-  @@index([tabId, assignmentId])
-}
-
-/// How one model did on one kind of job in one week of one project of a Swarm: counts and sums only, never a person, an agent or
-/// task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Written and read no more since routing went (Swarm v4 S8, 2026-11-11); nothing removes its rows now: they go with the
-/// old collections (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
-model SuperTabModelEvidence {
-  id                 String   @id @map("_id")
-  tabId              String
-  /// The project of the groups its attempts ran in: the report shows a reader only projects they see.
-  projectId          String
-  engine             String
-  model              String
-  kind               String
-  /// Monday 00:00 UTC of the week its attempts started.
-  week               DateTime
-  attempts           Float    @default(0)
-  firstReviews       Float    @default(0)
-  firstReviewPassed  Float    @default(0)
-  reworkRounds       Float    @default(0)
-  shipped            Float    @default(0)
-  minutesToShipSum   Float    @default(0)
-  minutesToShipCount Float    @default(0)
-  fixesAfterMerge    Float    @default(0)
-  tokensInput        Float    @default(0)
-  tokensOutput       Float    @default(0)
-  tokensCacheRead    Float    @default(0)
-  tokensCacheWrite   Float    @default(0)
-  tokensKnown        Float    @default(0)
-  apiCost            Float    @default(0)
-  costKnown          Float    @default(0)
-  costUnknown        Float    @default(0)
-  spend              Float    @default(0)
-  spendKnown         Float    @default(0)
-  updatedAt          DateTime
-
-  @@index([tabId, week])
-  /// The hourly sweep's prune across every Swarm (superTabs/sweeps.ts).
-  @@index([week])
-}
-
-/// One model's last ten first-review results on one kind of job in one project of a Swarm, oldest first: [{ a: assignment id, at: its start,
-/// passed }]. Written and read no more since routing went (Swarm v4 S8, 2026-11-11); nothing removes its rows now: they go with the
-/// old collections (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
-model SuperTabModelRecent {
-  id        String   @id @map("_id")
-  tabId     String
-  projectId String
-  engine    String
-  model     String
-  kind      String
-  results   Json
-  updatedAt DateTime
-
-  @@index([tabId, updatedAt])
-  /// The hourly sweep's prune across every Swarm (superTabs/sweeps.ts).
-  @@index([updatedAt])
-}
-
 model SuperTabStopReceipt {
   id              String   @id @map("_id")
   tabId           String
@@ -1545,94 +1406,6 @@ model SuperTabStopReceipt {
   createdAt       DateTime @default(now())
 
   @@unique([tabId, assignmentId])
-}
-
-// A custom role's skill text (superTabs/projects.ts ProjectRole), outside the tab snapshot: the snapshot keeps only
-// its version, so tab reads and host rosters stay small. Hosts fetch the text when the version changes.
-model SuperTabRoleText {
-  id        String @id @map("_id")
-  tabId     String
-  projectId String
-  roleId    String
-  version   String
-  text      String
-
-  @@index([tabId, projectId])
-}
-
-// A project's instructions (superTabs/instructions.ts): one Markdown document outside the tab snapshot, as role texts are. The
-// snapshot keeps only the project's revision and hash, so reads stay light; hosts and the Instructions panel read the text
-// when the revision changes. id = stableId(tabId, projectId). Deleted with the project (store.ts project.delete).
-model SuperTabInstructions {
-  id        String   @id @map("_id")
-  tabId     String
-  projectId String
-  revision  Int
-  hash      String
-  text      String
-  updatedAt DateTime
-
-  @@index([tabId, projectId])
-}
-
-// Every save of a project's instructions, the current one included: its last 50 (instructions.ts MAX_REVISIONS); the save
-// that writes the 51st deletes the oldest. `writtenBy` is a person's or the coordinator's id (`writtenByKind`), `askedBy` the
-// member whose words it carries. `dropped`: the lines that save dropped, each with its kind and who gave it, for the History
-// (superTabs/ruleGuard.ts droppedLines): at most 500 of 400 characters, removed with its revision. id = stableId(tabId,
-// projectId, revision).
-model SuperTabInstructionsRevision {
-  id            String   @id @map("_id")
-  tabId         String
-  projectId     String
-  revision      Int
-  hash          String
-  text          String
-  summary       String
-  writtenByKind String
-  writtenBy     String
-  askedBy       String?
-  at            DateTime
-  dropped       Json?
-
-  @@index([tabId, projectId, revision])
-}
-
-// A project's v3 rules record, one row per saved revision. Written and read no more since rules.set went (Swarm v4 S8,
-// 2026-11-11); the Swarm purge takes a tab's rows (purge.ts), the rest go with the old collections (slice S19). A row is at most
-// 16 KB of rules plus its diff.
-// `writtenBy` is a person's or the project's PM's id (`writtenByKind`), `askedBy` the person whose words it carries, `askedIn`
-// the chat message the PM passed on (null when a person saved). id = stableId(tabId, projectId, revision): two saves of one
-// revision collide on it, and one retries into RULES_STALE.
-model SuperTabProjectRules {
-  id            String   @id @map("_id")
-  tabId         String
-  projectId     String
-  revision      Int
-  rules         Json
-  diff          Json
-  summary       String
-  writtenByKind String
-  writtenBy     String
-  askedBy       String
-  askedIn       Json?
-  at            DateTime
-
-  @@index([tabId, projectId, revision])
-}
-
-// The small things a member tells a project's coordinator, kept beside its instructions so they survive a restart or a move
-// (instructions.ts): at most 100 live per project, each up to 300 characters. An expired one is never read and is deleted
-// by the next note write of its project; all go with the project.
-model SuperTabPmNote {
-  id        String    @id @map("_id")
-  tabId     String
-  projectId String
-  text      String
-  askedBy   String
-  at        DateTime
-  expiresAt DateTime?
-
-  @@index([tabId, projectId])
 }
 
 // Configuration observations stay outside the tab snapshot so a long-running

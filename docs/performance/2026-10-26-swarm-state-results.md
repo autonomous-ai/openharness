@@ -176,7 +176,8 @@ Idle, a Desktop change read costs 44 KB and a host tick 5 KB.
 
 ## Goal 4: the migration dry run
 
-`scripts/swarm-parts/dry-run.ts` runs on its own loopback replica set.
+`scripts/swarm-parts/dry-run.ts` ran on its own loopback replica set. It was removed in Swarm v4 S19 with the v1/v2 migration's
+single-row Swarms: every one of them was wiped. The results below are a record.
 
 ### On the base that ships
 
@@ -277,14 +278,7 @@ Each report names its commit, machine and plan fingerprint.
 
 **Database bytes per poll:** `pollDatabaseBytes.ts`, with the command above.
 
-**Migration dry run:**
-
-```bash
-NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  node --import tsx scripts/swarm-parts/dry-run.ts --out <folder>
-```
-
-It prints the timings and writes `swarm-parts-migration-<date>.json` to the folder.
+**Migration dry run:** removed in Swarm v4 S19 (see Goal 4).
 
 **Isolated end to end:**
 - The stack is group 3's local backend recipe: containers, fake sign-in and the backend on port 18085.
