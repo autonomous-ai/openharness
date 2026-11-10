@@ -277,6 +277,38 @@ void main() {
       expect(find.text('@dee', findRichText: true), findsNothing);
     });
 
+    // lampOS's PM is "first builder" and the sandbox has "a2a swarm": a tag of one read as plain text, and a post to one
+    // opened with its tag a second time (2026-11-11).
+    testWidgets('an agent whose name is several words is its tag, whole', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: const Scaffold(
+            body: SuperTabMessageText(
+              '@First Builder heads up on #3706. Not @first, and not @first builders.',
+              agents: ['first builder', 'second'],
+              addressed: ['first builder'],
+            ),
+          ),
+        ),
+      );
+      expect(
+        runsOf(tester, '@First Builder').single?.backgroundColor,
+        isNotNull,
+      );
+      // Said once, as written: the post it is to does not open with the tag again.
+      expect(
+        find.text(
+          '@First Builder heads up on #3706. Not @first, and not @first builders.',
+          findRichText: true,
+        ),
+        findsOneWidget,
+      );
+      expect(runsOf(tester, '@first'), isEmpty);
+    });
+
     testWidgets('a full address is the same person', (tester) async {
       await showText(tester, 'Ask @dee@example.com first.', ['dee']);
       expect(
