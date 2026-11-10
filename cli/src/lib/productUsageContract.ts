@@ -225,7 +225,7 @@ export const AGENT_BROWSER_CLOSE_REASONS = ['closed', 'agent', 'rate', 'backlog'
  * from the daemon's service and core, and `agent_browser_opened` from the Desktop. Never an id, URL, host or reason. */
 export const PRODUCT_USAGE_AGENT_BROWSER_METRICS = ['agent_browser_enabled', 'agent_browser_setup_ok', 'agent_browser_setup_failed',
   'agent_browser_start_ok', 'agent_browser_start_failed', ...AGENT_BROWSER_FAILED_STATES.map(state => `agent_browser_failed_${state}` as const),
-  'agent_browser_limit_dropped', 'agent_browser_challenge_seen', 'agent_browser_proxy_set', 'agent_browser_proxy_removed',
+  'agent_browser_limit_dropped', 'agent_browser_proxy_set', 'agent_browser_proxy_removed',
   'agent_browser_proxy_test_ok', 'agent_browser_proxy_test_failed', 'agent_browser_stream_opened',
   ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened'] as const
 export const PRODUCT_USAGE_METRICS = [
