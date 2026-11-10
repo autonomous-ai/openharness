@@ -4,7 +4,6 @@ import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
-import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
@@ -177,36 +176,6 @@ void main() {
       },
     );
   }
-
-  testWidgets('a legacy task root keeps its recorded ship message visible', (
-    tester,
-  ) async {
-    final server = _server('task-line', legacy: true);
-    server.messages.add({
-      'id': 'ship',
-      'conversationId': 'lead',
-      'thread': 'ship',
-      'sequence': 3,
-      'text': 'Shipped: Offline drafts',
-      'createdAt': '2026-11-03T09:02:00Z',
-      'author': {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'},
-      'source': {
-        'kind': 'ship',
-        'conversationId': 'offline',
-        'title': 'Offline drafts',
-        'requesterId': 'requester',
-        'builderIds': ['buddy'],
-      },
-    });
-    (server.state['conversations'] as List).first['lastMessageSequence'] = 3;
-    await showView(tester, server);
-    expect(find.text('Save offline drafts · in review'), findsOneWidget);
-    expect(find.byType(SuperTabShipRow), findsOneWidget);
-    expect(find.text('Offline drafts'), findsOneWidget);
-    await tester.tap(find.text('What changed'));
-    await tester.pumpAndSettle();
-    expect(find.text('Built by'), findsOneWidget);
-  });
 
   // Dee, 2026-11-04 (#2552): an ask's row reads as its title alone, with where
   // it stands after the time; older rows still carry the old prefix.

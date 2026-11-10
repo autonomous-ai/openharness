@@ -759,12 +759,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Chat times.** No time in a bubble's row. A time sits centered between
   messages only after a pause of more than five minutes (`SwarmChatTime`);
   a bubble's full date and time are on its tooltip.
-- **Chat cards.** A sent brief and a shipped note are compact cards
-  (`SwarmChatCard`): an icon and a small label (Sent to River, Shipped), one
-  title line, and one blue action (View brief, What changed) that shows the
-  rest in place. Never the whole brief inline. A task's live card under its
-  brief keeps its status and checks without repeating the title. What GitHub
-  said to your agent (a comment, review or line comment that names it or is on
+- **Chat cards.** A compact card (`SwarmChatCard`) is an icon and a small
+  label, one title line, and one blue action that shows the rest in place.
+  What GitHub said to your agent (a comment, review or line comment that names it or is on
   its own task or pull request, or a task labelled for it) is a card on the
   left in your chat with it, never your bubble (`SuperTabGitHubRow`): the pull
   request or issue mark, where it was and who wrote it (PR #4 · deehw, Review,

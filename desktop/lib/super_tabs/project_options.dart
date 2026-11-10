@@ -15,7 +15,6 @@ import 'project_visibility.dart';
 
 /// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
 const _gap = DesktopChrome.controlGap;
-const _halfGap = _gap / 2;
 
 /// How many branches a repository has, by `git ls-remote --heads` with this
 /// computer's own git login, or null when it could not be reached. One with
@@ -43,7 +42,7 @@ Future<int?> _branchCount(String url) async {
   }
 }
 
-/// A project's details, read only: its description, repository, coordinator and whether teammates' agents can
+/// A project's details, read only: its repository, coordinator and whether teammates' agents can
 /// push there, in the shared details frame (Ken, 2026-10-28). Its owner can share a repository from the Repository
 /// row while none is set (task #3211): other machines then clone it instead of starting in an empty folder.
 Future<void> _showProjectDetails(
@@ -64,21 +63,11 @@ Future<void> _showProjectDetails(
             .where((p) => p.id == project.id)
             .firstOrNull;
         final group = c.snapshot?.conversation(project.leadConversationId);
-        final brief = group?.brief.trim() ?? '';
         return SuperTabDetailDialog(
           title: current?.name ?? project.name,
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: _gap + _halfGap),
-                child: brief.isEmpty
-                    ? Text(
-                        'No description yet',
-                        style: DesktopChrome.metadata(),
-                      )
-                    : SelectableText(brief, style: DesktopChrome.text()),
-              ),
               SuperTabDetailRow(
                 label: 'Repository',
                 child: Column(

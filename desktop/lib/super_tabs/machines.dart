@@ -1186,15 +1186,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         return HarnessActivity.unknown;
       }
     }
-    if (c.snapshot?.conversations.any(
-          (group) =>
-              !group.closed &&
-              group.assignment?['agentId'] == agent.id &&
-              superTabWorkWaits(group.assignment?['status']),
-        ) ==
-        true) {
-      return HarnessActivity.needsInput;
-    }
     return native ?? HarnessActivity.unknown;
   }
 
@@ -1292,23 +1283,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// [view]'s agents under Working, Waiting, Idle and Kept (closed), each by name; a group with none is left out.
+  /// [view]'s agents under Working, Waiting, Idle and Closed, each by name; a group with none is left out.
   List<Widget> _agentGroups(_MachineView view) {
     final groups = <String, List<(SuperTabAgent, HarnessActivity)>>{
       'Working': [],
       'Waiting': [],
       'Idle': [],
-      'Kept (closed)': [],
+      'Closed': [],
     };
     for (final agent in view.agents) {
       final activity = _activity(view, agent);
       groups[switch (activity) {
             HarnessActivity.working || HarnessActivity.starting => 'Working',
             HarnessActivity.needsInput || HarnessActivity.failed => 'Waiting',
-            // A kept agent whose session is closed on a machine that is
-            // there: the Swarm removes the others, so this one says so.
-            _ when agent.keptClosed && activity != HarnessActivity.offline =>
-              'Kept (closed)',
+            // Its session is gone on a machine that is there: never Idle.
+            _
+                when agent.downSince != null &&
+                    activity != HarnessActivity.offline =>
+              'Closed',
             _ => 'Idle',
           }]!
           .add((agent, activity));
