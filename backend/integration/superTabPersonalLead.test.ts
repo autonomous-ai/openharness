@@ -93,3 +93,29 @@ describe('New project\'s opening request in a Team Swarm', () => {
     expect(read?.attachments?.map(a => a.name)).toEqual(['sketch.png', 'notes.txt'])
   })
 })
+
+// The other two ways Desktop hands a person's request over, both through agent.add's initialMessage: neither is a post in the
+// channel, so agents only leaves both to the person (agentsOnly.test.ts).
+describe('a person\'s request handed over with the agent that takes it, in a Team Swarm', () => {
+  // launch.dart, New project with a PM this Desktop starts: the PM joins the new channel with the request, which lands in the
+  // person's own chat with the PM.
+  it('keeps a local New project\'s request in the person\'s own chat with its new PM', async () => {
+    const f = await personal(randomUUID())
+    const added = (await f.execute({ type: 'agent.add', conversationId: f.games.conversationId, machineId: 'huy-mac', harnessId: randomUUID(), name: 'Lead',
+      lead: true, project: { cwd: '/Users/huy/games', repositoryUrl: 'https://github.com/huy/games' }, configuration: config,
+      initialMessage: 'make the landing page dark' })).result
+    const chat = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(String(added.agentId)))!
+    const rows = (await f.store.messages(owner, f.tab, chat.id, {})).messages
+    expect(rows.find(m => m.id === added.messageId)).toMatchObject({ text: 'make the landing page dark', author: { kind: 'person', id: owner.sub } })
+  })
+
+  // new_agent.dart, New agent: its 1:1 chat first (agent.new), then the session joins it with the request.
+  it('keeps New agent\'s request in the agent\'s own chat', async () => {
+    const f = await personal(randomUUID())
+    const chat = String((await f.execute({ type: 'agent.new', kind: 'regular', machineId: 'huy-mac', engine: 'claude', name: 'Ada', local: true })).result.conversationId)
+    const added = (await f.execute({ type: 'agent.add', conversationId: chat, machineId: 'huy-mac', harnessId: randomUUID(), name: 'Ada', lead: false,
+      configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }, initialMessage: 'Fix the docs' })).result
+    const rows = (await f.store.messages(owner, f.tab, chat, {})).messages
+    expect(rows.find(m => m.id === added.messageId)).toMatchObject({ text: 'Fix the docs', author: { kind: 'person', id: owner.sub } })
+  })
+})
