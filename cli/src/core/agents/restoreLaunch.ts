@@ -33,7 +33,7 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     const missing = deps.workspaceMissing(given.cwd)
     if (missing) return missing
     // An older Swarm session comes back with its role, or waits for it: boot restore and a host move relaunched an old
-    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). A held one waits in
+    // Swarm session with no saved role as an ordinary session (security review 1 of #2255). A held one waits in
     // its pane, and the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
     let entry = given
     const looked = await deps.adoptSwarmSkill?.lookup?.(given, current)

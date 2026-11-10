@@ -335,7 +335,7 @@ describe('agent_create, refused before any pane exists', () => {
     const launched = () => vi.mocked(create!).mock.calls.at(-1)![0]
     await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review' })
     expect(launched()).toMatchObject({ swarmRole: 'agent', swarmFallback: 'review' })
-    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['buddy', 'buddy'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
+    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
       await ask({ engine: 'codex', cwd: '/w', swarmRole })
       expect(launched()).toMatchObject({ swarmRole: role })
       expect(launched()).not.toHaveProperty('swarmFallback')
@@ -343,7 +343,7 @@ describe('agent_create, refused before any pane exists', () => {
     const calls = vi.mocked(create!).mock.calls.length
     for (const swarmRole of ['pm', 'Coordinator', 'reviewer']) {
       expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toStrictEqual({ error: 'INVALID_SWARM_ROLE',
-        detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
+        detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
     }
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })

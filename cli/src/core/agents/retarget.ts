@@ -114,7 +114,7 @@ export function createAgentRetargeter({
     // something that was not ours.
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
     // An older Swarm session switches with its role, or not at all while the role cannot be read: a switch relaunched an old
-    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). Nothing has touched
+    // Swarm session with no saved role as an ordinary session (security review 1 of #2255). Nothing has touched
     // the pane yet, so a refusal leaves the running engine as it is.
     const looked = await adoptSwarmSkill?.lookup?.(session, current)
     if (looked !== undefined) {

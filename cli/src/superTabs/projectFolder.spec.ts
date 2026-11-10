@@ -38,16 +38,6 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     await f.run()
     expect(f.prepare).not.toHaveBeenCalled()
   })
-  it('finds a project session of a person\'s one Buddy chat by the project it names, as that chat is in no project\'s list', async () => {
-    const f = fixture()
-    Object.assign(f.start.request, { conversationId: 'swarm-buddy-chat', buddySession: { thread: 'root', projectId: 'project-a' } })
-    await f.run()
-    expect(f.prepare).toHaveBeenCalledOnce()
-    // Its project alone: a session naming a project this machine was not told of prepares nothing, whatever its chat.
-    Object.assign(f.start.request, { conversationId: 'work', buddySession: { thread: 'root', projectId: 'project-b' } })
-    await expect(f.run()).rejects.toThrow('no authorized project')
-    expect(f.prepare).toHaveBeenCalledOnce()
-  })
   // Task #4698: a Member starts in its person's own chat, which is in no project's list, and names the project it sets up.
   it('finds a Member\'s project by the project its start names, and only one this machine was told of', async () => {
     const f = fixture()
@@ -179,14 +169,11 @@ describe('preparing a queued start', () => {
     expect(f.prepare).toHaveBeenCalledExactlyOnceWith(CLONE, { root: f.root })
   })
 
-  it('prepares nothing for a person\'s one Buddy, which has no project, or for a Regular agent, which starts in no project', async () => {
-    // 2026-11-02: the token call for a Buddy was refused with "This start has no project folder to prepare", which failed the start.
-    for (const request of [{ buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } }, { regular: true }]) {
-      const f = readied(request)
-      await f.ready()
-      expect(f.prepare).not.toHaveBeenCalled()
-      expect(f.empty).not.toHaveBeenCalled()
-    }
+  it('prepares nothing for a Regular agent, which starts in no project', async () => {
+    const f = readied({ regular: true })
+    await f.ready()
+    expect(f.prepare).not.toHaveBeenCalled()
+    expect(f.empty).not.toHaveBeenCalled()
   })
 
   // Task #4698: a Member's start is a Regular agent's in its person's chat, but it sets a project up: cloned.

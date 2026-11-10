@@ -131,7 +131,7 @@ describe('the lean bundle a release carries', () => {
   })
 
   it('loads the Swarm\'s code in its own process, which the master starts only while it is on', () => {
-    for (const marker of ['Super Tab retention', 'A Swarm skill needs a role and session key']) {
+    for (const marker of ['Super Tab retention', 'Super Tab host journal is unreadable']) {
       expect([...loads('superTabs')].some((name) => files.get(name)!.includes(marker)), marker).toBe(true)
     }
   })

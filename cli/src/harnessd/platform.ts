@@ -469,7 +469,7 @@ export interface PlatformState {
   unreachable: string | null
 }
 
-export type Outcome = { ok: true } | { ok: false; detail: string }
+type Outcome = { ok: true } | { ok: false; detail: string }
 
 const firstLine = (text: string): string => text.trim().split('\n')[0].trim()
 

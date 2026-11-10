@@ -100,23 +100,6 @@ describe('the Swarm\'s agents, as the core lets it close and reopen them', () =>
     expect(await createSwarmAgents({ ...deps({ byAgent }), members: { leads: () => new Set(), harnesses: () => new Set(['live']) } }).closeMember('live')).toEqual({ error: 'UNSUPPORTED' })
   })
 
-  // #3824: a Buddy the server asked to sleep closes when idle, with a permit that holds only while the roster still asks.
-  it('sleeps a Buddy the roster asks to, under a permit that lapses for good once the roster stops asking', async () => {
-    let asked = true
-    const closeAgent = vi.fn(async (_request: Record<string, unknown>) => ({ closed: true as const }))
-    const byAgent = (id: string) => id === 'buddy' ? { ...row('buddy'), registeredAt: 1000 } : undefined
-    const swarm = createSwarmAgents({ ...deps({ byAgent, closeAgent: closeAgent as never }),
-      members: { leads: () => new Set(), harnesses: () => new Set(['buddy']), sleepingBuddies: () => new Set(asked ? ['buddy'] : []) } })
-    expect(await swarm.closeMember('buddy')).toEqual({ closed: true })
-    const request = closeAgent.mock.calls[0]![0] as { mode: string; buddySleep: () => boolean }
-    expect(request).toMatchObject({ agentId: 'buddy', sessionId: 's-buddy', createdAt: new Date(1000).toISOString(), mode: 'idle' })
-    expect(request.buddySleep()).toBe(true)
-    asked = false
-    expect(request.buddySleep()).toBe(false)
-    asked = true
-    expect(request.buddySleep()).toBe(false)
-  })
-
   // The review of #1635: an agent removed before its host wrote a roster naming it is no member there; the exact receipt of
   // the Swarm's start proves it is the Swarm's own to close, and a receipt naming another harness proves nothing.
   it('closes a member the retention does not name only when its start receipt names it', async () => {
