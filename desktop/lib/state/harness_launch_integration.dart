@@ -46,6 +46,7 @@ class HarnessLaunchIntegration {
     this.checkRepositoryAgain,
     this.agentKind,
     this.ownMachinesOnly = false,
+    this.offersBrowser = false,
     this.startBuddy,
     this.stopBuddy,
     this.heading,
@@ -85,6 +86,9 @@ class HarnessLaunchIntegration {
   /// Only the person's own computers, never a shared, guest or Team one: an
   /// agent they start runs in their own account.
   final bool ownMachinesOnly;
+
+  /// Swarm New agent: the Browser pill, an agent's own sandboxed Chrome.
+  final bool offersBrowser;
 
   /// Join's Buddy (task #4196): the Swarm starts it on [machineId] with
   /// [engine], as before; the form only chooses them. Set, the form shows no

@@ -6,6 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/browser/browser_pill.dart';
+import 'package:harness/browser/browser_settings.dart';
+import 'package:harness/browser/browser_settings_page.dart';
+import 'package:harness/browser/browser_setup_dialog.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
@@ -169,8 +176,11 @@ Future<List<SuperTabController>> _show(
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
+  // Faye's Browser settings, as her computer keeps them.
+  final browserApp = _BrowserSettingsApp();
+  addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 3194);
+  tester.view.physicalSize = const Size(760, 4039);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -185,6 +195,7 @@ Future<List<SuperTabController>> _show(
           // The decision cards read their answers' state from a reader's Decisions.
           swarm: c,
           instructions: computer.link,
+          browserApp: browserApp,
         ),
       ),
     ),
@@ -374,8 +385,12 @@ class _Gallery extends StatelessWidget {
     required this.faces,
     required this.swarm,
     required this.instructions,
+    required this.browserApp,
   });
   final Brightness brightness;
+
+  /// Where Browser settings reads Faye's.
+  final AppNotifier browserApp;
   final List<String> faces;
 
   static const leftPane = ValueKey('gallery-left-pane');
@@ -661,6 +676,41 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
+              title(
+                'Browser in New agent: off, on, this computer to set up, another computer to set up',
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  BrowserPill(on: false, onPressed: () {}),
+                  gap(),
+                  BrowserPill(on: true, onPressed: () {}),
+                  gap(),
+                  BrowserPill(on: true, needsSetup: true, onPressed: () {}),
+                  gap(),
+                  BrowserPill(
+                    on: false,
+                    unavailable: 'Set up Browser on Ken Mac first',
+                    onPressed: () {},
+                  ),
+                ],
+              ),
+              title('Set up Browser, on Windows without WSL 2'),
+              const SizedBox(
+                width: 500,
+                child: BrowserSetupPrompt(restart: true, ownMachine: false),
+              ),
+              title('Browser settings: a proxy with a saved password'),
+              SizedBox(
+                width: 420,
+                height: 420,
+                child: BrowserSettingsPage(
+                  app: browserApp,
+                  machineId: 'm',
+                  agentId: 'faye',
+                  onBack: () {},
+                ),
+              ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
               title('Empty: a row'),
@@ -745,6 +795,31 @@ class _Gallery extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Faye's computer as Browser settings asks it: a SOCKS5 proxy whose password it keeps.
+class _BrowserSettingsApp extends AppNotifier {
+  _BrowserSettingsApp()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+
+  @override
+  Future<BrowserSettings> agentBrowserSettings(
+    String machineId,
+    String agentId,
+  ) async => const BrowserSettings(
+    proxy: BrowserProxy(
+      scheme: 'socks5',
+      host: 'proxy.example',
+      port: 1080,
+      username: 'faye',
+      passwordSet: true,
+    ),
+    languages: 'vi-VN, en-US',
+  );
 }
 
 /// A card in a channel of what an agent did on GitHub, as the channel draws one ([SuperTabGitHubRow]): [who]'s, for [event]

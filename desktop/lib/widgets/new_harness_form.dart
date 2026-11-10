@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../browser/browser_pill.dart';
+import '../browser/browser_setup_dialog.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
@@ -984,6 +986,17 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _focusEditor();
       _revealRow();
       return;
+    }
+    if (box.browser && box.browserNeedsSetup) {
+      final availability = box.browserAvailability!;
+      final install = await showBrowserSetupDialog(
+        context,
+        restart: availability.restart,
+        ownMachine: availability.ownMachine,
+      );
+      if (!mounted || !install || !await box.setUpBrowser() || !mounted) {
+        return;
+      }
     }
     _checkingLaunch = box.checking;
     final outcome = existingFolder
@@ -2453,6 +2466,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       final gitControls = Row(
         key: const ValueKey('new-harness-git-settings'),
         mainAxisSize: MainAxisSize.min,
+        // Browser's line hangs under its pill; the other pills keep their row.
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // A Product Manager always gets its own worktree.
           if (box.canUseWorktree && !box.placesLead)
@@ -2480,6 +2495,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               ),
             ),
+          if (box.offersBrowser)
+            FocusTraversalOrder(
+              order: const NumericFocusOrder(8.5),
+              child: BrowserPill(
+                on: box.browser,
+                unavailable: box.browserUnavailable,
+                needsSetup: box.browserNeedsSetup,
+                onPressed: box.locked ? null : box.toggleBrowser,
+              ),
+            ),
           if (!box.isCloud &&
               !box.leadThroughSwarm &&
               (box.choosesBranch || box.checkingGit || box.gitError != null))
@@ -2505,6 +2530,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               spacing: 16,
               children: [controls, gitControls],
             ),
