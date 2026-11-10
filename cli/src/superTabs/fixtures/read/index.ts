@@ -45,12 +45,12 @@ export function hostForm(rows: unknown, options: { tabs?: string[]; pools?: unkn
 export function partsOf(state: Json, options: { lastChangedAt?: number } = {}): Json {
   const v = ++version
   const part = (key: unknown, data: Json) => ({ key: String(key), version: v, changedAt: v, data })
-  const { people, agents, conversations, machines, starts, otherProjectsWork, mentionsWaiting, mentionsDigest, decisionsDigest, ...head } = state
+  const { people, agents, conversations, machines, starts, otherProjectsWork, mentionsDigest, decisionsDigest, ...head } = state
   return { format: 2, tabId: String(state.id ?? 'tab'), cursor: `tab-${v}`, serverTime: v, lastChangedAt: options.lastChangedAt ?? v, epoch: 1,
     head: part('head', head), members: asList(people).map(p => part(p.id, p)), agents: asList(agents).map(a => part(a.id, a)),
     groups: asList(conversations).map((c, i) => part(c.id ?? `group-${i}`, c)), machines: asList(machines).map(m => part(m.machineId, m)),
     starts: asList(starts).map(s => part(s.id, s)), progress: [],
-    derived: { ...(otherProjectsWork !== undefined ? { otherProjectsWork } : {}), ...(mentionsWaiting !== undefined ? { mentionsWaiting } : {}), ...(mentionsDigest !== undefined ? { mentionsDigest } : {}), ...(decisionsDigest !== undefined ? { decisionsDigest } : {}) } }
+    derived: { ...(otherProjectsWork !== undefined ? { otherProjectsWork } : {}), ...(mentionsDigest !== undefined ? { mentionsDigest } : {}), ...(decisionsDigest !== undefined ? { decisionsDigest } : {}) } }
 }
 
 /** A fake Swarm read: a changes read asks for a reload, so every read is a first load of the state the test holds now (a
