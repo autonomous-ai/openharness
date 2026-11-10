@@ -15,7 +15,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
   const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
-    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
+    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -29,6 +29,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
       : url.pathname === '/repos/acme/app/labels' ? state.labels
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/issues' ? (url.searchParams.get('state') === 'closed' ? state.closed : state.open)
@@ -235,6 +236,16 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
 
+    // lampOS #5212: a read posted as a review is a read; asked for another, its pull request waited on a reader it already had.
+    it('counts a READ-OK posted as a review as a read, and asks nobody else', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.reviews.set(30, [{ id: 7, state: 'APPROVED', body: 'Juno, 07:10, to **Pip**: READ-OK f6edb44', submitted_at: '2026-11-09T07:10:00Z',
+        author_association: 'MEMBER', user: { login: 'deehw' } }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+    })
+
     it('counts no READ-OK its author signed, however its two-word name is written, and asks a reader', async () => {
       const two: Crew = { builders: [...crew().builders, { id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }],
         machines: crew().machines }
@@ -262,6 +273,17 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('HOLD 1234567: off by one')])
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*deehw\*\*: the head is now f6edb44, after your HOLD on 1234567: please read it again/)])
+    })
+
+    // Swarm-sandbox #24, 2026-11-10: after a push, Harness asked "deehw" to read again for an unsigned READ-OK that never
+    // counted, and took that ask for a reader on its way, so it asked nobody who could read it.
+    it('asks no login to read again for its unsigned READ-OK on an older head, and asks a reader who signs', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.state.comments.set(30, [comment('READ-OK 1234567')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/: please read this pull request/)])
+      expect(asks(f)[0]).not.toContain('deehw')
     })
 
     it('counts no unsigned READ-OK from the login that opened the pull request, and asks a reader who signs', async () => {

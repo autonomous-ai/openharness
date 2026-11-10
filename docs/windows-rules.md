@@ -74,6 +74,14 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   Hermes harness on that PC never started. Only the launcher is refused — the Python it names runs the package fine — so
   `windowsEngineArgv` steps past it the same way (`lib/windows/hermesLaunch.ts`).
 
+- **What Harness runs in place of an engine must still read as that engine.** After the step above, the pane's Hermes was
+  `python.exe -I <root>\bin\hermes-boot.py`, which the process rules did not know: every Hermes pane after the first was
+  never confirmed and showed "Waiting to confirm the native engine process" after 10 minutes (DESKTOP-0TFH0OJ, 2026-11-09).
+  The boot module is owned by file identity (`hermesBootFileKey`, `lib/engineBin.ts`). Hermes' gateway, a child of the first
+  client here, is never an engine (`hermesGatewayProcess`), and since it runs every session's hooks with its own
+  environment, a hook is placed by the pane its session was opened from (`HERMES_SESSION_PANE`), not by its own.
+  Tests: `lib/processTable.hermesGateway.spec.ts`, `hookServer.spec.ts`.
+
 - **A pane's job allows explicit breakaway, so an engine can start a helper of its own.** Without
   `JOB_OBJECT_LIMIT_BREAKAWAY_OK` Windows refuses `CREATE_BREAKAWAY_FROM_JOB` with `ERROR_ACCESS_DENIED`: Hermes' gateway
   daemon is started that way, so every Hermes pane exited 2 with `Gateway inaccessible: windows_breakaway_unavailable`

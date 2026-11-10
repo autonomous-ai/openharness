@@ -532,11 +532,8 @@ void main() {
     () async {
       final paths = swarmPathsInSource(
         Directory('lib'),
-        // Uploads post a form straight through ApiClient, never this transport.
-        skip: const {
-          'lib/super_tabs/attachment_upload.dart',
-          'lib/super_tabs/avatar_upload.dart',
-        },
+        // An upload posts a form straight through ApiClient, never this transport.
+        skip: const {'lib/super_tabs/attachment_upload.dart'},
       );
       // The walk finds what it should, so a broken walk cannot pass.
       expect(paths.length, greaterThan(40));
@@ -559,14 +556,10 @@ void main() {
         }
       }
       expect(refused, isEmpty, reason: 'refused before sending on the web');
-      for (final file in [
-        'lib/super_tabs/attachment_upload.dart',
-        'lib/super_tabs/avatar_upload.dart',
-      ]) {
-        final source = File(file).readAsStringSync();
-        expect(source, isNot(contains('request(')), reason: file);
-        expect(source, contains('postForm('), reason: file);
-      }
+      final upload = File('lib/super_tabs/attachment_upload.dart')
+          .readAsStringSync();
+      expect(upload, isNot(contains('request(')));
+      expect(upload, contains('postForm('));
     },
   );
 

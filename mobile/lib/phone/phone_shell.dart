@@ -14,7 +14,6 @@ import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_home_root.dart';
 import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
-import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_project_page.dart' show swarmChatRoute;
 import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
 import '../swarm/swarm_session.dart';
@@ -117,11 +116,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       // Swarm Home's start screens: which computers the account has, and
       // whether any is online.
       computers: _swarmComputers,
-      // A photo goes straight to the backend with this app's own sign-in;
-      // the computer a Swarm call goes through carries text only.
-      uploadAvatar: swarmAvatarUploadVia(
-        (tabId, png) => widget.notifier.api.uploadSwarmAvatar(tabId, png),
-      ),
       // A chat's mic records voice messages with the terminal's recorder. Not
       // in sample mode, which has no account to send them with.
       voice: VoiceInputScope.maybeOf(context) == null

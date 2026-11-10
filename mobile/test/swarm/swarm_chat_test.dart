@@ -182,7 +182,6 @@ void main() {
     String conversation = 'g1',
     String? messageId,
     bool settle = true,
-    bool homeC = false,
     bool systemMenu = false,
   }) async {
     await tester.pumpWidget(
@@ -205,7 +204,6 @@ void main() {
           swarmId: swarmId,
           conversationId: conversation,
           messageId: messageId,
-          homeC: homeC,
         ),
       ),
     );
@@ -223,7 +221,6 @@ void main() {
     String conversation = 'g1',
     String? messageId,
     bool settle = true,
-    bool homeC = false,
     SwarmUpload upload = refuseSwarmUpload,
     bool systemMenu = false,
   }) async {
@@ -247,7 +244,6 @@ void main() {
       conversation: conversation,
       settle: settle,
       messageId: messageId,
-      homeC: homeC,
       systemMenu: systemMenu,
     );
     return host;
@@ -1976,171 +1972,34 @@ void main() {
 
   // Tony's iPhone 14, Profile, 44d284f65: the whole chat was built again on
   // each keystroke, and in 25 ms mid-scroll when the 5 s read answered.
-  group('reactions', () {
-    late List<String> haptics;
-
-    setUp(() {
-      haptics = [];
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-            if (call.method == 'HapticFeedback.vibrate') {
-              haptics.add(call.arguments as String? ?? call.method);
-            }
-            return null;
-          });
-    });
-    tearDown(
-      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null),
-    );
-
-    testWidgets('a long-press on a message opens the six with a light tap; '
-        'the pick counts under it at once and goes to the backend', (
-      tester,
-    ) async {
-      final fake = backend([message('m1', 1, text: 'Plan')]);
-      final sent = Completer<Object?>();
-      fake.routes[commands] = (_) => sent.future;
-      fake.routes['$messages?before=2'] = (_) => {
-        'messages': [
-          message(
-            'm1',
-            1,
-            text: 'Plan',
-            reactions: {
-              'tada': [('person', me)],
-            },
-          ),
-        ],
-        'next': null,
-        'reactionSeq': 1,
-      };
-      await pump(tester, fake);
-
-      await tester.longPress(find.text('Plan'));
-      await tester.pumpAndSettle();
-      expect(haptics, ['HapticFeedbackType.lightImpact']);
-      await tester.tap(key('swarm-react-tada'));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.single, {
-        'type': 'message.react',
-        'conversationId': 'g1',
-        'messageId': 'm1',
-        'emoji': 'tada',
-        'on': true,
-      });
-      expect(
-        find.descendant(
-          of: key('swarm-reaction-m1-tada'),
-          matching: find.text('1'),
-        ),
-        findsOneWidget,
-        reason: 'counted before the backend answers',
-      );
-      sent.complete({'result': <String, dynamic>{}});
-      await tester.pumpAndSettle();
-      expect(key('swarm-reaction-m1-tada'), findsOneWidget);
-    });
-
-    testWidgets('a tap on your own count takes it back', (tester) async {
-      final fake = backend([
-        message(
-          'm1',
-          1,
-          reactions: {
-            'heart': [('person', me), ('agent', 'agent-lead')],
-          },
-        ),
-      ]);
-      fake.routes['$messages?before=2'] = (_) => {
-        'messages': [
-          message(
-            'm1',
-            1,
-            reactions: {
-              'heart': [('agent', 'agent-lead')],
-            },
-          ),
-        ],
-        'next': null,
-        'reactionSeq': 2,
-      };
-      await pump(tester, fake);
-
-      await tester.tap(key('swarm-reaction-m1-heart'));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.single['on'], isFalse);
-      expect(
-        find.descendant(
-          of: key('swarm-reaction-m1-heart'),
-          matching: find.text('1'),
-        ),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('holding a count names who gave it, never by email', (
-      tester,
-    ) async {
-      await pump(
-        tester,
-        backend(
-          [
-            message(
-              'm1',
-              1,
-              reactions: {
-                'eyes': [
-                  ('agent', 'agent-lead'),
-                  ('person', 'person-ann'),
-                  ('person', me),
-                ],
-              },
-            ),
-          ],
-          members: [
-            person(me),
-            person('person-ann', role: 'collaborator'),
-          ],
-        ),
-      );
-
-      await tester.longPress(key('swarm-reaction-m1-eyes'));
-      await tester.pump();
-
-      expect(find.text('River, person-ann and You'), findsOneWidget);
-      expect(find.textContaining('@example.com'), findsNothing);
-      expect(key('swarm-react-eyes'), findsNothing, reason: 'no picker');
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-    });
-
-    testWidgets('a person who cannot post sees the counts; neither a tap nor '
-        'a long-press reacts', (tester) async {
-      final fake = backend(
-        [
-          message(
-            'm1',
-            1,
-            text: 'Plan',
-            reactions: {
-              'rocket': [('agent', 'agent-lead')],
-            },
-          ),
-        ],
-        members: [person(me, role: 'viewer')],
-      );
-      await pump(tester, fake);
-
-      await tester.tap(key('swarm-reaction-m1-rocket'));
-      await tester.longPress(find.text('Plan'));
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-reaction-m1-rocket'), findsOneWidget);
-      expect(key('swarm-react-rocket'), findsNothing);
-      expect(fake.commands, isEmpty);
-    });
+  // Reactions are gone (anh Dee, 2026-11-09): a message shows none, whatever
+  // an older server sends, and nothing offers one.
+  testWidgets('a message shows no reactions, and the long press offers none', (
+    tester,
+  ) async {
+    final fake = backend([
+      message(
+        'm1',
+        1,
+        text: 'Plan',
+        reactions: {
+          'eyes': [('agent', 'agent-lead')],
+          'tada': [('person', me)],
+        },
+      ),
+    ]);
+    await pump(tester, fake);
+    expect(find.text('👀'), findsNothing);
+    expect(find.text('🎉'), findsNothing);
+    await tester.longPress(find.text('Plan'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-copy-link'), findsOneWidget);
+    for (final emoji in ['👍', '🎉', '❤️', '😄', '👀', '✅', '🚀']) {
+      expect(find.text(emoji), findsNothing, reason: emoji);
+    }
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    expect(fake.commands.where((c) => c['type'] == 'message.react'), isEmpty);
   });
 
   group('Copy link to message', () {
@@ -2168,7 +2027,6 @@ void main() {
 
       await tester.longPress(find.text('Plan'));
       await tester.pumpAndSettle();
-      expect(key('swarm-react-tada'), findsOneWidget);
       await tester.tap(key('swarm-copy-link'));
       await tester.pumpAndSettle();
 
@@ -2178,41 +2036,9 @@ void main() {
       expect(fake.commands, isEmpty);
     });
 
-    testWidgets('the Add reaction chip opens the reactions alone: Copy link '
-        'is the long-press sheet\'s', (tester) async {
-      final fake = backend([
-        message(
-          'm1',
-          1,
-          text: 'Plan',
-          reactions: {
-            'eyes': [('agent', 'agent-lead')],
-          },
-        ),
-      ]);
-      await pump(tester, fake, homeC: true);
-
-      await tester.tap(key('swarm-add-reaction-m1'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-react-tada'), findsOneWidget);
-      expect(key('swarm-copy-link'), findsNothing);
-      await tester.tap(key('swarm-react-tada'));
-      await tester.pumpAndSettle();
-
-      expect(copied, isEmpty);
-      expect(fake.commands.where((c) => c['type'] == 'message.react'), [
-        {
-          'type': 'message.react',
-          'conversationId': 'g1',
-          'messageId': 'm1',
-          'emoji': 'tada',
-          'on': true,
-        },
-      ]);
-    });
-
-    testWidgets('a person who cannot post still copies the link; the sheet '
-        'offers no reactions', (tester) async {
+    testWidgets('a person who cannot post still copies the link', (
+      tester,
+    ) async {
       final fake = backend(
         [message('m1', 1, text: 'Plan')],
         members: [person(me, role: 'viewer')],
@@ -2221,7 +2047,6 @@ void main() {
 
       await tester.longPress(find.text('Plan'));
       await tester.pumpAndSettle();
-      expect(key('swarm-react-tada'), findsNothing);
       await tester.tap(key('swarm-copy-link'));
       await tester.pumpAndSettle();
 
@@ -3341,40 +3166,6 @@ void main() {
             ),
           ],
         );
-
-    testWidgets('a reaction: its own row alone', (tester) async {
-      final fake = backend(page());
-      fake.routes['$messages?before=4'] = (_) => {
-        'messages': [
-          for (final row in page().reversed)
-            if (row['id'] == 'm2')
-              message(
-                'm2',
-                2,
-                text: 'On it @River',
-                minute: 1,
-                reactions: {
-                  'thumbs_up': [('person', me)],
-                },
-              )
-            else
-              row,
-        ],
-        'next': null,
-        'reactionSeq': 1,
-      };
-      await pump(tester, fake);
-
-      final reacted = await rowsBuilt(() async {
-        await tester.longPress(find.text('On it @River'));
-        await tester.pumpAndSettle();
-        await tester.tap(key('swarm-react-thumbs_up'));
-        await tester.pumpAndSettle();
-      });
-
-      expect(reacted.toSet(), {'m2'});
-      expect(key('swarm-reaction-m2-thumbs_up'), findsOneWidget);
-    });
 
     testWidgets('a new message at the foot: its own row alone, at once', (
       tester,

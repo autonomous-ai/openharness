@@ -4,7 +4,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHookServer, type HookServerHandlers, chooseHookAgent, hookFiredAt, knownTranscriptFor } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFiredAt, knownTranscriptFor } from './hookServer.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
@@ -370,6 +370,79 @@ describe('process-owned hook server', () => {
     const response = await fetch(`${base}/api/auth/me`)
     expect(response.status).toBe(504)
     expect(await response.json()).toEqual({ success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } })
+  })
+})
+
+// Hermes 0.22+ runs every session's hooks in one shared gateway, so a hook names the gateway's pane: on DESKTOP-0TFH0OJ
+// (2026-11-09) `p2-0.5.80:%2002`, the first Hermes pane, for a conversation typed in `%2005`. The pane a session was
+// opened from is frozen with its policy in Hermes' store, from the client's `terminal.client_env_passthrough` names.
+describe('a Hermes hook from its shared gateway', () => {
+  const FC = 'local-fc37402fa0f9bc03c97ab45ce86220a06510ce9e8fced80fb9ed2a39324ce67a'
+  const DESKTOP = 'local-d199d58e8da30774bce4db24f350f2c05b7142a62dc92ed6df8f4d68a85eb6fd'
+  const GATEWAY_PANE = { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2002' }
+  /** Hermes 0.22.7's two tables, as much of them as is read: the session's row and its frozen policy. */
+  const store = (rows: Array<[string, Record<string, string> | null]>) => {
+    const { DatabaseSync } = (process as unknown as { getBuiltinModule(name: string): unknown }).getBuiltinModule('node:sqlite') as {
+      DatabaseSync: new (path: string) => { exec(sql: string): void; close(): void }
+    }
+    mkdirSync(env.HERMES_HOME, { recursive: true })
+    rmSync(join(env.HERMES_HOME, 'state.db'), { force: true })
+    const db = new DatabaseSync(join(env.HERMES_HOME, 'state.db'))
+    const quote = (text: string) => `'${text.replaceAll('\'', '\'\'')}'`
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT); CREATE TABLE state_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      ${rows.map(([id, clientEnv]) => `INSERT INTO sessions VALUES (${quote(id)}, 'local');
+        INSERT INTO state_meta VALUES (${quote(`gateway.local_policy.v1:${id}`)},
+          ${quote(JSON.stringify({ session_id: id, policy: { client_env_json: clientEnv && JSON.stringify(clientEnv), source: 'cli' } }))});`).join('\n')}`)
+    db.close()
+  }
+  const hook = (base: string, headers: Record<string, string>, sessionId: string) => fetch(`${base}/api/hook/session-start`, {
+    method: 'POST', headers, body: JSON.stringify({ engine: 'hermes', sessionId, hookEvent: 'on_session_start', runtimeHints: [GATEWAY_PANE], callerPid: 500 }),
+  })
+
+  it('is resolved by the pane its session was opened from, that pane alone the evidence', async () => {
+    store([[FC, { HARNESS_PANE: 'p2-0.5.80:%2005', PATH: 'C:\\Windows' }]])
+    const resolveHookAgent = vi.fn(async () => null)
+    const hookViaSharedProcess = vi.fn(async () => true)
+    const { base, headers } = await start({ resolveHookAgent, hookViaSharedProcess })
+    expect((await hook(base, headers, FC)).status).toBe(200)
+    expect(hookViaSharedProcess).toHaveBeenCalledWith({ engine: 'hermes', callerPid: 500 })
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'hermes', tmuxPane: undefined, runtimeHints: [{ backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2005' }],
+      callerPid: 500, bySessionPane: true, onWait: expect.any(Function),
+    })
+  })
+
+  it('is ignored, and says why, when its session names no pane (the Desktop app\'s, or a plain terminal\'s)', async () => {
+    store([[DESKTOP, null]])
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent, hookViaSharedProcess: async () => true })
+    const response = await hook(base, headers, DESKTOP)
+    expect(await response.json()).toEqual({ ignored: true, reason: 'hermes_gateway_session_has_no_pane' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
+  it('leaves a hook its pane\'s own Hermes ran as it came (Hermes 0.21 and older)', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent, hookViaSharedProcess: async () => false })
+    await hook(base, headers, FC)
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimeHints: [GATEWAY_PANE] }))
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.not.objectContaining({ bySessionPane: true }))
+  })
+})
+
+describe('the pane a Hermes client environment names', () => {
+  it.each([
+    ['a pty host pane', { HARNESS_PANE: 'p2-0.5.80:%2005' }, { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2005' }],
+    ['a tmux pane, ahead of a pty host pane it runs in', { TMUX_PANE: '%7', HARNESS_PANE: 'p2:%1' }, { backend: 'tmux', paneId: '%7' }],
+    ['nothing for no pane', { PATH: '/bin' }, null],
+    ['nothing for a malformed tmux pane', { TMUX_PANE: '7' }, null],
+    ['nothing for a malformed pty host pane', { HARNESS_PANE: '%2005' }, null],
+  ])('%s', (_name, clientEnv, pane) => {
+    expect(clientEnvPane(JSON.stringify(clientEnv))).toEqual(pane)
+  })
+
+  it.each([[null], [''], ['not json'], ['[]'], [42]])('nothing for a stored value that is not a map: %s', (value) => {
+    expect(clientEnvPane(value)).toBeNull()
   })
 })
 
