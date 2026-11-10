@@ -3819,7 +3819,7 @@ describe('Lead mentions', () => {
     expect((await store.read(peer, tab)).state).not.toHaveProperty('mentionsWaiting')
     const read = await app.inject({ url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
     expect(read.json().data.derived).not.toHaveProperty('mentionsWaiting')
-    const listed = await app.inject({ url: '/api/super-tabs/list?mentions=1', headers: { authorization: `Bearer ${peer.sub}` } })
+    const listed = await app.inject({ url: '/api/super-tabs/list', headers: { authorization: `Bearer ${peer.sub}` } })
     expect(listed.statusCode).toBe(200)
     expect(listed.json().data.tabs.find((t: { id: string }) => t.id === tab)).not.toHaveProperty('mentionsWaiting')
   })
