@@ -12,7 +12,7 @@ import 'controller.dart';
 /// call (hosts, starts, GitHub tokens, deliveries, terminals) are refused
 /// before anything is sent, so this transport never signs them.
 const _tab =
-    r'(?!(?:hosts|workspaces|grids|list|invitations|deleted|routing-policy|workspace-invitations)/)[A-Za-z0-9_-]+';
+    r'(?!(?:hosts|grids|list|invitations|deleted|routing-policy)/)[A-Za-z0-9_-]+';
 const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
@@ -26,10 +26,7 @@ final _swarmRoute = RegExp(
   '|conversations/$_id/(?:messages|catch-up|read|unread|notifications'
   '|threads/$_id/read'
   '|messages/$_id/attachments/$_id)'
-  '|projects/$_id/(?:github|github/approve|github/repository'
-  '|instructions(?:/revisions(?:/[0-9]+)?)?'
-  // The project's rules record, read in Project settings (#3393).
-  '|rules)'
+  '|projects/$_id/(?:github|github/approve|github/repository)'
   '|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );

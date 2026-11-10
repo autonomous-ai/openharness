@@ -2428,17 +2428,6 @@ class NewHarnessController extends ChangeNotifier {
   /// lost has still to be checked on.
   bool get locked => busy || checking || linkingProfile;
 
-  /// + New agent's Agent (`member`) or Product Manager (`lead`) (task #4196),
-  /// or null outside one.
-  String? get agentKind => integration?.agentKind;
-
-  void setAgentKind(String kind) {
-    final destination = integration;
-    if (destination == null || locked || destination.agentKindLocked) return;
-    destination.agentKind = kind;
-    notifyListeners();
-  }
-
   /// Lists always choose. The launch menu and optional task prompt start.
   bool get returnCreates =>
       checking ||
@@ -4967,7 +4956,6 @@ class NewHarnessController extends ChangeNotifier {
       model: model,
       dsh: harness,
       swarmRole: integration?.swarmRole,
-      swarmSkillMode: integration?.swarmSkillMode,
       browser: browser,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty

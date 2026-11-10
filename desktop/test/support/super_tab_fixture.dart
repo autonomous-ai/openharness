@@ -617,25 +617,6 @@ class ConversationServer {
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
 
-  /// Each project's instructions as GET .../projects/:id/instructions answers them (backend store.ts
-  /// `instructions`), by project id; a project missing here reads as unavailable.
-  final instructions = <String, Map<String, dynamic>>{};
-
-  /// Each project's kept revisions, newest first, each with its `text`: the history read leaves the text out, the
-  /// read of one revision has it.
-  final instructionRevisions = <String, List<Map<String, dynamic>>>{};
-
-  /// False answers the instructions reads as a backend from before them: a 404 without the backend's own code.
-  bool instructionsRoute = true;
-
-  /// Every instructions read, by path.
-  final instructionReads = <String>[];
-
-  /// Each project's rules record as GET .../projects/:id/rules answers it (backend store.ts `projectRules`), by
-  /// project id; a project missing here reads as unavailable. False [rulesRoute] answers as a backend from before it.
-  final projectRules = <String, Map<String, dynamic>>{};
-  bool rulesRoute = true;
-  final rulesReads = <String>[];
   final state = <String, dynamic>{
     'version': 1,
     'id': 'tab',
@@ -1425,29 +1406,6 @@ class ConversationServer {
           }
           revision++;
         }
-      } else if (command['type'] == 'instructions.save') {
-        output.addAll(_saveInstructions(command, reader ?? 'owner'));
-      } else if (command['type'] == 'note.remove') {
-        _requireMember(reader ?? 'owner');
-        final project = _project(command['projectId'] as String);
-        final document = instructions[project['id']];
-        final notes = document?['notes'] as List? ?? const [];
-        if (!notes.any((n) => (n as Map)['id'] == command['noteId'])) {
-          throw const SuperTabFailure(
-            'NOT_FOUND',
-            'This note is unavailable.',
-            statusCode: 404,
-          );
-        }
-        final notesRevision = ((project['notesRevision'] as int?) ?? 0) + 1;
-        project['notesRevision'] = notesRevision;
-        document!
-          ..['notes'] = [
-            for (final note in notes)
-              if ((note as Map)['id'] != command['noteId']) note,
-          ]
-          ..['notesRevision'] = notesRevision;
-        revision++;
       }
       output.addAll(commandResult);
       final result = {
@@ -1484,32 +1442,6 @@ class ConversationServer {
       return text == null
           ? {'requestId': id, 'ok': false, 'error': 'Its machine is offline.'}
           : {'requestId': id, 'ok': true, 'text': text};
-    }
-    if (uri.pathSegments.length > 5 &&
-        uri.pathSegments[3] == 'projects' &&
-        uri.pathSegments[5] == 'instructions') {
-      return _readInstructions(path, uri);
-    }
-    if (uri.pathSegments.length == 6 &&
-        uri.pathSegments[3] == 'projects' &&
-        uri.pathSegments[5] == 'rules') {
-      rulesReads.add(path);
-      if (!rulesRoute) {
-        throw const SuperTabFailure(
-          'BACKEND_UNAVAILABLE',
-          'Not Found',
-          statusCode: 404,
-        );
-      }
-      final rules = projectRules[uri.pathSegments[4]];
-      if (rules == null) {
-        throw const SuperTabFailure(
-          'NOT_FOUND',
-          'This project is unavailable.',
-          statusCode: 404,
-        );
-      }
-      return jsonDecode(jsonEncode(rules)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.length > 2 &&
         uri.pathSegments[uri.pathSegments.length - 2] == 'attachments') {
@@ -1707,149 +1639,6 @@ class ConversationServer {
     }
     // The whole-Swarm reads are gone (section 4.11): nothing may still ask.
     throw superTabUpdateRequired;
-  }
-
-  Map<String, dynamic> _project(String id) {
-    final projects = state['projects'] ??= <dynamic>[
-      projectFixture('lead', state['name'] as String, 'lead'),
-    ];
-    return (projects as List).cast<Map<String, dynamic>>().firstWhere(
-      (p) => p['id'] == id,
-      orElse: () => throw const SuperTabFailure(
-        'NOT_FOUND',
-        'This project is unavailable.',
-        statusCode: 404,
-      ),
-    );
-  }
-
-  /// A viewer's write is refused as the backend refuses it (model.ts `author`).
-  void _requireMember(String id) {
-    final role = (state['people'] as List? ?? const [])
-        .cast<Map>()
-        .where((p) => p['id'] == id)
-        .firstOrNull?['role'];
-    if (role == 'viewer') {
-      throw const SuperTabFailure(
-        'READ_ONLY',
-        'You have read-only access to this Super Tab.',
-        statusCode: 403,
-      );
-    }
-  }
-
-  /// `instructions.save` as the backend runs it (commands.ts): on the revision the writer read, or refused
-  /// `INSTRUCTIONS_STALE`; a save moves the project's `instructionsRevision` and keeps the text and a revision.
-  Map<String, dynamic> _saveInstructions(Map command, String writer) {
-    // What the backend's schema and access check refuse (commands.ts, instructions.ts), in the order it does.
-    _requireMember(writer);
-    final text = command['text'];
-    final summary = command['summary'];
-    if (text is! String || text.isEmpty || utf8.encode(text).length > 65536) {
-      throw const SuperTabFailure(
-        'VALIDATION_ERROR',
-        'Project instructions are at most 64 KB, and not empty.',
-        statusCode: 400,
-      );
-    }
-    if (summary is! String ||
-        summary.trim().isEmpty ||
-        summary.trim().length > 200 ||
-        summary.contains(RegExp(r'[\r\n]'))) {
-      throw const SuperTabFailure(
-        'VALIDATION_ERROR',
-        'Summarize the change in one line.',
-        statusCode: 400,
-      );
-    }
-    final project = _project(command['projectId'] as String);
-    final projectId = project['id'] as String;
-    final current = (project['instructionsRevision'] as int?) ?? 0;
-    if (command['baseRevision'] != current) {
-      throw SuperTabFailure(
-        'INSTRUCTIONS_STALE',
-        'The instructions changed since revision ${command['baseRevision']}. '
-            'Merge your change into revision $current and save again.',
-        statusCode: 409,
-      );
-    }
-    if (current > 0 && instructions[projectId]?['text'] == text) {
-      return {
-        'projectId': projectId,
-        'revision': current,
-        'hash': instructions[projectId]?['hash'],
-        'unchanged': true,
-      };
-    }
-    final next = current + 1;
-    final hash = 'hash-$projectId-$next';
-    project['instructionsRevision'] = next;
-    instructions[projectId] = {
-      'projectId': projectId,
-      'notes': <dynamic>[],
-      ...?instructions[projectId],
-      'revision': next,
-      'hash': hash,
-      'text': command['text'],
-      'template': false,
-      'coordinatorName': project['coordinatorName'] ?? 'Product Manager',
-      'notesRevision': project['notesRevision'] ?? 0,
-    };
-    (instructionRevisions[projectId] ??= []).insert(0, {
-      'revision': next,
-      'hash': hash,
-      'summary': (summary).trim(),
-      'writtenBy': {'kind': 'person', 'id': writer},
-      'askedBy': command['askedBy'] ?? writer,
-      'at': '2026-10-30T00:00:00Z',
-      'text': command['text'],
-    });
-    revision++;
-    return {'projectId': projectId, 'revision': next, 'hash': hash};
-  }
-
-  /// The three instructions reads (backend routes/superTabs.ts): the document, its kept revisions without their
-  /// text, and one revision with it.
-  Map<String, dynamic> _readInstructions(String path, Uri uri) {
-    instructionReads.add(path);
-    if (!instructionsRoute) {
-      throw const SuperTabFailure(
-        'BACKEND_UNAVAILABLE',
-        'Not Found',
-        statusCode: 404,
-      );
-    }
-    const unavailable = SuperTabFailure(
-      'NOT_FOUND',
-      'This project is unavailable.',
-      statusCode: 404,
-    );
-    final projectId = uri.pathSegments[4];
-    final rest = uri.pathSegments.skip(6).toList();
-    Map<String, dynamic> copy(Object value) =>
-        jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
-    if (rest.isEmpty) {
-      return copy(instructions[projectId] ?? (throw unavailable));
-    }
-    final kept = instructionRevisions[projectId] ?? const [];
-    if (rest.length == 1 && rest.single == 'revisions') {
-      return copy({
-        'projectId': projectId,
-        'revisions': [
-          for (final row in kept) {...row}..remove('text'),
-        ],
-      });
-    }
-    final wanted = rest.length == 2 ? int.tryParse(rest.last) : null;
-    final row = kept.where((r) => r['revision'] == wanted).firstOrNull;
-    if (row == null) {
-      throw const SuperTabFailure(
-        'NOT_FOUND',
-        'This revision is unavailable.',
-        statusCode: 404,
-      );
-    }
-    return copy({'projectId': projectId, ...row});
   }
 
   /// Who asks, for the reads a [controller] makes: a private conversation is

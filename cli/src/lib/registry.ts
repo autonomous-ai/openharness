@@ -195,12 +195,6 @@ export interface RegisteredSession {
    */
   browser?: true
   /**
-   * The conversation this agent was in on its own login when a fresh move took it onto a grid
-   * (`agent_retarget` with `fresh`: a conversation too long for the grid model's window). The way
-   * home reopens it instead of the grid's, and forgets it once home. Absent when there is none.
-   */
-  subscriptionSessionId?: string
-  /**
    * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
    * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
    * process — a running agent cannot be moved to a different profile the way it can be retargeted
@@ -1442,9 +1436,6 @@ class Registry {
           ...(typeof raw?.subscriptionModel === 'string' && raw.subscriptionModel
             ? { subscriptionModel: raw.subscriptionModel }
             : {}),
-          ...(typeof raw?.subscriptionSessionId === 'string' && raw.subscriptionSessionId
-            ? { subscriptionSessionId: raw.subscriptionSessionId }
-            : {}),
           ...(raw.bypassPermission === true ? { bypassPermission: true } : {}),
           ...(permissionModeName(raw.permissionMode) ? { permissionMode: raw.permissionMode } : {}),
           ...(raw.terminalHost === true || engine === 'terminal' ? { terminalHost: true } : {}),
@@ -2137,8 +2128,6 @@ class Registry {
       ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
       // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
       ...(existing?.browser ? { browser: true as const } : {}),
-      // And for the conversation a fresh move left: the grid's first hook would otherwise forget the way home.
-      ...(existing?.subscriptionSessionId ? { subscriptionSessionId: existing.subscriptionSessionId } : {}),
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
@@ -2709,18 +2698,6 @@ class Registry {
     if (!session) return false
     if (args.length) session.launchArgs = [...args]
     else delete session.launchArgs
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Remember the conversation a fresh move onto a grid left on the own login, or forget it (null) once
-   *  the agent is back in it. Kept while the agent is on a grid, across moves between grids. */
-  setSubscriptionSession(agentId: string, sessionId: string | null): boolean {
-    const session = this.agents.get(agentId)
-    if (!session) return false
-    if (sessionId) session.subscriptionSessionId = sessionId
-    else delete session.subscriptionSessionId
     session.touchedAt = Date.now()
     this.save()
     return true

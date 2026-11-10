@@ -91,9 +91,7 @@ Future<void> _showProjectDetails(
                 ),
               ),
               SuperTabDetailRow(
-                label:
-                    c.snapshot?.coordinatorNameOf(project.id) ??
-                    kDefaultCoordinatorName,
+                label: kDefaultCoordinatorName,
                 value: group?.leadId == null
                     ? 'Starting…'
                     : c.snapshot!.agentName(group!.leadId!),
@@ -386,7 +384,7 @@ Future<void> _deleteProject(
                       children: [
                         Text(
                           available
-                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its ${c.snapshot?.coordinatorNameOf(project.id) ?? kDefaultCoordinatorName}’s session will close too. This can’t be undone.'
+                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its $kDefaultCoordinatorName’s session will close too. This can’t be undone.'
                               : 'This project is no longer available.',
                           style: DesktopChrome.text(),
                         ),

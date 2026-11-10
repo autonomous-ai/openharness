@@ -11,10 +11,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// until the change is carried across — or, if the two are meant to differ now,
 /// until the file leaves this list on purpose.
 // The desktop's Swarm is v4 only (anh Dee, 2026-11-10): its parts reader no longer reads v3's personal tasks, live
-// cards, linked tasks and task steps, whose files went, so the phone's copies of those are its own now.
+// cards, linked tasks and task steps, nor a project's instructions document, whose files went, so the phone's copies of
+// those are its own now.
 const _copies = {
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
-  'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
 };
 
 /// The phone's model is ahead of main's desktop copy, so it is no exact copy
