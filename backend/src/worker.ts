@@ -19,6 +19,7 @@ import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
+import { startAccountNames } from './superTabs/migration/accountNamesJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -74,6 +75,7 @@ async function start(): Promise<void> {
 
   let stopSweeps = (): void => {}
   let stopLegacyDrop = (): void => {}
+  let stopAccountNames = (): void => {}
   let stopTimeChecks = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
@@ -92,6 +94,7 @@ async function start(): Promise<void> {
     productUsagePeopleRollupService.stop()
     stopSweeps()
     stopLegacyDrop()
+    stopAccountNames()
     stopTimeChecks()
     stopDeliveries()
     stopRepush()
@@ -135,6 +138,8 @@ async function start(): Promise<void> {
   // The collections of what Swarm v4 removed, the Leads conversations through the store's own write, and the dead old state of
   // migrated Swarms, go by themselves, a few rows at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma, swarms)
+  // Once after this release: each Swarm's people take their accounts' names (superTabs/migration/accountNamesJob.ts).
+  stopAccountNames = startAccountNames(prisma, swarms)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
   // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)

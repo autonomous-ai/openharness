@@ -72,6 +72,9 @@ class SuperTabFixtureConnection extends WsConn {
 
   /// Refuses the next join as the backend would, before anything is written.
   SuperTabFailure? failJoin;
+
+  /// Refuses the next `agent.new`, as the backend refuses a name it will not give.
+  SuperTabFailure? failNew;
   WsRequestFailure? backendFailure;
 
   /// [backendFailure] refuses only commands: an older backend still answers
@@ -235,6 +238,13 @@ class SuperTabFixtureConnection extends WsConn {
         };
       }
       final body = payload['body'] as Map<String, dynamic>?;
+      if (body?['command'] case final Map command
+          when command['type'] == 'agent.new') {
+        if (failNew case final failure?) {
+          failNew = null;
+          throw failure;
+        }
+      }
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));

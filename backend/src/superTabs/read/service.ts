@@ -114,7 +114,7 @@ export class SwarmReads {
   private readonly db: PrismaClient
   private readonly now: () => number
   /** Reads the store's own database, on its clock unless given one (tests). */
-  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
+  constructor(private readonly store: SuperTabStore, options: { now?: () => number } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
     this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
@@ -135,7 +135,7 @@ export class SwarmReads {
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
-        ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
+        steps: true as const, ...view.parts,
         // The feed's newest page (task #4203): its history is read by its own index, not from the loaded working set.
         ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
@@ -445,7 +445,7 @@ export class SwarmReads {
     return { notify: await writeChatSetting(this.db, { tabId, personId: user.sub, conversationId, notify, now: this.now() }) }
   }
 
-  /** The person's Activity in this Swarm (activity.ts): replies to their messages and reactions to them, those they can read
+  /** The person's Activity in this Swarm (activity.ts): replies to their messages, those they can read
    *  now. A person reading as themselves only. */
   async activity(user: AuthUser, tabId: string): Promise<{ items: ActivityItem[]; more: boolean }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)

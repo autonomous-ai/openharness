@@ -229,12 +229,13 @@ void main() {
       return reader;
     }
 
-    // Two computers of this account, one a team's, one another's: only the account's own are its machines.
-    AppNotifier appWithMachines() {
+    // Two computers of this account, one a team's, one another's: only the account's own are its machines. Old Rig is off,
+    // unless [rigUp].
+    AppNotifier appWithMachines({bool rigUp = false}) {
       final app = createApp();
       addTearDown(app.dispose);
-      app.machines = const [
-        Machine(
+      app.machines = [
+        const Machine(
           machineId: 'm3',
           authMode: MachineAuthMode.remote,
           name: 'Mac 3',
@@ -244,16 +245,16 @@ void main() {
           machineId: 'rig',
           authMode: MachineAuthMode.remote,
           name: 'Old Rig',
-          status: 'offline',
+          status: rigUp ? 'running' : 'offline',
         ),
-        Machine(
+        const Machine(
           machineId: 'team',
           authMode: MachineAuthMode.remote,
           name: 'Studio · Team',
           status: 'running',
           sessionKind: 'team',
         ),
-        Machine(
+        const Machine(
           machineId: 'theirs',
           authMode: MachineAuthMode.remote,
           name: 'Teammate Mac',
@@ -277,7 +278,7 @@ void main() {
           await reader.show('lead');
           return reader;
         }),
-        withApp: appWithMachines(),
+        withApp: appWithMachines(rigUp: true),
       );
       expect(key('super-agent-kestrel'), findsOneWidget);
       for (final project in c.snapshot!.projects) {
@@ -348,6 +349,7 @@ void main() {
       expect(saved['agentsGroupOpen'], isTrue);
       expect(saved['projectsGroupOpen'], isFalse);
       expect(saved['yourMachinesGroupOpen'], isFalse);
+      expect(saved['yourMachinesGroupChosen'], isFalse);
       expect(saved['topTeamsGroupOpen'], isFalse);
       await tester.runAsync(c.flush);
     });
@@ -359,8 +361,7 @@ void main() {
         agents: [_agent('kestrel', 'Kestrel')],
         withApp: appWithMachines(),
       );
-      await tester.tap(key('project-sidebar-machines'));
-      await settle(tester);
+      // Old Rig is off: the list is open without a click.
       // Alphabetical; a team's pool and a teammate's computer are not its own.
       expect(key('super-machine-m3'), findsOneWidget);
       expect(key('super-machine-rig'), findsOneWidget);
@@ -394,6 +395,93 @@ void main() {
         lessThan(tester.getTopLeft(key('super-manage')).dy),
       );
       await tester.runAsync(c.flush);
+    });
+
+    testWidgets('Your Machines opens by itself while a computer is off, and '
+        'what its person chose stands', (tester) async {
+      // A computer is off: open, so why an agent is silent is in sight.
+      final app = appWithMachines();
+      final c = await show(
+        tester,
+        agents: [_agent('kestrel', 'Kestrel')],
+        withApp: app,
+      );
+      expect(key('super-machine-rig'), findsOneWidget);
+      expect(c.yourMachinesGroupChosen, isFalse);
+      // Their click folds it, and it stays folded while the computer is still off.
+      await tester.tap(key('project-sidebar-machines'));
+      await settle(tester);
+      expect(key('super-machine-rig'), findsNothing);
+      expect(c.yourMachinesGroupChosen, isTrue);
+      expect(c.yourMachinesGroupOpen, isFalse);
+      // The sidebar redraws as the Swarm reads again.
+      await tester.runAsync(c.refresh);
+      await settle(tester);
+      expect(key('super-machine-rig'), findsNothing);
+      // Opened again, it is theirs to keep open.
+      await tester.tap(key('project-sidebar-machines'));
+      await settle(tester);
+      expect(key('super-machine-rig'), findsOneWidget);
+      expect(c.savedForTest['yourMachinesGroupOpen'], isTrue);
+      expect(c.savedForTest['yourMachinesGroupChosen'], isTrue);
+      await tester.runAsync(c.flush);
+    });
+
+    testWidgets('Your Machines stays folded while every computer is up, and '
+        'opens when one goes off', (tester) async {
+      final app = appWithMachines(rigUp: true);
+      final c = await show(
+        tester,
+        agents: [_agent('kestrel', 'Kestrel')],
+        withApp: app,
+      );
+      expect(key('super-machine-m3'), findsNothing);
+      app.machines = [
+        for (final m in app.machines)
+          if (m.machineId == 'm3')
+            Machine(
+              machineId: 'm3',
+              authMode: MachineAuthMode.remote,
+              name: 'Mac 3',
+              status: 'offline',
+            )
+          else
+            m,
+      ];
+      await tester.runAsync(c.refresh);
+      await settle(tester);
+      expect(key('super-machine-m3'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-machine-m3'),
+          matching: find.text('offline'),
+        ),
+        findsOneWidget,
+      );
+      await tester.runAsync(c.flush);
+    });
+
+    test('a view saved with Your Machines open keeps it open; one saved '
+        'folded follows the computers', () {
+      SuperTabController saved(Map<String, dynamic> flags) =>
+          swarm().controller(
+            initial: {'tabId': 'tab', 'accountId': 'owner', ...flags},
+          );
+      expect(
+        saved({'yourMachinesGroupOpen': true}).yourMachinesGroupChosen,
+        isTrue,
+      );
+      expect(
+        saved({'yourMachinesGroupOpen': false}).yourMachinesGroupChosen,
+        isFalse,
+      );
+      expect(saved(const {}).yourMachinesGroupChosen, isFalse);
+      final chose = saved({
+        'yourMachinesGroupOpen': false,
+        'yourMachinesGroupChosen': true,
+      });
+      expect(chose.yourMachinesGroupChosen, isTrue);
+      expect(chose.yourMachinesGroupOpen, isFalse);
     });
 
     testWidgets('a person with no computer of their own sees no Your '
@@ -484,6 +572,24 @@ void main() {
       await tester.tap(key('super-human-p0'));
       expect(pages, [SwarmPage.leaderboard]);
       await tester.runAsync(c.flush);
+    });
+
+    testWidgets('a Swarm of one person with no points yet shows nothing; a '
+        'team with none keeps the heading, its way to the Leaderboard', (
+      tester,
+    ) async {
+      final reader = board([('owner', 0)]);
+      await tester.runAsync(() => reader.show('lead'));
+      final c = await show(tester, leaderboard: reader);
+      expect(key('project-sidebar-humans'), findsNothing);
+      expect(find.text('Top Teams'), findsNothing);
+      await tester.runAsync(c.flush);
+
+      final team = board([('dee', 0), ('owner', 0)]);
+      await tester.runAsync(() => team.show('lead'));
+      final c2 = await show(tester, setup: people, leaderboard: team);
+      expect(key('project-sidebar-humans'), findsOneWidget);
+      await tester.runAsync(c2.flush);
     });
 
     testWidgets('before the board is read, nothing: an empty list shows no '
