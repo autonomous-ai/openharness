@@ -27,7 +27,7 @@ import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
-import type { AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
@@ -41,6 +41,7 @@ import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
+import { sessionForPaneId } from '../lib/terminalRuntime.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { externalUnavailable, type ExternalSessionAnswer, type ExternalSessionRequest } from '../lib/externalSessionWire.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
@@ -219,7 +220,16 @@ export interface CoreApi {
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
      *  the core is not asked it. */
     lastActivity?(agentId: string): Promise<number | null>
+    /** The ids of every agent here, live and stopped, read now: what the agent browser keeps a browser for (a browser
+     *  whose agent is in neither is deleted). Absent where the core is not asked it; a failed or missing answer is no answer. */
+    ids?(): Promise<{ live: string[]; stopped: string[] }>
+    /** The live agent whose terminal is the pane [pane] (`$HARNESS_PANE`), or null: the agent browser's
+     *  tools in an agent's pane name it so. Absent where the core is not asked it. */
+    ofPane?(pane: string): Promise<string | null>
   }
+  /** A fixed-name product counter (`GatewayPort.usageCounter`): no id, URL, host, reason or content. Absent where the
+   *  core offers a service none. */
+  count?(metric: ProductUsageMetric): void
   /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
   turns: {
     /** Deliver text into a live agent. */
@@ -649,6 +659,15 @@ export interface Asker {
 }
 
 /**
+ * Whether [asker] may open, retry or change an agent's browser, which holds its person's logins: a process on this
+ * computer, or another of the owner's own apps and computers. Never `owner` alone, which a verified machine share also
+ * is, and never a guest.
+ */
+export function mayOpenBrowser(asker: Asker): boolean {
+  return (asker.local || asker.accountOwner === true) && !asker.guest
+}
+
+/**
  * A request a service answers for the apps: the reply, or a promise of it. A throw or a rejection is
  * answered `SERVICE_FAILED` by the host and counted against the service.
  *
@@ -686,6 +705,13 @@ export const ROUTER_REQUESTS = ['route_decide'] as const
 export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
 export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmSkillGrant | null | undefined> }
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
+/**
+ * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up and restarting Windows to
+ * finish (this computer only), a browser's state for its agent's tools (this computer only), and Retry and the settings
+ * (the machine's own person only, `mayOpenBrowser`).
+ */
+export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_restart', 'agent_browser_retry',
+  'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',
   'agent_instructions_read', 'agent_instructions_write'] as const
@@ -1037,6 +1063,25 @@ export interface AgentCleanupPort {
 }
 /** What the core gets when the cleanup fails: nothing told, and every harness left open, as before it. */
 export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
+
+/**
+ * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent with Browser ticked, and
+ * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
+ * runs in its own process: core/agentBrowserLink.ts).
+ */
+export interface AgentBrowserPort {
+  /** An agent is here and running: its browser starts, for one created with Browser. Idempotent, as `ViewersPort.attach`. */
+  attached(session: RegisteredSession): void
+  /** The agent stopped: its browser stops, and its profile stays for a resume. */
+  stopped(agentId: string): void
+  /** The agent was purged: its browser and its profile go. */
+  deleted(agentId: string): void
+  frameContext(agentId: string): AgentBrowserFrame | undefined
+  stop(): void
+}
+/** What the core gets when the agent browser fails: nothing told, and frames without a browser. A purge it misses is
+ *  finished when it next starts, which deletes the browser of every agent that is gone. */
+export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = { attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, stop: undefined }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
 export interface ViewersPort {
@@ -1915,10 +1960,11 @@ export interface CorePorts {
   cloud: CloudPort | null
   superTabs: SuperTabsPort | null
   sharedMachines: SharedMachinesCorePort | null
+  agentBrowser: AgentBrowserPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null, agentBrowser: null }
 }
 
 export interface CoreApiDeps {
@@ -1998,6 +2044,8 @@ export interface CoreApiDeps {
   /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
   turnCard: CoreApi['clients']['turnCard']
   turnSummary: CoreApi['clients']['turnSummary']
+  /** Where a service's product counters go (`count`); absent, nowhere. */
+  count?: CoreApi['count']
   log?: (line: string) => void
 }
 
@@ -2007,7 +2055,7 @@ export function createCoreApi({
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
-  log = (line) => console.warn(line),
+  count, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
   // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
@@ -2059,7 +2107,10 @@ export function createCoreApi({
         const session = registry.byAgent(agentId)
         return session && activityAt ? activityAt(session) : null
       },
+      ids: async () => ({ live: registry.list().map(session => session.agentId), stopped: stoppedAgents.ids() }),
+      ofPane: async (pane) => sessionForPaneId(registry.list(), pane)?.agentId ?? null,
     },
+    ...(count ? { count } : {}),
     turns,
     questions,
     transcripts: { databaseHistory, lastTurn, ...(nativeTurns ? { nativeTurns } : {}) },

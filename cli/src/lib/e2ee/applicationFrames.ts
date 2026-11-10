@@ -41,6 +41,9 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // An agent's instructions file (services/projects.ts), read and saved from the owner's other computers: what the person
   // wrote there is theirs, so the relay sees none of it, in either direction.
   'agent_instructions_read', 'agent_instructions_write',
+  // An agent's browser from the owner's other computers (services/agentBrowser.ts): its settings carry the proxy and its
+  // password, a proxy test's answer the proxy's exit address.
+  'agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
   'browser_callback', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))

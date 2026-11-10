@@ -43,6 +43,8 @@ const MIN_MEMORY_BYTES = 3 * 1024 ** 3
 const MIN_VERSION: readonly [number, number] = [4, 6]
 // Enough of Podman's complaint to act on, never a whole build log.
 const MESSAGE_LIMIT = 2_000
+// An image build prints a line per package it installs, past execFile's 1 MB default, which kills the child.
+const OUTPUT_LIMIT = 64 * 1024 * 1024
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
 function installedPaths(platform: NodeJS.Platform): string[] {
@@ -95,7 +97,7 @@ export function createPodman(deps: {
     return await new Promise((done, fail) => {
       // The daemon was started by launchd or systemd, not a shell: the login shell's environment is what the
       // person's own `podman` sees (its machine connections, its helpers on PATH).
-      const child = execFile(file, args, { env: oneShotParentEnv(), timeout: timeoutMs, ...ownProcessGroup() }, (error, stdout, stderr) => {
+      const child = execFile(file, args, { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
         if (!error) return done({ stdout, stderr })
         fail(new PodmanError('podman_failed', error.killed
           ? `podman ${args[0]} timed out after ${timeoutMs} ms`

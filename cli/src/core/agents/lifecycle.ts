@@ -54,11 +54,15 @@ export interface LifecycleDeps {
   prepareSessionResume: ResumeAgentServiceDeps['prepareSessionResume']
   refreshGridWebSearch: ResumeAgentServiceDeps['refreshGridWebSearch']
   attachDsh: ResumeAgentServiceDeps['attachDsh']
+  attachBrowser?: ResumeAgentServiceDeps['attachBrowser']
   attachSession: ResumeAgentServiceDeps['attachSession']
   relaunchMarks?: ResumeAgentServiceDeps['relaunchMarks']
   /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The harnesses it started close with it
    *  (services/agentCleanup.ts `closed`). */
   stopped?: (agentId: string) => void
+  /** An agent was purged: its conversation is gone for good, and with it its agent browser's profile
+   *  (services/agentBrowser.ts `deleted`). A stop keeps the profile, so the login survives a resume. */
+  purged?: (agentId: string) => void
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
   /** Whether the agent is a Lead the core must never stop, as core/main.ts hands it in; absent, none is. */
@@ -74,7 +78,7 @@ export class LeadProtectedError extends Error {
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer, moveHeld,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
   leadProtected,
 }: LifecycleDeps) {
   /**
@@ -108,13 +112,14 @@ export function createAgentLifecycle({
       if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
       registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))
       send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
+      purged?.(s.agentId)
     },
   })
 
   const resume = createResumeAgentService({
     registry, stoppedAgents, createBackend, noBackendCode, backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
+    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks,
   })
   const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
     // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never

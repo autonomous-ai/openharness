@@ -801,6 +801,19 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
+    it('with Browser ticked, the row says so and its browser is attached; without, neither', async () => {
+      const attachBrowser = vi.fn()
+      vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, browser: true } } as never)
+      const { create } = setup({ attachBrowser })
+      await create(request({ browser: true }))
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ browser: true })
+      expect(attachBrowser).toHaveBeenCalledWith({ ...pending, browser: true })
+      vi.mocked(createAndRegisterPane).mockClear().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
+      await create(request())
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('browser')
+      expect(attachBrowser).toHaveBeenCalledTimes(1)
+    })
+
     it('as a DSH: its workspace prepared, trusted when it went into an empty folder, and its launch layered on', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       vi.mocked(materializeWorkspace).mockResolvedValue({ warnings: ['kept AGENTS.md'], created: ['template/scene.blend'], kept: [] } as never)

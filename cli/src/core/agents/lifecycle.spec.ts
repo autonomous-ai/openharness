@@ -79,6 +79,12 @@ describe('stopping, purging and resuming an agent', () => {
     })
   })
 
+  it('hands the resume the agent browser\'s attach, so a resumed agent gets its browser back', () => {
+    const attachBrowser = vi.fn()
+    setup({ attachBrowser })
+    expect(vi.mocked(createResumeAgentService).mock.calls[0]![0]).toMatchObject({ attachBrowser })
+  })
+
   it('stops through the stop service, then tells the cleanup the agent was stopped, never while the stop can fail', async () => {
     // A harness closed takes the harnesses it started with it (services/agentCleanup.ts): a window's close and Stop
     // Harness, `harness close` and a purge all stop through here.
@@ -184,6 +190,16 @@ describe('stopping, purging and resuming an agent', () => {
       purge.deleted(row({ sessionId: '' }))
       expect(deps.mirror.deleteHistory).toHaveBeenCalledTimes(1)
       expect(deps.registry.deleteSavedNames).toHaveBeenLastCalledWith(['a1'])
+    })
+
+    // The agent browser's profile volume holds the agent's logins: only a purge deletes it, never a stop.
+    it('purge calls agentBrowser.deleted; a plain stop does not', async () => {
+      const purged = vi.fn()
+      const { lifecycle, purge } = setup({ purged })
+      await lifecycle.stopAgent('a1')
+      expect(purged).not.toHaveBeenCalled()
+      purge.deleted(row())
+      expect(purged).toHaveBeenCalledWith('a1')
     })
   })
 

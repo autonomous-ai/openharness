@@ -13,6 +13,7 @@ declare const __BROWSER_POLICY__: string
 declare const __BROWSER_TOOLS_JSON__: string
 declare const __BROWSER_TOOLS__: string
 declare const __BROWSER_TOOLS_LIB__: string
+declare const __BROWSER_SOCKS5__: string
 
 /** The Containerfile installs exactly this version; the tool server uses only its public API. */
 export const PLAYWRIGHT_CORE_VERSION = '1.58.2'
@@ -30,6 +31,8 @@ export function browserContextFiles(): Record<string, string> {
     'browser-tools.json': asset(typeof __BROWSER_TOOLS_JSON__ === 'string' ? __BROWSER_TOOLS_JSON__ : undefined, 'browser-tools.json'),
     'browser-tools.mjs': asset(typeof __BROWSER_TOOLS__ === 'string' ? __BROWSER_TOOLS__ : undefined, 'browser-tools.mjs'),
     'browser-tools-lib.mjs': asset(typeof __BROWSER_TOOLS_LIB__ === 'string' ? __BROWSER_TOOLS_LIB__ : undefined, 'browser-tools-lib.mjs'),
+    // Its socks5.d.mts types it for the CLI's own import (exitLookup.ts) and is not part of the image.
+    'socks5.mjs': asset(typeof __BROWSER_SOCKS5__ === 'string' ? __BROWSER_SOCKS5__ : undefined, 'socks5.mjs'),
   }
 }
 

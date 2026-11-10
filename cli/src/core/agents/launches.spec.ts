@@ -545,6 +545,18 @@ describe('agent_create, launched', () => {
     expect(Object.keys(none!)).not.toContain('parentAgentId')
   })
 
+  // Browser ticked in New agent: a sandboxed Chrome starts beside it (services/agentBrowser.ts). Only true asks for one.
+  it('hands on Browser ticked, and nothing for any other value', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', browser: true })
+    await ask({ engine: 'claude', cwd: '/w', browser: 'yes' })
+    await ask({ engine: 'claude', cwd: '/w' })
+    const [ticked, odd, none] = vi.mocked(create!).mock.calls.map(([input]) => input)
+    expect(ticked).toMatchObject({ browser: true })
+    expect(Object.keys(odd!)).not.toContain('browser')
+    expect(Object.keys(none!)).not.toContain('browser')
+  })
+
   it('opens a terminal in the home folder, bypasses permission unless told not to, and takes blank choices as none', async () => {
     const { ask, create } = setup()
     vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'absent' } as never).mockReturnValueOnce({ state: 'ok', override: { networkId: 'g' } } as never)

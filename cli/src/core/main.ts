@@ -107,7 +107,7 @@ import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { dshThrough } from './agents/dshThrough.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
-import type { AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { confirmHomes, sessionCodexHome } from '../lib/engineHomes.js'
 import { sessionStoreContracts } from '../engines/sessionStoreContracts.js'
@@ -204,8 +204,9 @@ import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
+import { createAgentBrowserLink, wakeAgentBrowser } from './agentBrowserLink.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
-import { AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
@@ -424,6 +425,8 @@ let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | 
 let waitingForRef: ((s: RegisteredSession) => 'engine' | null) | null = null
 
 let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
+/** Set by runForeground once the agent browser can be asked: an agent's browser, for its frame (services/agentBrowser.ts). */
+let browserFrameRef: ((agentId: string) => AgentBrowserFrame | undefined) | null = null
 
 /** Aggregate snapshots only; populated after the optional usage port is composed. */
 let usagePortRef: UsageSnapshots | null = null
@@ -440,6 +443,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null): Promi
     activity: () => activityFrameContextRef?.(s) ?? null,
     waitingFor: () => waitingForRef?.(s) ?? null,
     gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
+    browser: browserFrameRef?.(s.agentId),
   })
 }
 
@@ -934,6 +938,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The recaps' cards and recaps (services/recaps.ts) down the doors they took from here, and a turn's final answer.
     turnCard: (frame) => backendRef?.sendCommander(frame), turnSummary: (frame) => backendRef?.send(frame), lastTurn: (sessionId) => readLastTurn(sessionId),
+    // A service's product counters (the agent browser's), to the gateway's report, as the socket's own are.
+    count: (metric) => backendRef?.countUsage(metric),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
     // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
@@ -1510,6 +1516,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const requestsOf: Record<string, readonly string[]> = {
     search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
     devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
+    agentBrowser: AGENT_BROWSER_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
   }
   // The experiments (core/api.ts `EXPERIMENTS`): each may act on the core through the hooks an experiment has.
@@ -1593,6 +1600,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
   const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts))
+  // What the core tells the agent browser in its own process, keeps of what it says, and answers it (core/agentBrowserLink.ts).
+  const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame, opts) => serviceLinks.notify('agentBrowser', frame, opts), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
@@ -1602,7 +1611,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // once needed: a request asks. Shell and Agent Messages are in the always-running edge host, but a first request
     // can beat that host's connection. Hold it through the same bounded startup gate; after any disconnect, fail
     // promptly as before. Under a master from before, Agent Messages' own process starts at its first request this way.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell', 'messages']),
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell', 'messages', 'agentBrowser']),
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`).
     waitsThroughRestart: new Set(['store']),
@@ -1628,6 +1637,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload, authority)
       : service === 'shell' ? answerShellQuery(coreApi, query, payload)
       : service === 'agentCleanup' ? agentCleanupLink.answer(query, payload)
+      : service === 'agentBrowser' ? agentBrowserLink.answer(query, payload)
       : service === 'recaps' ? recapsLink.answer(query, payload) : answerAgentQuery(coreApi, query, payload)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
@@ -1652,6 +1662,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'superTabs') swarmDoors?.cards.serviceUp()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
       if (service === 'viewers') viewersLink.connected()
+      if (service === 'agentBrowser') agentBrowserLink.connected()
       devicesWake.connected(service)
       viewersWake.connected(service)
       // A service up again (or up at last): the agents held for it are launched (core/agents/heldLaunches.ts).
@@ -1675,6 +1686,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'devices') { devicesLink.disconnected(); swarmDoors?.cards.devicesGone() }
       if (service === 'wifi') wifiCore.stopped()
       if (service === 'recaps') recapsLink.disconnected()
+      if (service === 'agentBrowser') agentBrowserLink.disconnected()
       void terminalWatch.gone(service)
     },
   })
@@ -1773,6 +1785,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
   if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm ? { retained: swarm.retainedHarnesses, closed: swarm.recordCleanupClose } : undefined), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
+  // A sandboxed Chrome beside each agent created with Browser (services/agentBrowser.ts): in its own process, on
+  // demand (services/agentBrowserProcess.ts), or in this one.
+  if (outOfProcess.has('agentBrowser')) ports.agentBrowser = agentBrowserLink.port
+  else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
+  browserFrameRef = (agentId) => ports.agentBrowser?.frameContext(agentId)
+  backend.browserFrameProvider = browserFrameRef
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
@@ -2251,6 +2269,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     devicesWake.start(outOfProcess)
     wakeModels({ outOfProcess, dataDir: env.ADAPTER_DATA_DIR, runtimeDir: env.ADAPTER_RUNTIME_DIR, want: (service) => coreLink.want(service) })
     wakeViewers({ wake: viewersWake, agents: () => registry.list(), dataDir: env.ADAPTER_DATA_DIR })
+    wakeAgentBrowser({ outOfProcess, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }
@@ -2623,6 +2642,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
+  // And every agent created with Browser gets its browser back.
+  for (const session of registry.list()) if (session.browser) ports.agentBrowser?.attached(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
   // pending Cursor tasks this boot, not no daemon.
@@ -2784,6 +2805,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     watchNewPane,
     announceSession,
     attachDsh,
+    attachBrowser: (session) => ports.agentBrowser?.attached(session),
     prepareApiTools,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
@@ -2890,10 +2912,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     refreshGridWebSearch,
     attachDsh,
+    attachBrowser: (session) => ports.agentBrowser?.attached(session),
     attachSession: (session) => attachSession(session),
     relaunchMarks,
-    // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts).
-    stopped: (agentId) => ports.agentCleanup?.closed(agentId),
+    // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts), and its browser
+    // stops, its login kept (services/agentBrowser.ts).
+    stopped: (agentId) => { ports.agentCleanup?.closed(agentId); ports.agentBrowser?.stopped(agentId) },
+    // Purged: its browser and its login go too.
+    purged: (agentId) => ports.agentBrowser?.deleted(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
     // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
     ...(swarm ? { leadProtected: (agentId: string, leadSwitch?: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId, leadSwitch) } : {}),

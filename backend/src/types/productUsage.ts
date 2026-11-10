@@ -217,6 +217,17 @@ export const PRODUCT_USAGE_LAUNCH_METRICS = [
 export const PRODUCT_USAGE_ACTION_MEASURES = ['requests', 'ok', 'failed', 'pending', 'unknown',
   'error_setup', 'error_auth', 'error_unavailable', 'error_invalid', 'error_other',
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
+/** The agent browser's failed states (cli/src/services/agentBrowser/browsers.ts) and its stream's close reasons. */
+export const AGENT_BROWSER_FAILED_STATES = ['needs_setup', 'podman_install_failed', 'podman_manual', 'podman_old', 'podman_memory',
+  'state_unreadable', 'podman_down', 'image_failed', 'browser_stopped', 'profile_unwritable', 'proxy_failed', 'browser_limit'] as const
+export const AGENT_BROWSER_CLOSE_REASONS = ['closed', 'agent', 'rate', 'backlog', 'route'] as const
+/** The agent browser's outcomes, each a counter of its own (`browser_open` already counts a pane opening an address):
+ * from the daemon's service and core, and `agent_browser_opened` from the Desktop. Never an id, URL, host or reason. */
+export const PRODUCT_USAGE_AGENT_BROWSER_METRICS = ['agent_browser_enabled', 'agent_browser_setup_ok', 'agent_browser_setup_failed',
+  'agent_browser_start_ok', 'agent_browser_start_failed', ...AGENT_BROWSER_FAILED_STATES.map(state => `agent_browser_failed_${state}` as const),
+  'agent_browser_limit_dropped', 'agent_browser_challenge_seen', 'agent_browser_proxy_set', 'agent_browser_proxy_removed',
+  'agent_browser_proxy_test_ok', 'agent_browser_proxy_test_failed', 'agent_browser_stream_opened',
+  ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened'] as const
 export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_HEALTH_METRICS,
   'active_installation_days', 'working_installation_days', 'first_work_installations',
@@ -255,6 +266,7 @@ export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS,
   ...PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS,
   'ui_phone_first_open',
+  ...PRODUCT_USAGE_AGENT_BROWSER_METRICS,
   // Written by the backend itself: a report that named counters this backend does not know yet, which
   // it kept without them (routes/productUsage.ts). One per report, never the names.
   'health_cli_report_unknown_metric', 'health_desktop_report_unknown_metric', 'health_phone_report_unknown_metric',

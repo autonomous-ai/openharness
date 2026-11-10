@@ -79,6 +79,8 @@ export interface CreateAgentDeps {
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
   attachDsh: (session: RegisteredSession) => void
+  /** Its browser starts, for an agent created with Browser (core/api.ts `AgentBrowserPort.attached`). */
+  attachBrowser?: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   /** The hook server's port, which installed engine hooks post to. */
   hookPort: number
@@ -112,7 +114,7 @@ async function swarmFolder(cwd: string): Promise<boolean> {
 }
 
 export function createAgentCreator({
-  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
+  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh, attachBrowser,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, swarmLaunch,
 }: CreateAgentDeps) {
@@ -121,7 +123,7 @@ export function createAgentCreator({
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
     if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
-    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
+    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
     let createBackend = initialBackend
     if (!createBackend && recoverBackend) {
       createBackend = await recoverBackend()
@@ -453,6 +455,7 @@ export function createAgentCreator({
       label: dshLabel,
       startedBy: startedBy ?? null,
       parentAgentId: parentAgentId ?? null,
+      ...(browser ? { browser: true } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result
@@ -468,6 +471,7 @@ export function createAgentCreator({
     }
     announceSession(pending)
     if (pending.dsh) attachDsh(pending)
+    if (pending.browser) attachBrowser?.(pending)
 
     void watchNewPane(engine, pending, spawned, command, installIfMissing, undefined)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)

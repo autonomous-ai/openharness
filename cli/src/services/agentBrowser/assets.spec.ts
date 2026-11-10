@@ -24,9 +24,9 @@ describe('browser assets', () => {
   })
 
   it('the bundle\'s copies win over the files', () => {
-    for (const name of ['CONTAINERFILE', 'ENTRYPOINT', 'POLICY', 'TOOLS_JSON', 'TOOLS', 'TOOLS_LIB']) vi.stubGlobal(`__BROWSER_${name}__`, `bundled ${name}`)
+    for (const name of ['CONTAINERFILE', 'ENTRYPOINT', 'POLICY', 'TOOLS_JSON', 'TOOLS', 'TOOLS_LIB', 'SOCKS5']) vi.stubGlobal(`__BROWSER_${name}__`, `bundled ${name}`)
     expect(Object.values(browserContextFiles()).sort()).toEqual([
-      'bundled CONTAINERFILE', 'bundled ENTRYPOINT', 'bundled POLICY', 'bundled TOOLS', 'bundled TOOLS_JSON', 'bundled TOOLS_LIB',
+      'bundled CONTAINERFILE', 'bundled ENTRYPOINT', 'bundled POLICY', 'bundled SOCKS5', 'bundled TOOLS', 'bundled TOOLS_JSON', 'bundled TOOLS_LIB',
     ])
   })
 

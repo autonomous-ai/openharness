@@ -157,6 +157,20 @@ describe('createAndRegisterPane', () => {
     expect(person.ok && person.pending).not.toHaveProperty('parentAgentId')
   })
 
+  it('records Browser ticked on the row it opens', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const ticked = await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
+      argv: ['claude'], browser: true,
+    })
+    expect(ticked.ok && ticked.pending).toMatchObject({ browser: true })
+    const plain = await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-2', argv: ['claude'],
+    })
+    expect(plain.ok && plain.pending).not.toHaveProperty('browser')
+  })
+
   it('does not retry a tmux spawn failure', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

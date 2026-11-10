@@ -406,6 +406,14 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('ask')
   })
 
+  // Its browser and its login were kept while it was stopped: the resume starts it again.
+  it('attaches the browser of an agent created with Browser', async () => {
+    const attachBrowser = vi.fn()
+    rewrite({ browser: true })
+    expect(await createResumeAgentService({ ...deps, attachBrowser })(saved.agentId)).toMatchObject({ ok: true })
+    expect(attachBrowser).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, browser: true }))
+  })
+
   it('does not join concurrent Open requests with different permission choices', async () => {
     const stop = deferred<void>(); (deps.stopJobs as Map<string, Promise<void>>).set(saved.agentId, stop.promise)
     const resume = createResumeAgentService(deps)

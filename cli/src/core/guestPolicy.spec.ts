@@ -34,6 +34,16 @@ describe('what a guest may ask', () => {
     }
   })
 
+  // Review Focus 1 of the agent browser: a share guest's session is `owner` too, and the browser holds the owner's logins.
+  // The policy is default-deny, so every browser frame and request is refused before any service hears it.
+  it('the guest policy refuses every agent_browser type', () => {
+    for (const type of ['agent_browser_open', 'agent_browser_ack', 'agent_browser_close',
+      'agent_browser_available', 'agent_browser_setup', 'agent_browser_restart', 'agent_browser_retry', 'agent_browser_state',
+      'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+      expect(verdict(type, { agentId: 'mine' }), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
+    }
+  })
+
   it('reads none of the owner\'s plan allowances: its harnesses run on its own sign-in (anh Dee, 2026-11-07)', () => {
     expect(verdict('usage_read')).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
     expect(verdict('usage_read', { profile: { engine: 'claude', id: 'default' } })).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })

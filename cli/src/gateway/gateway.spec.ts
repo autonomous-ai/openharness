@@ -67,12 +67,12 @@ const queuedFor = (socket: BackendSocket, connId: string): Frame[] =>
 
 /** A paired client with a live session on `connId`: it proves its identity with a hello and reads the
  *  welcome, as the phone app does, so what it seals opens under the gateway's real session. */
-async function pairedClient(socket: BackendSocket, connId: string, opts: { role?: 'web' | 'device'; label?: string; shared?: boolean } = {}) {
+async function pairedClient(socket: BackendSocket, connId: string, opts: { role?: 'web' | 'device'; label?: string; shared?: boolean; machineId?: string } = {}) {
   const gateway = gatewayOf(socket)
   const identity = C.newIdentity()
   const pub = C.b64e(identity.pub)
-  const store = (gateway.e2ee as unknown as { store: { addPaired(pub: string, label: string, at: number, role: string, peer?: { shared?: boolean }): void } }).store
-  store.addPaired(pub, opts.label ?? 'Dee’s phone', Date.now(), opts.role ?? 'web', { shared: opts.shared })
+  const store = (gateway.e2ee as unknown as { store: { addPaired(pub: string, label: string, at: number, role: string, peer?: { shared?: boolean; kind?: 'machine'; machineId?: string }): void } }).store
+  store.addPaired(pub, opts.label ?? 'Dee’s phone', Date.now(), opts.role ?? 'web', { shared: opts.shared, ...(opts.machineId ? { kind: 'machine', machineId: opts.machineId } : {}) })
   const eph = C.newEphemeral()
   await dispatchDown(socket, { type: 'e2e_hello', payload: { identityPub: pub, ephPub: C.b64e(eph.pub), sig: C.b64e(C.helloSig(identity.priv, MACHINE, eph.pub)) } }, connId)
   // The latest: a second hello on a connection replaces its session.
@@ -98,6 +98,18 @@ describe('a remote client, as the core hears it', () => {
     expect(socket.remoteClient('phone-1')).toEqual({ role: 'web', label: 'Dee’s phone', identity: phone.pub, direct: false, accountOwner: true })
     await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'phone-1')
     expect(socket.remoteClient('phone-1')).toBeNull()
+    await socket.stop()
+  })
+
+  // The agent browser opens only for the machine's own person (core/api.ts `mayOpenBrowser`): a verified machine share is
+  // `owner` too, so the rule stands on `accountOwner`, which the gateway sets from the pairing record alone.
+  it('accountOwner is set for the owner\'s other machine, and never for a shared machine', async () => {
+    const socket = relaySocket(MACHINE)
+    await pairedClient(socket, 'other-mac', { machineId: 'machine-2', label: 'Dee’s Mac' })
+    await pairedClient(socket, 'shared-mac', { machineId: 'machine-3', label: 'Kim’s Mac', shared: true })
+    expect(socket.remoteClient('other-mac')).toMatchObject({ accountOwner: true, machineId: 'machine-2' })
+    expect(socket.remoteClient('shared-mac')).toMatchObject({ accountOwner: false })
+    expect(socket.remoteClient('shared-mac')).not.toHaveProperty('machineId')
     await socket.stop()
   })
 

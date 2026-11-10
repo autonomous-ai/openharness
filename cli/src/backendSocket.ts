@@ -37,7 +37,8 @@ import type { StartedBy } from './lib/agentAttribution.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { engineInstallLine, engineInstallRecipe } from './lib/engineInstall.js'
 import { supportsFirstPrompt } from './lib/engineLaunch.js'
-import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
+import { agentFrame, type AgentBrowserFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
+import type { ProductUsageMetric } from './lib/productUsageContract.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { OwnerCommands, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
@@ -71,6 +72,11 @@ const TERMINAL_UPLOAD_CONTROL_TYPES: ReadonlySet<string> = new Set(['terminal_ch
 const MESSAGE_REQUESTS: ReadonlySet<string> = new Set(MESSAGES_REQUESTS)
 /** Share's requests, which the frame log leaves out as well: they carry who a harness is shared with. */
 const SHARE_REQUEST_TYPES: ReadonlySet<string> = new Set(SHARE_REQUESTS)
+/** The agent browser's frames are never logged, in or out: its settings carry a proxy's password, their replies the
+ *  proxy's host, and a proxy test's the proxy's exit address (services/agentBrowser.ts). */
+const UNLOGGED_BROWSER = 'agent_browser_'
+/** Whether an outgoing frame goes to the frame log (`LOG_FRAMES`). */
+const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).startsWith(UNLOGGED_BROWSER)
 
 export type Frame = Record<string, unknown>
 
@@ -210,6 +216,8 @@ export class BackendSocket {
     /** The harness here whose agent started it, when one in a Harness pane did (registry `parentAgentId`); only with
      *  `startedBy: 'agent'`. The windows open the new harness beside it and say who started it. */
     parentAgentId?: string | null
+    /** Browser ticked: a sandboxed Chrome runs beside it (services/agentBrowser.ts), kept on the row. */
+    browser?: boolean
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `remote_terminal_handoff` — cli.ts names the agent whose tile is that tmux pane, or null. */
@@ -222,6 +230,8 @@ export class BackendSocket {
   /** What a message to an agent waits for now (core/input.ts `waitingFor`): its frame says so. */
   waitingForProvider: ((session: RegisteredSession) => 'engine' | null) | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
+  /** An agent's sandboxed browser, as the agent browser last said (core/api.ts `AgentBrowserPort.frameContext`). */
+  browserFrameProvider: ((agentId: string) => AgentBrowserFrame | undefined) | null = null
   /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
   viewerStreams: ViewerStreams | null = null
   /** A viewer stream's frame to the one connection that opened it: false when it cannot reach it. */
@@ -384,6 +394,24 @@ export class BackendSocket {
   /** A remote client the gateway holds a session with: its role and the label it was paired under. */
   remoteClient(connId: string): RemoteClient | null {
     return this.remoteClients.get(connId) ?? null
+  }
+
+  /**
+   * Who a connection is, as the core established it: what a service trusts, never a payload's word. A window or tool
+   * here is local; a remote client is what its session proved (`role`, a guest, the owner's own account). A frame passes
+   * its own `local` and `role`, stamped as it was queued, which outlive the connection it came on.
+   */
+  askerFor(connId: string, local = this.localClients.has(connId), role: RemoteRole | null = this.remoteClient(connId)?.role ?? null): Asker {
+    const client = local ? null : this.remoteClient(connId)
+    const guest = client?.guest
+    return {
+      local,
+      owner: local || (role === 'web' && guest === undefined),
+      ...(!local ? { accountOwner: client?.accountOwner === true } : {}),
+      ...(client?.machineId ? { machine: { machineId: client.machineId, label: client.label } } : {}),
+      ...(guest !== undefined ? { guest } : {}),
+      connection: connId,
+    }
   }
 
   constructor(machineId: string, onStatus: (connected: boolean) => void = () => {}) {
@@ -594,7 +622,7 @@ export class BackendSocket {
     // The orchestrator's state it cannot read (a full disk: reading makes its folder) must not cost every
     // frame after it (e2e/diskfull.e2e.ts).
     try { this.onFrameSent?.(frame) } catch { /* the frame goes out regardless */ }
-    if (env.LOG_FRAMES) logFrame('→', 'web', frame)
+    if (logged(frame)) logFrame('→', 'web', frame)
     for (const [connId, sink] of this.localClients) {
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
     }
@@ -605,7 +633,7 @@ export class BackendSocket {
    *  gateway when it carries content — and never the windows here, which are told through `sendLocal`. An
    *  agent's question goes both ways (core/questions.ts): `send` would add the tool connections too. */
   sendRemote(frame: Frame): void {
-    if (env.LOG_FRAMES) logFrame('→', 'web', frame)
+    if (logged(frame)) logFrame('→', 'web', frame)
     this.toRemoteApps(frame)
   }
 
@@ -641,7 +669,7 @@ export class BackendSocket {
     for (const [connId, sink] of this.localClients) {
       if (this.toolClients.has(connId)) continue
       const sent = typeof frame === 'function' ? frame(connId) : frame
-      if (env.LOG_FRAMES) logFrame('→', 'local', sent)
+      if (logged(sent)) logFrame('→', 'local', sent)
       if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
     }
   }
@@ -650,7 +678,7 @@ export class BackendSocket {
   sendLocalTo(connId: string, frame: Frame): boolean {
     const sink = this.localClients.get(connId)
     if (!sink) return false
-    if (env.LOG_FRAMES) logFrame('→', 'local', frame)
+    if (logged(frame)) logFrame('→', 'local', frame)
     if (sink.sendFrame(frame)) return true
     void this.unregisterLocalClient(connId)
     return false
@@ -747,6 +775,9 @@ export class BackendSocket {
 
   /** A loopback client that said it is a tool (`harness pair`, the MCP server), not a window. */
   isToolClient(connId: string): boolean { return this.toolClients.has(connId) }
+
+  /** A service's fixed-name product counter (core/api.ts `CoreApi.count`), into the gateway's report as the socket's own. */
+  countUsage(metric: ProductUsageMetric): void { this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)) }
 
   /** The windows attached right now — for a listener that arrives after some of them did. */
   localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
@@ -916,7 +947,7 @@ export class BackendSocket {
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = rpcResultType(type)
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && !type.startsWith('agent_instructions_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && type !== 'phone_pair' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && !type.startsWith('agent_instructions_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -977,7 +1008,7 @@ export class BackendSocket {
     // actually asked for rather than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && !type.startsWith('agent_instructions_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && !type.startsWith('grid_fleet_') && !type.startsWith('agent_instructions_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const launchMeasured = productUsageLaunch(type, (frame.payload as { creationId?: unknown } | undefined)?.creationId,
@@ -1074,11 +1105,7 @@ export class BackendSocket {
     // A request a service answers, in its own process or in this one: routed to it, or answered
     // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
     // Who asked is established here, after the gates above, and the service trusts only that.
-    const client = local ? null : this.remoteClient(connId)
-    const asker: Asker = { local, owner, ...(!local ? { accountOwner: client?.accountOwner === true } : {}),
-      ...(client?.machineId ? { machine: { machineId: client.machineId, label: client.label } } : {}),
-      ...(guest !== undefined ? { guest } : {}),
-      connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
+    const asker: Asker = { ...this.askerFor(connId, local, role), ...(typeof requestId === 'string' ? { requestId } : {}) }
     // A window that draws row state asks for the models list with `rowState`, and the list's changes are
     // pushed to it in that form (`pushGridModels`). Noted here, by connection: the models service answers
     // the list, and a request reaches it without its connection.
@@ -1404,7 +1431,7 @@ export class BackendSocket {
   /** A stopped agent's frame: no pane, no terminal, nothing to fork. */
   async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
     const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null,
-      tokenUsage: this.tokenUsageProvider?.(s) ?? null, gridAnnotation: this.gridAnnotation })
+      tokenUsage: this.tokenUsageProvider?.(s) ?? null, gridAnnotation: this.gridAnnotation, browser: this.browserFrameProvider?.(s.agentId) })
     return {
       ...frame,
       status: 'stopped',
@@ -1425,6 +1452,7 @@ export class BackendSocket {
       activity: () => this.activityFrameProvider?.(s) ?? null,
       waitingFor: () => this.waitingForProvider?.(s) ?? null,
       gridAnnotation: this.gridAnnotation,
+      browser: this.browserFrameProvider?.(s.agentId),
     })
   }
 

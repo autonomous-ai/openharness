@@ -195,6 +195,15 @@ describe('createPodman', () => {
     expect(slow.message).toBe('podman ps timed out after 200 ms')
   })
 
+  // An image build prints a line per package it installs: more than execFile's 1 MB default, which killed the build
+  // and read as a timeout.
+  it('output over a megabyte is read whole, and a timeout still applies', async () => {
+    fake.reply('build', { stdout: 'x'.repeat(3 * 1024 * 1024) })
+    const podman = found()
+    expect((await podman.run(['build', '-t', 'harness-browser:t', '/ctx'])).stdout).toHaveLength(3 * 1024 * 1024)
+    expect(vi.mocked(execFile).mock.calls[0]![2]).toEqual(expect.objectContaining({ timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }))
+  })
+
   it('without podman, run and spawn are needs_setup', async () => {
     const podman = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
     expect((await failure(podman.run(['ps']))).state).toBe('needs_setup')
