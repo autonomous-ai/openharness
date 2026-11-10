@@ -99,8 +99,8 @@ vi.mock('../lib/apiModels.js', () => ({
 }))
 vi.mock('../lib/claudeProfiles.js', async (importOriginal) => ({
   profileId: (await importOriginal<typeof import('../lib/claudeProfiles.js')>()).profileId,
-  listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude', reportLabel: 'Claude' }))),
-  linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked', reportLabel: 'Linked' } } : { error: 'INVALID_PATH' })),
+  listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude' }))),
+  linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked' } } : { error: 'INVALID_PATH' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
   defaultCodexHome: () => '/home/me/.codex',
@@ -987,7 +987,7 @@ describe('the models service', () => {
 
       it('claude_profiles_list: the folders this machine offers under its own machine id; a failed scan is said', async () => {
         const { ask, core } = setup()
-        expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude', reportLabel: 'Claude' }] })
+        expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude' }] })
         expect(listClaudeProfiles).toHaveBeenLastCalledWith(['/home/me/.claude-work'], { machineId: core.daemon.machineId() })
         expect(await ask('claude_profiles_list')).toEqual({ profiles: [] })
         vi.mocked(listClaudeProfiles).mockImplementationOnce(() => { throw new Error('unreadable') })
@@ -996,7 +996,7 @@ describe('the models service', () => {
 
       it('claude_profile_link: links the folder and answers the profile, or why not', async () => {
         const { ask, core } = setup()
-        expect(await ask('claude_profile_link', { path: '/home/me/.claude-work' })).toEqual({ profile: { id: 'p', path: '/home/me/.claude-work', label: 'Linked', reportLabel: 'Linked' } })
+        expect(await ask('claude_profile_link', { path: '/home/me/.claude-work' })).toEqual({ profile: { id: 'p', path: '/home/me/.claude-work', label: 'Linked' } })
         expect(await ask('claude_profile_link', { path: 42 })).toEqual({ error: 'INVALID_PATH' })
         expect(linkClaudeProfile).toHaveBeenLastCalledWith('', core.daemon.machineId())
       })

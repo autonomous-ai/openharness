@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -140,6 +140,28 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     const byId = setup()
     await byId.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: profileId('m1', 'codex', 'default') } }))
     expect(byId.calls.map(c => c[0])).toContain('agent_create')
+  })
+
+  // The backend moves a PM left on another account back to the default one (backend pmAccount.ts): the new session takes no
+  // folder of the old one's.
+  it('starts a PM that ran in another account\'s folder on the default account', async () => {
+    for (const old of [{ engine: 'claude', claudeHome: '/homes/work' }, { engine: 'codex', codexHome: '/homes/work-codex' }]) {
+      const t = setup({ old })
+      await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: old.engine, profileId: profileId('m1', old.engine as 'claude' | 'codex', 'default') } }))
+      const created = t.calls.find(c => c[0] === 'agent_create')![1]
+      expect(created).toMatchObject({ engine: old.engine })
+      expect(created).not.toHaveProperty('claudeHome')
+      expect(created).not.toHaveProperty('codexHome')
+    }
+  })
+
+  // A native Codex launch reports its home's path, which for the default home is the default account too (replacements.ts
+  // accountId; profileHome took it before #3831).
+  it('takes the default Codex home by the id of its path, on this machine', async () => {
+    const t = setup()
+    vi.stubEnv('CODEX_HOME', t.home)
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: profileId('m1', 'codex', realpathSync(t.home)) } }))
+    expect(t.calls.map(c => c[0])).toContain('agent_create')
   })
 
   it('refuses an engine that cannot run a PM before closing it', async () => {
@@ -302,7 +324,6 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls).toEqual([])
   })
 
-
   it('does nothing for a request it cannot claim', async () => {
     const t = setup({ claim: false })
     await t.switches.serve(row())
@@ -387,9 +408,7 @@ describe('whether the default account holds a sign-in', () => {
     expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', undefined]])
     expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
   })
-
 })
-
 
 const buddyRow = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => row({
   buddyOf: { personId: 'owner', generation: 'g' }, buddyScope: 'swarm',

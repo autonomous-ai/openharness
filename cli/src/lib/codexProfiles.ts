@@ -118,7 +118,7 @@ function processEnvironment(): Record<string, string> {
 }
 
 /**
- * Every Codex profile this machine can offer: previously linked folders, `observedPaths` (Codex
+ * Every Codex profile this machine lists: previously linked folders, `observedPaths` (Codex
  * homes the caller already knows about from this same machine's other Codex agents), and freshly
  * discovered folders. Never throws — a discovery scan that fails still returns the linked/observed
  * folders that resolved fine.

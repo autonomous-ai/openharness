@@ -14,6 +14,7 @@ import { cliSignedIn, type EngineStatusRun } from '../lib/engineAccount.js'
 import { buddyAccountFile, buddyOwnerOf, signedInAccount } from '../lib/buddyGuard.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
 import { profileId as profileIdOf } from '../lib/claudeProfiles.js'
+import { defaultCodexHome } from '../lib/codexProfiles.js'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
@@ -50,7 +51,7 @@ export interface LeadSwitchDeps {
   now: () => number
   open: (where: Where) => Promise<Daemon>
   /** Whether the engine's default account holds a usable sign-in. */
-  signedIn: (engine: string) => Promise<boolean>
+  signedIn: (engine: 'claude' | 'codex') => Promise<boolean>
   /** What the default [signedIn] runs to ask the engine; injected by specs. */
   run?: EngineStatusRun
   /** Reads only the daemon-prepared handoff file, with a strict byte limit; injected by host specs. */
@@ -64,9 +65,9 @@ interface Run { switchId: string; harnessId: string; changeId: string; busy: boo
 /** Whether the engine's default account is signed in, as its engine says (lib/engineAccount.ts `cliSignedIn`) under the daemon's
  *  environment, where a key its engine reads also counts. An engine that cannot say is taken as signed out: the switch would
  *  stop at a sign-in screen nobody sees. */
-export async function profileSignedIn(engine: string, environment: NodeJS.ProcessEnv = oneShotParentEnv(), run?: EngineStatusRun): Promise<boolean> {
+export async function profileSignedIn(engine: 'claude' | 'codex', environment: NodeJS.ProcessEnv = oneShotParentEnv(), run?: EngineStatusRun): Promise<boolean> {
   if (engine === 'claude' && CLAUDE_KEY_VARIABLES.some(name => environment[name])) return true
-  return await cliSignedIn(engine === 'claude' ? 'claude' : 'codex', environment, run) === true
+  return await cliSignedIn(engine, environment, run) === true
 }
 
 /** A request's one change id, so a record of #2493 (which holds only this) tells which switch it belongs to, and a create repeated
@@ -143,9 +144,12 @@ export class LeadSwitchRequests {
     const engine = String(request.engine), profileId = String(request.profileId ?? 'default')
     if (engine !== 'claude' && engine !== 'codex') return { ok: false, error: NO_ENGINE }
     // The default account of the machine the PM moves to, by its literal name or its hex id: for a move to another machine the
-    // Swarm names that machine's default (backend commands.ts defaultProfileId).
+    // Swarm names that machine's default (backend commands.ts defaultProfileId). Here the default Codex home also goes by the id
+    // of its path, as profileHome took it: a Swarm may hold that id from an older report.
     const target = run.crossMachine ? String(request.targetMachineId) : this.machineId
-    if (profileId !== 'default' && profileId !== profileIdOf(target, engine, 'default')) return { ok: false, error: DEFAULT_ONLY }
+    const defaults = ['default', profileIdOf(target, engine, 'default'),
+      ...engine === 'codex' && !run.crossMachine ? [profileIdOf(target, engine, defaultCodexHome())] : []]
+    if (!defaults.includes(profileId)) return { ok: false, error: DEFAULT_ONLY }
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt
     // from, it would come back role-less, with no Swarm skill and the machine owner's own GitHub login.
@@ -161,8 +165,7 @@ export class LeadSwitchRequests {
     }
     if (buddy) {
       // Check before the handoff stops anything: the launch guard also checks the recorded owner when the new engine starts.
-      if (skill.role !== 'buddy' || row.agent.buddySession || row.agent.modelRequest || !['claude', 'codex'].includes(engine)
-        || run.crossMachine || !await buddyOwnerCurrent()) {
+      if (skill.role !== 'buddy' || row.agent.buddySession || row.agent.modelRequest || run.crossMachine || !await buddyOwnerCurrent()) {
         return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
       }
     }

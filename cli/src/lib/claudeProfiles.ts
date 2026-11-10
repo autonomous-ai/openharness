@@ -5,8 +5,8 @@
  * it, `profileId(machine, 'claude', 'default')`. A profile's `path` is the folder as it was given or linked, which is what
  * Claude Code hashes for its Keychain item and what CLAUDE_CONFIG_DIR must hold; its id is of the real path.
  *
- * Two labels, both from the folder alone: `label` is for the machine's owner; `reportLabel` is what leaves the
- * machine, so it drops a name holding an '@' and is cut short.
+ * Its `label` is the folder's name, for the machine's owner alone: no profile leaves the machine (a machine reports each
+ * engine's default account, superTabs/machines.ts).
  */
 
 import { createHash, randomUUID } from 'crypto'
@@ -22,7 +22,6 @@ export interface ClaudeProfile {
   id: string
   path: string
   label: string
-  reportLabel: string
   /** Set on the default account alone. */
   default?: true
 }
@@ -32,7 +31,6 @@ export type ClaudeProfileError = { error: 'INVALID_PATH' | 'NOT_FOUND' }
 const FILE = join(env.ADAPTER_DATA_DIR, 'claude-profiles.json')
 const MAX_LINKED = 256
 const MAX_ENTRIES = 512
-const REPORT_LABEL_MAX = 40
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/
 const ORCA_HOME_RE = /\/claude-profiles\/([0-9a-f][0-9a-f-]*)\/home$/i
 
@@ -51,19 +49,12 @@ function folderLabel(path: string, home: string): string {
   return orca ? `Orca ${orca[1].slice(0, 4)}` : path.startsWith(harnessFolder(home)) ? `Claude ${basename(path)}` : basename(path)
 }
 
-/** The folder's label as it may leave the machine: never one holding an '@' (an email), and short. */
-function reportLabelFor(path: string, home: string): string {
-  const name = folderLabel(path, home)
-  return (name.includes('@') ? 'Claude' : name).slice(0, REPORT_LABEL_MAX)
-}
-
 function profileFor(machineId: string, path: string, real: string, home: string, isDefault = false): ClaudeProfile {
   return {
     id: profileId(machineId, 'claude', isDefault ? 'default' : real),
     ...(isDefault ? { default: true as const } : {}),
     path,
     label: folderLabel(path, home),
-    reportLabel: reportLabelFor(path, home),
   }
 }
 
@@ -152,7 +143,7 @@ function discover(home: string, environment: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Every Claude profile this machine can offer: the default account, linked folders, `observedPaths`
+ * Every Claude profile this machine lists: the default account, linked folders, `observedPaths`
  * (folders the caller already knows from this machine's other agents) and discovered ones. Never
  * throws; a folder that vanished or is malformed is just not listed.
  */
@@ -198,7 +189,7 @@ export function profileHome(
  * has none), or a folder under `~/.harness/claude-profiles/`, where Desktop's "Add Claude account" makes a new one before it
  * holds any file. Any other path would be written into (hooks, folder trust) and adopted for good (core/agents/launches.ts).
  */
-export function claudeHomeOffered(
+export function claudeHomeListed(
   claudeHome: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
 ): boolean {
   const own = join(options.home ?? homedir(), '.harness', 'claude-profiles') + sep
