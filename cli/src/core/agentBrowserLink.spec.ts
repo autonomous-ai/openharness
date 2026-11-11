@@ -135,6 +135,23 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(await bare.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: null })
   })
 
+  // The person's Start and Stop, from the agent browser's own process: the core sets the flag and tells the browser.
+  it('set_browser sets the flag through the core and answers what it said; a payload without an id or a boolean is INVALID_REQUEST', async () => {
+    const setBrowser = vi.fn((agentId: string, on: boolean) => Promise.resolve(agentId === 'a1'
+      ? { ok: true as const, changed: on } : { error: 'NOT_RUNNING' as const }))
+    const link = createAgentBrowserLink({ core: fakeCore({ agents: { setBrowser } }), notify: () => true, want: () => {} })
+    expect(await link.answer('set_browser', { agentId: 'a1', on: true })).toEqual({ ok: true, changed: true })
+    expect(await link.answer('set_browser', { agentId: 'a1', on: false })).toEqual({ ok: true, changed: false })
+    expect(await link.answer('set_browser', { agentId: 'gone', on: true })).toEqual({ error: 'NOT_RUNNING' })
+    for (const payload of [{ on: true }, { agentId: 7, on: true }, { agentId: 'a1' }, { agentId: 'a1', on: 'yes' }]) {
+      expect(await link.answer('set_browser', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(setBrowser.mock.calls).toEqual([['a1', true], ['a1', false], ['gone', true]])
+    // A core without the call has no answer to give.
+    const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })
+    expect(await bare.answer('set_browser', { agentId: 'a1', on: true })).toEqual({ error: 'UNSUPPORTED' })
+  })
+
   it('hands on the agent browser\'s own counters, and no other', async () => {
     const { link, count } = setup()
     expect(await link.answer('count', { metric: 'agent_browser_failed_podman_old' })).toEqual({ ok: true })

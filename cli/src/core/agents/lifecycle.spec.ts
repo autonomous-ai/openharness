@@ -262,8 +262,22 @@ describe('stopping, purging and resuming an agent', () => {
 
 describe('the agent browser, as its agent starts and ends', () => {
   const withBrowser = row({ browser: true })
-  const browsers = (port: { attached: (session: RegisteredSession) => void; stopped: (agentId: string) => void } | null = { attached: vi.fn(), stopped: vi.fn() }) =>
-    ({ port, lifecycle: createAgentBrowserLifecycle(() => port) })
+  /** The live rows, as the registry keeps them: `setBrowser` changes the row itself. */
+  const liveRows = (...live: RegisteredSession[]) => {
+    const rows = new Map(live.map(session => [session.agentId, session]))
+    return {
+      byAgent: vi.fn((agentId: string) => rows.get(agentId)),
+      setBrowser: vi.fn((agentId: string, on: boolean) => {
+        const session = rows.get(agentId)
+        if (!session) return null
+        if (on) session.browser = true
+        else delete session.browser
+        return session
+      }),
+    }
+  }
+  const browsers = (port: { attached: (session: RegisteredSession) => void; stopped: (agentId: string) => void } | null = { attached: vi.fn(), stopped: vi.fn() },
+    rows = liveRows()) => ({ port, rows, lifecycle: createAgentBrowserLifecycle(() => port, rows) })
 
   it('stops the browser of an agent whose engine exits by itself', () => {
     const { port, lifecycle } = browsers()
@@ -299,6 +313,75 @@ describe('the agent browser, as its agent starts and ends', () => {
     const down = browsers(null).lifecycle
     down.attached(withBrowser)
     expect(() => down.ended('a1')).not.toThrow()
+  })
+
+  // The person's Start and Stop: the flag, then the browser's own start or stop, in one turn.
+  it('turned on while the agent runs, its browser is attached; turned off, it is stopped once and the flag is clear', () => {
+    const agent = row()
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(agent))
+    lifecycle.attached(agent)
+    expect(lifecycle.set('a1', true)).toEqual({ ok: true, changed: true })
+    expect(rows.setBrowser).toHaveBeenCalledWith('a1', true)
+    expect(port!.attached).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: 'a1', browser: true }))
+    expect(lifecycle.set('a1', false)).toEqual({ ok: true, changed: true })
+    expect(port!.stopped).toHaveBeenCalledTimes(1)
+    expect(port!.stopped).toHaveBeenCalledWith('a1')
+    expect(rows.byAgent('a1')).not.toHaveProperty('browser')
+    // Its agent ending later tells the browser nothing more.
+    lifecycle.ended('a1')
+    expect(port!.stopped).toHaveBeenCalledTimes(1)
+  })
+
+  it('on twice attaches twice and changes once', () => {
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(row()))
+    expect(lifecycle.set('a1', true)).toEqual({ ok: true, changed: true })
+    expect(lifecycle.set('a1', true)).toEqual({ ok: true, changed: false })
+    expect(port!.attached).toHaveBeenCalledTimes(2)
+    expect(rows.byAgent('a1')?.browser).toBe(true)
+    // Still one browser to stop when its agent ends.
+    lifecycle.ended('a1')
+    lifecycle.ended('a1')
+    expect(port!.stopped).toHaveBeenCalledTimes(1)
+  })
+
+  it('off for a browser that is off changes nothing and tells nothing', () => {
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(row()))
+    expect(lifecycle.set('a1', false)).toEqual({ ok: true, changed: false })
+    expect(lifecycle.set('gone', false)).toEqual({ ok: true, changed: false })
+    expect(rows.setBrowser).not.toHaveBeenCalled()
+    expect(port!.attached).not.toHaveBeenCalled()
+    expect(port!.stopped).not.toHaveBeenCalled()
+  })
+
+  it('an agent that does not run is NOT_RUNNING, a guest\'s is NOT_ALLOWED, and neither row changes', () => {
+    const guests = row({ agentId: 'g1', guest: 'guest@example.com' })
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(guests))
+    expect(lifecycle.set('stopped-agent', true)).toEqual({ error: 'NOT_RUNNING' })
+    expect(lifecycle.set('g1', true)).toEqual({ error: 'NOT_ALLOWED' })
+    expect(rows.setBrowser).not.toHaveBeenCalled()
+    expect(guests).not.toHaveProperty('browser')
+    expect(port!.attached).not.toHaveBeenCalled()
+  })
+
+  it('a browser turned off is not attached again when its agent resumes; one left on is', () => {
+    const turnedOff = row()
+    const leftOn = row({ agentId: 'a2', sessionId: 's2' })
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(turnedOff, leftOn))
+    lifecycle.set('a1', true)
+    lifecycle.set('a2', true)
+    lifecycle.set('a1', false)
+    // Both agents stop, then resume with the rows they kept.
+    lifecycle.ended('a1')
+    lifecycle.ended('a2')
+    expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a1'], ['a2']])
+    lifecycle.attached(rows.byAgent('a1')!)
+    lifecycle.attached(rows.byAgent('a2')!)
+    expect(port!.attached).toHaveBeenNthCalledWith(3, expect.not.objectContaining({ browser: true }))
+    expect(port!.attached).toHaveBeenNthCalledWith(4, expect.objectContaining({ agentId: 'a2', browser: true }))
+    // Only the one left on has a browser to stop when it ends again.
+    lifecycle.ended('a1')
+    lifecycle.ended('a2')
+    expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a1'], ['a2'], ['a2']])
   })
 })
 

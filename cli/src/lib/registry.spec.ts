@@ -2090,6 +2090,30 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.releaseEngine(pending.agentId, true)).not.toHaveProperty('browser')
   })
 
+  // The person's Start and Stop (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the flag means its Browser is on.
+  it('setBrowser sets and clears the flag on a live row, saves it, and answers null for no row', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const agent = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%53' }], cwd: '/tmp/demo' })!
+    const saved = (): unknown => (JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<{ agentId: string; browser?: unknown }>)
+      .find(r => r.agentId === agent.agentId)?.browser
+    const on = registry.setBrowser(agent.agentId, true)
+    expect(on).toBe(registry.byAgent(agent.agentId))
+    expect(on?.browser).toBe(true)
+    expect(saved()).toBe(true)
+    // Asked again, the row stays as it is.
+    expect(registry.setBrowser(agent.agentId, true)?.browser).toBe(true)
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(agent.agentId)?.browser).toBe(true)
+    const off = registry.setBrowser(agent.agentId, false)
+    expect(off).not.toHaveProperty('browser')
+    expect(saved()).toBeUndefined()
+    expect(registry.setBrowser(agent.agentId, false)).not.toHaveProperty('browser')
+    expect(registry.setBrowser('nobody', true)).toBeNull()
+    expect(registry.setBrowser('nobody', false)).toBeNull()
+  })
+
   // A fresh move's remembered conversation went with the v3 Buddy's model switch (#3901): a row an older release saved with
   // one loads without it, and its agent's moves reopen its own conversation (core/agents/retarget.ts).
   it('loads a row saved with a remembered subscription session without it', async () => {

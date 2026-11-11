@@ -77,6 +77,11 @@ describe('the core API services stand on', () => {
     expect(TURN_END_HEARERS.every(service => TURN_DELIVERERS.includes(service))).toBe(true)
   })
 
+  // The agent browser types its ready and stopped lines into the agent, from its own process too.
+  it('lets the agent browser write turns into agents from its own process', () => {
+    expect(TURN_DELIVERERS).toContain('agentBrowser')
+  })
+
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
     const agents = [{ ...row('a'), sessionId: '' }, row('b')]
     expect(resolveAgent(agents, 'b')?.agentId).toBe('b')
@@ -269,6 +274,16 @@ describe('the core API services stand on', () => {
     expect(await core.agents.ids!()).toEqual({ live: ['live'], stopped: ['stopped'] })
     expect(await core.agents.ofPane!('%7')).toBe('live')
     expect(await core.agents.ofPane!('%8')).toBeNull()
+  })
+
+  // The person's Start and Stop reach the core through the agent browser (core/agents/lifecycle.ts `set`).
+  it('agents.setBrowser is the dep\'s answer, and absent without one', async () => {
+    const setBrowser = vi.fn((agentId: string, on: boolean) => (agentId === 'a1' ? { ok: true as const, changed: on } : { error: 'NOT_RUNNING' as const }))
+    const core = createCoreApi({ ...coreDeps(), setBrowser })
+    expect(await core.agents.setBrowser!('a1', true)).toEqual({ ok: true, changed: true })
+    expect(await core.agents.setBrowser!('gone', true)).toEqual({ error: 'NOT_RUNNING' })
+    expect(setBrowser.mock.calls).toEqual([['a1', true], ['gone', true]])
+    expect(createCoreApi(coreDeps()).agents.setBrowser).toBeUndefined()
   })
 
   it('hands a service\'s product counters on only where the core was told where they go', () => {
