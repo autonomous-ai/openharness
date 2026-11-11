@@ -1171,6 +1171,18 @@ describe('the agent\'s commands', () => {
     expect(await c.run('snapshot')).toEqual({ error: 'OFF' })
   })
 
+  // The core in its own process gave no answer in time: the browser is still on, and still the agent's to drive.
+  it('a Stop the core does not take leaves nothing marked: the agent\'s next command runs', async () => {
+    const c = await commands()
+    c.hear(c.typed[0]!.deliveryId, 'delivered')
+    c.setBrowser.mockRejectedValueOnce(new Error('the core gave no answer for the switch'))
+    await expect(c.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).rejects.toThrow('no answer')
+    const answer = c.run('snapshot')
+    await c.line(1)
+    c.tools[0]!.answer(page('Example Domain'))
+    expect(await answer).toEqual({ ok: true, text: 'Example Domain' })
+  })
+
   it('a Stop with no command running types the stop line', async () => {
     const c = await commands()
     c.hear(c.typed[0]!.deliveryId, 'delivered')
