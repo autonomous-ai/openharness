@@ -150,6 +150,12 @@ export function createAgentLifecycle({
  * `set` is its person's Start and Stop, which the agent browser asks of the core (`CoreApi.agents.setBrowser`): the
  * row's flag, then the browser's own start or stop, in one turn, so the flag changes in the order the service's
  * queue asked. A browser left on comes back when its agent runs again; one turned off does not.
+ *
+ * How it comes back (decision 14): create, resume and daemon start attach it at once, before the engine is seen, so
+ * the browser starts with its agent. Every other path is caught at the next scan: the reconciler's look at each
+ * running agent (agents/discovery.ts `onObserved`) says `observed`. Only those three paths were handed `attached`, so
+ * an agent back from the archive (a restore that could not see its engine, or two missed scans) ran on with its flag
+ * set and no browser, and its Browser button was gone for good (a teammate's Mac, released build, 2026-11-11).
  */
 export function createAgentBrowserLifecycle(
   browser: () => Pick<AgentBrowserPort, 'attached' | 'stopped'> | null,
@@ -164,9 +170,14 @@ export function createAgentBrowserLifecycle(
   const ended = (agentId: string): void => {
     if (running.delete(agentId)) browser()?.stopped(agentId)
   }
+  // Said on every scan of every running agent, while the daemon is idle: a browser already attached costs one lookup.
+  const observed = (session: RegisteredSession): void => {
+    if (session.browser && !running.has(session.agentId)) attached(session)
+  }
   return {
     attached,
     ended,
+    observed,
     set(agentId: string, on: boolean): BrowserSwitch {
       const row = rows.byAgent(agentId)
       if (!on) {

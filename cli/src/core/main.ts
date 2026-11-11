@@ -841,8 +841,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     lastTurn: sessionId => readLastTurn(sessionId),
   })
   const ports = emptyPorts()
-  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts), and
-  // turned on and off by its person through the core (`CoreApi.agents.setBrowser`), so it is made before the core API.
+  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts),
+  // attached again on any look at its running agent that finds it left out (`observed`, from discovery), and turned on
+  // and off by its person through the core (`CoreApi.agents.setBrowser`), so it is made before the core API.
   const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser, registry)
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
   // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
@@ -1989,6 +1990,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const discovery = createDiscoveryHandlers({
     registry,
     attachDsh,
+    attachBrowser: agentBrowsers.observed,
     forgetSession,
     announceSession,
     bindObservedAgent,

@@ -1,8 +1,9 @@
 /**
  * Discovery: what the reconciler's scans of the terminal backends and their processes mean for the
  * registry. A process no row owns opens an agent; a row's own process updates it (runtimes, identity,
- * permissions, profile homes, DSH) and wakes a dormant one; a row whose engine exited keeps its
- * conversation or goes dormant; a row whose pane is gone is removed, unless restore never ran.
+ * permissions, profile homes, DSH), gives it back its DSH and a browser its person left on, and wakes a
+ * dormant one; a row whose engine exited keeps its conversation or goes dormant; a row whose pane is gone
+ * is removed, unless restore never ran.
  *
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
@@ -29,6 +30,8 @@ export interface DiscoveryDeps {
     | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
     | 'terminalAvailable' | 'setTerminalAvailable'>
   attachDsh: (session: RegisteredSession) => void
+  /** The agent browser's look at a running agent whose Browser is on (agents/lifecycle.ts `observed`). */
+  attachBrowser: (session: RegisteredSession) => void
   forgetSession: (id: string, opts?: { force?: boolean; agentId?: string }) => void
   announceSession: (session: RegisteredSession) => void
   bindObservedAgent: (observed: DiscoveredTerminalAgent) => Promise<void>
@@ -51,7 +54,7 @@ export interface DiscoveryDeps {
 }
 
 export function createDiscoveryHandlers({
-  registry, attachDsh, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
+  registry, attachDsh, attachBrowser, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
   stoppedAgents, send, restoreDegraded, terminals,
 }: DiscoveryDeps) {
@@ -193,8 +196,11 @@ export function createDiscoveryHandlers({
     // And the DSH: a row minted by discovery (or written before the field existed) learns it from
     // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
     if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
-    const withDsh = registry.byAgent(current.agentId)
-    if (withDsh?.dsh) attachDsh(withDsh)
+    const live = registry.byAgent(current.agentId)
+    if (live?.dsh) attachDsh(live)
+    // And its browser, if its person left it on, for the same reason: whatever path brought this agent back to running,
+    // it passes here (decision 14). The registry's row now, not the scan's, so a Stop since the scan began is kept.
+    if (live?.browser) attachBrowser(live)
     // This live process, in this row's own pane, is what "started" means — for a resumed row as
     // much as any other. A resume used to be held back here until its `SessionStart` hook landed,
     // on the grounds that only the hook proves WHICH conversation reopened. Two things were wrong
