@@ -67,8 +67,8 @@ describe('Swarm sessions without skill files (task #4673)', () => {
       expect(rules).toContain('@Name wakes someone.')
       // anh Dee, 2026-11-11: "it should be like a human conversation", of a PM's replies that read as its own narration.
       expect(rules).toContain('answer there.')
-      // The review of #4074: a post that answers nothing, such as a PM's hand-off, is as brief.
-      expect(rules).toContain('- Write briefly, as on Slack.')
+      // The review of #4074: a post that answers nothing, such as a PM's hand-off, is as brief; an issue's body need not be.
+      expect(rules).toContain('- Post briefly, as on Slack.')
     }
   })
   // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
