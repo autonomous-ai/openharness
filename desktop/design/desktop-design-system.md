@@ -443,7 +443,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **One surface.** The left, middle and right panes share one ground,
   `AppPalette.swarmField`, the colour the selected native tab joins. Only the
   layout's 1-point `AppDesktop.rim` hairlines split them. `SuperTabView` paints
-  it under all three, so no pane shows its host's colour. A palette the person chose that names its own sidebar (Plum)
+  it under all three, so no pane shows its host's colour. A pane opened beside
+  the chat or in its place (Info, Instructions, Browser, Tasks, a task, a
+  thread) stands on that ground too, never a white sheet of its own
+  (`test/swarm_pane_room_test.dart`). A palette the person chose that names its own sidebar (Plum)
   keeps it.
 - **Top bar.** An agent's chat (Swarm v4, anh Dee 2026-11-08) has one bar, as
   high as the channel's: the 22-point face, the name in 13-point medium, then
