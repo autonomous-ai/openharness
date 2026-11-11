@@ -1267,4 +1267,69 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await vi.waitFor(() => expect(run.deps.input.submit).toHaveBeenCalledWith('agent:main:other', TASK))
     })
   })
+
+  // A restart resumes the same key, so the pass never binds it again: the TUI process, not the key, says when the
+  // folder its agent's store is read from may have changed.
+  describe('its state folder', () => {
+    /** A pane bound to `agent:main:plain`, showing it ready, whose TUI holds `folder`. */
+    const bound = (folder: string | null, row: Partial<RegisteredSession> = {}) => {
+      const run = setup({ capturePane: vi.fn(async () => screen('screen-plain')), openclawPaneRead: vi.fn(() => true), openclawStateDir: vi.fn(async () => folder) })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', ...row }))
+      return run
+    }
+
+    it('a relaunched TUI that holds another state folder: the row takes it and the session is read again', async () => {
+      const run = bound('/new', { firstTask: 'Fix the parser' })
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
+      expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/new')
+      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true }]])
+      expect(console.log).toHaveBeenCalledWith('[discovery] a1 openclaw · state folder changed')
+      // The task waits for the session read from the new folder: the next pass binds it again, then hands it over.
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
+    it('the folder is read once per TUI process', async () => {
+      const run = bound('/h/.openclaw')
+      vi.mocked(run.deps.registry.setOpenclawStateDir).mockReturnValue(false)
+      await run.binding.bindObservedAgent(tui())
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawStateDir).toHaveBeenCalledOnce()
+      const relaunched = tui({ processIdentity: { pid: 7714, startMarker: '2026-11-10T09:00:00Z' } })
+      await run.binding.bindObservedAgent(relaunched)
+      expect(run.deps.openclawStateDir).toHaveBeenCalledTimes(2)
+      // What it remembers is bounded: the 256th agent starts it over, at the cost of one more read for each.
+      for (let i = 0; i < 256; i++) {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain' }))
+        await run.binding.bindObservedAgent(tui())
+      }
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      await run.binding.bindObservedAgent(relaunched)
+      expect(run.deps.openclawStateDir).toHaveBeenCalledTimes(2 + 256 + 1)
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+    })
+
+    it('the same folder, or open files that cannot be read, change nothing', async () => {
+      const same = bound('/h/.openclaw')
+      vi.mocked(same.deps.registry.setOpenclawStateDir).mockReturnValue(false)
+      await same.binding.bindObservedAgent(tui())
+      expect(same.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/h/.openclaw')
+      expect(same.deps.forgetSession).not.toHaveBeenCalled()
+      const unreadable = bound(null)
+      await unreadable.binding.bindObservedAgent(tui())
+      expect(unreadable.deps.openclawStateDir).toHaveBeenCalledWith(7714)
+      expect(unreadable.deps.registry.setOpenclawStateDir).not.toHaveBeenCalled()
+      expect(unreadable.deps.forgetSession).not.toHaveBeenCalled()
+      // A stop or restart that took the agent while its open files were read owns it: the read changes nothing.
+      const stopped = bound(null)
+      vi.mocked(stopped.deps.openclawStateDir).mockImplementation(async () => {
+        stopped.binding.whileChanging((agentId) => agentId === 'a1')
+        return '/new'
+      })
+      await stopped.binding.bindObservedAgent(tui())
+      expect(stopped.deps.registry.setOpenclawStateDir).not.toHaveBeenCalled()
+      expect(stopped.deps.forgetSession).not.toHaveBeenCalled()
+    })
+  })
 })
