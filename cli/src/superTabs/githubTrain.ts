@@ -14,9 +14,10 @@
  * on 2026-11-10) reads them back from GitHub. One train is open at a time.
  *
  * Anyone who can write to the repository can write that body, so before it lands a train is read from its branch: one merge
- * commit for each member the body names, the member's head its second parent, down to the base's tip (`holds`). Merge commits
- * made by hand with those same parents and other content get onto the branch only by rewriting it, which GitHub notes on the
- * pull request where nobody can write: a train with such an event does not land (REWRITTEN).
+ * commit for each member the body names, the member's head its second parent, down to the base's tip (`holds`). That reads
+ * parents, not content: merge commits made by hand with those same parents, or one more pushed on top for a pull request
+ * added to the body, read the same. So the train marks the tip it built with a commit status (TRAIN_MARK), which GitHub signs
+ * with the login that made it, and only a tip this login marked is attended: a commit is its content and all under it.
  *
  * It never force-pushes, writes no ref outside `harness-train/`, and merges nothing on an answer it does not expect: any other
  * answer is a GitHubStop, which stops this repository's pass until the merger's next try (githubRest.ts Waits). The GitHub
@@ -43,9 +44,12 @@ const SHA = /^[0-9a-f]{40}$/
 /** A member as a train's body names it. Its readers are there for the note that it landed, which a restart must write the same. */
 const MEMBER = /^#([1-9]\d{0,9}) at ([0-9a-f]{40}), READ-OK by ([\w -]{1,200})$/
 const BUILT = /\bbuilt to ([0-9a-f]{40})\b/
-/** What GitHub notes on a pull request whose branch was rewritten or made again, or whose base was: a train with one is not
- *  the one that was built and checked. Nobody can write a pull request's events. */
-const REWRITTEN = new Set(['head_ref_force_pushed', 'head_ref_deleted', 'head_ref_restored', 'reopened', 'base_ref_changed', 'base_ref_force_pushed'])
+/** The commit status the train puts on the tip it built. Anyone who can push can add a status, and GitHub says who made each:
+ *  only a tip with this one from this computer's login is a train's. It is no check of the train (githubMerge.ts checksOf). */
+export const TRAIN_MARK = 'harness/train'
+/** Pages of a hundred of a tip's statuses read for the mark, the newest first: under more than these it is not found, and the
+ *  train is closed and built again. */
+const MARK_PAGES = 10
 /** GitHub's closing keywords before an issue of this repository. */
 const CLOSES = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#([1-9]\d{0,9})\b/gi
 /** The most issues one landing closes: a body is anyone's text, and can name any number of them. */
@@ -192,6 +196,8 @@ export class GitHubTrain<T extends TrainPull> {
   private async attend(train: Train, ready: readonly T[], waiting: ReadonlySet<string>): Promise<void> {
     // Its branch is not at the tip its body says the train built: someone pushed to it, or wrote the body.
     if (train.head !== train.tip) return this.close(train, false, 'its branch is not at the tip the train built')
+    // Nor at a tip this login never built, whatever its body and its parents say: its checks are not waited for.
+    if (!await this.marked(train.head)) return this.close(train, false, 'its tip is not one the train built')
     // What it was tested on is the base as it is: a run on a base that moved lands nothing, so it is not waited for. Not even
     // when the base gained only documentation: suites read some of it (scripts/ci-plan.py).
     const ahead = await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${train.head}`)
@@ -215,10 +221,6 @@ export class GitHubTrain<T extends TrainPull> {
       return this.close(train, false, 'a pull request it carries is no longer ready at its head')
     }
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, false, 'its branch does not hold what its body names')
-    // And it is the branch the train built: merge commits made again by hand have the same parents and other content, and get
-    // onto it only by a forced push, or by deleting the branch and making it again. GitHub notes each on the pull request.
-    const events = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${train.number}/events?per_page=${PAGE}`, 1)
-    if (events.some(event => REWRITTEN.has(String(event.event)))) return this.close(train, false, 'its branch was rewritten after the train built it')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged
     // under its author, and the work counts as theirs (shippingRead.ts). Squashed, the members are only closed and the one
     // commit is this login's. Else a squash, else a rebase, which takes no message. The next way is tried too when GitHub
@@ -255,6 +257,13 @@ export class GitHubTrain<T extends TrainPull> {
     await this.finish(train, String(merged.sha), method === 'merge')
     // Its members stay open until GitHub marks them (finish): the branch goes here.
     if (method === 'merge') await this.drop(train.branch)
+  }
+
+  /** Whether this computer's login marked [tip] as a train it built (TRAIN_MARK). */
+  private async marked(tip: string): Promise<boolean> {
+    const login = (await this.host.login()).toLowerCase()
+    const statuses = await this.deps.reads.current(this.repo, `/repos/${this.repo}/commits/${tip}/statuses?per_page=${PAGE}`, MARK_PAGES)
+    return statuses.some(status => status.context === TRAIN_MARK && String(object(status.creator).login ?? '').toLowerCase() === login)
   }
 
   /** Whether [train]'s branch is what its body names and nothing else: from its head down, one merge commit for each member,
@@ -311,6 +320,8 @@ export class GitHubTrain<T extends TrainPull> {
     // The same 404 answers a merge into a branch that is gone: with the train's own branch deleted under the build, it was
     // no word on the fork's head, and nothing merges on its own.
     if (untaken.length || !members.length) return await this.drop(branch) ? untaken : []
+    // Marked as this login's build before the pull request exists: what is pushed to the branch from here on is not.
+    await this.sent('POST', `/statuses/${tip}`, [201], { state: 'success', context: TRAIN_MARK, description: 'Built by Harness from pull requests that were read.' })
     const opened = object((await this.sent('POST', '/pulls', [201], { head: branch, base: this.base, draft: false, title: `${TITLE}${members.map(m => `#${m.number}`).join(' ')}`,
       body: trainBody(this.base, tip, members.map(m => ({ number: m.number, head: m.head, readers: m.readers.join(' and ') }))) })).body)
     const [train] = await this.mine([opened])

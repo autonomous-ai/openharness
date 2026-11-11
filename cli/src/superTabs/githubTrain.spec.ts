@@ -252,8 +252,9 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     await f.settle()
     const branch = f.train().head.ref
     expect(branch).toMatch(/^harness-train\/\d+$/)
-    expect(f.state.sent.map(s => [s.method, s.path, s.body.ref ?? s.body.head])).toEqual([
-      ['POST', '/git/refs', `refs/heads/${branch}`], ['POST', '/merges', a.head.sha], ['POST', '/merges', b.head.sha], ['POST', '/merges', c.head.sha], ['POST', '/pulls', branch]])
+    expect(f.state.sent.map(s => [s.method, s.path, s.body.ref ?? s.body.head ?? s.body.context])).toEqual([
+      ['POST', '/git/refs', `refs/heads/${branch}`], ['POST', '/merges', a.head.sha], ['POST', '/merges', b.head.sha], ['POST', '/merges', c.head.sha],
+      ['POST', `/statuses/${f.train().head.sha}`, 'harness/train'], ['POST', '/pulls', branch]])
     expect(f.state.sent[0]!.body.sha).toBe(f.state.main[0]!.sha)
     expect(f.state.sent.slice(1, 4).map(s => s.body.base)).toEqual([branch, branch, branch])
     expect(f.train().title).toBe('Train: #4 #5 #7')
