@@ -171,6 +171,52 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await git('branch', '--show-current')).toBe('main')
   })
 
+  describe('concurrent starts take turns per repository', () => {
+    const log = () => join(root, 'worktree-adds.log')
+    /** git as the daemon runs it, writing `start <repo>` and `end <repo>` around each `worktree add`. With PEER_WAIT set,
+     *  an add waits (at most 5 s) until another add has started, so two that run at once are seen to. */
+    beforeEach(async () => {
+      const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+      const bin = join(root, 'bin')
+      await mkdir(bin)
+      await writeFile(join(bin, 'git'), `#!/bin/sh
+case " $* " in *" worktree add "*)
+  repo=; prev=; for arg in "$@"; do [ "$prev" = -C ] && repo=$arg; prev=$arg; done
+  echo "start $repo" >> '${log()}'
+  if [ -n "$PEER_WAIT" ]; then i=0; while [ "$(grep -c '^start' '${log()}')" -lt 2 ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; fi
+  '${realGit}' "$@"; code=$?
+  echo "end $repo" >> '${log()}'
+  exit $code;;
+esac
+exec '${realGit}' "$@"
+`, { mode: 0o755 })
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+    })
+    const lines = async () => (await readFile(log(), 'utf8')).trim().split('\n')
+
+    // 2026-11-11: two adds at once in one repository, and one read the other's half-written .git/worktrees/<name> ("fatal:
+    // failed to read .../commondir"), exit 128, WORKTREE_FAILED. Starts that draw the same made-up name both start, too.
+    it('all start, on distinct branches, one worktree add at a time', async () => {
+      const harnesses = join(root, 'harnesses')
+      const paths = await Promise.all(Array.from({ length: 4 }, () =>
+        prepareGitProject(repo, { root: harnesses, worktree: true, ref: 'refs/heads/feature', pick: () => 0 })))
+      const branches = await Promise.all(paths.map(current))
+      expect(new Set(branches)).toEqual(new Set(['amber-badger', 'amber-badger-2', 'amber-badger-3', 'amber-badger-4']))
+      for (const branch of branches) expect(await git('config', '--get', `branch.${branch}.harness`)).toBe('placeholder')
+      for (const path of paths) expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('feature')
+      expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end', 'start', 'end', 'start', 'end'])
+    })
+
+    it('in different repositories at once', async () => {
+      vi.stubEnv('PEER_WAIT', '1')
+      const other = join(root, 'other')
+      await exec('git', ['clone', '--quiet', repo, other])
+      const harnesses = join(root, 'harnesses')
+      await Promise.all([repo, other].map(source => prepareGitProject(source, { root: harnesses, worktree: true, branchName: 'both' })))
+      expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'start', 'end', 'end'])
+    })
+  })
+
   it('makes up a two-word branch no branch uses, in a folder named for it, grouped by repository', async () => {
     expect(placeholderBranch([], () => 0)).toBe('amber-badger')
     expect(placeholderBranch(['refs/heads/amber-badger', 'amber-badger-2'], () => 0)).toBe('amber-badger-3')
