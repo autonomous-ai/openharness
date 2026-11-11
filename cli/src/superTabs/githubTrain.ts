@@ -9,7 +9,8 @@
  *
  * Nothing is stored. An open train is an open pull request this computer's login opened from a `harness-train/` branch of
  * this repository into the base, whose body names the tip the train built and each member as `#N at <head>`; a red one is that
- * pull request closed with `Train, red:` in its title; a landed one is it merged. A daemon restart (each release is one, seven
+ * pull request closed with `Train, red:` in its title; a landed one is it merged, as a merge commit where the repository allows
+ * one, so that GitHub marks each member merged under its own author. A daemon restart (each release is one, seven
  * on 2026-11-10) reads them back from GitHub. One train is open at a time.
  *
  * Anyone who can write to the repository can write that body, so before it lands a train is read from its branch: one merge
@@ -212,9 +213,11 @@ export class GitHubTrain<T extends TrainPull> {
       return this.close(train, false, 'a pull request it carries is no longer ready at its head')
     }
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, false, 'its branch does not hold what its body names')
-    // Squashed where the repository allows it, as each pull request was; else a merge commit, else a rebase, which takes no message.
+    // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged
+    // under its author, and the work counts as theirs (shippingRead.ts). Squashed, the members are only closed and the one
+    // commit is this login's. Else a squash, else a rebase, which takes no message.
     const settings = await this.deps.reads.one(this.repo, `/repos/${this.repo}`)
-    const method = settings.allow_squash_merge !== false ? 'squash' : settings.allow_merge_commit !== false ? 'merge' : 'rebase'
+    const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase'
     // Pinned to the head its checks passed: a push since is a 409, and nothing lands.
     const reply = await this.sent('PUT', `/pulls/${train.number}/merge`, [200, 405],
       { sha: train.head, merge_method: method, ...method === 'rebase' ? {} : landingMessage(riders) })
@@ -234,6 +237,8 @@ export class GitHubTrain<T extends TrainPull> {
     if (merged.merged !== true || !SHA.test(String(merged.sha))) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to the merge of #${train.number} is not one the train reads.`)
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} landed ${train.members.map(m => `#${m.number}`).join(' ')} as ${String(merged.sha).slice(0, 7)}`)
     await this.finish(train, String(merged.sha))
+    // Its members stay open until GitHub marks them (finish): the branch goes here.
+    if (method === 'merge') await this.drop(train.branch)
   }
 
   /** Whether [train]'s branch is what its body names and nothing else: from its head down, one merge commit for each member,
@@ -291,11 +296,14 @@ export class GitHubTrain<T extends TrainPull> {
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} built on ${from.slice(0, 7)}: ${members.map(m => `#${m.number}`).join(' ')}`)
   }
 
-  /** Tells and closes the members of merged [train] still open at the head it names, then deletes its branch; their numbers.
-   *  A member already told (its close failed last pass) is not told again. */
+  /** Tells the members of merged [train] still open at the head it names; their numbers. Landed as a merge commit, GitHub
+   *  marks each merged by itself, a moment later: closed here first, one would stay closed and never read as merged. Landed
+   *  any other way, each is closed here and the train's branch deleted. A member already told is not told again. */
   private async finish(train: Train, sha: string): Promise<number[]> {
     const open = train.members.filter(member => this.pulls.some(pull => Number(pull.number) === member.number && object(pull.head).sha === member.head))
     if (!open.length) return []
+    const landing = await this.deps.reads.one(this.repo, `/repos/${this.repo}/git/commits/${sha}`)
+    const kept = Array.isArray(landing.parents) && landing.parents.length === 2 && object(landing.parents[1]).sha === train.tip
     const said = `landed in #${train.number} as `
     for (const member of open) {
       const comments = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${member.number}/comments?per_page=${PAGE}`, 3)
@@ -303,9 +311,9 @@ export class GitHubTrain<T extends TrainPull> {
         await this.sent('POST', `/issues/${member.number}/comments`, [201],
           { body: `${this.host.stamp()}: ${said}${sha.slice(0, 7)}. READ-OK on ${member.head.slice(0, 7)} by ${member.readers}, checks green.` })
       }
-      await this.sent('PATCH', `/pulls/${member.number}`, [200], { state: 'closed' })
+      if (!kept) await this.sent('PATCH', `/pulls/${member.number}`, [200], { state: 'closed' })
     }
-    await this.drop(train.branch)
+    if (!kept) await this.drop(train.branch)
     return open.map(member => member.number)
   }
 
