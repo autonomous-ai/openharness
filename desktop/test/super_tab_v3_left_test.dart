@@ -66,6 +66,7 @@ void main() {
     String? boardProjectId,
     SuperTabShippingReader? leaderboard,
     AppNotifier? withApp,
+    List<String>? invited,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
@@ -103,6 +104,7 @@ void main() {
               boardProjectId: boardProjectId,
               leaderboard: leaderboard,
               onManage: () {},
+              onInvite: invited == null ? null : () => invited.add('invite'),
             ),
           ),
         ),
@@ -152,6 +154,38 @@ void main() {
         ),
         findsOneWidget,
       );
+    });
+
+    // anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be
+    // visible". People join a Swarm by an invitation, and only its owner makes one (backend commands.ts, invite.create).
+    testWidgets('Invite people sits under the Swarm\'s name for its owner, and '
+        'opens its people', (tester) async {
+      final invited = <String>[];
+      await show(tester, agents: mine, invited: invited);
+      expect(
+        top(tester, 'super-swarm-switcher'),
+        lessThan(top(tester, 'project-sidebar-invite')),
+      );
+      expect(
+        top(tester, 'project-sidebar-invite'),
+        lessThan(top(tester, 'project-sidebar-agents')),
+      );
+      await tester.tap(find.text('Invite people'));
+      await tester.pump();
+      expect(invited, ['invite']);
+    });
+
+    testWidgets('a person who is not the Swarm\'s owner sees no Invite people', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        agents: mine,
+        invited: [],
+        setup: (server) => server.state['ownerId'] = 'tuan',
+      );
+      expect(key('project-sidebar-invite'), findsNothing);
+      expect(find.text('Invite people'), findsNothing);
     });
 
     testWidgets('no Decisions, Mentions, Threads or Projects grid', (

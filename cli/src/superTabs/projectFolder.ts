@@ -83,8 +83,12 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
   const repository = object(project.repository)
   const expectedRoot = swarmCloneRoot(core.dataDir, row.tabId, pool.cwd)
   if (!expectedRoot) throw new Error('Add this machine again to authorize its swarm workspace.')
-  if (repository.machineId === core.daemon.machineId() && sameFolder(request.cwd, repository.cwd)) return
   const expected = join(expectedRoot, project.id)
+  // The owner's own checkout, which the project names as its folder on this machine, is used as it is. The project's Swarm folder
+  // here is not that, though the project names it too once the Swarm started its Product Manager here (backend leadStart.ts
+  // placeLead): it is a clone Harness makes. Taken for the owner's own, it was never cloned, and the PM's worktree was asked of an
+  // empty folder (the rehearsal, 2026-11-11). A clone already there is used again (lib/projectFolder.ts), never cloned twice.
+  if (repository.machineId === core.daemon.machineId() && sameFolder(request.cwd, repository.cwd) && !sameFolder(request.cwd, expected)) return
   if (!sameFolder(request.cwd, expected)) throw new Error('The requested folder is outside this project.')
   // Nothing to clone (task #3211): its own empty folder here, with no worktree, which has nothing to branch from. The
   // backend starts it that way (machines.ts noRepositoryStart); an older one asks for a worktree, refused in words.

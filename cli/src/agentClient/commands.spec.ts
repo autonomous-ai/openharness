@@ -106,7 +106,7 @@ describe('harness ps', () => {
     started(h.ledger, 'lead', 'kid')
     expect(await psCommand([], h.deps)).toBe(EXIT.ok)
     const text = h.out.join('\n')
-    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\.\nCan start harnesses: yes\.\nYours: 1 open of 4 · 1 of 20 starts in the last 10 minutes\nNAME +AGENT +STATE +STARTED BY +ACTIVE +FOLDER/)
+    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\.\nCan start harnesses: yes\.\nYours: 1 open of 8 · 1 of 20 starts in the last 10 minutes\nNAME +AGENT +STATE +STARTED BY +ACTIVE +FOLDER/)
     expect(text).toMatch(/kid +Codex +working +you +1m +\/work\/kid \(main\)\n  kid recap/)
     expect(text).toMatch(/lead +Claude Code +idle +person \(you\)/)
     expect(text).not.toContain('sh ')
@@ -725,9 +725,10 @@ describe('refusals and the person', () => {
 
   it('refuses a start over the open limit with its reason, the switch off and an orphan with theirs', async () => {
     const d = new FakeDaemon()
-    d.frames = [frame('lead', { engine: 'claude' }), ...['a', 'b', 'c', 'd'].map((id) => frame(id))]
+    const kids = Array.from({ length: SPAWN_LIMITS.livePerHarness }, (_, i) => `k${i}`)
+    d.frames = [frame('lead', { engine: 'claude' }), ...kids.map((id) => frame(id))]
     const h = harness(d)
-    for (const kid of ['a', 'b', 'c', 'd']) started(h.ledger, 'lead', kid)
+    for (const kid of kids) started(h.ledger, 'lead', kid)
     const full = await (await agentOrigin(h.deps))!.check().catch((e) => e)
     expect(full).toBeInstanceOf(AgentClientError)
     expect([full.code, full.reason]).toEqual(['SPAWN_LIMIT', 'OPEN_LIMIT'])
@@ -767,7 +768,7 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 4.'])
+    expect(h.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'])
     expect(d.requests.at(-1)).toMatchObject({ type: 'agent_close', payload: { agentId: 'kid', sessionId: 's-kid', mode: 'idle' } })
     const now = harness(d)
     expect(await closeCommand(['kid', '--now', '--json'], now.deps)).toBe(EXIT.ok)
@@ -782,7 +783,7 @@ describe('harness close', () => {
     started(h.ledger, 'lead', 'kid')
     started(h.ledger, 'lead', 'other')
     expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.ok)
-    expect(h.out.join('\n')).toBe('kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 1 open of 4.')
+    expect(h.out.join('\n')).toBe('kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 1 open of 8.')
     const json = harness(d)
     expect(await closeCommand(['other', '--json'], json.deps)).toBe(EXIT.ok)
     expect(JSON.parse(json.out[0])).toEqual({ name: 'other', id: 'other', closed: true, effect: 'Its conversation is kept; the person can resume it.', next: [], open: 1 })
@@ -866,7 +867,7 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['kid on studio: closed. It had not started a conversation, so none was kept.\nNext: nothing; you have 0 open of 4.'])
+    expect(h.out).toEqual(['kid on studio: closed. It had not started a conversation, so none was kept.\nNext: nothing; you have 0 open of 8.'])
     expect(await closeCommand(['kid', '--now', '--json'], h.deps)).toBe(EXIT.ok)
     expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It had not started a conversation, so none was kept.', next: [], open: 0 })
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.failed)
@@ -887,7 +888,7 @@ describe('harness close', () => {
     expect(readFileSync(ledgerPath(dir), 'utf8').trim().split('\n')).toHaveLength(2)
     const unwritable = harness(d, { ledger: (data) => Object.assign(new Ledger(ledgerPath(data)), { append: () => { throw new Error('read-only') } }) })
     expect(await closeCommand(['kid'], unwritable.deps)).toBe(EXIT.ok)
-    expect(unwritable.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 4.'])
+    expect(unwritable.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'])
   })
 
   it('closes one harness at a time, by name', async () => {
@@ -1058,7 +1059,7 @@ describe('harness new, run by an agent', () => {
     started(l, 'lead', 'far', 'mini', NOW - 3_600_000)
     expect(spawnRefusal(lead, live, l, 'm', NOW)).toBeNull()
     live.add('mini/far')
-    expect(spawnRefusal(lead, live, l, 'm', NOW)).toBe('You have 4 harnesses running. Close one you are done with first (harness close <name>).')
+    expect(spawnRefusal(lead, live, l, 'm', NOW)).toBe('You have 8 harnesses running. Close one you are done with first (harness close <name>).')
     const crowd = new Ledger(ledgerPath(mkdtempSync(join(dir, 'crowd-'))))
     const busy = new Set<string>()
     for (let i = 0; i < SPAWN_LIMITS.livePerMachine; i++) {
@@ -1071,10 +1072,11 @@ describe('harness new, run by an agent', () => {
     expect(spawnRefusal(lead, new Set(), quick, 'm', NOW)).toBe('You started 20 harnesses in 10 minutes. Wait, or work with the ones you have.')
   })
 
-  it('keeps a harness another agent started from starting more: four of its own at most, one level down', () => {
-    // Owner, October 12: "be very careful about when to start a new agent so we don't waste user token". They were eight
-    // and two levels: a harness an agent started could start more, and each of those spent the person's tokens.
-    expect(SPAWN_LIMITS).toMatchObject({ livePerHarness: 4, depth: 1, livePerMachine: 40, perWindow: 20 })
+  it('keeps a harness another agent started from starting more: eight of its own at most, one level down', () => {
+    // Owner, October 12: "be very careful about when to start a new agent so we don't waste user token". Two levels went
+    // then: a harness an agent started could start more, and each of those spent the person's tokens. Eight at once came
+    // back on November 11 (four in between): one level down and forty a computer are what stop a runaway.
+    expect(SPAWN_LIMITS).toMatchObject({ livePerHarness: 8, depth: 1, livePerMachine: 40, perWindow: 20 })
     const l = new Ledger(ledgerPath(dir))
     const kid = { machineId: 'm', agentId: 'kid', name: 'kid', engine: 'codex' }
     // The person's harness: no line, no parent.
@@ -1109,7 +1111,7 @@ describe('harness new, run by an agent', () => {
     const empty = new Ledger(ledgerPath(mkdtempSync(join(dir, 'waiting-'))))
     expect(spawnRefusal(lead, new Set(), empty, 'm', NOW, waiting(SPAWN_LIMITS.livePerHarness - 1))).toBeNull()
     expect(spawnRefusal(lead, new Set(), empty, 'm', NOW, waiting(SPAWN_LIMITS.livePerHarness)))
-      .toBe('You have 4 harnesses running or starting. Close one you are done with first (harness close <name>).')
+      .toBe('You have 8 harnesses running or starting. Close one you are done with first (harness close <name>).')
     const crowd = new Ledger(ledgerPath(mkdtempSync(join(dir, 'crowd-waiting-'))))
     const busy = new Set<string>()
     for (let i = 0; i < SPAWN_LIMITS.livePerMachine - 1; i++) {
@@ -1570,11 +1572,12 @@ describe('spawnCheck and spawnCount', () => {
 
   it('counts what the limits count, and names the limit that refuses', () => {
     const ledger = new Ledger(ledgerPath(dir))
-    for (const kid of ['a', 'b', 'c', 'd']) started(ledger, 'lead', kid)
-    const live = new Set(['m/a', 'm/b', 'm/c', 'm/d'])
-    expect(spawnCount(lead, live, ledger, NOW)).toEqual({ open: 4, starts: 4, depth: 0, oldestStartAt: NOW })
+    const kids = Array.from({ length: SPAWN_LIMITS.livePerHarness }, (_, i) => `k${i}`)
+    for (const kid of kids) started(ledger, 'lead', kid)
+    const live = new Set(kids.map(kid => `m/${kid}`))
+    expect(spawnCount(lead, live, ledger, NOW)).toEqual({ open: 8, starts: 8, depth: 0, oldestStartAt: NOW })
     expect(spawnCheck(lead, live, ledger, 'm', NOW)).toEqual({ reason: 'OPEN_LIMIT', message: spawnRefusal(lead, live, ledger, 'm', NOW) })
-    expect(spawnCheck(lead, new Set(['m/a']), ledger, 'm', NOW)).toBeNull()
+    expect(spawnCheck(lead, new Set(['m/k0']), ledger, 'm', NOW)).toBeNull()
     expect(spawnCheck({ ...lead, startedByAgent: true }, new Set(), ledger, 'm', NOW)).toEqual({ reason: 'DEPTH', message: DEPTH_REFUSAL })
   })
 
@@ -1610,7 +1613,7 @@ describe('harness whoami', () => {
     expect(h.out.join('\n')).toBe([
       'You: Claude Code "lead" (lead), inside Harness, on studio.',
       'Can start harnesses: yes.',
-      'Yours: 1 open of 4 · 1 of 20 starts in the last 10 minutes · other machines: office (running), box (offline)',
+      'Yours: 1 open of 8 · 1 of 20 starts in the last 10 minutes · other machines: office (running), box (offline)',
     ].join('\n'))
     expect(d.closed).toBe(true)
     // The list the daemon keeps, never the backend: a request left open held the process for 10 to 35 s (review).

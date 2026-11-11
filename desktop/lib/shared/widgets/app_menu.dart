@@ -85,6 +85,8 @@ class AppMenuItem extends StatefulWidget {
     this.detail,
     this.leading,
     this.trailing,
+    this.state,
+    this.stateFailed = false,
     this.focusNode,
     this.metrics = AppMenuRowMetrics.compact,
     this.textStyle,
@@ -132,6 +134,15 @@ class AppMenuItem extends StatefulWidget {
   /// meeting it for the first time, and there is nowhere else in a menu row to
   /// put the sentence.
   final Widget? trailing;
+
+  /// A word of state at the row's far end, for a list whose rows each stand somewhere: `fails`, `not run`.
+  ///
+  /// Caption size and faint, or the error ink when [stateFailed]. The row draws it itself, where a [trailing] widget
+  /// keeps its own colours: red on the active row's blue cannot be read, so there it takes the row's detail ink.
+  final String? state;
+
+  /// Whether [state] says something failed.
+  final bool stateFailed;
   final FocusNode? focusNode;
 
   /// A quiet SECOND LINE under the label, for a row whose label alone does not
@@ -203,6 +214,9 @@ class AppMenuItem extends StatefulWidget {
       }
       if (row.note case final note?) {
         text += 8 + line(note, AppType.body());
+      }
+      if (row.state case final state?) {
+        text += 8 + line(state, AppType.caption());
       }
       widest = math.max(widest, text);
     }
@@ -393,6 +407,21 @@ class _AppMenuItemState extends State<AppMenuItem> {
                   const SizedBox(width: 8),
                   widget.trailing!,
                 ],
+                if (widget.state case final state?) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    state,
+                    maxLines: 1,
+                    style: AppType.caption(
+                      color: active
+                          ? AppDesktop.selectionDetail
+                          : widget.stateFailed
+                          ? error
+                          : AppPalette.textFaint,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
                 if (widget.selected) ...[
                   const SizedBox(width: 12),
                   Icon(
@@ -487,7 +516,8 @@ class AppMenuSearchField extends StatelessWidget {
 /// marks missed each other.
 ///
 /// Past [searchAfter] rows the panel opens on a search field, matching a row's
-/// label, detail and note. Headings and dividers step aside during a search.
+/// label, detail, note and state word. Headings and dividers step aside during
+/// a search.
 ///
 /// [AppMenuItem] rows close the whole dropdown before they act. Anything else
 /// among [children] (a heading, an [AppMenuDivider]) is drawn as it is.
@@ -690,7 +720,8 @@ class _AppDropdownState extends State<AppDropdown> {
   bool _matches(AppMenuItem row, String needle) =>
       row.label.toLowerCase().contains(needle) ||
       (row.detail?.toLowerCase().contains(needle) ?? false) ||
-      (row.note?.toLowerCase().contains(needle) ?? false);
+      (row.note?.toLowerCase().contains(needle) ?? false) ||
+      (row.state?.toLowerCase().contains(needle) ?? false);
 
   List<AppMenuItem> get _rows => [
     for (final child in widget.children) ?_rowIn(child),
