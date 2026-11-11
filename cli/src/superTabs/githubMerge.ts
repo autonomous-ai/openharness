@@ -195,15 +195,18 @@ const COMPARE_FILES_MAX = 300
 /** Changes kept by each merger and assigner: what a commit changes since its merge base does not change. */
 const PATCHES_MAX = 1_000
 
-/** A compare's files as one change: each file's status and names and its added and removed lines, without context or line numbers;
- *  null when one file has no patch (binary, or too large for GitHub to give) or the list may be cut short. */
+/** A compare's files as one change: each file's status and names and its added and removed lines, without context or line numbers.
+ *  A file GitHub gives no patch for and counts no changed lines in (a binary, a rename or a mode change alone) is its content,
+ *  by its blob: two heads that differ only in a binary are two changes. Null when a file with changed lines has no patch (too
+ *  large for GitHub to give), when one with no patch names no blob, or when the list may be cut short. */
 function changeOf(files: Json[]): string | null {
   if (files.length >= COMPARE_FILES_MAX) return null
   const parts: string[] = []
   for (const file of [...files].sort((a, b) => String(a.filename ?? '').localeCompare(String(b.filename ?? '')))) {
-    if (typeof file.patch !== 'string' && Number(file.changes ?? 0) > 0) return null
+    const whole = typeof file.patch === 'string'
+    if (!whole && (Number(file.changes ?? 0) > 0 || !/^[0-9a-f]{40,64}$/.test(String(file.sha ?? '')))) return null
     const lines = String(file.patch ?? '').split('\n').filter(line => line.startsWith('+') || line.startsWith('-'))
-    parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''), lines]))
+    parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''), lines, ...whole ? [] : [String(file.sha)]]))
   }
   return createHash('sha256').update(parts.join('\n')).digest('hex')
 }
