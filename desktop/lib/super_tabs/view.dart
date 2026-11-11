@@ -2854,11 +2854,13 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Whether [id] is where Swarm v4's agents talk to each other: a project's channel, drawn as the board draws them.
   bool _agentTalk(String id) => _agentsOnlyId(id);
 
-  /// The teammates [message] is to, by the name their tags read: each its words do not tag opens its bubble.
-  List<String> _postTo(SuperTabMessage message) =>
-      _agentTalk(message.conversationId)
+  /// The teammates [message] is to, by the name their tags read, and the names they are stored under where those differ: each
+  /// its words do not tag by either opens its bubble.
+  ({List<String> names, Map<String, String> stored}) _postTo(
+    SuperTabMessage message,
+  ) => _agentTalk(message.conversationId)
       ? superTabPostTo(c.snapshot, message)
-      : const [];
+      : (names: const [], stored: const {});
 
   /// An agent chat's header (Swarm v4): the agent, where it runs, then its instructions and its terminal, each opening
   /// beside the chat. The name takes two thirds of the room the buttons leave at most and is cut with an ellipsis, where the
@@ -3516,9 +3518,12 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final g in snapshot?.conversations ?? <SuperTabConversation>[])
         if (g.number != null) g.number!: g.id,
     };
+    // Each agent's tag as it is written: its own name, which a PM's role name is not ("@Ray", stored as Product Manager).
     _agentNames = [
-      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[])
+      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[]) ...{
         agent.name,
+        ?agent.displayName,
+      },
     ];
     _people = {};
     for (final person in snapshot?.people ?? <SuperTabPerson>[]) {
@@ -3567,6 +3572,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ? null
         : c.quoted(message.conversationId, answers);
     final reply = byId[answers] ?? quoted?.message;
+    final to = _postTo(message);
     final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
     final thread = inThread || root != message.id
@@ -3579,7 +3585,8 @@ class _SuperTabViewState extends State<SuperTabView>
       message: message,
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
-      to: _postTo(message),
+      to: to.names,
+      storedNames: to.stored,
       author: _shownAuthor(c, message),
       // A person is found by their username, as they are tagged, and reads
       // as the name they set.
