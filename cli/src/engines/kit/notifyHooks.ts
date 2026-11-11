@@ -33,17 +33,26 @@ export function hookScriptCandidates(dir: string, script: string | undefined, pl
 }
 export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
 
-/** The notify.mjs every hook line names, when it is not there; null when it is. With [engine], null too for an engine
- *  whose hooks do not run it. */
+/**
+ * The engines whose hook install was refused because notify.mjs was not there. Only they are told it is missing: an engine
+ * whose hooks do not run it, that installs none here (no Windows runner), or whose hooks are off was never refused for it,
+ * and blaming the file would hide the reason that does clear by waiting (#3954 review).
+ */
+const refusedForScript = new Set<string>()
+
+/** The notify.mjs every hook line names, when it is not there; null when it is. With [engine], null too unless that
+ *  engine's install was refused for it. */
 export function missingHookScript(engine?: string): string | null {
-  if (engine !== undefined && !(NOTIFY_ENGINES as readonly string[]).includes(engine)) return null
+  if (engine !== undefined && !refusedForScript.has(engine)) return null
   return existsSync(HOOK_SCRIPT) ? null : HOOK_SCRIPT
 }
 
-/** Refuses an install whose hook lines would name a notify.mjs that is not there ([HookScriptMissing]). */
-export function requireHookScript(): void {
+/** Refuses [engine]'s install when its hook lines would name a notify.mjs that is not there ([HookScriptMissing]). */
+export function requireHookScript(engine: NotifyEngine): void {
   const missing = missingHookScript()
-  if (missing) throw new HookScriptMissing(missing)
+  if (!missing) return
+  refusedForScript.add(engine)
+  throw new HookScriptMissing(missing)
 }
 
 /** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
@@ -154,8 +163,7 @@ function withoutTrailingSeparators(arg: string): string {
 }
 
 /** The engines whose hook lines run notify.mjs; the others (OpenCode, Pi, Amp, …) report through a plugin of their own. */
-const NOTIFY_ENGINES = ['claude', 'codex', 'cursor', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'copilot'] as const
-type NotifyEngine = typeof NOTIFY_ENGINES[number]
+type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot'
 
 /** notify.mjs's argument list for [engine]: the managed Node, the script, and Harness's own flags. No user input. */
 export function hookArgv(

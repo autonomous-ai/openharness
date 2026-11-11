@@ -8,7 +8,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { backend, identifier, object, SuperTabHostError, within } from './wire.js'
 import { isCoordinator, isStep } from './agentContext.js'
-import { wireRole } from '../lib/swarmSkills.js'
+import { swarmBasics, wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution } from './contribution.js'
 import { ClaudeSignIns } from './claudeSignIn.js'
@@ -22,9 +22,11 @@ import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.
 import { ShippingReporter } from './shipping.js'
 import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
+import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
+import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { crewOf, labelOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
@@ -164,8 +166,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   const github = (options.github ?? githubRest)()
-  // The verdicts and claims being made by command now, by agent and what was asked: as many as there are commands running.
+  // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.
   const commands = new Map<string, Promise<unknown>>()
+  // Each agent's cuts here, one after another and no more than an hour holds (githubSplit.ts Cuts).
+  const cuts = new Cuts()
   // This computer's GitHub login, asked once: a verdict or a claim made by command looks for its own earlier comment by it
   // (githubVerdict.ts, githubClaim.ts).
   let githubLogin: Promise<string> | null = null
@@ -200,8 +204,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
     send: github.send, records })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
-  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
-    get: github.get, send: github.send, records })))(core, sources)
+  const assigns = (options.githubAssign ?? ((api, held) => {
+    // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
+    const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
+      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
+    return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers })
+  }))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
@@ -322,6 +330,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in
           // these alone; a Reviewer's keeps its kind.
           return { ok: true, role: grant ? wireRole(grant) : grant }
+        }
+        // What Harness adds to an agent's instructions at every start, for its person to read in Desktop's Instructions beside the
+        // rest (anh Dee, 2026-11-11: "show users what goes into the agent"): the Swarm's basics for its role, as this release gives
+        // them (lib/swarmSkills.ts). Its own agents/<name>.md, which comes after them, is read apart. No role, or an unreadable
+        // roster, answers no `text`.
+        if (payload.action === 'basics') {
+          const grant = await port.swarmRole(String(payload.harnessId ?? ''))
+          return grant ? { ok: true, text: swarmBasics(grant.role === 'coordinator').text } : { ok: true }
         }
         // Import agent (Desktop): whether any Swarm lists this harness here. An unreadable roster answers no `listed`, on which
         // Desktop refuses rather than share.
@@ -450,27 +466,32 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             throw error
           }
         }
-        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts) and a builder's claim on a task (`take`,
-        // githubClaim.ts): made with this computer's gh under the calling agent's name, on a repository of a project it reads,
-        // and its comment recorded with the backend as that agent's.
-        if (payload.action === 'read' || payload.action === 'take') {
+        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts), a builder's claim on a task (`take`,
+        // githubClaim.ts) and a piece it cuts off one (`split`, githubSplit.ts): made with this computer's gh under the calling
+        // agent's name, on a repository of a project it reads, and its comment recorded with the backend as that agent's.
+        if (payload.action === 'read' || payload.action === 'take' || payload.action === 'split') {
           const verdict = payload.action === 'read' ? verdictAsked(payload) : null, claim = payload.action === 'take' ? claimAsked(payload) : null
-          if (!verdict && !claim) return { error: 'INVALID_REQUEST' }
+          const piece = payload.action === 'split' ? splitAsked(payload) : null
+          if (!verdict && !claim && !piece) return { error: 'INVALID_REQUEST' }
           // This computer's gh login is its person's: only that person's own agent here posts with it, as GitHub news and the
           // merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
           const me = (await core.account.identity().catch(() => null))?.accountId ?? null
           if (!me || agent.contributorId !== me || agent.machineOwnerId !== me) {
             return { error: 'AGENT_UNAVAILABLE', detail: verdict ? 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.'
-              : 'A task is taken with its person\'s own GitHub login, on that person\'s computer.' }
+              : claim ? 'A task is taken with its person\'s own GitHub login, on that person\'s computer.'
+              : 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' }
           }
           const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
           // joins the one still running, or both would find no comment yet and each post its own.
-          const same = JSON.stringify([agentId, verdict ?? claim])
+          // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
+          const same = JSON.stringify([agentId, verdict ?? claim ?? sameCut(piece!)])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
-          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict) : takeTask(deps, { name, repositories }, claim!))
+          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict)
+            : claim ? takeTask(deps, { name, repositories }, claim)
+            : cuts.run(agentId, () => splitTask(deps, { name, repositories }, piece!)))
             .finally(() => commands.delete(same))
           commands.set(same, made)
           return { ok: true, value: await made }

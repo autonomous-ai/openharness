@@ -40,7 +40,7 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that is
     // a failed install with its reason, not a rejection (B4.1 review).
-    requireHookScript()
+    requireHookScript(rule.engine)
     const cmd = command(port, rule.engine, undefined, undefined, options.environment, platform === 'win32' ? rule.win32Runner! : 'bash')
     return await runHookPreparation([rule.file], async attempt => {
       const observed = inspectHookFile(rule.file)

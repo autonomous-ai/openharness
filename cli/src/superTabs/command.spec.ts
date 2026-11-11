@@ -507,6 +507,11 @@ describe('stdin for -', () => {
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("read - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
       + "Close stdin after the message, as a heredoc does: read ok|hold OWNER/REPO#N SHA - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
+    // And a piece's words its own.
+    expect(await superTabCommand([...prefix, 'split', 'acme/app#34', 'm', 'Sync the theme', '-'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("split - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
+      + "Close stdin after the message, as a heredoc does: split OWNER/REPO#N s|m|l TITLE - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+    expect(request).not.toHaveBeenCalled()
     // What arrives in time is used as before, read once.
     const stdin = vi.fn(async () => 'Ready\n')
     expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-3'], { ...deps, stdin })).toBe(0)
@@ -547,12 +552,44 @@ it('lists what waits for the agent in its pane, a line each, and says when nothi
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' })
 })
 
+// A project's goal file and its workflow are written into the caller's checkout (goalStarter.ts): the daemon has no part in it.
+it('writes a goal file in the checkout it runs in, says what it wrote, and asks nothing of the daemon', async () => {
+  expect(parseSuperTabArgs(['goal'], where).payload).toMatchObject({ action: 'goal' })
+  expect(() => parseSuperTabArgs(['goal', 'acme/app'], where)).toThrow('harness super-tab')
+  const print = vi.fn(), open = vi.fn()
+  const deps = { where: () => where, pane: undefined, open, print, goal: vi.fn(async () => ({ ok: true, said: 'Wrote agents/GOAL.md and .github/workflows/goal.yml.' })) }
+  expect(await superTabCommand(['goal'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith('Wrote agents/GOAL.md and .github/workflows/goal.yml.')
+  deps.goal.mockResolvedValueOnce({ ok: false, said: 'This folder is in no git repository: run it in your checkout of the project.' })
+  expect(await superTabCommand(['goal'], deps)).toBe(1)
+  expect(print).toHaveBeenLastCalledWith('This folder is in no git repository: run it in your checkout of the project.')
+  expect(open).not.toHaveBeenCalled()
+})
+
 // A builder's claim is made by command (githubClaim.ts).
 it('takes a task by its repository and number, and nothing else', () => {
   expect(parseSuperTabArgs(['take', 'acme/app#34'], where).payload).toMatchObject({ action: 'take', tabId: '', repository: 'acme/app', number: 34 })
   expect(parseSuperTabArgs([...prefix, 'take', 'Acme/App.js#3'], where).payload).toMatchObject({ action: 'take', tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', number: 3 })
   for (const argv of [['take'], ['take', '34'], ['take', 'acme/app'], ['take', 'acme/app#0'], ['take', 'acme/../app#3'], ['take', 'acme/app#34', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})
+
+// A builder cuts a piece off a task it holds by command (githubSplit.ts).
+it('cuts a piece off a task: the repository and number, its size, its title, and what it is', () => {
+  expect(parseSuperTabArgs(['split', 'acme/app#34', 'm', 'Sync the theme', 'Only the theme.'], where).payload).toMatchObject({ action: 'split', tabId: '',
+    repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: 'Only the theme.' })
+  // What it is may be left out, or come on stdin as a post's does.
+  expect(parseSuperTabArgs([...prefix, 'split', 'Acme/App.js#3', 'l', ' Sync '], where).payload).toMatchObject({ action: 'split', tabId: 'tab', agentId: 'agent',
+    repository: 'Acme/App.js', number: 3, size: 'l', title: 'Sync', text: '' })
+  const stdin = vi.fn(() => "Read `theme` at start.\nWrite it on change.\n")
+  expect(parseSuperTabArgs(['split', 'acme/app#34', 's', 'Sync the theme', '-'], where, stdin, () => false).payload).toMatchObject({ text: 'Read `theme` at start.\nWrite it on change.' })
+  expect(() => parseSuperTabArgs(['split', 'acme/app#34', 's', 'Sync the theme', '-'], where, () => 'x', () => true))
+    .toThrow("split - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: split OWNER/REPO#N s|m|l TITLE - <<'MSG'")
+  for (const argv of [['split'], ['split', 'acme/app#34'], ['split', 'acme/app#34', 'm'], ['split', 'acme/app#34', 'xl', 'Title'], ['split', '34', 'm', 'Title'],
+    ['split', 'acme/app#0', 'm', 'Title'], ['split', 'acme/../app#3', 'm', 'Title'], ['split', 'acme/app#34', 'm', ' '], ['split', 'acme/app#34', 'm', 'a\nb'],
+    ['split', 'acme/app#34', 'm', 'Title', 'words', 'extra'], ['split', 'acme/app#34', 'm', 'Title', 'x'.repeat(32_001)]]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ').slice(0, 80)).toThrow('harness super-tab')
   }
 })
 

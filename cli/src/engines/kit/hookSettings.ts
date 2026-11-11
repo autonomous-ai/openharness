@@ -44,12 +44,14 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
   // A startup refresh and a launch share the entire installation. Releasing the
   // reservation between notify and Messages let each revoke the other's second
   // stage, so a healthy launch could be held by the daemon's own refresh.
+  // Before the notify.mjs check, as in nativeHookSettings.ts: an engine with no Windows runner skips its hooks there whether
+  // or not the file is (#3954 review).
+  if (platform === 'win32' && !settings.win32Runner) return hooksNotOnWindows(engine)
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that
     // is a failed install with its reason, not a rejection (B4.1 review). So is a notify.mjs that is not there.
-    requireHookScript()
-    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)
-    if (!entry) return hooksNotOnWindows(engine)
+    requireHookScript(engine)
+    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)!
     return await runHookPreparation(files, async attempt => {
       await installNotifyHooks(settings, port, home, entry, attempt, platform)
       // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is

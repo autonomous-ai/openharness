@@ -210,7 +210,8 @@ Future<List<SuperTabController>> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
-  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, as her computer sends them.
+  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, what Harness adds at every start and
+  // her person's own CLAUDE.md, as her computer sends them.
   final computer =
       SwarmV4Computer(
           files: {'h/Faye': 'Answer in Vietnamese.\nNever push to main.'},
@@ -229,6 +230,15 @@ Future<List<SuperTabController>> _show(
         ]
         ..skipped = [
           {'name': 'CLAUDE.local.md', 'why': 'link'},
+        ]
+        ..basics = 'You are a Swarm agent on a team shipping one project.\n- Your tasks are GitHub issues labelled builder:<your name>.'
+        ..personal = [
+          {
+            'name': 'CLAUDE.md',
+            'path': '~/.claude/CLAUDE.md',
+            'text': 'Answer in plain words.',
+            'truncated': false,
+          },
         ];
   // The task cards read the lampOS review Swarm's channel.
   final c = swarmV4Server().controller(account: 'owner');
@@ -959,11 +969,11 @@ class _Gallery extends StatelessWidget {
           ]),
           section(
             'instructions',
-            'Instructions: the agent\'s own file, then its folder\'s files, read only and folded',
+            'Instructions: the agent\'s own file, then what else goes into it, read only and folded: its folder\'s, Harness\'s, its person\'s own, and its engine\'s',
             [
               SizedBox(
                 width: 380,
-                height: 500,
+                height: 640,
                 child: SwarmAgentInstructions(
                   agent: _agent('Faye'),
                   machineName: 'Mac Studio',
