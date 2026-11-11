@@ -356,6 +356,17 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(fork).toMatchObject({ state: 'closed', merged_at: expect.any(String) })
   })
 
+  // Whether GitHub compares a real fork's head with the base by its SHA is not yet seen, and a read it refuses would hold the
+  // repository's pass: a fork alone rides a train of one, which the merges API either takes or refuses.
+  it('carries a fork\'s pull request that is alone on a train of one, even on main\'s tip', async () => {
+    const f = setup()
+    const fork = f.add(4, { fork: true })
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.carried()).toEqual([[4]])
+    expect(f.state.asked.filter(path => path.startsWith(`/compare/main...${fork.head.sha}`))).toEqual([])
+  })
+
   it('merges a fork\'s pull request on its own, as before the train, when GitHub does not take its head, and builds the train of the others next', async () => {
     const f = setup()
     f.add(4); const fork = f.add(5, { fork: true }); f.add(6)
