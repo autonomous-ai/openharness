@@ -910,7 +910,7 @@ List<String> superTabSidebarOrder(
 
 /// The projects a list of them offers, from A to Z: the Swarm's, less an archived one, and in the person's own Personal
 /// Swarm (personal_projects.dart, worked out once a call) less v3's tab projects and those it hides: a project whose
-/// panes are all closed (task #3042) and the Swarm's first project while it names no repository. A hidden one stays while
+/// panes are all closed (task #3042). A hidden one stays while
 /// its chat is open, unless something covers the chat ([paneCovered]), and while that chat has something unread. None
 /// left out without the app, which holds the panes.
 List<SuperTabProject> superTabListedProjects(

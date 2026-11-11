@@ -232,6 +232,40 @@ class PersonalSwarm extends ChangeNotifier {
 
   String? _tabShowing(String swarmId) =>
       app.swarms.where((s) => s.id == swarmId).firstOrNull?.superTabId;
+
+  /// Opens Personal from the tab the person is on, outside a Swarm ([swarmsToOpen]): its tab if one shows it, else that
+  /// tab when it is an empty page, else a tab of its own (`AppNotifier.openSuperTab`). Asked of the server when this
+  /// computer has not met it yet, which answers the same Swarm on each of the person's computers and makes it the first
+  /// time. A person who moved to another tab meanwhile is left there. Throws why it could not.
+  Future<void> open() async {
+    final account = _account;
+    final from = app.activeSwarmId;
+    final id = await ensure();
+    if (account == null || _account != account || app.activeSwarmId != from) {
+      return;
+    }
+    app.openSuperTab(id, kPersonalSwarmName, intoSwarmId: from);
+  }
+}
+
+/// The row [swarmsToOpen] lists Personal under, whether or not the server has made it yet. No Swarm's id is ever this.
+const kPersonalSwarmRow = kPersonalSwarmOperation;
+
+/// The Swarms a person opens from outside a Swarm (the New Tab page, a Swarm draft, ⌘K): on the Desktop, Personal first,
+/// always, then those closed on this computer, so their Personal Swarm is in reach on each of their computers without
+/// another Swarm open (anh Dee, 2026-11-11). Without [personal] (the web's host), the Swarms closed there alone.
+List<({String id, String name})> swarmsToOpen(
+  AppNotifier app, {
+  required bool personal,
+}) {
+  final closed = app.closedSuperTabs;
+  if (!personal || app.currentUser == null) return closed;
+  final known = PersonalSwarm.of(app).id;
+  return [
+    (id: kPersonalSwarmRow, name: kPersonalSwarmName),
+    for (final tab in closed)
+      if (tab.id != known) tab,
+  ];
 }
 
 /// The Swarms the dropdown lists under Personal, by name: every Swarm the

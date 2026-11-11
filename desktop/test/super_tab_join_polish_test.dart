@@ -6,7 +6,7 @@ import 'package:harness/super_tabs/join_dialog.dart';
 import 'package:harness/super_tabs/join_link.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_options.dart';
-import 'package:harness/super_tabs/switch_pm.dart';
+import 'package:harness/super_tabs/choose_pm.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -115,7 +115,7 @@ void main() {
     );
   });
 
-  testWidgets('Switch Product Manager offers Check again', (t) async {
-    await pendingIn(t, (context, c) => showSwitchPm(context, c, 'lead'));
+  testWidgets('Choose PM offers Check again', (t) async {
+    await pendingIn(t, (context, c) => showChoosePm(context, c, 'lead'));
   });
 }

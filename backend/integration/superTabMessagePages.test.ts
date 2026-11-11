@@ -77,6 +77,22 @@ async function counted<T>(read: () => Promise<T>): Promise<{ value: T; rows: Cou
   }
 }
 
+// anh Dee, 2026-11-11, of their chat with their agent full of GitHub's cards: "so terrible. it should be like a human
+// conversation". A relay is how GitHub's words reach the agent: its agent's alone to read, and still delivered to it.
+describe('what GitHub said to an agent, relayed by its person\'s Harness', () => {
+  it('is left out of the person\'s chat, read by the agent, and delivered to it', async () => {
+    const { tab, lead, chat } = await fixture()
+    await run(tab, { type: 'github.relay', conversationId: chat, agentId: lead, event: 'comment', on: 'pull', repository: 'acme/app',
+      number: 4, url: 'https://github.com/acme/app/pull/4#issuecomment-1', login: 'octocat', association: 'MEMBER',
+      text: 'Juno: READ-OK f6edb44' } as Command, host)
+    const relayed = (page: { messages: Array<{ source?: unknown }> }) =>
+      page.messages.filter(m => (m.source as { kind?: string } | null | undefined)?.kind === 'github')
+    expect(relayed(await store.messages(host, tab, chat, {}))).toEqual([])
+    expect(relayed(await store.messages(host, tab, chat, {}, lead))).toHaveLength(1)
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, conversationId: chat, agentId: lead } })).toBe(1)
+  })
+})
+
 describe('messages by reader (spec 5 A1)', () => {
   it('counts an agent\'s older page and a person\'s newest page under their kinds, with batches and rows, naming nothing', async () => {
     const { tab, lead } = await fixture()
