@@ -24,13 +24,16 @@ const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.Inp
 export async function storeSwarm(db: PrismaClient, input: { state: SuperTabState; revision: number; messages?: StoredMessage[] }, now = Date.now()) {
   const { revision, messages = [] } = input
   const state = structuredClone(input.state)
-  for (const group of state.conversations) group.pullRequestUrls ??= []
   const lastActivity = new Map<string, number>()
   for (const m of messages) lastActivity.set(m.conversationId, Math.max(lastActivity.get(m.conversationId) ?? 0, m.createdAt.getTime()))
+  for (const group of state.conversations) group.pullRequestUrls ??= []
+  for (const group of [...state.conversations, ...state.parkedConversations ?? []]) {
+    if (lastActivity.has(group.id)) group.lastActivityAt ??= new Date(lastActivity.get(group.id)!).toISOString()
+  }
   await swarmTransaction(db, async tx => {
     await tx.superTab.create({ data: { id: state.id, ownerId: state.ownerId, autonomousEnv: state.environment, revision, ...indexesOf(state),
       format: 2, state: { version: 2 } } })
-    await parts.insertParts(tx, parts.split(state, { tabId: state.id, version: revision, now, lastActivity }))
+    await parts.insertParts(tx, parts.split(state, { tabId: state.id, version: revision, now }))
     if (messages.length) await tx.superTabMessage.createMany({ data: messages.map(m => ({ id: m.id, tabId: state.id, conversationId: m.conversationId,
       sequence: m.sequence, author: json(m.author), text: m.text, replyTo: null, recipientIds: m.recipientIds ?? [], mentions: [],
       ...(m.source ? { source: json(m.source) } : {}), createdAt: m.createdAt })) })

@@ -4,11 +4,12 @@
  * any of them", then "EVERYTHING", lampOS's Swarm included). Every Swarm created before WIPE_CUTOFF goes with all it keeps; one
  * created after it is never touched, so the first v4 Swarms are safe.
  *
- * Each is deleted as its owner deleting it is (store.ts wipeSwarm, deletion.ts), Personal Swarms too: it leaves every list at once,
- * every member's apps are told, and its hosts close every agent's session and clean up its folders. None can be restored. Then its
- * stored files, every record that carries its id and its row go (purge.ts purgeRecords) as soon as no host has anything left to
- * read of it, or once the 7 days a host has for that are over, as for any deleted Swarm. What is not a Swarm's stays: accounts and
- * sign-ins, machines and devices, terminals, Agent Messages, Models.
+ * Each in parts (format 2) is deleted as its owner deleting it is (store.ts wipeSwarm, deletion.ts), Personal Swarms too: it leaves
+ * every list at once, every member's apps are told, and its hosts close every agent's session and clean up its folders. One still
+ * in a single row (format 1, never served) is marked deleted and leaves every list in one write (retireSingleRow), due for the purge
+ * at once. None can be restored. Then its stored files, every record that carries its id and its row go (purge.ts purgeRecords)
+ * as soon as no host has anything left to read of it, or once the 7 days a host has for that are over, as for any deleted Swarm.
+ * What is not a Swarm's stays: accounts and sign-ins, machines and devices, terminals, Agent Messages, Models.
  *
  * Runs in the singleton worker: a pass every PASS_MS walks every Swarm a page at a time in id order, and logs counts only. A Swarm
  * that fails is tried again on the next pass, further apart while passes keep failing. It stops once a pass finds nothing left from
@@ -45,11 +46,13 @@ export interface WipePass { deleted: number; purged: number; left: number; hosts
 const createdOf = (row: Record<string, unknown>) => row.createdAt == null ? null : ms(row.createdAt)
 
 /** Marks single-row Swarm [tabId] deleted and due for the purge at [now], in one write that matches it only while it is still live
- *  and in one row: false when another runner came first. Raw: `deletedAt: null` matches a row that never had the field. */
+ *  and in one row: false when another runner came first. Like a deletion (parts/commit.ts indexesOf), the same write empties its
+ *  member and invitation lists, so it leaves every person's lists at once. Nobody is told: no app or host ever read it, since a
+ *  single-row Swarm is never served. Raw: `deletedAt: null` matches a row that never had the field. */
 async function retireSingleRow(db: PrismaClient, tabId: string, now: number): Promise<boolean> {
   const at = { $date: new Date(now).toISOString() }
   const reply = await db.$runCommandRaw({ update: 'SuperTab', updates: [{ q: { _id: tabId, format: { $ne: 2 }, deletedAt: null },
-    u: { $set: { deletedAt: at, purgeAt: at } } }] }) as unknown as { nModified?: number }
+    u: { $set: { deletedAt: at, purgeAt: at, memberIds: [], invitedEmails: [] } } }] }) as unknown as { nModified?: number }
   return Number(reply.nModified ?? 0) === 1
 }
 

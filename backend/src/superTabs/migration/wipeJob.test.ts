@@ -12,7 +12,7 @@ const at = (time: number) => ({ $date: new Date(time).toISOString() })
 const DAY = 24 * 60 * 60 * 1000
 const NOW = WIPE_CUTOFF + DAY
 
-type Update = { q: { _id: string; format: { $ne: number }; deletedAt: null }; u: { $set: { deletedAt: { $date: string }; purgeAt: { $date: string } } } }
+type Update = { q: { _id: string; format: { $ne: number }; deletedAt: null }; u: { $set: { deletedAt: { $date: string }; purgeAt: { $date: string }; memberIds: []; invitedEmails: [] } } }
 /** Swarm rows by id, as the job pages them: those after the cursor, in order, at most `$limit`. A single-row Swarm's retirement
  *  ([updates]) sets its deletion on the row it still matches. */
 function database(rows: Row[]) {
@@ -70,7 +70,7 @@ describe('one pass of the wipe', () => {
     const pass = await wipeOnce(db, { wipeSwarm: async id => { wiped.push(id); return id === 'a-0001' ? 'gone' : 'deleted' } }, null,
       { now: () => NOW, pause: async () => { pauses++ } })
     expect(wiped).toEqual(live.map(r => r._id))
-    expect(updates).toEqual([{ q: { _id: 'c-no-date', format: { $ne: 2 }, deletedAt: null }, u: { $set: { deletedAt: at(NOW), purgeAt: at(NOW) } } }])
+    expect(updates).toEqual([{ q: { _id: 'c-no-date', format: { $ne: 2 }, deletedAt: null }, u: { $set: { deletedAt: at(NOW), purgeAt: at(NOW), memberIds: [], invitedEmails: [] } } }])
     expect(purged).toEqual(['b-done', 'b-late'])
     // The purge keeps the row only while it is still the deletion this pass read.
     expect(purgeRecords.mock.calls.map(c => (c as unknown[])[2])).toEqual([new Date(NOW + 6 * DAY), new Date(NOW - 1)])

@@ -99,6 +99,15 @@ function hostDigest(group: GroupData): string {
     !!group.audience, work ? [work.id, work.agentId, work.status, work.execution, work.result?.slice(0, 500) ?? null] : null])).digest('base64url').slice(0, 22)
 }
 
+/** A part's data as stored. A group leaves out `reportSeq`, the report progress that went in S19b, which every group written
+ *  before it still holds as 0: each loses it at its next write, and no group is written for it alone (read/views.ts groupView
+ *  hides it until then). Goes on or after 2026-12-12, with that strip. */
+function storedData(kind: PartKind, data: unknown): Prisma.InputJsonValue {
+  const stored = json(data)
+  if (kind === 'group' && stored && typeof stored === 'object') delete (stored as Record<string, unknown>).reportSeq
+  return stored
+}
+
 /** The columns each kind keeps out of its data for queries (schema.prisma). */
 export function extracted(kind: PartKind, data: unknown, stamp: number): Record<string, unknown> {
   switch (kind) {
@@ -160,18 +169,18 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
     if (prior) {
       if (write.kind === 'start') fields = await keepFinishedAt(tx, id, fields)
       const updated = await model.updateMany({ where: { id, version: prior.version, deleted: true }, data: { version: prior.version + 1,
-        changedAt: new Date(stamp), deleted: false, purgeAt: null, data: json(write.data), ...fields } })
+        changedAt: new Date(stamp), deleted: false, purgeAt: null, data: storedData(write.kind, write.data), ...fields } })
       if (!updated.count) throw new PartConflict(write.kind, write.key)
       return prior.version + 1
     }
     const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await agentFloor(tx, tabId) + 1 : 0)
     await model.create({ data: { id, tabId, key: write.key, version, changedAt: new Date(stamp), deleted: false, ordinal: write.ordinal,
-      data: json(write.data), ...fields } })
+      data: storedData(write.kind, write.data), ...fields } })
     return version
   }
   const data = write.op === 'touch' ? {}
-    : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data), ...write.host }
-    : { ...reading ? { readAt: new Date(stamp), ...write.content ? { contentAt: new Date(stamp) } : {} } : { changedAt: new Date(stamp) }, data: json(write.data), ...(write.kind === 'start'
+    : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: storedData(write.kind, write.data), ...write.host }
+    : { ...reading ? { readAt: new Date(stamp), ...write.content ? { contentAt: new Date(stamp) } : {} } : { changedAt: new Date(stamp) }, data: storedData(write.kind, write.data), ...(write.kind === 'start'
       ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head, ...write.host }
   const updated = await model.updateMany({ where: { id, version: write.seen, deleted: false }, data: { version: write.seen + 1, ...data } })
   if (!updated.count) throw new PartConflict(write.kind, write.key)

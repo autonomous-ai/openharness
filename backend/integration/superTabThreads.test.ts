@@ -49,7 +49,7 @@ const person = (actor: AuthUser) => ({ kind: 'person', id: actor.sub, name: acto
 const agent = (id: string) => ({ kind: 'agent', id, name: id, membershipGeneration: 'gen' })
 let sequence = 10, scenes = 0
 
-/** A migrated Swarm: a Lead, a worker in Web, and the owner's own agent in its 1:1 chat with them. Web holds a lone root and
+/** A stored Swarm: a Lead, a worker in Web, and the owner's own agent in its 1:1 chat with them. Web holds a lone root and
  *  threads with every kind of reply a reader may skip: a note to the Lead alone, a route row, a tag. Its root `w-b` is a note
  *  to the worker alone. The 1:1 chat holds a thread too. */
 async function scene() {

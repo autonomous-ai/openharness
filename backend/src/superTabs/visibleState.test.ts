@@ -23,6 +23,10 @@ describe('visibleState', () => {
     expect(visible.conversations.some(c => c.dormant)).toBe(false)
   })
 
+  it.each(readers)('hands %s none of the overlap alerts a head written before S18 may still hold', (_name, actor) => {
+    expect(visibleState({ ...s.state, overlapAlerts: ['a:b'] } as typeof s.state, actor, NOW)).not.toHaveProperty('overlapAlerts')
+  })
+
   it('keeps each reader\'s projects', () => {
     expect(visibleState(s.state, peer, NOW).projects!.map(p => p.id)).toContain(s.secret)
     expect(visibleState(s.state, outsider, NOW).projects!.map(p => p.id)).not.toContain(s.secret)

@@ -32,7 +32,7 @@ function machineParts(state: SuperTabState): Map<string, MachineData> {
 
 /** One Swarm's state as parts, every part at `version` and `changedAt = now`. */
 export function split(state: SuperTabState, opts: { tabId: string; version: number; now: number; visibilityEpoch?: number;
-  lastActivity?: ReadonlyMap<string, number>; messageBase?: number }): SwarmParts {
+  messageBase?: number }): SwarmParts {
   const { version, now } = opts
   const head = Object.fromEntries(Object.entries(state).filter(([key]) => !(STATE_ONLY as readonly string[]).includes(key))) as HeadData
   const present = LISTS.filter(list => state[list] !== undefined)
@@ -40,7 +40,7 @@ export function split(state: SuperTabState, opts: { tabId: string; version: numb
   // A conversation of a kind this release does not know is kept exactly as a later release wrote it.
   const groups = [...state.conversations, ...state.parkedConversations ?? []].map((group, i) => part('group', group.id, !knownKind(group) ? group : {
     ...group, messageSeq: group.messageSeq ?? opts.messageBase ?? version,
-    lastActivityAt: group.lastActivityAt ?? new Date(opts.lastActivity?.get(group.id) ?? now).toISOString(),
+    lastActivityAt: group.lastActivityAt ?? new Date(now).toISOString(),
   }, i, version, now))
   for (const entry of groups) if (entry.data?.dormant) entry.dormant = true
   return {

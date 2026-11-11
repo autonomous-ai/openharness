@@ -761,10 +761,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   author(state, actor)
   // The copy leaves out what no reader gets and no step below reads: the owner-only sharing, the hosts' slot claims, released
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
-  // not every member's). Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
-  // (spec, Archive); a command may still load one.
+  // not every member's). Nor a dormant conversation: it is read on demand, never in a whole-Swarm read (spec, Archive); a
+  // command may still load one. Nor `overlapAlerts`, which backends up to 1.4.68 (before S18) still wrote into the heads of
+  // Swarms made after the wipe's cut-off; goes on or after 2026-12-12.
   const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, closingSessions: _closing,
-    removedSessions: _removed, ...kept } = state
+    removedSessions: _removed, overlapAlerts: _alerts, ...kept } = state as SuperTabState & { overlapAlerts?: string[] }
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
   // ordinary people and agent syncs must never receive the note or its correlation fields.

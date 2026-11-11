@@ -114,10 +114,10 @@ const MACHINE_RENAME_SWARMS = 500
 /** The fields of a Swarm's row the store reads: every command and read loads this row. */
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
-/** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
+/** A Swarm still in one row (format 1, from before the parts of 2026-10-26) is never served: it answers as one that does not
+ *  exist, as a read does (read/service.ts), until the wipe deletes it (migration/wipeJob.ts). */
 function requireParts(row: SwarmRow): SwarmRow {
-  if (row.format !== 2) fail('SWARM_MIGRATING', 'This Swarm is being updated. Try again in a moment.', 503)
-  return row
+  return row.format === 2 ? row : fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
 }
 
 /** What a command or read works on: the index row, the parts it loaded, and the state reassembled from them. */
@@ -169,8 +169,8 @@ function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touc
   return delivery.authorKind === 'person' ? [{ kind: 'member', key: delivery.authorId }] : []
 }
 
-/** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt
- *  every group's link list from its history. The state shares the loaded records, frozen: a command changes its own copy
+/** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8): every group keeps its link
+ *  list as commands write it (appendPullRequestUrls). The state shares the loaded records, frozen: a command changes its own copy
  *  (commands.ts applyCommand), and the parts stay what the write is compared with (parts/commit.ts). */
 export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {}): Promise<Loaded> {
   return loadedFrom(row, await loadActive(tx, row.id, named))

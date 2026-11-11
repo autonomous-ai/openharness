@@ -1,4 +1,4 @@
-/** Test support only: a Swarm built through real commands, for the read views and the migration tests. */
+/** Test support only: a Swarm built through real commands, for the read views' tests. */
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type SuperTabState } from '../model.js'
 import { storedAssignment, storedTask } from '../storedWork.test-support.js'

@@ -153,7 +153,7 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
  *  membership they were listed with, who reads it already (one who can manage it first, else a viewer); else, for a public
  *  project, to the Swarm's owner, who reads it too; else it is nobody's ('' owner): nobody reads it, and the Swarm's owner
  *  sees only that it exists and may delete it (deletableProject). A project from before ownerGeneration whose owner is still
- *  here gets their membership now, which is how the migration fills it. Each project that changed hands, in order. */
+ *  here gets their membership now. Each project that changed hands, in order. */
 export function settleOwners(state: SuperTabState): Array<{ projectId: string; from: string; to: string }> {
   const changed: Array<{ projectId: string; from: string; to: string }> = []
   const people = new Map(state.people.map(p => [p.id, p]))

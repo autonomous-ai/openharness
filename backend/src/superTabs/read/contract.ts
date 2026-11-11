@@ -123,7 +123,8 @@ export interface FirstLoad extends ReadMeta {
   machines: LivePart<MachineView>[]
   starts: LivePart<StartView>[]
   /** Always empty: the report progress part went with Swarm v4 (S19). Released CLIs still require the list (cli
-   *  superTabs/partsStore.ts reads every list); it goes once no supported CLI does. */
+   *  superTabs/partsStore.ts maps every list, readContract.ts marks it required). It goes not before 2026-12-12, and only once
+   *  a CLI release reads `progress` as optional and is 30 days old. */
   progress: []
   derived: Derived
   /** Opaque: the reader's summary (`derived` without its marks) as a hash (derivedEtag.ts). Send it back as `derivedEtag` on
@@ -174,7 +175,7 @@ export interface CommandReply {
   result: Record<string, unknown>
   parts: Array<{ kind: PartKind; key: string; version: number }>
   lastChangedAt: number | null
-  /** Only on a replayed receipt from before the migration. */
+  /** Only on a replayed receipt from before the parts (2026-10-26). */
   legacyRevision?: number
 }
 

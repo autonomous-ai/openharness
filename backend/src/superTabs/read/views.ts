@@ -43,7 +43,10 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  // `reportSeq`: the report progress that went in S19b; a group written before it still holds 0 until its next write
+  // (parts/write.ts storedData). Goes on or after 2026-12-12, with that drop.
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest }
+    = withSeenRequirement(group, seenMachines) as Conversation & { reportSeq?: number }
   const readers = audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)

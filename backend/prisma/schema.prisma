@@ -1053,6 +1053,8 @@ model SuperTab {
   /// 1: the whole Swarm in `state`, from before 2026-10-26: never served, and deleted by the wipe (superTabs/migration/wipeJob.ts).
   /// 2: split into the Swarm* part collections (docs/design/2026-10-26-swarm-state-parts.md); `state` is then `{ version: 2 }`,
   /// which every older backend refuses before writing.
+  /// The default stays 1: Prisma reads a row without the field (older than it) as the default, and such a row is in one row.
+  /// Every create sets 2 (store.ts create).
   format         Int      @default(1)
   /// The Workspace an earlier release put it in, also on its head part. Swarm v4 removed Workspaces and their collections: nothing writes
   /// or reads it, and a new Swarm has none. The column and its index go in the schema step for the shared collections (slice S19),

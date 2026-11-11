@@ -415,7 +415,7 @@ describe('the host poll\'s Swarm lookup', () => {
     // A Swarm whose host cleaned up after the machine left: it lists the machine nowhere.
     const dropped = await scene({ sharedMachine: s.machineId })
     await db.superTab.update({ where: { id: dropped.tabId }, data: { machineIds: { set: [] }, cleanupMachineIds: { set: [] } } })
-    // A Swarm still in one row (format 1) is left for its migration.
+    // A Swarm still in one row (format 1) is never served: the wipe removes it.
     const legacy = await scene({ sharedMachine: s.machineId })
     await db.superTab.update({ where: { id: legacy.tabId }, data: { format: 1 } })
     expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([s.tabId])

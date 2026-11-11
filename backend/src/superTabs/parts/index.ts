@@ -1,6 +1,6 @@
 /**
- * Swarm state by parts (docs/design/2026-10-26-swarm-state-parts.md, section 7.2): the interface the store, the read API
- * and the migration share.
+ * Swarm state by parts (docs/design/2026-10-26-swarm-state-parts.md, section 7.2): the interface the store and the read
+ * API share.
  */
 
 export * from './types.js'

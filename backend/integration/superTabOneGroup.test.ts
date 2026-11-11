@@ -27,7 +27,7 @@ import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // GET /api/super-tabs/:tabId/groups/:conversationId (task #2875). Ken's report of 11-04 17:13 VN: ~1,500 of these in two minutes
-// each read the Swarm's change feeds (SwarmGroup and SwarmProgress by changedAt, SwarmMachine by readAt), 1.33 GB in all.
+// each read the Swarm's whole change feeds (its groups by changedAt, its machines by readAt), 1.33 GB in all.
 // The read cache patches from deltas here, as in production (server.ts, SWARM_CACHE_DELTA=on). A fresh loopback replica set,
 // created here; this suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -226,7 +226,7 @@ async function everyKind() {
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await storeSwarm(db, { state, revision: 700 }, MIGRATED)
   // Stored without a number, as 111 live groups on prod are (11-04): a whole read numbers an awake one after every other
-  // (model.ts numberConversations); a quiet one reads without. Migration numbers them, so the number goes after it.
+  // (model.ts numberConversations); a quiet one reads without. The fixture's commands numbered them, so the stored number goes.
   await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId, key: { $in: [legacy, quietLegacy] } }, u: { $unset: { 'data.number': '' } }, multi: true }] })
   const groups = (await parts.loadAll(db, tabId)).groups.filter(g => !g.deleted).map(g => g.key)
   return { tabId, groups, readers: [[owner], [peer], [outsider], [owner, lead], [owner, worker], [owner, secretWorker], [owner, sharedLead],

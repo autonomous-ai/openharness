@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type Prisma } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
@@ -152,7 +152,7 @@ describe('first load (design 4.3)', () => {
   async function singleRow() {
     const tabId = `tab-${randomUUID()}`
     await db.superTab.create({ data: { id: tabId, ownerId: owner.sub, autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: [], machineIds: [],
-      revision: 3, state: JSON.parse(JSON.stringify({ ...swarm(MIGRATED).state, id: tabId })) } })
+      format: 1, revision: 3, state: JSON.parse(JSON.stringify({ ...swarm(MIGRATED).state, id: tabId })) } })
     return tabId
   }
 
@@ -162,6 +162,14 @@ describe('first load (design 4.3)', () => {
     expect(status).toBe(404)
     expect(body.error!.code).toBe('NOT_FOUND')
     expect(await db.superTab.findUnique({ where: { id: tabId }, select: { format: true, revision: true } })).toEqual({ format: 1, revision: 3 })
+  })
+
+  it('refuses a command to a Swarm still in one row as to one that does not exist, not as one to retry', async () => {
+    const tabId = await singleRow()
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${owner.sub}` },
+      payload: { operationId: randomUUID(), command: { type: 'conversation.rename', conversationId: 'lead', title: 'Renamed' } } })
+    expect([response.statusCode, response.json().error.code]).toEqual([404, 'NOT_FOUND'])
+    expect(response.headers['retry-after']).toBeUndefined()
   })
 
   it('leaves a Swarm still in one row out of its members\' list', async () => {
@@ -223,7 +231,7 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
     group.lostAttempt = { id: group.assignment.id, agentId: worker }
     delete state.agents.find(a => a.id === worker)!.workDecision
   }
-  /** After the migration (which stores derived decisions), the worker has none: as a loss after it leaves it. */
+  /** The worker with no stored decision: as a loss after it leaves it. */
   async function noDecision(tabId: string, agentId: string) {
     await db.$transaction(async tx => {
       const agent = (await parts.loadActive(tx, tabId)).agents.find(a => a.key === agentId)!
@@ -401,7 +409,7 @@ describe('host form (design 4.10)', () => {
     s.edit(state => {
       const pool = state.machines!.find(m => m.machineId === machine)!
       state.conversations.find(c => c.id === ids.web)!.requesterId = webRequester
-      // These checks send real-time host readings. Keep their running task fresh: its migrated timestamp would now trigger
+      // These checks send real-time host readings. Keep their running task fresh: its fixture timestamp would now trigger
       // the all-worker 3-hour return clock, a real work change rather than the unchanged heartbeat this fixture tests.
       state.conversations.find(c => c.id === ids.web)!.assignment!.progressAt = Date.now()
       // One in a running group, one in a dormant group none of its agents is in: the host still has to settle it.
@@ -684,6 +692,23 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
       .toEqual([[s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
+  })
+
+  it('sends no group its old report sequence, and a group\'s next write leaves it out, but writes no group for it alone', async () => {
+    const s = await scene()
+    // Every group stored before the report progress went holds `reportSeq: 0` in its data.
+    const stored = async (key: string) => (await db.swarmGroup.findUnique({ where: { id: `${s.tabId}:${key}` } }))!.data as Prisma.JsonObject
+    for (const key of [s.web, s.secretGroup]) {
+      await db.swarmGroup.update({ where: { id: `${s.tabId}:${key}` }, data: { data: { ...await stored(key), reportSeq: 0 } } })
+    }
+    clock = Date.now()
+    const groups = (await get(`/api/super-tabs/${s.tabId}/parts`)).body.data.groups as Array<{ key: string; data: object }>
+    expect(groups.find(g => g.key === s.web)!.data).not.toHaveProperty('reportSeq')
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/commands`, headers: { authorization: `Bearer ${owner.sub}` },
+      payload: { operationId: randomUUID(), command: { type: 'conversation.rename', conversationId: s.web, title: 'Renamed' } } })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(await stored(s.web)).not.toHaveProperty('reportSeq')
+    expect(await stored(s.secretGroup)).toHaveProperty('reportSeq', 0)
   })
 })
 
@@ -1068,7 +1093,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
     await swarmTransaction(db, async tx => {
       const agent = await tx.swarmAgent.findUniqueOrThrow({ where: { id: `${s.tabId}:${s.more.loner}` } })
       // As prod still holds some (6 of 48 live agents, 10-29): no stored project, so it is read from the conversation it is in
-      // (projects.ts agentProjectId). Migration stores one, so the part loses it here.
+      // (projects.ts agentProjectId). The fixture stores one, so the part loses it here.
       const { projectId: _stored, ...data } = agent.data as { projectId?: string }
       await guardedWrite(tx, s.tabId, { op: 'update', kind: 'agent', key: s.more.loner, seen: agent.version,
         // Kept after its work: an agent with no stored decision has its active conversations loaded anyway (light.ts undecidedWork).
@@ -1122,7 +1147,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
   })
 
   describe('a change poll reads only what its reply needs (DB 2.3)', () => {
-    /** After the migration (which stores derived decisions), the agent has none, as a loss after it leaves it. */
+    /** The agent with no stored decision, as a loss after it leaves it. */
     async function withoutDecision(tabId: string, agentId: string) {
       await swarmTransaction(db, async tx => {
         const agent = await tx.swarmAgent.findUniqueOrThrow({ where: { id: `${tabId}:${agentId}` } })

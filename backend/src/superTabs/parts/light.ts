@@ -138,7 +138,7 @@ async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], l
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T })
 
-/** Delivery authority only: no machine reports, starts, progress, or unrelated work. Keep the Lead conversations for
+/** Delivery authority only: no machine reports, starts, or unrelated work. Keep the Lead conversations for
  * ledProject, and the named agents' groups for legacy project identity. These projected groups must never be committed as
  * state; a delivery only touches its authority parts and updates its own row. */
 export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[],
@@ -181,8 +181,7 @@ export async function loadLightGroups(tx: Transaction, tabId: string, index: Gro
 }
 
 /**
- * The live parts of one Swarm with conversations light, and no progress parts: a change poll sends those from the change
- * feed (read/changes.ts), and nothing derived reads them. Conversations: every active one (`groups: 'active'`, as
+ * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived
  * values read once every finished worker's decision is stored), with the active ones of agents stored with no project (they
  * take theirs from the first one they are in: projects.ts agentProjectId); plus those named by id and those the named agents

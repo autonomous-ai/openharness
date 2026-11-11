@@ -116,7 +116,7 @@ async function ownAgent(tab: string) {
 async function storedState(tab: string): Promise<SuperTabState> {
   return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
 }
-/** Replaces a Swarm's parts with `state`, as an older release or the migration would have left them. Versions keep rising. */
+/** Replaces a Swarm's parts with `state`, as an older release would have left them. Versions keep rising. */
 async function saveState(tab: string, state: SuperTabState) {
   await swarmTransaction(db, async tx => {
     const current = await parts.loadAll(tx, tab)
@@ -196,7 +196,7 @@ describe('delivery authority dependencies', () => {
     const legacy = state.agents.find(a => a.id === sender)!
     delete legacy.projectId
     await saveState(tab, state)
-    // A stale cross-project delivery from before migration must not acquire the public receiver's project identity.
+    // A stale cross-project delivery from an older release must not acquire the public receiver's project identity.
     const sent = await (await crew(tab, lead)).say('Stale legacy delivery.')
     const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
     await db.superTabDelivery.update({ where: { id: delivery.id }, data: { authorKind: 'agent', authorId: sender,

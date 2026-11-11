@@ -249,7 +249,7 @@ export class SwarmReads {
   /**
    * One conversation from its own row by key and the parts its read check reads: the head, members and agents (cachedReads.ts
    * readAccess), and for an agent stored with no project its active conversations (agentProjectId). Never the whole Swarm: its
-   * cached base and machines were refreshed from the Swarm's group, machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
+   * cached base and machines were refreshed from the Swarm's change feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
    * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
    * an agent's 1:1 chat. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
    * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
