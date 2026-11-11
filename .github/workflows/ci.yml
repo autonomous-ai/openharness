@@ -1,6 +1,6 @@
 name: CI
 
-# Fast PR checks: each changed component runs its own Linux unit tests. Native,
+# Fast PR checks: each changed component, and each that reads a changed file, runs its own Linux unit tests. Native,
 # macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
 # docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
 # only the plan and process checks; the PR run covered the code. After Update branch,
@@ -681,7 +681,7 @@ jobs:
 
   # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
   # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
-  # pty/, term/, the vendored terminal and the CLI's ptyhost files (scripts/ci-plan.py ALSO), and by installer/, whose
+  # pty/, term/, the vendored terminal and the CLI's code (scripts/ci-plan.py ALSO, DEPENDS), and by installer/, whose
   # model and steps (harness-install.exe) are plain Rust that tests here.
   pty-checks:
     concurrency:

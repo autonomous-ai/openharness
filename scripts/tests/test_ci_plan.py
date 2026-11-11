@@ -29,8 +29,7 @@ class SelectionTests(unittest.TestCase):
         # mobile/test/swarm/desktop_parity_test.dart compares the phone's Swarm models with these; a desktop-only PR that
         # changed one passed its own CI and failed two batches later (River, 2026-11-03).
         for path in ["desktop/lib/super_tabs/model.dart", "desktop/lib/super_tabs/controller.dart",
-                     "desktop/lib/super_tabs/parts.dart",
-                     "desktop/lib/super_tabs/live_card.dart", "desktop/lib/widgets/engine_identity.dart",
+                     "desktop/lib/super_tabs/parts.dart", "desktop/lib/widgets/engine_identity.dart",
                      "desktop/test/support/real_fonts.dart"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
@@ -46,13 +45,12 @@ class SelectionTests(unittest.TestCase):
                      "mobile/integration_test/push_e2e/reply_push.apns"]:
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("backend", path))
-        for path in ["backend/src/superTabs/processNotes.ts"]:
+        for path in ["backend/src/lib/deviceAckCore.ts"]:
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("cli", path))
 
     def test_every_desktop_file_the_phone_tests_read_selects_mobile(self):
-        # The phone's tests name what they read as '../desktop/<path>', an import of '../../desktop/<path>', or (the parity
-        # test's copies and model) the desktop side 'lib/super_tabs/<file>.dart', which only Desktop has.
+        # The phone's tests name what they read as '../desktop/<path>', or an import of '../../desktop/<path>'.
         root = Path(__file__).resolve().parents[2]
         tests = sorted((root / "mobile/test").rglob("*.dart"))
         if not tests:
@@ -61,7 +59,6 @@ class SelectionTests(unittest.TestCase):
         for test in tests:
             text = test.read_text()
             named |= {"desktop/" + m for m in re.findall(r"'(?:\.\./)+desktop/([\w/.-]+\.dart)'", text)}
-            named |= {"desktop/" + m for m in re.findall(r"'(lib/super_tabs/[\w/.-]+\.dart)'", text)}
         self.assertIn("desktop/lib/super_tabs/model.dart", named)
         for path in sorted(named):
             with self.subTest(path=path):
@@ -87,11 +84,12 @@ class SelectionTests(unittest.TestCase):
 
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
         for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
-                     ".github/workflows/ci.yml", "Makefile", "store/tools/runtimes.sh", "surprise.py"]:
+                     ".github/workflows/ci.yml", "Makefile", "surprise.py"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], set())
 
-    def test_each_component_selects_only_its_own_suite(self):
+    def test_each_component_owns_only_its_own_suite(self):
+        # What else a path selects is what other suites declare reading (DEPENDS), tested below.
         for path, expected in {
             "cli/src/lib/relayFrames.ts": {"cli"}, "tests/fixture.ts": {"cli"},
             "desktop/test/log_redact_test.dart": {"desktop"}, "tui/src/main.rs": {"tui"},
@@ -104,9 +102,9 @@ class SelectionTests(unittest.TestCase):
             "pty/src/stream.rs": {"pty"},
         }.items():
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], expected)
+                self.assertEqual(planner.owners(path), expected)
 
-    def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_select_the_pty_suite(self):
+    def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
         for path, expected in {
             "cli/src/lib/ptyHost/stream.ts": {"cli", "pty"}, "cli/src/lib/ptyHostBackend.ts": {"cli", "pty"},
             "cli/src/lib/ptyHostBackend.contract.spec.ts": {"cli", "pty"},
@@ -115,7 +113,8 @@ class SelectionTests(unittest.TestCase):
             "cli/src/lib/ptyHostile.ts": {"cli"}, "cli/src/lib/tmuxBackend.ts": {"cli"},
         }.items():
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], expected)
+                self.assertEqual(planner.owners(path), expected)
+                self.assertLessEqual(expected, planner.select([path])[0])
 
     def test_the_windows_installer_selects_the_pty_suite(self):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
@@ -125,13 +124,13 @@ class SelectionTests(unittest.TestCase):
 
     def test_the_pipe_auth_vectors_also_select_the_desktop_suite(self):
         # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
-        self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
-        self.assertEqual(planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0], {"cli"})
+        self.assertIn("desktop", planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0])
+        self.assertNotIn("desktop", planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0])
 
     def test_the_goal_rows_also_select_the_desktop_suite(self):
         # desktop/test/swarm_goal_test.dart reads them from cli/: a changed row runs both readers.
-        self.assertEqual(planner.select(["cli/src/superTabs/__fixtures__/goal-rows.json"])[0], {"cli", "desktop"})
-        self.assertEqual(planner.select(["cli/src/superTabs/goal.ts"])[0], {"cli"})
+        self.assertIn("desktop", planner.select(["cli/src/superTabs/__fixtures__/goal-rows.json"])[0])
+        self.assertNotIn("desktop", planner.select(["cli/src/superTabs/goal.ts"])[0])
 
     def test_the_desktop_runner_and_its_durations_select_the_desktop_suite(self):
         # Task #3458: the runner splits the Desktop shards by the durations file; a change to either runs those shards,
@@ -166,10 +165,42 @@ class SelectionTests(unittest.TestCase):
                 self.assertLessEqual(checking, planner.JOBS[suite])
 
     def test_the_shared_terminal_crate_selects_both_the_pty_host_and_the_tui(self):
-        # term/ is a dependency of the PTY host and of the shipped TUI (`hn`): both suites run.
+        # term/ is a dependency of the PTY host and of the shipped TUI (`hn`): both suites run (and os-checks, which packages
+        # the TUI).
         for path in ("term/src/capture.rs", "term/Cargo.toml"):
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], {"pty", "tui"})
+                self.assertEqual(planner.owners(path), {"pty", "tui"})
+                self.assertEqual(planner.select([path])[0], {"os", "pty", "tui"})
+
+    def test_a_file_another_suite_reads_selects_that_suite(self):
+        # #4033 changed the CLI's engineLaunch.ts, which Desktop's and the phone's first-task tests read; its CI ran the
+        # CLI's suite only, and main's Desktop CI went red until #4035. companions and pty import the CLI's code.
+        self.assertEqual(planner.select(["cli/src/lib/engineLaunch.ts"])[0], {"cli", "companions", "desktop", "mobile", "pty"})
+        self.assertEqual(planner.select(["cli/src/lib/tmuxBackend.ts"])[0], {"cli", "companions", "pty"})
+        # A desktop file only the desktop reads runs the desktop alone; one the phone's tests read runs both.
+        self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
+        self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0], {"desktop", "mobile"})
+        # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
+        self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
+
+    def test_every_declared_input_selects_the_suite_that_reads_it(self):
+        # Selection and reuse read the same declaration: a PR that changes a suite's input runs that suite.
+        for suite, entries in planner.DEPENDS.items():
+            for entry in entries:
+                path = entry + "x" if entry.endswith("/") else entry
+                with self.subTest(suite=suite, path=path):
+                    self.assertTrue(planner.reads(suite, path))
+                    self.assertIn(suite, planner.select([path])[0])
+
+    def test_every_declared_input_exists(self):
+        # A declaration of a removed file selects a suite for a look-alike someone adds later, and hides nothing it reads.
+        root = Path(__file__).resolve().parents[2]
+        if not (root / "cli/src").is_dir():
+            self.skipTest("needs a full checkout (CI's process checks are sparse)")
+        for suite, entries in planner.DEPENDS.items():
+            for entry in entries:
+                with self.subTest(suite=suite, entry=entry):
+                    self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
 
     def test_invalid_paths_fail(self):
         for path in ["../cli/code.ts", "/absolute", ""]:
@@ -243,7 +274,7 @@ class GitPlanTests(unittest.TestCase):
         self.assertFalse((self.root / "cli/src/changed.ts").exists())
         plan = self.plan()
         self.assertEqual(plan["paths"], ["cli/src/changed.ts", "desktop/lib/changed.dart", "scripts/planner.py"])
-        self.assertEqual(plan["suites"], ["cli", "desktop"])
+        self.assertEqual(plan["suites"], ["cli", "companions", "desktop", "pty"])
 
     def test_rename_selects_old_and_new_components(self):
         self.write("website/source.txt")
@@ -937,7 +968,8 @@ class CrossReadTests(unittest.TestCase):
 
     def test_an_undeclared_read_of_another_component_is_found(self):
         self.write("mobile/test/a_test.dart", "File('../backend/src/app.ts'); File('../backend/src/types/productUsage.ts');")
-        self.write("mobile/test/b_test.dart", "final f = File('../cli/src/$path'); // declared: cli/src/")
+        self.write("cli/src/engines/codex/contract.ts", "data")
+        self.write("mobile/test/b_test.dart", "final f = File('../cli/src/engines/$id/contract.ts'); // declared: cli/src/engines/")
         self.write("mobile/test/c_test.dart", "File('../docs/contracts/store/v1.json'); File('../docs/guide.md');")
         self.assertEqual(planner.undeclared_reads(self.root, "mobile"), [
             ("mobile/test/a_test.dart", "backend/src/app.ts"),
