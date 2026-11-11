@@ -25,7 +25,7 @@ const LISTS: Array<[keyof PartsPayload, ListedKind]> = [
 
 export function storeOf(first: FirstLoad): PartsStore {
   const parts = new Map<ListedKind, Map<string, PartEnvelope>>(LISTS.map(([field, kind]) =>
-    [kind, new Map((first[field] as PartEnvelope[]).map(part => [part.key, part]))]))
+    [kind, new Map(((first[field] ?? []) as PartEnvelope[]).map(part => [part.key, part]))]))
   return { cursor: first.cursor, epoch: first.epoch, lastChangedAt: first.lastChangedAt,
     head: first.head, parts, dormant: new Map(), derived: first.derived }
 }
@@ -35,7 +35,7 @@ export function mergeChanges(store: PartsStore, changes: ChangedParts): PartsSto
   const dormant = new Map(store.dormant)
   for (const [field, kind] of LISTS) {
     const held = parts.get(kind)!
-    for (const part of changes[field] as PartEnvelope[]) {
+    for (const part of (changes[field] ?? []) as PartEnvelope[]) {
       const known = held.get(part.key) ?? (kind === 'group' ? dormant.get(part.key) : undefined)
       if (known && known.version >= part.version) continue
       dormant.delete(part.key)

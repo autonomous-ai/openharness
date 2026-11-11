@@ -60,7 +60,8 @@ export interface PartsPayload extends ReadMeta {
   groups: PartEnvelope[]
   machines: PartEnvelope[]
   starts: PartEnvelope[]
-  progress: PartEnvelope[]
+  /** Absent from a backend on or after 2026-12-12 when there is none (backend S19). */
+  progress?: PartEnvelope[]
   derived: Derived
 }
 /** `GET /api/super-tabs/:tabId/parts` (design 4.3). */
