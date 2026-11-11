@@ -559,6 +559,41 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
     f.next.stop()
   })
 
+  // "Harness types it once after a compaction": what it was told before is a summary now (core/turns/ends.ts TurnEnd.compacted).
+  it('types an agent whose context was compacted all that waits for it, once it is idle, then its next thing as before', async () => {
+    const BEHIND = 'Your acme/app#30 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push'
+    const NEXT = `Next: acme/app#15 Next one. It is given to you and nobody has taken it: ${TAKE} acme/app#15`
+    const ALL = 'Your context was compacted. What waits for you, as Harness reads it now (harness super-tab inbox lists it again):\n'
+    const f = setup({ working: true, items: [item(15, 'Next one'), { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' },
+      item(12, 'Fix the login bug', ['status:taken'])] })
+    f.state.pulls[30] = { mergeable_state: 'behind' }
+    f.next.start()
+    // Compacted in a turn that ended busy, or that its person stopped: typed at the end that finds it idle.
+    await f.end({ compacted: true })
+    await f.end({ aborted: true })
+    expect(f.tell).not.toHaveBeenCalled()
+    f.state.working = false
+    await f.end()
+    expect(f.told()).toEqual([`${ALL}- ${BEHIND}\n- ${NEXT}`])
+    await f.end()
+    expect(f.told()).toEqual([`${ALL}- ${BEHIND}\n- ${NEXT}`, BEHIND])
+    // Nothing waits: nothing is typed, and its next end types nothing either.
+    f.state.items = []
+    await f.end({ compacted: true, aborted: true })
+    await f.end()
+    await f.end()
+    expect(f.tell).toHaveBeenCalledTimes(2)
+    f.next.stop()
+    // A terminal that is no agent of its person's here keeps nothing for later.
+    const g = setup({ watched: [] })
+    g.next.start()
+    await g.end({ compacted: true })
+    g.state.watched = [PIP]
+    await g.end()
+    expect(g.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    g.next.stop()
+  })
+
   it('lists at most INBOX_MAX, and fails by GitHub\'s code when GitHub cannot be read', async () => {
     const f = setup({ items: [] })
     f.state.owed = Array.from({ length: INBOX_MAX + 3 }, (_, i) => ({ number: 40 + i, sha: HEAD.slice(0, 7) }))

@@ -74,6 +74,8 @@ export function createTurnEnds(deps: TurnEndsDeps) {
   const open = new Map<string, OpenTurn>()
   /** The answers of the turns that ended last in each session, the latest last. */
   const done = new Map<string, Array<{ prompt: string; turnId: number; answer: string }>>()
+  /** The sessions whose context was compacted since their last end: the next end says so. */
+  const compactions = new Map<string, true>()
   let turns = 0
   /** The services that hear turn ends and have connected in this core's life. Until one has, or something here listens, nobody can
    *  ask what a turn said, so what it says is not kept (a machine that never opens the Swarm pays nothing per text for it), and a
@@ -115,6 +117,14 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       turn.now.parts.length = 0
       turn.now.size = 0
     },
+    /** The context of the agent in [sessionId] was compacted (`context_compact`): what it was told before is a summary now. The end of
+     *  the turn running, or of its next turn when none is (`/compact` at its prompt), says so (`TurnEnd.compacted`), and the Swarm's
+     *  host types it what waits for it (superTabs/nextThing.ts; Swarm plan, step 1, item 2). */
+    compacted(sessionId: string): void {
+      compactions.delete(sessionId)
+      compactions.set(sessionId, true)
+      trim(compactions)
+    },
     /** A live turn ended. A listener that throws costs that listener this end, never another listener or the funnel. An end whose
      *  start was never seen is told to nobody: nothing can say which turn it was. */
     ended(event: Omit<TurnEnd, 'prompt' | 'turnId'>): void {
@@ -129,7 +139,7 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       if (kept.length > TURNS_KEPT) kept.shift()
       done.set(event.sessionId, kept)
       trim(done)
-      const told: TurnEnd = { ...event, prompt: turn.prompt, turnId: turn.turnId }
+      const told: TurnEnd = { ...event, prompt: turn.prompt, turnId: turn.turnId, ...compactions.delete(event.sessionId) ? { compacted: true as const } : {} }
       for (const listener of listeners) {
         try { listener(told) } catch (error) {
           log(`[turns] a turn-end listener failed on ${event.agentId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)

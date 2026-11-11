@@ -598,8 +598,8 @@ export type TurnDelivery = SessionInputDelivery
 /** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session, whether it was cut short (an interrupt), and
  *  which turn it was, whatever any transcript shows by the time it is asked: its prompt as a hash (lib/promptIdentity.ts), which
  *  says which message it answers, and its number among the turns this core has told, which tells it from another turn asked the same
- *  words. */
-export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number }
+ *  words. [compacted] when its agent's context was compacted in it, or since the turn before (core/turns/ends.ts). */
+export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number; compacted?: true }
 
 /** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */
