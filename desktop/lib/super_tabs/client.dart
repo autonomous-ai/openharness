@@ -480,6 +480,21 @@ class SuperTabClient {
     return sent;
   }
 
+  /// The sessions, as (computer key, harness id), that are agents of a Swarm other than [tabId], as this Desktop last read
+  /// each Swarm open here or closed here and still the account's: what one Swarm knows of the others without a read. A
+  /// closed Swarm no longer listed (deleted, or left) holds nobody, where [_leadOfHarness] keeps protecting its PMs.
+  Set<(String, String)> agentsOutside(String tabId) => {
+    for (final (id, snapshot) in [
+      for (final c in loadedControllers)
+        if (c.snapshot case final snapshot?) (c.tabId, snapshot),
+      for (final MapEntry(:key, :value) in _closedSnapshots.entries)
+        if (_listed.contains(key)) (key, value),
+    ])
+      if (id != tabId)
+        for (final agent in snapshot.agents)
+          (machineIdKey(agent.machineId), agent.harnessId),
+  };
+
   String? _leadOfHarness(String machineId, String harnessId) {
     for (final snapshot in [
       for (final controller in loadedControllers) ?controller.snapshot,

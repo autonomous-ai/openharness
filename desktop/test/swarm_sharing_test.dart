@@ -62,7 +62,11 @@ Future<SuperTabController> _open(
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
-              onPressed: () => showSuperTabSharing(context, controller),
+              onPressed: () => showSuperTabSharing(
+                context,
+                controller,
+                title: 'Manage people',
+              ),
               child: const Text('Share'),
             ),
           ),
