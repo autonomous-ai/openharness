@@ -8,6 +8,7 @@ import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type C
 import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 import { COORDINATOR_NAME } from './roleNames.js'
+import { agentDisplayName } from './agentNames.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
@@ -136,7 +137,11 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
   if (placement) placement.status = 'started'
   const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
   const project = start.request.leadFor && projectsOf(state).find(p => p.id === start.request.leadFor!.projectId)
-  const started = `${project ? COORDINATOR_NAME : start.request.name} started on ${machine ?? 'its machine'}.`
+  // By its own name, as its posts and tags have it, with its role beside it (anh Dee, 2026-11-11: "the tag Product Manager is
+  // also weird just tag the agent"): it is the first line its project's channel shows.
+  const shown = project ? agentDisplayName(state.agents, agentId) : undefined
+  const who = !project ? start.request.name : shown && shown !== COORDINATOR_NAME ? `${shown}, the ${COORDINATOR_NAME},` : COORDINATOR_NAME
+  const started = `${who} started on ${machine ?? 'its machine'}.`
   const ran = state.agents.find(a => a.id === agentId)?.configuration
   const other = ran && otherThanAsked(start.request, ran)
   return { text: other ? `${started} ${other}` : started, source: machine ? { kind: 'system', machine } : { kind: 'system' } }
