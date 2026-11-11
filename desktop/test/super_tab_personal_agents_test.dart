@@ -20,12 +20,55 @@ import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'super_tab_launch_test.dart'
+    show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show MemoryStore;
 
 /// Set to a folder to write the pictures of Your Team there, in both themes at three window sizes.
 final _shots = Platform.environment['PERSONAL_AGENTS_SHOTS'];
+
+/// Another Swarm the person is in, beside their Personal one.
+const _acme = 'fedcba9876543210fedcba98';
+
+/// The backend with Acme beside the Personal Swarm: Acme's reads and commands go to [acme], everything else as before.
+class _WithAcme extends SuperTabFixtureConnection {
+  _WithAcme(super.store);
+  final acme = ConversationServer();
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final path = payload['path'];
+    if (type == 'super_tabs' && path == '/api/super-tabs/list') {
+      return {
+        'ok': true,
+        'value': {
+          'tabs': [
+            {'id': tabId, 'name': 'Personal', 'ownerId': 'owner'},
+            {'id': _acme, 'name': 'Acme', 'ownerId': 'owner'},
+          ],
+          'next': null,
+        },
+      };
+    }
+    if (type == 'super_tabs' &&
+        path is String &&
+        path.startsWith('/api/super-tabs/$_acme/')) {
+      final value = await acme.request(
+        payload['method'] as String,
+        path,
+        body: payload['body'] as Map<String, dynamic>?,
+      );
+      return {'ok': true, 'value': value};
+    }
+    return super.request(type, payload: payload, timeout: timeout);
+  }
+}
 
 /// Your Team in a person's Personal Swarm (Swarm v4, anh Dee 2026-11-09): every pane they run is an agent there, with its
 /// face, its name and its computer, clicked through as a person does.
@@ -49,6 +92,7 @@ void main() {
     String? title,
     bool chosen = true,
     AgentProject? project,
+    String? startedBy,
   }) => Agent(
     id: id,
     name: name,
@@ -58,6 +102,7 @@ void main() {
     status: status,
     terminalAvailable: status != 'stopped',
     project: project,
+    startedBy: startedBy,
   );
 
   void computer(
@@ -131,8 +176,9 @@ void main() {
     List<Map<String, Object>> removed = const [],
     Size size = const Size(1440, 900),
     Brightness brightness = Brightness.light,
+    SuperTabFixtureConnection Function(MemoryStore)? connection,
   }) async {
-    final f = SuperTabLaunchFixture();
+    final f = SuperTabLaunchFixture(connectionFactory: connection);
     f.app.machineStates['m']!.localOnly = true;
     (desk ?? usualDesk)(f);
     f.connection.server.state
@@ -270,6 +316,7 @@ void main() {
     List<(String, String, String)> joined = const [('m', 'joined', 'Atlas')],
     List<Map<String, Object>> removed = const [],
     Size size = const Size(1440, 900),
+    SuperTabFixtureConnection Function(MemoryStore)? connection,
   }) => testWidgets(description, (tester) async {
     final (:f, :c) = await open(
       tester,
@@ -280,6 +327,7 @@ void main() {
       joined: joined,
       removed: removed,
       size: size,
+      connection: connection,
     );
     await body(tester, f, c);
     await close(tester, f, c);
@@ -363,7 +411,7 @@ void main() {
     f.app.machineStates['laptop']!.nodeOnline = false;
     await changed(tester, f);
     expect(
-      inRow('super-pane-laptop-notes', find.text('Mac laptop · offline')),
+      inRow('super-pane-laptop-notes', find.text('offline')),
       findsOneWidget,
     );
     f.app.machineStates['laptop']!.nodeOnline = true;
@@ -716,6 +764,72 @@ void main() {
     );
   });
 
+  // anh Dee, 2026-11-11: "the agents started in other swarms leave them in other swarms, they are not part of this swarm".
+  scene(
+    'a session that is an agent of another Swarm stays there: Your Team offers it only once it leaves that Swarm',
+    (tester, f, c) async {
+      // The person has Acme open too, and Docs bot is one of its agents.
+      final acme = (f.connection as _WithAcme).acme;
+      acme.state
+        ..['id'] = _acme
+        ..['name'] = 'Acme'
+        ..['ownerId'] = 'owner'
+        ..['people'] = [
+          {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+        ]
+        ..['agents'] = [
+          {
+            'id': swarmAgentId('m', 'docs'),
+            'projectId': 'lead',
+            'name': 'Docs bot',
+            'machineId': 'm',
+            'harnessId': 'docs',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'claude'},
+            'kind': 'regular',
+          },
+        ];
+      final acmeTab = await f.app.superTabs.open(_acme);
+      await acmeTab.refresh();
+      await changed(tester, f);
+      // Neither Acme's agent nor a session a Swarm started is offered: only the laptop's own session is.
+      expect(names(), ['Release notes']);
+      expect(key('super-pane-m-docs'), findsNothing);
+      expect(key('super-pane-m-built'), findsNothing);
+
+      // They close Acme's tab here: what was last read of it still keeps Docs bot Acme's.
+      await f.app.superTabs.refreshTabs();
+      f.app.superTabs.release(_acme);
+      await changed(tester, f);
+      expect(names(), ['Release notes']);
+
+      // They open Acme again, and Acme lets Docs bot go: it is theirs to bring in, and a click makes it an agent here.
+      (acme.state['agents'] as List).clear();
+      await (await f.app.superTabs.open(_acme)).refresh();
+      await changed(tester, f);
+      expect(names(), ['Docs bot', 'Release notes']);
+      await tester.tap(key('super-pane-m-docs'));
+      await joined(tester);
+      expect(
+        f.connection.joins.single['command'],
+        containsPair('harnessId', 'docs'),
+      );
+    },
+    connection: _WithAcme.new,
+    desk: (f) {
+      usualDesk(f);
+      // A session a Swarm's agent started, shown in one of their own tabs.
+      f.app.machineStates['m']!.agents = [
+        ...f.app.machineStates['m']!.agents,
+        session('built', 'Billing builder', startedBy: 'agent'),
+      ];
+      f.app.swarms
+          .firstWhere((t) => t.id == 'one')
+          .panes
+          .add(pane('m', 'built'));
+    },
+  );
+
   scene('a Swarm with other people in it lists no panes of theirs', (
     tester,
     f,
@@ -883,7 +997,7 @@ void main() {
         expect(find.text('Choose your own computer.'), findsOneWidget);
         await changed(tester, f);
         expect(
-          inRow('super-pane-laptop-notes', find.text('Mac laptop · offline')),
+          inRow('super-pane-laptop-notes', find.text('offline')),
           findsOneWidget,
         );
         final sentBefore = sent(f).length;
@@ -917,6 +1031,42 @@ void main() {
       expect((c.selectedId, sent(f).length), before);
       expect(find.byType(SnackBar), findsNothing);
     });
+
+    // PSQA, 2026-11-12: a computer's long name cut "offline" off its rows, the one word saying why a click did nothing.
+    scene(
+      'a row of a computer that is off says offline, as an agent\'s row does, its face grey, however long the computer\'s name',
+      (tester, f, c) async {
+        f.app.machineStates['laptop']!.nodeOnline = false;
+        await changed(tester, f);
+        expect(
+          inRow('super-pane-laptop-notes', find.text('offline')),
+          findsOneWidget,
+        );
+        expect(
+          inRow(
+            'super-pane-laptop-notes',
+            find.byKey(const ValueKey('super-face-offline')),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          inRow(
+            'super-pane-m-docs',
+            find.byKey(const ValueKey('super-face-offline')),
+          ),
+          findsNothing,
+        );
+      },
+      desk: (f) {
+        f.app.machineStates['m']!.agents = [session('docs', 'Docs bot')];
+        computer(f.app, 'laptop', 'Dee’s MacBook Pro (16-inch, 2024)');
+        f.app.machineStates['laptop']!.agents = [
+          session('notes', 'Release notes', engine: 'codex'),
+        ];
+        deskTab(f.app, 'one', [pane('m', 'docs'), pane('laptop', 'notes')]);
+      },
+      joined: const [],
+    );
 
     scene(
       'a session two tabs show joins once, and a name of emoji and one the person never '

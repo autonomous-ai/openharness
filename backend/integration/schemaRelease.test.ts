@@ -26,6 +26,7 @@ const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
   ...['SwarmHead', 'SwarmGroup', 'SwarmStart'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
   ['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabGithubComment', 'github_comment_expiry', { createdAt: 1 }, 90 * DAY],
+  ['SuperTabTaskTokens', 'task_tokens_expiry', { createdAt: 1 }, 90 * DAY],
   ['SuperTabTerminalRequest', 'terminal_request_expiry', { createdAt: 1 }, 120],
   ['product_usage_receipts', 'product_usage_expiry', { expiresAt: 1 }, 0],
   ['product_usage_totals', 'product_usage_expiry', { dayUtc: 1 }, 396 * DAY],

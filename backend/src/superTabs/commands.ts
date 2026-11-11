@@ -1595,7 +1595,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
       // run the model its role asked for.
-      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused), [], null, SYSTEM_ROW,
+      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, agentDisplayName(state.agents, agentId)), [], null, SYSTEM_ROW,
         undefined, undefined, stableId(operationId, 'launch-refused'))
       break
     }

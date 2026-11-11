@@ -60,8 +60,9 @@ class PersonalAgent {
 
   String get computer => machine.machine.displayName;
 
-  /// Where it runs, and that its computer is asleep or off when it is.
-  String get place => machine.isOffline ? '$computer · offline' : computer;
+  /// Where it runs, or `offline` while its computer is asleep or off, as an agent's row says it: the one word saying why a
+  /// click does nothing, which a long computer name cut off (PSQA, 2026-11-12).
+  String get place => machine.isOffline ? 'offline' : computer;
 
   /// What it is once it joins ([swarmAgentId]).
   final String swarmId;
@@ -136,13 +137,15 @@ String swarmJoinName(Agent agent, String seed, Set<String> taken) {
 /// The panes of the person's own that are agents of their Swarm [snapshot] but not in it yet, by name: a Claude Code or Codex
 /// session that runs ([kSwarmEngines]) on one of their own computers, each once whatever tabs hold it, under a name nobody
 /// in the Swarm and no other row has ([swarmJoinName]). One they took out of the Swarm is left out
-/// ([SuperTabSnapshot.removedPanes]).
+/// ([SuperTabSnapshot.removedPanes]). One another Swarm holds, or a Swarm started, stays that Swarm's (anh Dee, 2026-11-11:
+/// "the agents started in other swarms leave them in other swarms, they are not part of this swarm").
 List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   final joined = {
     for (final agent in snapshot.agents)
       (machineIdKey(agent.machineId), agent.harnessId),
     ...snapshot.removedPanes,
   };
+  final elsewhere = app.superTabs.agentsOutside(snapshot.id);
   final seen = <(String, String)>{};
   final sessions =
       <({MachineState machine, Agent agent, String? own, String id})>[];
@@ -151,13 +154,16 @@ List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   for (final entry in _ownPanes(app)) {
     final harnessId = entry.pane.agentId!;
     final key = (machineIdKey(entry.pane.machineId), harnessId);
-    if (joined.contains(key) || !seen.add(key)) continue;
+    if (joined.contains(key) || elsewhere.contains(key) || !seen.add(key)) {
+      continue;
+    }
     final agent = (byId[entry.pane.machineId] ??= {
       for (final agent in entry.machine.agents) agent.id: agent,
     })[harnessId];
     if (agent == null ||
         !kSwarmEngines.contains(agent.engine) ||
         agent.isStopped ||
+        agent.startedBySwarm ||
         !agent.terminalAvailable) {
       continue;
     }
