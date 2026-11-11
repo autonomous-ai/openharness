@@ -120,12 +120,13 @@ const helps = new Map<string, { help: Promise<ProbeOutput | null>; at: number }>
 const HELP_LIFE_MS = 60_000
 /** At most this many installs, each under the PATH it runs with; beyond it the oldest goes. */
 const HELP_LIMIT = 32
-function helpOf(executable: NativeExecutableSnapshot, environment: Readonly<Record<string, string>>): Promise<ProbeOutput | null> {
-  const key = `${executable.identity}\0${environment.PATH ?? ''}`, at = performance.now()
+function helpOf(executable: NativeExecutableSnapshot, environment: Readonly<Record<string, string>>,
+  args: readonly string[] = ['--help']): Promise<ProbeOutput | null> {
+  const key = `${executable.identity}\0${environment.PATH ?? ''}\0${args.join(' ')}`, at = performance.now()
   const known = helps.get(key)
   if (known && at - known.at < HELP_LIFE_MS) return known.help
   helps.delete(key)
-  const help = read(executable.command, ['--help'], environment)
+  const help = read(executable.command, args, environment)
   if (helps.size >= HELP_LIMIT) helps.delete(helps.keys().next().value!)
   helps.set(key, { help, at })
   void help.then(output => {
@@ -203,6 +204,18 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     return { ...waiting(runtimeState), refusal: 'ENGINE_CANNOT_RUN' }
   }
   if (!executable.current()) return waiting('Waiting for the selected engine executable to stop changing.')
+  // Windows: a program named claude that is not Claude Code, asked its version before anything else. The Claude
+  // desktop app's own Claude.exe (reached through CLAUDE_PATH, or an older app's `claude` alias on PATH) answers
+  // `--version` with its bare version (5.1231.2) at once, and `--help` by opening its window on the person's screen and
+  // never exiting: every launch then held at "permission flags" for good (a customer, 2026-11-10; reproduced on
+  // Windows 11, 2026-11-11). Claude Code says `2.1.322 (Claude Code)`. No answer is no evidence: the launch goes on.
+  if (engine === 'claude' && process.platform === 'win32') {
+    const version = await helpOf(executable, environment, ['--version'])
+    const said = `${version?.stdout ?? ''}\n${version?.stderr ?? ''}`
+    if (version?.code === 0 && said.trim() && !said.includes('Claude Code') && executable.current()) {
+      return { ...waiting(notClaudeCode(executable.command, said)), refusal: 'ENGINE_CANNOT_RUN' }
+    }
+  }
   // Windows: the startup probe a launch script makes before every run elsewhere (engines/kit/launchStartup.ts), made
   // once here, of the executable this launch holds. No answer holds the launch, as the script ends one.
   const owned = process.platform === 'win32' ? startupOwnedFlag(launchContract(engine)) : null
@@ -288,9 +301,18 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     },
   }
   if (await launch.permission(source) === 'unknown') {
-    return failed ? cannotRun(engine, failed) : waiting('Waiting to confirm the selected executable’s permission flags.')
+    // Which file, so a launch held this way says what it waits for (a customer saw this sentence alone for minutes).
+    return failed ? cannotRun(engine, failed) : waiting(`Waiting to confirm the selected executable’s permission flags (${executable.command}).`)
   }
   return { ok: true, launch }
+}
+
+/** The sentence a creation is refused with when the selected `claude` is another program: which one, what it said, and
+ *  the two ways out. */
+export function notClaudeCode(path: string, said: string): string {
+  const answer = said.split(/\r?\n/).map(line => line.trim()).find(Boolean)?.slice(0, 80) ?? ''
+  return `${path} is not Claude Code: asked its version, it answered "${answer}" (the Claude desktop app's own program answers this way). `
+    + 'Install Claude Code (irm https://claude.ai/install.ps1 | iex), or set CLAUDE_PATH to its claude.exe, then start the harness again.'
 }
 
 /** Whether [help] lists [flag] as a whole option, not the start of a longer one (`--auto` is not `--auto-update`). */
