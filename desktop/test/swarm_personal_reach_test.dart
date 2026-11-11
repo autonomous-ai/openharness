@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -23,6 +24,7 @@ class _Backend {
   final creates = <Map<String, dynamic>>[];
   String? personal;
   bool failCreate = false;
+  Completer<void>? holdCreate;
 
   void add(String id, String name) {
     servers[id] = ConversationServer()
@@ -52,6 +54,7 @@ class _Backend {
     }
     if (method == 'POST' && uri.path == '/api/super-tabs') {
       creates.add(Map.of(body!));
+      if (holdCreate case final hold?) await hold.future;
       if (failCreate) {
         throw const SuperTabFailure(
           'SERVICE_UNAVAILABLE',
@@ -220,6 +223,24 @@ void main() {
       app.swarms.where((s) => s.superTabId == backend.personal),
       hasLength(1),
     );
+    await _end(tester, app);
+  });
+
+  testWidgets('a person who moves to another tab while Personal is being made '
+      'stays there', (tester) async {
+    final backend = _Backend()..holdCreate = Completer<void>();
+    final app = _computer(backend);
+    final first = app.activeSwarmId;
+    app.newSwarm(newTabPage: true);
+    app.markSuperTabDraft(app.activeSwarmId);
+    await mount(tester, app);
+    await tester.tap(_row(_personalRow));
+    await tester.pump();
+    app.selectSwarm(first);
+    backend.holdCreate!.complete();
+    await _settle(tester);
+    expect(app.activeSwarmId, first);
+    expect(app.swarms.where((s) => s.superTabId != null), isEmpty);
     await _end(tester, app);
   });
 

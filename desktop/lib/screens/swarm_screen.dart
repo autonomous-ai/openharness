@@ -542,7 +542,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
       WorkspaceLearning(storage: kUnderTest ? null : HarnessFileStore.shared);
   final _newTabSources = <String, TerminalPane>{};
 
-  Widget _startGuide() => WorkspaceWelcome(
+  /// Redrawn as well when Personal is known here, so its own row in Recent Swarms goes ([swarmsToOpen]).
+  Widget _startGuide() => ListenableBuilder(
+    listenable: PersonalSwarm.of(app),
+    builder: (context, _) => _welcome(),
+  );
+
+  Widget _welcome() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
     swarmDraft: app.activeSwarm.isSuperTab,
@@ -4552,8 +4558,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Personal from [swarmsToOpen]: made the first time it is asked for; a failure is said where the person is.
   Future<void> _openPersonalSwarm() async {
     try {
-      await PersonalSwarm.of(app).open(intoSwarmId: app.activeSwarmId);
+      await PersonalSwarm.of(app).open();
     } catch (failure) {
+      // Asked by the account that left: nothing to say to the next.
+      if (failure is SuperTabFailure && failure.code == 'ACCOUNT_CHANGED') {
+        return;
+      }
       appLog.warn(
         'super-tab',
         'Personal Swarm did not open '
@@ -4562,7 +4572,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _showPaneActionHint(
         failure is SuperTabFailure
             ? failure.message
-            : 'Could not open your Personal Swarm. Try again.',
+            : 'Could not create your Personal Swarm.',
       );
     }
   }

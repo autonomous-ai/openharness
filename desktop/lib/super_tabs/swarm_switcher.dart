@@ -231,14 +231,18 @@ class PersonalSwarm extends ChangeNotifier {
   String? _tabShowing(String swarmId) =>
       app.swarms.where((s) => s.id == swarmId).firstOrNull?.superTabId;
 
-  /// Opens Personal from outside a Swarm ([swarmsToOpen]): its tab if one shows it, else a tab of its own, or the empty
-  /// page [intoSwarmId] (`AppNotifier.openSuperTab`). Asked of the server when this computer has not met it yet, which
-  /// answers the same Swarm on each of the person's computers and makes it the first time. Throws why it could not.
-  Future<void> open({String? intoSwarmId}) async {
+  /// Opens Personal from the tab the person is on, outside a Swarm ([swarmsToOpen]): its tab if one shows it, else that
+  /// tab when it is an empty page, else a tab of its own (`AppNotifier.openSuperTab`). Asked of the server when this
+  /// computer has not met it yet, which answers the same Swarm on each of the person's computers and makes it the first
+  /// time. A person who moved to another tab meanwhile is left there. Throws why it could not.
+  Future<void> open() async {
     final account = _account;
+    final from = app.activeSwarmId;
     final id = await ensure();
-    if (account == null || _account != account) return;
-    app.openSuperTab(id, kPersonalSwarmName, intoSwarmId: intoSwarmId);
+    if (account == null || _account != account || app.activeSwarmId != from) {
+      return;
+    }
+    app.openSuperTab(id, kPersonalSwarmName, intoSwarmId: from);
   }
 }
 
