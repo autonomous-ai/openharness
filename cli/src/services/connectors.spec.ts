@@ -13,6 +13,7 @@ import { Store } from '../lib/connectors/store.js'
 import * as gateway from '../lib/connectors/gateway.js'
 import { FakeGateway } from '../testing/connectorServers.js'
 import { serveBridgeSocket } from '../lib/connectors/bridge.js'
+import { LSOF_MS } from '../lib/peerAccount.js'
 
 // The real socket, but for a failure with no Error to say why, which nothing here can provoke.
 vi.mock('../lib/connectors/bridge.js', async (original) => {
@@ -21,6 +22,11 @@ vi.mock('../lib/connectors/bridge.js', async (original) => {
 })
 
 const OWNER = { local: true, owner: true }
+/**
+ * How long the bridge may take to answer: a known key is answered only once it has asked who is calling, which on a Mac is
+ * lsof, about a second at load 28 and allowed LSOF_MS. A second cut that lookup off on a loaded Mac (cli-core gate, load 30).
+ */
+const ANSWER_MS = LSOF_MS + 1_000
 
 describe('the connectors service', () => {
   let home: string
@@ -51,8 +57,8 @@ describe('the connectors service', () => {
     await new Promise(done => free.close(done))
     return port
   }
-  /** What a request answered, or 0 when it was not answered within a second. */
-  const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.status, () => 0)
+  /** What a request answered, or 0 when it was not answered in ANSWER_MS. */
+  const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(ANSWER_MS) }).then(reply => reply.status, () => 0)
 
   // Any process can dial a port a test listens on: under load another run's request reached a held port just released and taken
   // again (one node process held connections to the holders of two parallel runs), and a holder that kept the connection waited
@@ -297,7 +303,7 @@ describe('the connectors service', () => {
       }
       return 0
     }
-    const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1_000) }).then(reply => reply.text())
+    const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(ANSWER_MS) }).then(reply => reply.text())
     const rawStatus = (port: number, path: string) => new Promise<number>((resolve, reject) => {
       const sent = httpRequest({ host: '127.0.0.1', port, path, method: 'POST', timeout: 1_000 }, (reply) => { reply.resume(); resolve(reply.statusCode ?? 0) })
       sent.once('timeout', () => sent.destroy(new Error('no answer within a second')))
