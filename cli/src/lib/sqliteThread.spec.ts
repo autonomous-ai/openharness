@@ -1,0 +1,77 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { builtinSqlite, closeSqliteHandles } from './sqliteBuiltin.js'
+import { sqliteReadAll } from './sqliteRead.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite, sqliteThreadsForTest } from './sqliteThread.js'
+
+// A read the store answers slowly, as a whole Devin session on a 36 GB store did (#1906): counting to ? in SQL.
+const SLOW = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) SELECT count(*) AS n FROM c'
+
+const withBuiltin = builtinSqlite() ? describe : describe.skip
+
+withBuiltin('SQLite reads off the core\'s thread', () => {
+  let dir = ''
+  let db = ''
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sqlite-thread-'))
+    db = join(dir, 'store.db')
+    const Database = builtinSqlite()!
+    const store = new Database(db, { readOnly: false })
+    store.exec("CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT); INSERT INTO message VALUES ('m1', 'one'), ('m2', 'two');")
+    store.close()
+    enableOffThreadSqlite()
+  })
+  afterEach(async () => {
+    await resetOffThreadSqlite()
+    closeSqliteHandles()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+
+  // #1906: a read on the core's own thread held it for the whole query, the master missed its heartbeats and killed it.
+  it('keeps the caller\'s loop turning while a slow read runs', async () => {
+    let turned = false
+    setImmediate(() => { turned = true })
+    const read = await sqliteReadAll(db, SLOW, [3_000_000])
+    expect(read).toEqual({ ok: true, rows: [{ n: 3_000_000 }], via: 'builtin' })
+    expect(turned).toBe(true)
+  })
+
+  it('answers a read past its deadline as transient, and the read after it as ever', async () => {
+    const late = await sqliteReadAll(db, SLOW, [50_000_000], { timeoutMs: 20 })
+    expect(late).toMatchObject({ ok: false, reason: 'transient' })
+    expect((late as { error: Error }).error.message).toMatch(/deadline/)
+    expect(await sqliteReadAll(db, 'SELECT id FROM message ORDER BY id')).toEqual({ ok: true, rows: [{ id: 'm1' }, { id: 'm2' }], via: 'builtin' })
+  })
+
+  // A poller asks again every second: a read that outlasts its deadline was started again each time, and the same heavy
+  // query ran on every core (#1906, eight sqlite3 children at 639%).
+  it('runs an identical read once while it is still in flight', async () => {
+    const [first, second] = await Promise.all([sqliteReadAll(db, SLOW, [1_000_000]), sqliteReadAll(db, SLOW, [1_000_000])])
+    expect(first).toEqual({ ok: true, rows: [{ n: 1_000_000 }], via: 'builtin' })
+    // One answer, handed to both: the same rows, not two copies.
+    expect((second as { rows: unknown }).rows).toBe((first as { rows: unknown }).rows)
+    const third = await sqliteReadAll(db, SLOW, [1_000_000])
+    expect((third as { rows: unknown }).rows).not.toBe((first as { rows: unknown }).rows)
+  })
+
+  it('runs at most two reads at once, and the rest in turn', async () => {
+    const reads = [1, 2, 3, 4, 5].map(n => sqliteReadAll(db, SLOW, [500_000 + n]))
+    expect(sqliteThreadsForTest()).toBeLessThanOrEqual(2)
+    expect((await Promise.all(reads)).map(read => read.ok ? read.rows[0].n : read.reason))
+      .toEqual([500_001, 500_002, 500_003, 500_004, 500_005])
+    expect(sqliteThreadsForTest()).toBeLessThanOrEqual(2)
+  })
+
+  it('refuses rows past the reply\'s limit, as the CLI\'s buffer does', async () => {
+    const read = await sqliteReadAll(db, 'SELECT id, data FROM message', [], { maxBuffer: 16 })
+    expect(read).toMatchObject({ ok: false, reason: 'transient' })
+    expect((read as { error: Error }).error.message).toMatch(/limit/)
+  })
+
+  it('reads a store that is not there as transient, and binds parameters as the thread does', async () => {
+    expect(await sqliteReadAll(join(dir, 'absent.db'), 'SELECT 1')).toMatchObject({ ok: false, reason: 'transient' })
+    expect(await sqliteReadAll(db, 'SELECT data FROM message WHERE id = ?', ['m2'])).toEqual({ ok: true, rows: [{ data: 'two' }], via: 'builtin' })
+  })
+})
