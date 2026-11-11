@@ -120,3 +120,21 @@ it('hands the account\'s notices the core tells it to the host, and nothing else
   expect(heard).toHaveLength(1)
   t.process.stop()
 })
+
+// After a restart that cut a message off in the middle of typing, the host asks whether the agent took it, by the last turn its
+// engine wrote (superTabs/host.ts): the transcript is the core's to read, so this process asks it.
+it('reads an agent\'s last turn from the core, and fails on an answer it cannot read', async () => {
+  const t = setup()
+  await expect(t.api().transcripts.lastTurn('session-1')).rejects.toThrow('Core disconnected')
+  const turns: Record<string, unknown> = { 'session-1': { userMessage: 'Build it.', assistantText: 'Built.', extra: 1 }, 'session-2': null,
+    'session-3': { userMessage: 'Build it.' } }
+  const query = vi.fn(async (name: string, payload: Record<string, unknown>) => name === 'last_turn'
+    ? (String(payload.sessionId) in turns ? { turn: turns[String(payload.sessionId)] } : { error: 'NOT_SUPER_TABS' }) : {})
+  t.wire().onConnected!({ query })
+  expect(await t.api().transcripts.lastTurn('session-1')).toEqual({ userMessage: 'Build it.', assistantText: 'Built.' })
+  expect(query).toHaveBeenCalledWith('last_turn', { sessionId: 'session-1' })
+  expect(await t.api().transcripts.lastTurn('session-2')).toBeNull()
+  await expect(t.api().transcripts.lastTurn('session-3')).rejects.toThrow('The core did not say the last turn.')
+  await expect(t.api().transcripts.lastTurn('session-4')).rejects.toThrow('The core did not say the last turn.')
+  t.process.stop()
+})
