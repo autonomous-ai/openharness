@@ -1,0 +1,45 @@
+│
+◇
+
+OpenClaw 2026.11.2 (b556fdf) — One CLI to rule them all, and one more restart because you changed the port.
+
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session no-gateway
+ gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle
+ agent main | session no-gateway | unknown | deliver:off | tokens ?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

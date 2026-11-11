@@ -10,9 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 /// would parse on a computer and be dropped on the phone. Here a drift fails
 /// until the change is carried across — or, if the two are meant to differ now,
 /// until the file leaves this list on purpose.
-// The desktop's Swarm is v4 only (anh Dee, 2026-11-10): its parts reader no longer reads v3's personal tasks, live
-// cards, linked tasks and task steps, nor a project's instructions document, whose files went, so the phone's copies of
-// those are its own now.
+// The desktop's Swarm is v4 only (anh Dee, 2026-11-10): v3's personal tasks, live cards, linked tasks, task steps and
+// project instructions went from both sides.
 const _copies = {
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
 };

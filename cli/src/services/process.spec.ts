@@ -4,6 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
+
+// Whether the host starts an event-loop delay monitor: one samples on a 20 ms timer, 50 wakeups a second in a
+// process with nothing else to do.
+const loopMonitors = vi.hoisted(() => ({ started: 0 }))
+vi.mock('node:perf_hooks', async (original) => {
+  const real = await original<typeof import('node:perf_hooks')>()
+  return { ...real, monitorEventLoopDelay: (...args: Parameters<typeof real.monitorEventLoopDelay>) => { loopMonitors.started++; return real.monitorEventLoopDelay(...args) } }
+})
 import type { MasterChannel } from '../harnessd/coreLink.js'
 import { heldOffFile, hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults, type ServiceHostOptions, type ServiceProcessOptions } from './process.js'
 
@@ -41,7 +49,6 @@ describe('the process the services run in', () => {
     channel: new FakeChannel(),
     env: {},
     exit: (code) => exits.push(code),
-    loopDelay: { take: () => 4, stop: vi.fn() },
     onSignal: (signal, handler) => { if (signal === 'SIGTERM') sigterm = handler },
     ...over,
   })
@@ -49,13 +56,20 @@ describe('the process the services run in', () => {
   beforeEach(() => { vi.useFakeTimers(); exits = []; sigterm = null })
   afterEach(() => vi.useRealTimers())
 
+  it('wakes for nothing between beats: no event-loop delay monitor, whose 20 ms timer cost an idle host 0.075% of a core', () => {
+    loopMonitors.started = 0
+    const channel = new FakeChannel()
+    host({ channel, env: {} }).leave(0)
+    expect(loopMonitors.started).toBe(0)
+    expect(channel.beats).toEqual([{ type: 'harnessd:heartbeat', rssBytes: 10, heapUsedBytes: 5 }])
+  })
+
   it('beats to the master as the core does, one beat for all it runs, and exits when the master goes', async () => {
     const channel = new FakeChannel()
-    const loopDelay = { take: () => 4, stop: vi.fn() }
-    const running = host({ channel, loopDelay, env: { HARNESSD_WATCHDOG_MS: '3000' } })
+    const running = host({ channel, env: { HARNESSD_WATCHDOG_MS: '3000' } })
     const stops = [vi.fn(), vi.fn()]
     for (const stop of stops) running.add({ stop })
-    expect(channel.beats).toEqual([{ type: 'harnessd:heartbeat', rssBytes: 10, heapUsedBytes: 5, loopDelayMs: 4 }])
+    expect(channel.beats).toEqual([{ type: 'harnessd:heartbeat', rssBytes: 10, heapUsedBytes: 5 }])
     vi.advanceTimersByTime(1_000)
     expect(channel.beats).toHaveLength(2)
     channel.emit('disconnect')
@@ -63,7 +77,6 @@ describe('the process the services run in', () => {
     // Every service it runs is stopped before it goes.
     for (const stop of stops) expect(stop).toHaveBeenCalledOnce()
     expect(exits).toEqual([0])
-    expect(loopDelay.stop).toHaveBeenCalled()
     vi.advanceTimersByTime(10_000)
     expect(channel.beats).toHaveLength(2)
   })

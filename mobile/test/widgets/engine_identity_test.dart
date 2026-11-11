@@ -29,6 +29,12 @@ void main() {
       );
     });
 
+    test('OpenClaw has its name and its mark', () {
+      final claw = engineIdentity('openclaw');
+      expect(claw.label, 'OpenClaw');
+      expect(claw.asset, 'assets/engine-icons/openclaw.png');
+    });
+
     test('an engine this build has never heard of is named by the daemon, '
         'then by its id, then as an agent', () {
       final named = engineIdentity('gemini', displayName: ' gemini CLI ');

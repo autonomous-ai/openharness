@@ -858,3 +858,45 @@ describe('when reports go', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 })
+
+it('counts the daemon\'s Node once a collector day: its major, and why it stays below 24', async () => {
+  await usage.stop()
+  let node: NonNullable<ProductUsageDeps['node']> extends () => infer T ? T : never = { version: 'v22.23.2', managed: true, migration: 'rolled-back' }
+  usage = createProductUsage({ file, now: () => now, request, context: CLI, node: () => node })
+  await flush()
+  now += 86_400_000
+  node = { version: 'v24.22.2', managed: true, migration: null }
+  await flush()
+  now += 86_400_000
+  node = { version: 'v20.1.0', managed: false, migration: 'unmanaged' }
+  await flush()
+  const counted = Object.fromEntries(Object.entries(totals()).filter(([metric]) => metric.startsWith('health_cli_node_')))
+  expect(counted).toEqual({ health_cli_node_22: 1, health_cli_node_held_rolled_back: 1, health_cli_node_24: 1, health_cli_node_other: 1, health_cli_node_held_unmanaged: 1 })
+})
+
+it('sends the Node counters alone, so a backend from before them refuses only those', async () => {
+  await usage.stop()
+  const nodeMetric = (metric: string) => metric.startsWith('health_cli_node_')
+  // That backend's strict vocabulary: one unknown name makes the whole report invalid.
+  const accepted: Record<string, number>[] = []
+  request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+    if (method === 'GET') return { status: 200, body: { data: { enabled: true, revision: 0 } } }
+    const counters = (body as { counters: Record<string, number> }).counters
+    sent.push(structuredClone(body))
+    if (Object.keys(counters).some(nodeMetric)) return { status: 400, body: { error: { code: 'INVALID_USAGE_REPORT' } } }
+    accepted.push(counters)
+    return { status: 200, body: { data: { accepted: true } } }
+  })
+  usage = createProductUsage({ file, now: () => now, request, context: CLI, node: () => ({ version: 'v22.23.2', managed: true, migration: 'rolled-back' }) })
+  await usage.sync(); usage.counter('search_requests')
+  await flush()
+  for (const report of sent as { counters: Record<string, number> }[]) {
+    const names = Object.keys(report.counters)
+    expect(names.every(nodeMetric) || !names.some(nodeMetric), names.join()).toBe(true)
+  }
+  const kept = Object.assign({}, ...accepted)
+  expect(kept).toMatchObject({ search_requests: 1, health_cli_collector_days: 1 })
+  // Its refusal is the Node counters' alone: no delivery failure is counted for it.
+  expect(kept.health_cli_report_rejected).toBeUndefined()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pending: null, days: {} })
+})

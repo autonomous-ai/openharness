@@ -8,7 +8,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_chat_manage.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -340,37 +339,6 @@ void main() {
       await tester.tap(key('swarm-archive-cancel'));
       await settle(tester);
       expect(sent('conversation.archive'), isEmpty);
-      expect(reader().snapshot!.conversation(chat)!.archived, isFalse);
-    });
-
-    testWidgets('Archive archives: the chat leaves the lists for Older, '
-        'and its page says so', (tester) async {
-      await pump(tester);
-      await menu(tester);
-      await tester.tap(find.text('Archive'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-archive-confirm'));
-      await settle(tester);
-
-      expect(sent('conversation.archive'), [
-        {
-          'type': 'conversation.archive',
-          'conversationId': chat,
-          'archived': true,
-        },
-      ]);
-      final snapshot = reader().snapshot!;
-      final work = swarmProjectWork(snapshot, snapshot.projects.single);
-      expect(work.active.map((g) => g.id), isNot(contains(chat)));
-      expect(work.older.map((g) => g.id), contains(chat));
-      expect(find.text('This chat is archived.'), findsOneWidget);
-
-      // Reopen from its ⋮, with no Rename while archived.
-      await menu(tester);
-      expect(find.text('Rename'), findsNothing);
-      await tester.tap(find.text('Reopen'));
-      await settle(tester);
-      expect(sent('conversation.archive').last['archived'], isFalse);
       expect(reader().snapshot!.conversation(chat)!.archived, isFalse);
     });
 

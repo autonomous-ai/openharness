@@ -14,7 +14,7 @@
 import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
 import type { Asker, ServiceRequests } from '../core/api.js'
-import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
+import { heartbeatInterval, type MasterChannel } from '../harnessd/coreLink.js'
 import { isMasterMessage } from '../harnessd/protocol.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 
@@ -111,7 +111,6 @@ export interface ServiceHostOptions {
   channel?: MasterChannel
   env?: NodeJS.ProcessEnv
   exit?: (code: number) => void
-  loopDelay?: LoopDelay
   /** How the master's stop (SIGTERM) reaches this process; this process's own signal when absent. */
   onSignal?: (signal: NodeJS.Signals, handler: () => void) => void
   /** How long its services get to stop before it exits all the same. */
@@ -140,10 +139,9 @@ export function hostServices(options: ServiceHostOptions): ServiceHost {
 
   // Alive, to the master: the same beat the core sends, so the same watchdog and budgets apply, to the
   // process as a whole. A host's services share its heap: one leaking costs every one of them a restart.
-  const loopDelay = options.loopDelay ?? processLoopDelay()
   const beat = (): void => {
     const memory = channel.memoryUsage()
-    channel.send?.({ type: 'harnessd:heartbeat', rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, loopDelayMs: loopDelay.take() })
+    channel.send?.({ type: 'harnessd:heartbeat', rssBytes: memory.rss, heapUsedBytes: memory.heapUsed })
   }
   const beating = channel.send ? setInterval(beat, heartbeatInterval(env)) : null
   if (channel.send) beat()
@@ -157,7 +155,6 @@ export function hostServices(options: ServiceHostOptions): ServiceHost {
     leaving = true
     if (beating) clearInterval(beating)
     if (leaking) clearInterval(leaking)
-    loopDelay.stop()
     // Its services stop first, however this process ends (the master's SIGTERM, the master going, a test
     // fault): the viewers' servers run in process groups of their own, and would otherwise outlive it
     // holding their ports until the next viewers process reaped them. Bounded, so one that never finishes

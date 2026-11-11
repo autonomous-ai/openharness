@@ -19,6 +19,7 @@ import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
+import { OPENCLAW_KEY } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
@@ -486,14 +487,15 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     let resumeSessionId: string | null = null
     if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
       // Engines' ids: uuids, `ses_…` (OpenCode, Kilo), `20260927_101500_ab12cd` (Hermes), slugs
-      // (Devin), Pi's custom ids with dots. One word, never a path.
-      if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
+      // (Devin), Pi's custom ids with dots, OpenClaw's `agent:<id>:<key>`. One word, never a path.
+      const sessionId = payload.resumeSessionId
+      if (typeof sessionId !== 'string' || !(/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(sessionId) || engine === 'openclaw' && OPENCLAW_KEY.test(sessionId))) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
       if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
-      resumeSessionId = payload.resumeSessionId
+      resumeSessionId = sessionId
     }
     let takeOver: 'idle' | 'now' | 'wait' | null = null
     if (payload.takeOver !== undefined && payload.takeOver !== null) {

@@ -415,7 +415,7 @@ make upload-desktop           # macOS
 make upload-desktop-linux     # Linux (ARM64 or x64) — must run on the matching Ubuntu build host
 make upload-desktop-linux ARCH=arm64
 make upload-desktop-linux ARCH=amd64  # amd64 is the x64 artifact
-make upload-node-runtime ARGS="22.23.2"
+make upload-node-runtime ARGS="24.22.2"
 ```
 
 See [RELEASE.md](RELEASE.md) for signing, notarization, versioning, managed
