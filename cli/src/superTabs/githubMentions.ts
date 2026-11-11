@@ -74,7 +74,7 @@ interface Held { agentId: string; number: number; key: string; item: Json; since
 interface Memory { repos: Record<string, RepoMemory> }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** Whether [body] is the agent's own post: it signs its posts with its name first ("Pip, 14:05: ..."). */
+/** Whether [body] is the agent's own post: it signs its GitHub comments with its name first ("Pip: ...", "Pip, 14:05: ..." before). */
 export const signedBy = (body: string, names: readonly string[]): boolean =>
   names.some(name => new RegExp(`^\\W*${escape(name)}[*_]*\\s*[,:]`).test(body))
 /** Whether [body] names the agent: one of its names as written, as a whole word ("Pip", "@Pip", "**Pip**"). In its own case:
