@@ -19,16 +19,35 @@ import { CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemo
 
 const GiB = 1024 ** 3
 
-/** A `podman` that logs each argv as a line and answers what a browser's start asks; `events` streams nothing. */
+/**
+ * A `podman` that logs each argv as a line and answers what a browser's start asks; `events` streams nothing. Its exec
+ * of the tool server (browser-tools.mjs) answers each line as the real one does: a snapshot with [TREE], a screenshot
+ * with [SHOT], and the window with the size it was asked for.
+ */
 function writeFakePodman(daemon: IsolatedDaemon): string {
   const calls = join(daemon.root, 'podman-calls.log')
   const image = `localhost/${imageTag(browserAssetsHash(), new Date())}`
+  const shot = join(daemon.root, 'shot.jpg')
+  writeFileSync(shot, SHOT)
   const script = `#!${process.execPath}
 const fs = require('node:fs')
 const args = process.argv.slice(2)
 fs.appendFileSync(${JSON.stringify(calls)}, args.join(' ') + '\\n')
 const line = args.join(' ')
 if (args[0] === 'events') { setInterval(() => {}, 1 << 30); return }
+if (args[0] === 'exec' && args.at(-1) === '/opt/harness-browser/browser-tools.mjs') {
+  const answers = {
+    browser_snapshot: () => ({ content: [{ type: 'text', text: ${JSON.stringify(TREE)} }] }),
+    browser_screenshot: () => ({ content: [{ type: 'image', data: fs.readFileSync(${JSON.stringify(shot)}).toString('base64'), mimeType: 'image/jpeg' }] }),
+  }
+  require('node:readline').createInterface({ input: process.stdin }).on('line', (text) => {
+    const { id, method, params } = JSON.parse(text)
+    const result = method === 'window' ? { width: params.width, height: params.height }
+      : method === 'tools/call' && answers[params.name] ? answers[params.name]() : null
+    process.stdout.write(JSON.stringify(result ? { jsonrpc: '2.0', id, result } : { jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }) + '\\n')
+  })
+  return
+}
 if (line.startsWith('info')) process.stdout.write(JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: ${8 * GiB} } }))
 else if (line.startsWith('images')) process.stdout.write(JSON.stringify([{ Names: [${JSON.stringify(image)}], Created: 1, Containers: 0 }]))
 else if (line.startsWith('ps')) process.stdout.write('[]')
