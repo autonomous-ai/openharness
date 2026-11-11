@@ -71,15 +71,16 @@ export async function pullTalk(reads: GitHubReads, repo: string, number: number)
   // Stable: a comment and a review of one time keep the comment first, as markers.py does.
   return [...comments, ...reviews].sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
 }
-/** A post's signature: its writer's name first, then a comma, colon or bracket ("Juno, 14:20:", "**Faye** (PM):"). */
-const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
+/** A post's signature: its writer's name first, then a comma, colon or bracket ("Juno, 14:20:", "**Faye** (PM):"). A name
+ *  after an @ is the one spoken to ("@Pip, HOLD ..."), not the writer. */
+const SIGNATURE = /^[^\w@＠﹫]*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
 /** How each note to a pull request's author begins, after "not merged yet at <head>: ". A note is said once for each pull
  *  request, kind and head, as lampOS's train bot keys what it told (`<PR> <kind> <head>`, train-bot.sh), never by its words:
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
-const NOTES = { unsigned: 'the READ-OK from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ', blocked: 'GitHub\'s rules for ',
-  stacked: 'it carries open ' } as const
+const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
+  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ' } as const
 type NoteKind = keyof typeof NOTES
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
@@ -247,7 +248,8 @@ const nameChar = (char: string): string => char.toLowerCase().replace(/ς/g, 'σ
 /** Whether [line] is signed [name], however the name is written: the line's first letters and digits are the name's, then,
  *  before any other letter or digit, a comma, colon or bracket ("Đức Anh, 14:20:", "**Pip Two** (builder):", "Atlas Reed Two 🐝,").
  *  The name is read against the line, not the line by a pattern, so a name of any length, script or punctuation is known; one
- *  pass over at most 200 characters, stopped at the first letter that is not the name's. */
+ *  pass over at most 200 characters, stopped at the first letter that is not the name's. A name after an @ is the one spoken
+ *  to: "@Pip, HOLD ..." from a reader was Pip's own, and Pip's READ-OK lifted it (review of #3708). */
 export function signedAs(line: string, name: string): boolean {
   const want = [...name.normalize('NFKC')].map(nameChar).join('')
   if (!want) return false
@@ -255,6 +257,7 @@ export function signedAs(line: string, name: string): boolean {
   let key = '', at = 0
   for (const char of text) {
     at += char.length
+    if (char === '@' && !key) return false
     const part = nameChar(char)
     if (!want.startsWith(part, key.length)) return false
     key += part
@@ -400,7 +403,18 @@ export class GitHubMerge {
       const comments = await this.recordedNames(project, await pullTalk(this.reads, repo, number))
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
-      if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
+      const holds = [...readers].filter(([, r]) => r.verdict === 'HOLD')
+      if (holds.length) {
+        // Only its writers' own HOLDs stand: no reader is asked to lift them (githubAssign.ts askReaders), so it is said, once for
+        // the head (review of #3708). A reader's HOLD is the reader's to say. "READ-OK on <sha>" reads as no verdict (ownVerdict).
+        const writers = holds.map(([reader, r]) => isWriter(people.writers, reader) ? r : null)
+        const held = writers.every(r => r !== null) ? writers[0] : null
+        if (held) {
+          await this.tellOnce(repo, number, head, author, 'held', `${held.name} on ${held.sha.slice(0, 7)} is a writer's own: `
+            + `${held.name} lifts it with a READ-OK on ${head.slice(0, 7)}.`, comments)
+        }
+        continue
+      }
       // A READ-OK on an earlier head whose change is the head's is one on it (sameChange).
       const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].filter(r => r.verdict === 'READ-OK').map(r => r.sha))
       // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.

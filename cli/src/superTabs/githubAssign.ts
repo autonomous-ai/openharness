@@ -295,7 +295,8 @@ export class GitHubAssign {
       const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
       // An unsigned READ-OK from that login was no read, so there is nobody to ask again for it (an unsigned HOLD stands, and is).
       const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha) && !(r.ownLogin && r.verdict === 'READ-OK'))
-      const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
+      // A writer asked before (a task taken over by the reader asked) is not reading it.
+      const waiting = [...asked.keys()].filter(name => !own(name) && !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
         if (lastAsk(reader, true)) continue
         await this.ask(repo, number, head, r.name, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
