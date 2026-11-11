@@ -40,6 +40,7 @@ import 'package:harness/super_tabs/message_receipt.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
+import 'package:harness/super_tabs/personal_lead_card.dart' show SwarmPmStart;
 import 'package:harness/super_tabs/project_sidebar.dart'
     show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
@@ -234,7 +235,7 @@ Future<List<SuperTabController>> _show(
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
-  tester.view.physicalSize = const Size(760, 5000);
+  tester.view.physicalSize = const Size(760, 5600);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -951,6 +952,25 @@ class _Gallery extends StatelessWidget {
               child: SuperTabEmptyWords(superTabEmptyChannel),
             ),
           ]),
+          // A Personal project's channel with no PM (Swarm v4): one line and Start PM, which opens the PM's own chat; and
+          // why it could not start.
+          section('pm-start', 'Start PM: a Personal project with no PM', [
+            const SizedBox(
+              width: 440,
+              child: SwarmPmStart(
+                line: 'This project has no Product Manager.',
+                onStart: _noop,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const SizedBox(
+              width: 440,
+              child: SwarmPmStart(
+                line: 'Couldn’t start the Product Manager: Claude Code isn’t signed in on Mac Studio',
+                onStart: _noop,
+              ),
+            ),
+          ]),
           // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
           section(
             'github-card',
@@ -1232,3 +1252,5 @@ class _NearlyComparator extends LocalFileComparator {
     throw FlutterError('$golden: $problem. What it drew: ${drawn.path}');
   }
 }
+
+void _noop() {}
