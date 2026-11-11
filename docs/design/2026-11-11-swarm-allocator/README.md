@@ -94,6 +94,8 @@ Numbers in brackets are the [sources](#sources).
   1/q − 1 others: only then does adding it raise the landings expected of the run. q comes from its class's record.
   On lampOS 34 of 803 trains broke by their own run at 2 to 3 riders, about 2% a change, so a train of 20 was safe.
   Ours already carries up to 20.
+- **A rig is a named thing with a queue.** A lamp, a VM or a device for end-to-end checks holds one check at a time. A
+  task that needs one starts only if a slot is expected by the time it is built, and checks on a rig are batched.
 
 ### 2. Match: who does it, and with which model
 
@@ -120,8 +122,13 @@ Then the score, for the item on this agent with each model it may run:
 2. **Which first?** Of those, the one with the most `v × P / T`, raised a little for each hour it has waited, so a
    wrong estimate cannot starve a task.
 
-Several agents free at once take the assignment with the highest total; a crew is small, so it is exact. Every offer
-carries its reason in one line: "to Pip: it would wait 50 minutes for Ada, and costs Pip 12 more", or "left for Ada:
+A read is an item like any other. How strong its reader is, and whether it gets one read or two, comes from the
+change's risk: its size and its class's record of holds. On lampOS a second reader held 15 to 19% of the heads a first
+had passed, so a read is not where to save first.
+
+When work is short it goes first to the person whose offered budget is least used, so no one's subscription carries
+the team. Several agents free at once take the assignment with the highest total; a crew is small, so it is exact.
+Every offer carries its reason in one line: "to Pip: it would wait 50 minutes for Ada, and costs Pip 12 more", or "left for Ada:
 free in 10 minutes, at half the tokens".
 
 **Bound late.** The offer goes to the agent's own daemon. It checks what only it knows (the machine now, the window
@@ -140,7 +147,8 @@ is used, is near the best that can be done [18]. A price of 0 means spend it. Cl
   nears room, and the window closes when the room is less than the smallest task's 90th percentile, so no agent is
   stranded mid-task. It is worked out on the person's own computer from what their CLI reports, and only the price
   leaves it.
-- **A machine**: from the cores and memory free now, its person's own work included.
+- **A machine**: from the cores and memory free now, its person's own work included. A class whose record shows heavy
+  builds goes where the cores are free, and a machine's own daemon declines a second heavy build.
 - **An agent's minute**: from what waits in its own area.
 - **CI**: from how long check runs wait.
 - **A person who pays by the token** sets a budget for the day. It is priced as a window is.
