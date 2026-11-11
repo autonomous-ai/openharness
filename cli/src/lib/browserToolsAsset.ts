@@ -13,9 +13,9 @@ export interface BrowserTool {
 
 /**
  * The agent browser's tool list (cli/assets/browser/browser-tools.json). `harness browser` builds its commands and help
- * from it and the tool server in the image reads the same file, so the two never disagree. The release bundle carries
- * it inside cli.js (build-bundle.mjs `define`); a dev checkout and the tests read the file (src/lib/ and dist/lib/ are
- * both two levels down).
+ * from it, and the daemon runs only the commands it names (services/agentBrowser.ts), so the two never disagree. The
+ * release bundle carries it inside cli.js (build-bundle.mjs `define`); a dev checkout and the tests read the file
+ * (src/lib/ and dist/lib/ are both two levels down).
  */
 export function browserTools(): { tools: BrowserTool[] } {
   const json = typeof __BROWSER_TOOLS_JSON__ === 'string'

@@ -749,7 +749,7 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
-    it('with Browser ticked, the row says so and its browser is attached; without, neither', async () => {
+    it('with an older Desktop\'s browser: true, the row says so and its browser is attached; without, neither', async () => {
       const attachBrowser = vi.fn()
       vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, browser: true } } as never)
       const { create } = setup({ attachBrowser })

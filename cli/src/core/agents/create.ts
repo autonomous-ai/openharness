@@ -80,7 +80,8 @@ export interface CreateAgentDeps {
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
   attachDsh: (session: RegisteredSession) => void
-  /** Its browser starts, for an agent created with Browser (core/api.ts `AgentBrowserPort.attached`). */
+  /** Its browser starts, for an agent whose Browser is on from the start: an older Desktop's create (core/api.ts
+   *  `AgentBrowserPort.attached`). */
   attachBrowser?: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   /** The hook server's port, which installed engine hooks post to. */

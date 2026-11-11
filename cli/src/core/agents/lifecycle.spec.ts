@@ -323,7 +323,7 @@ describe('the agent browser, as its agent starts and ends', () => {
     expect(port!.stopped).toHaveBeenCalledTimes(2)
   })
 
-  it('tells nothing of an agent created without Browser, and nothing while the service is down', () => {
+  it('tells nothing of an agent whose Browser is off, and nothing while the service is down', () => {
     const { port, lifecycle } = browsers()
     lifecycle.attached(row())
     lifecycle.ended('a1')
@@ -416,7 +416,7 @@ describe('the agent browser, as its agent starts and ends', () => {
     expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a1'], ['a1']])
   })
 
-  it('a look at an agent that is attached already tells nothing: one created with Browser, one its person started, one there at daemon start', () => {
+  it('a look at an agent that is attached already tells nothing: one an older Desktop created with its Browser on, one its person started, one there at daemon start', () => {
     const created = row({ agentId: 'created', browser: true })
     const started = row({ agentId: 'started' })
     const kept = row({ agentId: 'kept', browser: true })

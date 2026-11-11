@@ -566,8 +566,9 @@ describe('agent_create, launched', () => {
     expect(Object.keys(none!)).not.toContain('parentAgentId')
   })
 
-  // Browser ticked in New agent: a sandboxed Chrome starts beside it (services/agentBrowser.ts). Only true asks for one.
-  it('hands on Browser ticked, and nothing for any other value', async () => {
+  // An older Desktop's New agent still sends its Browser checkbox: a sandboxed Chrome starts beside the agent
+  // (services/agentBrowser.ts). Only true asks for one.
+  it('hands on an older Desktop\'s browser: true, and nothing for any other value', async () => {
     const { ask, create } = setup()
     await ask({ engine: 'claude', cwd: '/w', browser: true })
     await ask({ engine: 'claude', cwd: '/w', browser: 'yes' })

@@ -1,7 +1,7 @@
 /**
- * One tool server per ready browser, held by the daemon (spec: Where the tool server runs): the same `podman exec -i
- * harness-browser-<agentId> node /opt/harness-browser/browser-tools.mjs` the `browser-mcp` relay started, started at
- * the browser's first command or window, started again after it exits, ended when the browser stops. Held here, it
+ * One tool server per ready browser, held by the daemon (spec: Where the tool server runs): `podman exec -i
+ * harness-browser-<profile> node /opt/harness-browser/browser-tools.mjs`, started at the browser's first command or
+ * window, started again after it exits, ended when the browser stops. Held here, it
  * keeps the current tab and the snapshot's refs between two `harness browser` commands, and the order of commands and
  * the person's Stop are decided in one place. One JSON-RPC message per line, and no MCP handshake: the tool server
  * answers `tools/call` and `window` only.
