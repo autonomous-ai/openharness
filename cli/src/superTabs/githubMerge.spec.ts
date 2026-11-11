@@ -187,7 +187,8 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     ['changed lines below it alone: where it was', 4, base('@@ -7,2 +7,6 @@\n tail\n+a\n+b\n+c\n+d\n end'), 1],
     ['changed a line above and a line below in one hunk: moved by the one above alone', 5, base('@@ -1,9 +1,12 @@\n import os\n+x\n import re\n import sys\n def quote():\n     today\n     days\n     return\n-old\n+new\n+newer\n+newest\n end'), 1],
     ['changed a line it stands on', 4, base('@@ -3,3 +3,3 @@\n import sys\n-def quote():\n+def quote(n):\n     today'), 0],
-    ['changed 300 files or more', 9, { files: Array.from({ length: 300 }, (_, at) => ({ filename: `docs/${at}.md`, status: 'modified', changes: 1, patch: '@@ -1 +1 @@\n-a\n+b' })) }, 0],
+    // The file's own change is among them, and would carry it: the list may be cut short, so it is not read.
+    ['changed 300 files or more', 9, { files: [...grew().files, ...Array.from({ length: 299 }, (_, at) => ({ filename: `docs/${at}.md`, status: 'modified', changes: 1, patch: '@@ -1 +1 @@\n-a\n+b' }))] }, 0],
     ['lists the file twice', 9, { files: [...grew().files, ...grew().files] }, 0],
   ])('across a rebase onto a base that %s', async (_case, at, main, merges) => {
     const f = setup()

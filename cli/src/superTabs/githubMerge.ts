@@ -280,26 +280,30 @@ const COMPARE_FILES_MAX = 300
 const PATCHES_MAX = 1_000
 
 /** A hunk's line numbers, which a rebase moves; what follows them (the heading the hunk is under) stays. */
-const HUNK = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@/
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/
 /** A submodule's whole patch: the commit it points at. */
 const SUBMODULE = /^[+-]Subproject commit [0-9a-f]{40,64}$/
 
-/** Where a hunk's first changed line is in the file it was made from, and how many lines the hunk covers before and after. */
-type Hunk = [at: number, was: number, is: number]
-/** What a commit changes since the commit of the base it stands on ([from]): its change in one word, and each file's hunks. */
+/** One hunk of a patch: where it begins in the file it was made from and how many of that file's lines it stands on, and each
+ *  run of rows it changes: the line of that file it is at, how many lines it removes there and how many it adds. */
+interface Hunk { start: number; was: number; runs: Array<[at: number, removed: number, added: number]> }
+/** What a commit changes since the commit of the base it stands on ([from]): its change in one word, and each file's hunks,
+ *  by the name the file had there. */
 interface Change { hash: string; from: string; hunks: Map<string, Hunk[]> }
 
 /** A patch's hunks, in order. */
 function hunksOf(rows: readonly string[]): Hunk[] {
   const hunks: Hunk[] = []
-  let line = 0, open = false
+  let line = 0, run: Hunk['runs'][number] | null = null
   for (const row of rows) {
     const head = HUNK.exec(row)
-    if (head) { hunks.push([0, Number(head[2] ?? 1), Number(head[3] ?? 1)]); line = Number(head[1]); open = true; continue }
-    if (!hunks.length) continue
-    // Its first added or removed row: the lines before it are the ones around it.
-    if (open && (row.startsWith('+') || row.startsWith('-'))) { hunks.at(-1)![0] = line; open = false }
-    if (row.startsWith(' ') || row.startsWith('-')) line++
+    if (head) { hunks.push({ start: Number(head[1]), was: Number(head[2] ?? 1), runs: [] }); line = Number(head[1]); run = null; continue }
+    const hunk = hunks.at(-1)
+    if (!hunk) continue
+    if (row.startsWith('+') || row.startsWith('-')) {
+      if (!run) hunk.runs.push(run = [line, 0, 0])
+      if (row.startsWith('-')) { run[1]++; line++ } else run[2]++
+    } else if (row.startsWith(' ')) { run = null; line++ }
   }
   return hunks
 }
@@ -332,19 +336,24 @@ function changeOf(files: Json[]): { hash: string; hunks: Map<string, Hunk[]> } |
     if (link || (whole && lines.every(line => SUBMODULE.test(line)))) return null
     parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''),
       whole ? rows.map(row => row.replace(HUNK, '@@')) : [String(file.sha)]]))
-    hunks.set(String(file.filename ?? ''), hunksOf(rows))
+    // By the name it had on the base: its hunks are numbered in that file. A name listed twice is not read.
+    const was = String(file.previous_filename || file.filename || '')
+    if (hunks.has(was)) return null
+    hunks.set(was, hunksOf(rows))
   }
   return { hash: createHash('sha256').update(parts.join('\n')).digest('hex'), hunks }
 }
 
 /** One compare, kept in [kept] under its two ends: null when GitHub cannot give it, or does not know a commit. A commit's
  *  change since another does not change. */
-async function compared<T>(reads: GitHubReads, kept: Map<string, unknown>, repo: string, from: string, to: string, read: (compare: Json) => T | null): Promise<T | null> {
-  const key = `${repo}\n${from}\n${to}`
+async function compared<T>(reads: GitHubReads, kept: Map<string, unknown>, repo: string, kind: 'change' | 'moved', from: string, to: string,
+  read: (compare: Json) => T | null): Promise<T | null> {
+  const key = `${kind}\n${repo}\n${from}\n${to}`
   if (kept.has(key)) return kept.get(key) as T | null
   let found: T | null
   try {
-    found = read(await reads.one(repo, `/repos/${repo}/compare/${from}...${to}`))
+    // The base with itself may be hundreds of commits: its files are on the first page, and one commit of them is asked for.
+    found = read(await reads.one(repo, `/repos/${repo}/compare/${from}...${to}${kind === 'moved' ? '?per_page=1' : ''}`))
   } catch (error) {
     if (!(error instanceof GitHubStop) || error.everywhere) throw error
     found = null
@@ -361,20 +370,27 @@ async function compared<T>(reads: GitHubReads, kept: Map<string, unknown>, repo:
  * it: a change of spaces alone is read again.
  */
 const patchOf = (reads: GitHubReads, kept: Map<string, unknown>, repo: string, base: string, sha: string): Promise<Change | null> =>
-  compared(reads, kept, repo, base, sha, compare => {
+  compared(reads, kept, repo, 'change', base, sha, compare => {
     const change = Array.isArray(compare.files) ? changeOf(compare.files.map(object)) : null
     const from = String(object(compare.merge_base_commit).sha ?? '')
     return change && /^[0-9a-f]{40,64}$/.test(from) ? { ...change, from } : null
   })
 
-/** How the base itself changed each file from its commit [from] to its later commit [to]: the hunks of each, null for a file
- *  GitHub gives no patch for. Null when [to] does not hold [from], or the list may be cut short. */
+/** How the base itself changed each file from its commit [from] to its later commit [to]: the hunks of each, by the name it
+ *  had and the name it has, null for a file GitHub gives no patch for. Null when [to] does not hold [from], when the list may
+ *  be cut short, or when it names a file twice. */
 const movedBy = (reads: GitHubReads, kept: Map<string, unknown>, repo: string, from: string, to: string): Promise<Map<string, Hunk[] | null> | null> =>
-  compared(reads, kept, repo, from, to, compare => {
+  compared(reads, kept, repo, 'moved', from, to, compare => {
     const files = Array.isArray(compare.files) ? compare.files.map(object) : null
     if (!files || files.length >= COMPARE_FILES_MAX || compare.behind_by !== 0) return null
-    return new Map(files.flatMap(file => [String(file.filename ?? ''), String(file.previous_filename ?? '')].filter(Boolean)
-      .map(name => [name, typeof file.patch === 'string' ? hunksOf(file.patch.split('\n')) : null] as const)))
+    const moved = new Map<string, Hunk[] | null>()
+    for (const file of files) {
+      for (const name of new Set([String(file.filename ?? ''), String(file.previous_filename || file.filename || '')])) {
+        if (moved.has(name)) return null
+        moved.set(name, typeof file.patch === 'string' ? hunksOf(file.patch.split('\n')) : null)
+      }
+    }
+    return moved
   })
 
 /** Whether each hunk of [now] is where [then] had it: at the same line when both stand on the same commit of the base, else
@@ -384,13 +400,21 @@ async function inPlace(reads: GitHubReads, kept: Map<string, unknown>, repo: str
   const moved = then.from === now.from ? new Map<string, Hunk[] | null>() : await movedBy(reads, kept, repo, then.from, now.from)
   if (!moved) return false
   for (const [file, hunks] of now.hunks) {
-    const were = then.hunks.get(file), above = moved.get(file)
-    if (!were || were.length !== hunks.length || above === null) return false
-    for (const [at, [line]] of hunks.entries()) {
-      const before = were[at]![0]
-      // A change of the base above it moves it by what that change added or removed. One at its very line changes the lines
-      // around it, and then the two are not the same change.
-      if (line !== before + (above ?? []).filter(([start]) => start < before).reduce((sum, [, was, is]) => sum + is - was, 0)) return false
+    const were = then.hunks.get(file), base = moved.get(file)
+    if (!were || were.length !== hunks.length || base === null) return false
+    // Each run of lines the base changed by itself: a hunk of its patch joins runs within six lines of each other, one of
+    // which may be above a change and one below.
+    const runs = (base ?? []).flatMap(hunk => hunk.runs)
+    for (const [at, hunk] of hunks.entries()) {
+      const { start, was } = were[at]!
+      let shift = 0
+      for (const [line, removed, added] of runs) {
+        // Wholly above the lines the hunk stands on: it moves them by what it added or removed. Among them: they are no
+        // longer the lines that were read around the change. Below: nothing.
+        if (line + removed <= start) shift += added - removed
+        else if (line < start + was) return false
+      }
+      if (hunk.start !== start + shift) return false
     }
   }
   return true
