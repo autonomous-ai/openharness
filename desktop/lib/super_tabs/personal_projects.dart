@@ -180,8 +180,9 @@ class PersonalProjects extends ChangeNotifier {
   final _failures = <String, int>{};
   final _retryAt = <String, DateTime>{};
 
-  /// The Personal Swarm [c] reads, while it is the signed-in person's alone
-  /// with no one else in it. Never a team Swarm.
+  /// The Personal Swarm [c] reads, the signed-in person's own: people they
+  /// invite there change nothing of it (anh Dee, 2026-11-11). Never another
+  /// Swarm.
   bool eligible(SuperTabController c) {
     final account = app.currentUser?.id;
     final snapshot = c.snapshot;
@@ -191,8 +192,7 @@ class PersonalProjects extends ChangeNotifier {
         snapshot != null &&
         identical(app.superTabs.peek(c.tabId), c) &&
         PersonalSwarm.of(app).id == c.tabId &&
-        snapshot.ownerId == account &&
-        snapshot.people.every((p) => p.id == account);
+        snapshot.ownerId == account;
   }
 
   Map<String, String?> _projects(String account, String swarm) =>

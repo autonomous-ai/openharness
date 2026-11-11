@@ -579,14 +579,16 @@ void main() {
     );
   });
 
-  scene('a Swarm with other people in it lists no panes of theirs', (
-    tester,
-    f,
-    c,
-  ) async {
-    expect(find.text('Your Team'), findsOneWidget);
-    expect(paneRows(), findsNothing);
-  }, people: const ['owner', 'kim']);
+  // anh Dee, 2026-11-11: the person invites people to their Personal Swarm, and it stays theirs.
+  scene(
+    'their Personal Swarm with someone they invited still lists their own panes, and never the guest\'s',
+    (tester, f, c) async {
+      expect(find.text('Your Team'), findsOneWidget);
+      expect(paneRows(), findsNWidgets(2));
+      expect(key('super-pane-guest-theirs'), findsNothing);
+    },
+    people: const ['owner', 'kim'],
+  );
 
   scene(
     'a Swarm that is not their Personal one lists no panes either',
