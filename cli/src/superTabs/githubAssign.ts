@@ -3,12 +3,13 @@
  * important. assign to the right builder. assign to maximize optimize resource allocation", "the bottleneck is a
  * combination of cpu disk token etc.", "lets write the best algo"). The PM labels what each task touches and needs and how
  * big and urgent it is (part:, needs:, size:, p0-p2); this reads those with the project's builders and what their machines
- * last reported, plans with the solver (assign/search.ts), and gives each builder what it starts next, two deep:
- * `builder:<name>` on the issue and one line saying why. GitHub news (githubMentions.ts) then brings the task to its
+ * last reported, plans with the solver (assign/search.ts), and gives each builder with nothing to build what it starts next
+ * (one task at a time, four open at most: assign/crew.ts hasRoom): `builder:<name>` on the issue and one line saying why.
+ * GitHub news (githubMentions.ts) then brings the task to its
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { areaOf, ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { areaOf, ASKED, hasRoom, heldTasks, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -174,19 +175,20 @@ export class GitHubAssign {
     const closed = await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1)
     await this.measure(repo, closed)
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
-    const read = readProblem({ now: this.now(), issues, closed, crew, minutes })
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
     const pulls = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
     // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
     // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
     // pull request merges without it. Another builder would do it again.
-    const withReaders = await this.askReaders(project, read, pulls, crew)
+    const withReaders = await this.askReaders(project, issues, pulls, crew)
+    // Read after them: such a task is not one its builder builds, and takes none of its time in the plan.
+    const read = readProblem({ now: this.now(), issues, closed, crew, withReaders, minutes })
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
-    const numbers = numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed })
+    const numbers = numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, short, picks, closed })
     await this.deps.numbers.pass(project, numbers,
       async () => goalOf(this.reads, repo, String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')),
       // The day's scoreboard, read only as the day is posted: the comments and files of what landed (scoreboard.ts).
@@ -207,9 +209,9 @@ export class GitHubAssign {
     await this.sayWaiting(project, issues)
     await this.openWaiting(repo, issues, crew, read, short)
     if (!read.free.size) return { short, picks: [] }
-    // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
-    // keeps under 1% of a core).
-    if (![...read.open.values()].some(count => count < DEEP)) return { short, picks: [] }
+    // Nobody is given a task while every builder has one to build, or holds four: no plan, so a backlog costs no CPU each
+    // minute (the daemon at rest keeps under 1% of a core).
+    if (!crew.builders.some(builder => hasRoom(read, builder.id))) return { short, picks: [] }
     // As many steps as the problem is worth, within the second: a few thousand for a small team, the whole second for a large.
     const solved = solve(read.problem, { budgetMs: SOLVE_MS, iterations: Math.min(MAX_STEPS, STEPS_PER_TASK * read.problem.tasks.length), seed: 1,
       ...(this.last.has(repo) ? { start: this.last.get(repo) } : {}) })
@@ -283,9 +285,11 @@ export class GitHubAssign {
    * (githubMerge.ts), so its reader is asked to read the new head, once. Nothing while a HOLD stands on the head itself: its
    * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts).
    */
-  private async askReaders(project: LedProject, read: Read, open: Json[], crew: Crew): Promise<Set<number>> {
+  private async askReaders(project: LedProject, issues: Json[], open: Json[], crew: Crew): Promise<Set<number>> {
     const { repo } = project
     const team = teamOf(crew, project.pm)
+    // What each builder holds, for the reader with the least (readerFor).
+    const held = heldTasks(issues, crew.builders)
     // Read only when the PM is the reader left; one that cannot be read is taken as stopped, and the pass goes on.
     let pmRuns: Promise<boolean> | undefined
     const pmHears = () => pmRuns ??= this.deps.pmRunning(project).catch(() => false)
@@ -384,11 +388,11 @@ export class GitHubAssign {
       })
       let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length - retyping.length
       // None of its writers reads it: its label's agent nor its branch's (a task taken over carries both).
-      const skip = new Set([...asked.keys(), ...readers.keys(), ...[...read.builders.values()].filter(b => own(b.name)).map(b => b.id)])
+      const skip = new Set([...asked.keys(), ...readers.keys(), ...crew.builders.filter(b => own(b.name)).map(b => b.id)])
       while (need-- > 0) {
         // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
         // Juno, its PM, read every pull request of Pip's).
-        const builder = readerFor(read, author, skip)
+        const builder = readerFor(crew.builders, held, author, skip)
         const pm = readerKey(project.pm)
         const reader = builder ?? (!own(pm) && !skip.has(pm) && await pmHears() ? { id: pm, name: project.pm } : null)
         if (!reader) {
@@ -514,14 +518,15 @@ export class GitHubAssign {
   }
 
   /**
-   * A task Harness gave that its builder has not taken in [WAIT_TAKE_MS], while a builder of the team has nothing given or taken
-   * and could take it, goes back with one line of why, and the next plan gives it to the builder who can start it soonest (Swarm
-   * plan, step 1, item 6: "Nobody waits on it"). Two deep, a builder's second task waited for its first however long that took,
-   * while others sat with nothing. One its PM or a person gave stands: Harness gave it when its own word "for **Name**" is on it.
+   * A task Harness gave that its builder has not taken in [WAIT_TAKE_MS], while a builder of the team has nothing to build and
+   * room for it (assign/crew.ts hasRoom) and could take it, goes back with one line of why, and the next plan gives it to the
+   * builder who can start it soonest (Swarm plan, step 1, item 6: "Nobody waits on it"). A builder whose turn does not end, or
+   * that is on a fix or a read, takes its task late, while others sit with nothing. One its PM or a person gave stands: Harness
+   * gave it when its own word "for **Name**" is on it.
    * Once a task and builder in a daemon's life, so a plan or a person that gives it back to that builder is not undone.
    */
   private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[]): Promise<void> {
-    const idle = crew.builders.filter(b => (read.open.get(b.id) ?? 0) === 0 && !short.some(away => away.label === b.label))
+    const idle = crew.builders.filter(b => hasRoom(read, b.id) && !short.some(away => away.label === b.label))
     if (!idle.length) return
     const now = this.now()
     // One task back for each builder with nothing, the oldest first: on the sandbox (2026-11-11) one free builder took two back,
