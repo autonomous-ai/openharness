@@ -7,7 +7,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { localDatabase, type LocalDatabase } from './bench/mongo.js'
 import { DEFAULT_CONFIG } from './bench/config.js'
-import { DRIVERS } from './bench/bench.js'
+import { partsDriver } from './bench/drivers/parts.js'
 import { machineId, seedAccounts } from './bench/fixtures.js'
 import { plan } from './bench/plan.js'
 import { seedSwarm, AGENT_CONFIGURATION, type Swarm } from './bench/seed.js'
@@ -29,8 +29,8 @@ vi.mock('../src/superTabs/cachedReads.js', async original => {
 const { harnessShareRoutes } = await import('../src/routes/harnessShares.js')
 const { SuperTabStore } = await import('../src/superTabs/store.js')
 
-/** The Swarm the benchmark runs on, with 40 workers over 6 machines, most of them shared with the recipient. */
-const CONFIG = { ...structuredClone(DEFAULT_CONFIG), groups: 200, doneShare: 0.8, workers: 40 }
+/** The Swarm the benchmark runs on, with 40 agents over 6 machines (10 of them its projects' PMs), most of them shared with the recipient. */
+const CONFIG = { ...structuredClone(DEFAULT_CONFIG), agents: 40, projects: 10 }
 const RUNS = 30, WAVE = 20
 
 let database: LocalDatabase
@@ -39,7 +39,8 @@ let swarm: Swarm
 let recipient: AuthUser
 /** Who the next list call is made as. */
 let viewer: AuthUser
-/** The shares the recipient must be listed, by hand: each worker not on its own machine, the Swarm's Lead, and the ordinary share. */
+/** The shares the recipient must be listed, by hand: each PM not on its own machine (every reader of its project watches it), and
+ *  the ordinary share. */
 let expected: string[]
 /** Every share addressed to the recipient that the list must leave out, by why. */
 let hidden: Record<string, string>
@@ -53,7 +54,10 @@ const list = async (as: AuthUser = recipient) => {
 const listedIds = (machines: Awaited<ReturnType<typeof list>>) => machines.flatMap(m => m.shares.map(s => s.id)).sort()
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number; reads: number }
+interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number; reads: number; seeks: number }
+/** How many values a read's filter asks for by `$in`: an index scan seeks once for each. */
+const inValues = (value: unknown): number => Array.isArray(value) ? value.reduce((n: number, item) => n + inValues(item), 0)
+  : value && typeof value === 'object' ? Object.entries(value).reduce((n, [key, item]) => n + (key === '$in' && Array.isArray(item) ? item.length : inValues(item)), 0) : 0
 /** What Mongo did for each collection while `read` ran: plans, documents examined and rows returned. */
 async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   const db = database.db
@@ -61,18 +65,20 @@ async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   await read()
   await db.$runCommandRaw({ profile: 0 })
   const found = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
-    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; keysExamined?: number; docsExamined?: number; nreturned?: number }> } }
+    unknown as { cursor: { firstBatch: Array<{ ns: string; planSummary?: string; keysExamined?: number; docsExamined?: number; nreturned?: number
+      command?: { pipeline?: unknown[]; filter?: unknown } }> } }
   await db.$runCommandRaw({ drop: 'system.profile' })
   const byCollection = new Map<string, Profiled>()
   for (const row of found.cursor.firstBatch) {
     const collection = row.ns.slice(row.ns.indexOf('.') + 1)
     if (collection.startsWith('system.') || collection.startsWith('$cmd')) continue
-    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0, reads: 0 }
+    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0, reads: 0, seeks: 0 }
     entry.reads++
     if (row.planSummary && !entry.plans.includes(row.planSummary)) entry.plans.push(row.planSummary)
     entry.keysExamined += row.keysExamined ?? 0
     entry.docsExamined += row.docsExamined ?? 0
     entry.returned += row.nreturned ?? 0
+    entry.seeks += inValues(row.command?.pipeline?.[0] ?? row.command?.filter)
     byCollection.set(collection, entry)
   }
   return [...byCollection.values()]
@@ -82,7 +88,7 @@ beforeAll(async () => {
   database = await localDatabase()
   const db = shared.db = database.db
   const people = await seedAccounts(db, CONFIG.machines)
-  const driver = await DRIVERS.parts!(db, () => people)
+  const driver = await partsDriver(db, () => people)
   swarm = (await seedSwarm(driver, CONFIG, plan(CONFIG), people)).swarm
   await driver.close()
   recipient = people[1]!
@@ -91,19 +97,21 @@ beforeAll(async () => {
       agentId: data.agentId, recipientEmail: data.recipientEmail ?? recipient.email, autonomousEnv: 'prod', name: data.agentId,
       ownerPublicKey: 'fixture-key', expiresAt: data.expiresAt ?? new Date(Date.now() + 86_400_000), revokedAt: data.revokedAt ?? null } })
   expected = []
-  for (const worker of swarm.workers) {
-    if (worker.machine === 1) continue
+  hidden = {}
+  const hide = async (why: string, data: Parameters<typeof share>[1]) => { const id = randomUUID(); hidden[id] = why; await share(id, data) }
+  for (const [i, agent] of swarm.agents.entries()) {
+    if (agent.machine === 1) continue
+    if (i >= CONFIG.projects) {
+      await hide('another person\'s Member: only its person reads it', { superTabId: swarm.tabId, owner: agent.machine, agentId: agent.harnessId })
+      continue
+    }
     const id = randomUUID()
-    await share(id, { superTabId: swarm.tabId, owner: worker.machine, agentId: worker.harnessId })
+    await share(id, { superTabId: swarm.tabId, owner: agent.machine, agentId: agent.harnessId })
     expected.push(id)
   }
   const plain = randomUUID()
   await share(plain, { superTabId: null, owner: 2, agentId: 'plain-harness' })
   expected.push(plain)
-  // The Swarm's current Lead is open to its readers (projects.ts watchClosed); confidential, it is closed everywhere else.
-  const lead = randomUUID()
-  await share(lead, { superTabId: swarm.tabId, owner: 0, agentId: 'bench-lead' })
-  expected.push(lead)
   expected.sort()
   // A Swarm the recipient is not in, with one agent shared through it, and its Lead, shared outside any Swarm.
   const store = new SuperTabStore(db)
@@ -118,14 +126,12 @@ beforeAll(async () => {
   const { id: _row, ...template } = await db.swarmAgent.findFirstOrThrow({ where: { tabId: swarm.tabId } })
   await db.swarmAgent.createMany({ data: Array.from({ length: 200 }, (_, i) => ({ ...template, id: `crowd-${i}`, tabId: `crowd-tab-${i}`,
     key: `crowd-agent-${i}`, data: template.data as object })) })
-  hidden = {}
-  const hide = async (why: string, data: Parameters<typeof share>[1]) => { const id = randomUUID(); hidden[id] = why; await share(id, data) }
   await hide('an ordinary share of a confidential session', { superTabId: null, owner: 0, agentId: 'elsewhere-lead' })
   await hide('a Swarm the recipient is not in', { superTabId: other, owner: 0, agentId: 'elsewhere-worker' })
   await hide('an agent not in the Swarm', { superTabId: swarm.tabId, owner: 2, agentId: 'gone-worker' })
   await hide('expired', { superTabId: null, owner: 3, agentId: 'expired-harness', expiresAt: new Date(Date.now() - 1000) })
   await hide('revoked', { superTabId: null, owner: 3, agentId: 'revoked-harness', revokedAt: new Date() })
-  await share(randomUUID(), { superTabId: swarm.tabId, owner: 2, agentId: swarm.workers.find(w => w.machine === 2)!.harnessId, recipientEmail: 'someone-else@example.com' })
+  await share(randomUUID(), { superTabId: swarm.tabId, owner: 2, agentId: swarm.agents.find(a => a.machine === 2)!.harnessId, recipientEmail: 'someone-else@example.com' })
   app = Fastify()
   app.decorateRequest('user', null)
   app.addHook('onRequest', async req => { req.user = viewer })
@@ -189,8 +195,10 @@ describe('the harness shares list on a Swarm-sized database', () => {
       const nullBounds = (p: string) => read.collection === 'harness_shares' && branches(p).length === 2 && new Set(branches(p)).size === 1
       expect(read.plans.filter(p => p.includes('}, IXSCAN') && !nullBounds(p)), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
-      // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production.
-      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(read.returned + 10)
+      // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production (here the 200
+      // crowd agents). An agent read by `$in` seeks once per key it asks for, and a seek may examine the key past its match.
+      const seeks = read.collection === 'SwarmAgent' ? read.seeks : 0
+      expect(read.keysExamined, read.collection).toBeLessThanOrEqual(read.returned + seeks + 10)
     }
   })
 })
