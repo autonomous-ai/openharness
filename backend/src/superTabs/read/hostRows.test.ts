@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { storedAssignment } from '../storedWork.test-support.js'
 import { hostTab } from './hostRows.js'
+import type { HostAgentRow } from './contract.js'
+import { activeWork } from '../model.js'
+import { canWatchAgent, ledProject } from '../projects.js'
 import { owner, peer, swarm } from './fixture.test-support.js'
 
 const user = { sub: owner.userId, email: owner.email } as AuthUser
@@ -63,6 +66,44 @@ describe('a host\'s roster read', () => {
     expect(roster.filter(r => 'agent' in r && !('closeSession' in r))).toHaveLength(agents)
     return count
   }
+
+  // Each value as the per-agent reads it replaced answer it, for a Lead, a Regular agent working and waiting on its person, one
+  // stopping, one idle and one in an archived task only.
+  it('gives each row what the per-agent reads give', async () => {
+    const s = swarm()
+    s.join(peer)
+    const add = (name: string, group: string, lead = false) => s.add(name, group, lead, owner, 'host', owner.userId)
+    const lead = add('lead', 'lead', true)
+    const task = s.group('Fix login'), quiet = s.group('Old work'), other = s.group('Docs')
+    const worker = add('worker', task), stopping = add('stopping', other), idle = add('idle', other), archived = add('archived', quiet)
+    s.edit(state => {
+      state.agents.find(a => a.id === worker)!.regular = true
+      storedAssignment(state, task, worker).status = 'needs_human'
+      state.agents.find(a => a.id === stopping)!.workDecision = 'stop'
+      storedAssignment(state, other, stopping)
+      state.conversations.find(c => c.id === quiet)!.archived = true
+    })
+    const people = [{ id: owner.userId, email: owner.email }, { id: peer.userId, email: peer.email }]
+    const { roster } = await hostTab('tab', s.state, 'host', user, null, { ...lookups, people })
+    const state = s.state
+    for (const id of [lead, worker, stopping, idle, archived]) {
+      const target = state.agents.find(a => a.id === id)!
+      const row = roster.find(r => 'agent' in r && r.agent.id === id && !('closeSession' in r)) as HostAgentRow
+      const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === id && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
+      expect({ active: row.active, attention: row.attention, lead: row.lead, led: row.ledConversationId, stop: row.stopRequested, observers: row.observers }, id).toEqual({
+        active: state.conversations.some(c => !c.archived && c.agentIds.includes(id)),
+        attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: null } : null,
+        lead: !!ledProject(state, id), led: ledProject(state, id)?.leadConversationId ?? null,
+        stop: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === id),
+        observers: people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
+          .map(p => ({ email: p.email, userId: p.id })),
+      })
+    }
+    expect(roster.find(r => 'agent' in r && r.agent.id === worker)).toMatchObject({ attention: { status: 'needs_human' } })
+    expect(roster.find(r => 'agent' in r && r.agent.id === lead)).toMatchObject({ lead: true })
+    expect(roster.find(r => 'agent' in r && r.agent.id === archived)).toMatchObject({ active: false })
+    expect(roster.find(r => 'agent' in r && r.agent.id === stopping)).toMatchObject({ stopRequested: false })
+  })
 
   it('walks the conversations as often for twenty agents as for two', async () => {
     expect(await walks(20)).toBe(await walks(2))

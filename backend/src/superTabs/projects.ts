@@ -136,9 +136,13 @@ export function agentProjectId(state: SuperTabState, target: Agent): string {
 /** Where an agent is that its project is read from: the first task it works on now, and the first conversation it is in
  *  that is not its own chat. */
 export interface AgentPlaces { work: Conversation | undefined; group: Conversation | undefined }
+/** Whether [c] is a task [agentId] works on now: the first such is a Regular agent's place (agentProjectId). */
+export const worksIn = (c: Conversation, agentId: string): boolean => c.assignment?.agentId === agentId && activeWork(c)
+/** Whether [c] is a conversation [agentId] is in that is not its own chat: the first such is its place otherwise. */
+export const placedIn = (c: Conversation, agentId: string): boolean => c.agentIds.includes(agentId) && !isAgentChat(c)
 const agentPlaces = (state: SuperTabState, target: Agent): AgentPlaces => ({
-  work: target.regular ? state.conversations.find(c => c.assignment?.agentId === target.id && activeWork(c)) : undefined,
-  group: target.regular || target.projectId ? undefined : state.conversations.find(c => c.agentIds.includes(target.id) && !isAgentChat(c)),
+  work: target.regular ? state.conversations.find(c => worksIn(c, target.id)) : undefined,
+  group: target.regular || target.projectId ? undefined : state.conversations.find(c => placedIn(c, target.id)),
 })
 
 /** [agentProjectId] from where [target] is ([places]), read by the caller: a host's roster reads every agent's places in one pass. */
@@ -343,6 +347,7 @@ function readsAgentChat(state: SuperTabState, actor: Actor, group: Conversation)
     && target.contributorId === owner.id && target.machineOwnerId === owner.id
 }
 
+/** [projectId]: [target]'s agentProjectId in this very [state], when the caller read it already (read/hostRows.ts). */
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent, projectId = agentProjectId(state, target)): boolean {
   // An idle Regular agent (task #4116): its person, itself, and the PM of a project its person reads, which may give it a task.
   if (target.regular && projectId === NO_PROJECT) {
