@@ -12,7 +12,9 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/firstAnswers.ts',
   // An agent's next thing, typed as its turn ends (Swarm plan, step 1, item 1, 11-11).
   'src/superTabs/nextThing.ts',
-  // A project's numbers, told to its PM when work runs short and posted once a day (anh Dee, 11-11).
+  // A team's numbers for the day before, posted daily in its project's channel (Swarm plan, step 8, 11-11).
+  'src/superTabs/githubNumbers.ts',
+  // A project's numbers, told to its PM when work runs short (anh Dee, 11-11).
   'src/superTabs/pmNumbers.ts',
   // A piece cut off a task by its builder (anh Dee, 11-11).
   'src/superTabs/githubSplit.ts',

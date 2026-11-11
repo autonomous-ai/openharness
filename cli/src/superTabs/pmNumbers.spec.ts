@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Crew, Read } from './assign/crew.js'
 import type { LedProject } from './githubMerge.js'
-import { dayLine, messageOf, numbersOf, numbersSender, placeOf, plainName, PmNumbers, shortLine, toldLine, type How, type Numbers } from './pmNumbers.js'
+import { messageOf, numbersOf, numbersSender, operationOf, placeOf, plainName, PmNumbers, shortLine, toldLine, type How, type Numbers } from './pmNumbers.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -23,8 +23,7 @@ const crew = (): Crew => ({
 const read = (open: Record<string, number>, free: string[]): Read => ({ open: new Map(Object.entries(open)), free: new Set(free) } as unknown as Read)
 const task = (number: number, labels: string[], more: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...more })
 const free = (...names: string[]) => names.map(name => ({ id: name.toLowerCase(), name }))
-const numbers = (over: Partial<Numbers> = {}): Numbers => ({ builders: 4, free: free('Ada', 'Kai'), open: 0, unsized: 0, held: 3, landed: 12, landedBy: [['Pip', 7], ['Kai', 5]],
-  closed: 9, more: false, activity: NOW - HOUR, ...over })
+const numbers = (over: Partial<Numbers> = {}): Numbers => ({ free: free('Ada', 'Kai'), open: 0, unsized: 0, landed: 12, more: false, activity: NOW - HOUR, ...over })
 const counts = (over: Partial<Parameters<typeof numbersOf>[0]> = {}) => numbersOf({ now: NOW, crew: crew(), pm: 'Juno', issues: [], read: read({}, []), withReaders: new Set(),
   short: [], picks: [], closed: [], ...over })
 
@@ -37,7 +36,7 @@ describe('a project\'s counts after an assigner\'s pass', () => {
       // Kai's one task has its pull request with its readers: Kai has nothing to work on. Bo's subscription has no room, and
       // Ada was given #7 this pass: neither is free.
       withReaders: new Set([3]), short: [{ name: 'Bo', label: 'builder:bo', why: 'quota' }], picks: [{ task: '#7', builder: 'ada', start: 0 }] })
-    expect(counted).toMatchObject({ builders: 4, free: [{ id: 'kai', name: 'Kai' }], open: 2, unsized: 3, held: 4 })
+    expect(counted).toMatchObject({ free: [{ id: 'kai', name: 'Kai' }], open: 2, unsized: 3 })
     // With two tasks, both in review, a builder's list is full: it is given nothing whatever is open, and is not counted as
     // waiting for a task its PM could open.
     const full = counts({ issues: [task(1, ['builder:pip', 'status:taken']), task(2, ['builder:pip', 'status:taken']), task(3, ['builder:kai', 'status:taken'])], withReaders: new Set([1, 2, 3]) })
@@ -49,7 +48,7 @@ describe('a project\'s counts after an assigner\'s pass', () => {
     expect(cut.free.map(free => free.name)).toEqual(['Bo', 'Pip'])
   })
 
-  it('counts what the team landed in the last day, merged or carried by a train that landed squashed, and the team\'s tasks closed', () => {
+  it('counts what the team landed in the last day, merged or carried by a train that landed squashed, and when it last moved', () => {
     const pull = (number: number, label: string, more: Json = {}) => ({ number, pull_request: { merged_at: null }, labels: [{ name: label }], ...more })
     const merged = (number: number, label: string, at: string) => pull(number, label, { pull_request: { merged_at: at }, closed_at: at, updated_at: at })
     const counted = counts({ closed: [merged(1, 'builder:pip', ago(HOUR)), merged(2, 'Builder:Pip', ago(2 * HOUR)), merged(3, 'builder:kai', ago(23 * HOUR)),
@@ -67,12 +66,13 @@ describe('a project\'s counts after an assigner\'s pass', () => {
       { closed_at: ago(HOUR), state_reason: 'completed', labels: [{ name: 'builder:pip' }] }, { closed_at: ago(2 * HOUR), labels: [{ name: 'builder:cy' }] },
       { closed_at: ago(2 * HOUR), state_reason: null, labels: [{ name: 'builder:juno' }] }, { closed_at: ago(HOUR), state_reason: 'not_planned', labels: [{ name: 'builder:pip' }] },
       { closed_at: ago(49 * HOUR), state_reason: 'completed', labels: [{ name: 'builder:pip' }] }, { closed_at: ago(HOUR), state_reason: 'completed', labels: [{ name: 'question' }] }] })
-    expect(counted).toMatchObject({ landed: 7, landedBy: [['Ada', 2], ['Pip', 2], ['Cy', 1], ['Juno', 1], ['Kai', 1]], closed: 3, more: false, activity: NOW - HOUR })
+    // Pip 2, Ada 2, Cy, Juno and Kai.
+    expect(counted).toMatchObject({ landed: 7, more: false, activity: NOW - HOUR })
     // When the team last landed or closed anything, as far back as the list goes: a day old or more too, and nobody else's.
     expect(counts({ closed: [merged(6, 'builder:pip', ago(25 * HOUR)), merged(7, 'bug', ago(HOUR)), { closed_at: ago(HOUR), labels: [{ name: 'question' }] },
       { closed_at: ago(HOUR), state_reason: 'not_planned', labels: [{ name: 'builder:pip' }] }, pull(10, 'builder:ada', { closed_at: ago(HOUR) })] }))
-      .toMatchObject({ landed: 0, closed: 0, activity: NOW - 25 * HOUR })
-    expect(counts({ closed: [{ closed_at: ago(30 * HOUR), labels: [{ name: 'builder:pip' }] }] })).toMatchObject({ closed: 0, activity: NOW - 30 * HOUR })
+      .toMatchObject({ landed: 0, activity: NOW - 25 * HOUR })
+    expect(counts({ closed: [{ closed_at: ago(30 * HOUR), labels: [{ name: 'builder:pip' }] }] })).toMatchObject({ activity: NOW - 30 * HOUR })
     expect(counts().activity).toBe(0)
     // A sized task opened is the project moving too: its PM's answer to being told. An issue with no size is none.
     expect(counts({ issues: [task(7, ['size:s'], { created_at: ago(2 * HOUR) }), task(8, ['size:m', 'builder:pip'], { created_at: ago(HOUR) }), task(9, [], { created_at: ago(MINUTE) })],
@@ -100,11 +100,11 @@ describe('a project\'s counts after an assigner\'s pass', () => {
     expect(plainName('@@@')).toBe('a builder')
     const named = counts({ crew: { builders: [{ id: 'x', name: '@Pip `rm`', label: 'builder:@pip-`rm`', machineId: 'mac', engine: 'claude' }], machines: [] },
       closed: [{ number: 1, pull_request: { merged_at: ago(HOUR) }, labels: [{ name: 'builder:@pip-`rm`' }] }] })
-    expect(named).toMatchObject({ free: [{ id: 'x', name: 'Pip rm' }], landedBy: [['Pip rm', 1]] })
+    expect(named).toMatchObject({ free: [{ id: 'x', name: 'Pip rm' }], landed: 1 })
     // Two builders whose names say the same are two: each waits and lands as itself.
     const twins = counts({ crew: { builders: [{ id: 'a', name: 'Pip!', label: 'builder:pip!', machineId: 'mac', engine: 'claude' }, { id: 'b', name: 'Pip?', label: 'builder:pip?', machineId: 'mac', engine: 'claude' }],
       machines: [] }, closed: [{ number: 1, pull_request: { merged_at: ago(HOUR) }, labels: [{ name: 'builder:pip!' }] }, { number: 2, pull_request: { merged_at: ago(HOUR) }, labels: [{ name: 'builder:pip?' }] }] })
-    expect(twins).toMatchObject({ builders: 2, free: [{ id: 'a', name: 'Pip' }, { id: 'b', name: 'Pip' }], landedBy: [['Pip', 1], ['Pip', 1]] })
+    expect(twins).toMatchObject({ free: [{ id: 'a', name: 'Pip' }, { id: 'b', name: 'Pip' }], landed: 2 })
   })
 })
 
@@ -174,14 +174,6 @@ describe('what Harness says of the counts', () => {
     expect(toldLine(['Ada', 'Bo', 'Kai'], numbers({ unsized: 2 }), 'Juno')).toBe(`Harness: Ada, Bo and Kai have nothing to do, and no sized task is open (2 open issues have no size). ${next}`)
     expect(toldLine(['Ada'], numbers({ open: 3 }), '@Juno')).toBe(`Harness: Ada has nothing to do, and the 3 sized tasks open were not given to it. ${next}`)
   })
-
-  it('posts the day for the project\'s people', () => {
-    expect(dayLine(numbers(), 'Wed 11 Nov')).toBe('Harness, Wed 11 Nov, the last 24 hours: 12 pull requests landed (Pip 7, Kai 5) and 9 tasks closed. Now: 2 of 4 builders with nothing to do, 0 tasks open and 3 in hand.')
-    expect(dayLine(numbers({ builders: 0, free: [], landed: 94, landedBy: [['A', 50], ['B', 20], ['C', 10], ['D', 10], ['E', 3], ['F', 1]], closed: 1, open: 1, held: 0, more: true }), 'Wed 11 Nov'))
-      .toBe('Harness, Wed 11 Nov, the last 24 hours: 94 pull requests or more landed (A 50, B 20, C 10, D 10, E 3, others) and 1 task or more closed. Now: no builder is running, 1 task open and 0 in hand.')
-    expect(dayLine(numbers({ builders: 1, free: [], landed: 0, landedBy: [], closed: 2, open: -1 }), 'Thu 12 Nov')).toBe('Harness, Thu 12 Nov, the last 24 hours: 0 pull requests landed and 2 tasks closed. '
-      + 'Now: 0 of 1 builder with nothing to do, 0 tasks open and 3 in hand.')
-  })
 })
 
 describe('the numbers, told as they are due', () => {
@@ -208,7 +200,7 @@ describe('the numbers, told as they are due', () => {
   const passes = async (t: ReturnType<typeof setup>, minutes: number, counted: Numbers, pm = t.numbers) => {
     for (let minute = 0; minute < minutes; minute++) { await pm.pass(PROJECT, counted); t.clock.now += MINUTE }
   }
-  const quiet = numbers({ landed: 0, landedBy: [], closed: 0 }), busy = { ...quiet, free: [] }
+  const quiet = numbers({ landed: 0 }), busy = { ...quiet, free: [] }
   const hows = (t: ReturnType<typeof setup>) => t.sent.map(([how]) => how)
   const down = new SuperTabHostError('BACKEND_UNAVAILABLE', 'The server did not answer.', 503)
   const kept = (t: ReturnType<typeof setup>) => JSON.parse(readFileSync(t.file, 'utf8')).app
@@ -354,33 +346,32 @@ describe('the numbers, told as they are due', () => {
     }
   })
 
-  it('tries again, later each time, a message the server did not take, says so once, and lets the other kinds through', async () => {
-    const t = setup(), landed = { ...quiet, landed: 2, closed: 1 }
+  it('tries again, later each time, a message the server did not take, and says so once', async () => {
+    const t = setup(), landed = { ...quiet, landed: 2 }
     t.failing.set('tell', down)
     await passes(t, 15 + 20, landed)
     // At 15 minutes, then 30 s, 1, 2, 4 and 8 minutes on: by the minute's passes, at 15, 16, 17, 19, 23 and 31.
     expect(t.tried.filter(how => how === 'tell')).toHaveLength(6)
     expect(t.log.mock.calls).toEqual([['[super-tab] numbers: NOT_SENT acme/app: The server did not answer.']])
-    // The day's post went out meanwhile: one kind that fails does not hold another.
-    expect(hows(t)).toEqual(['post'])
+    expect(hows(t)).toEqual([])
     t.failing.clear()
     await passes(t, 16, landed)
     // Told as things are when it is taken, and the hour to the next runs from then.
     expect(t.sent.at(-1)).toEqual(['tell', expect.any(String), shortLine(['Ada', 'Kai'], landed, '14:46')])
     await passes(t, 55, landed)
-    expect(hows(t)).toEqual(['post', 'tell'])
+    expect(hows(t)).toEqual(['tell'])
     await passes(t, 1, landed)
-    expect(hows(t)).toEqual(['post', 'tell', 'tell'])
+    expect(hows(t)).toEqual(['tell', 'tell'])
     // Taken once, a kind's next failure waits from the start again: 30 s, not the minutes the last one had reached.
-    const x = setup(new Date(2026, 10, 11, 9, 0).getTime()), posting = numbers({ free: [] })
-    x.failing.set('post', down)
-    await passes(x, 14, posting)
+    const x = setup()
+    x.failing.set('tell', down)
+    await passes(x, 15 + 14, quiet)
     x.failing.clear()
-    await passes(x, 8, posting)
-    expect(hows(x)).toEqual(['post'])
-    x.clock.now += 24 * HOUR
-    x.failing.set('post', down)
-    await passes(x, 3, posting)
+    await passes(x, 8, quiet)
+    expect(hows(x)).toEqual(['tell'])
+    x.clock.now += HOUR
+    x.failing.set('tell', down)
+    await passes(x, 3, quiet)
     expect(x.tried).toHaveLength(5 + 1 + 3)
     // The line to its person, not taken, is said when the server takes it.
     const w = setup()
@@ -438,7 +429,7 @@ describe('the numbers, told as they are due', () => {
     expect(v.tried).toEqual(['tell', 'tell', 'tell', 'say'])
   })
 
-  it('gives each message an id of its project, its kind and the tell before it, or its day', async () => {
+  it('gives each message an id of its project, its kind and the tell before it', async () => {
     // A tell is the one after the tell before it, whichever minute, hour and words it goes in: tried again past the hour's
     // edge after an answer that was lost, it is the same operation, not a second line to the PM.
     const first = setup(), late = setup(NOW + 2 * MINUTE), elsewhere = setup()
@@ -467,58 +458,32 @@ describe('the numbers, told as they are due', () => {
     const lost = setup(NOW + 5 * HOUR)
     await passes(lost, 16, quiet)
     expect(lost.sent[0]![1]).not.toBe(first.sent[0]![1])
-    // A tell, the line to its person and the day's post never share one.
+    // A tell and the line to its person never share one.
     const all = setup()
     await passes(all, 3 * 60 + 20, { ...quiet, landed: 1 })
-    expect(hows(all)).toEqual(['post', 'tell', 'tell', 'tell', 'say'])
-    expect(new Set(all.sent.map(([, id]) => id)).size).toBe(5)
-  })
-
-  it('posts the day\'s numbers once, from nine, and none for a day with nothing to say', async () => {
-    const t = setup(new Date(2026, 10, 11, 8, 58).getTime()), landed = numbers({ free: [] })
-    await passes(t, 2, landed)
-    expect(t.sent).toEqual([])
-    await passes(t, 3, landed)
-    expect(t.sent).toEqual([['post', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), dayLine(landed, 'Wed 11 Nov')]])
-    // Not again that day, by the same Harness or the next, nor when the clock is set back a day.
-    await passes(t, 60, landed)
-    await passes(t, 60, landed, t.make())
-    t.clock.now -= 24 * HOUR
-    await passes(t, 3, landed)
-    expect(t.sent).toHaveLength(1)
-    // The next day, once more; a day when nothing landed and no task closed has none, and is not looked at again.
-    t.clock.now = new Date(2026, 10, 12, 9, 0).getTime()
-    await passes(t, 2, busy)
-    await passes(t, 2, landed)
-    expect(t.sent).toHaveLength(1)
-    // One the server did not take is posted when it does, as things are then; one it has already is not posted again.
-    t.clock.now = new Date(2026, 10, 13, 11, 30).getTime()
-    t.failing.set('post', down)
-    await passes(t, 1, landed)
-    t.failing.clear()
-    await passes(t, 2, { ...landed, closed: 10 })
-    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['post', dayLine(landed, 'Wed 11 Nov')], ['post', dayLine({ ...landed, closed: 10 }, 'Fri 13 Nov')]])
-    expect(t.sent[1]![1]).not.toBe(t.sent[0]![1])
-    t.clock.now = new Date(2026, 10, 14, 9, 0).getTime()
-    t.failing.set('post', new SuperTabHostError('OPERATION_REUSED', 'This operation was sent with other words.', 409))
-    await passes(t, 3, landed)
-    expect(t.tried.filter(how => how === 'post')).toHaveLength(4)
-    expect(kept(t).day).toBe('2026-11-14')
+    expect(hows(all)).toEqual(['tell', 'tell', 'tell', 'say'])
+    expect(new Set(all.sent.map(([, id]) => id)).size).toBe(4)
+    expect(all.sent[0]![1]).toBe(operationOf(PROJECT, 'tell', `first ${Math.floor((NOW + 15 * MINUTE) / HOUR)}`))
   })
 
   it('says each failure once among the last two hundred, and a memory it could not write', async () => {
-    const t = setup(), landed = numbers({ free: [] })
+    const t = setup(), last = { ...PROJECT, projectId: 'project-200' }
+    // Each project's builders wait their quarter of an hour, and its tell fails in words of its own.
     for (let n = 0; n <= 200; n++) {
-      t.failing.set('post', new Error(`Failure ${n}.`))
-      await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed)
+      const project = { ...PROJECT, projectId: `project-${n}` }
+      await t.numbers.pass(project, quiet)
+      t.clock.now += 15 * MINUTE
+      t.failing.set('tell', new Error(`Failure ${n}.`))
+      await t.numbers.pass(project, quiet)
     }
     expect(t.log).toHaveBeenCalledTimes(201)
     // The newest is still remembered; the first was forgotten, and is said again.
     t.clock.now += MINUTE
-    await t.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed)
+    await t.numbers.pass(last, quiet)
     expect(t.log).toHaveBeenCalledTimes(201)
-    t.failing.set('post', new Error('Failure 0.'))
-    await t.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed)
+    t.failing.set('tell', new Error('Failure 0.'))
+    t.clock.now += MINUTE
+    await t.numbers.pass(last, quiet)
     expect(t.log).toHaveBeenCalledTimes(202)
     const u = setup()
     mkdirSync(u.file)
@@ -532,12 +497,14 @@ describe('the numbers, told as they are due', () => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
     try {
       const sent: string[] = []
-      const ofNow = new PmNumbers({ file: t.file, send: async (_how, _project, _id, text) => { if (!sent.length) { sent.push(text); throw new Error('Not yet.') } sent.push(text) } })
-      await ofNow.pass(PROJECT, numbers({ free: [] }))
+      const ofNow = new PmNumbers({ file: t.file, send: async (_how, _project, _id, text) => { sent.push(text); if (sent.length === 1) throw new Error('Not yet.') } })
+      await ofNow.pass(PROJECT, quiet)
+      vi.setSystemTime(NOW + 15 * MINUTE)
+      await ofNow.pass(PROJECT, quiet)
       expect(warn).toHaveBeenCalledWith('[super-tab] numbers: NOT_SENT acme/app: Not yet.')
-      vi.setSystemTime(NOW + MINUTE)
-      await ofNow.pass(PROJECT, numbers({ free: [] }))
-      expect(sent).toEqual(Array(2).fill(dayLine(numbers({ free: [] }), 'Wed 11 Nov')))
+      vi.setSystemTime(NOW + 16 * MINUTE)
+      await ofNow.pass(PROJECT, quiet)
+      expect(sent).toEqual([shortLine(['Ada', 'Kai'], quiet, '14:15'), shortLine(['Ada', 'Kai'], quiet, '14:16')])
     } finally { vi.useRealTimers(); warn.mockRestore() }
   })
 
@@ -545,9 +512,9 @@ describe('the numbers, told as they are due', () => {
     const t = setup(), landed = numbers({ free: [] })
     for (let n = 0; n < 205; n++) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed)
     expect(Object.keys(JSON.parse(readFileSync(t.file, 'utf8')))).toHaveLength(200)
-    // The first is written again the next day, and so is no longer the oldest.
+    // One whose project moved is written again, and so is no longer the oldest.
     t.clock.now += 24 * HOUR
-    for (const n of [5, 300]) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed)
+    for (const n of [5, 300]) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, { ...landed, activity: NOW + HOUR })
     const names = Object.keys(JSON.parse(readFileSync(t.file, 'utf8')))
     expect(names).toHaveLength(200)
     expect(names.slice(0, 1).concat(names.slice(-2))).toEqual(['project-7', 'project-5', 'project-300'])
