@@ -94,6 +94,9 @@ void main() {
         find.text('It joins your team with its own chat.'),
         findsOneWidget,
       );
+      // It finds agents: harness is not a word of the Swarm.
+      expect(find.text('Search agents'), findsOneWidget);
+      expect(find.textContaining('harness'), findsNothing);
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
           .search;
