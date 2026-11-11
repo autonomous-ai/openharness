@@ -489,7 +489,10 @@ export class GitHubAssign {
     const idle = crew.builders.filter(b => (read.open.get(b.id) ?? 0) === 0 && !short.some(away => away.label === b.label))
     if (!idle.length) return
     const now = this.now()
-    for (const issue of issues) {
+    // One task back for each builder with nothing, the oldest first: on the sandbox (2026-11-11) one free builder took two back,
+    // and the next plan had two to give it.
+    for (const issue of [...issues].sort((a, b) => Number(a.number) - Number(b.number))) {
+      if (!idle.length) return
       const labels = labelNames(issue)
       const builder = crew.builders.find(b => labels.includes(b.label))
       if (issue.pull_request || !builder || labels.includes('status:taken') || this.backs.has(`${repo}#${issue.number}:back:${builder.label}`)) continue
@@ -500,6 +503,7 @@ export class GitHubAssign {
       const gave = Math.max(0, ...comments.filter(c => readerKey(ownAsk(c, /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /)?.[1] ?? '\n') === readerKey(builder.name))
         .map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite))
       if (!gave || now - gave < WAIT_TAKE_MS) continue
+      idle.splice(idle.indexOf(taker), 1)
       await this.takeBack(repo, [issue], [{ name: builder.name, label: builder.label, why: 'stopping' }],
         `${builder.name} has not started it in ${Math.round((now - gave) / 60_000)} minutes, and ${taker.name} has nothing to do`)
     }
