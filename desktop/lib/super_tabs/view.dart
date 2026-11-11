@@ -34,7 +34,6 @@ import '../shortcuts/app_keymap.dart' show KeymapRegion;
 import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
-import 'leaderboard/reader.dart';
 import 'leaderboard/leaderboard_page.dart';
 import 'leaderboard/shipping.dart';
 import 'jump_to_latest.dart';
@@ -353,11 +352,6 @@ class _SuperTabViewState extends State<SuperTabView>
   );
   SuperTabController get c => widget.controller;
 
-  /// The open project's week board, read for Manage's Models. Made when
-  /// Manage is first shown: a view torn down before then reads none.
-  SuperTabProjectBoard? _projectBoard;
-  SuperTabProjectBoard get _board => _projectBoard ??= SuperTabProjectBoard(c);
-
   /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is.
   SwarmAgentStates? _states;
 
@@ -366,6 +360,7 @@ class _SuperTabViewState extends State<SuperTabView>
       : SwarmAgentStates(
           controller: c,
           github: _github,
+          app: widget.app,
           localRepository: (agent) =>
               PersonalProjects.of(widget.app!).agentRepository(c, agent),
           // A test never waits for the next read of a board.
@@ -514,8 +509,6 @@ class _SuperTabViewState extends State<SuperTabView>
       _states = _agentStates();
     }
     if (oldWidget.controller != c) {
-      _projectBoard?.dispose();
-      _projectBoard = null;
       _shippingBoard?.dispose();
       _shippingBoard = null;
       oldWidget.controller.threadPaneHidden();
@@ -1140,7 +1133,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
-    _projectBoard?.dispose();
     _states?.dispose();
     _shippingBoard?.dispose();
     c.removeListener(_changed);
@@ -3478,6 +3470,9 @@ class _SuperTabViewState extends State<SuperTabView>
   SuperTabSnapshot? _indexed;
   Map<int, String> _references = const {};
   Map<String, SuperTabPerson> _people = const {};
+  // One list for every row: each reads its several-word names once for a
+  // list (message_text.dart).
+  List<String> _agentNames = const [];
   void _index() {
     final snapshot = c.snapshot;
     if (identical(snapshot, _indexed)) return;
@@ -3486,6 +3481,10 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final g in snapshot?.conversations ?? <SuperTabConversation>[])
         if (g.number != null) g.number!: g.id,
     };
+    _agentNames = [
+      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[])
+        agent.name,
+    ];
     _people = {};
     for (final person in snapshot?.people ?? <SuperTabPerson>[]) {
       _people.putIfAbsent(person.id, () => person);
@@ -3553,10 +3552,7 @@ class _SuperTabViewState extends State<SuperTabView>
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username,
       ],
-      agentNames: [
-        for (final agent in c.snapshot?.agents ?? const <SuperTabAgent>[])
-          agent.name,
-      ],
+      agentNames: _agentNames,
       mentionAddresses: {
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username: person.email,
@@ -5084,7 +5080,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               ? SuperTabManagePage(
                                   controller: c,
                                   app: widget.app,
-                                  board: _board,
                                   tab: _manageTab,
                                   onAddAgent: widget.onAddAgent,
                                   onOpenAgent: (agent) {

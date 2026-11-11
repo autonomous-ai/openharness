@@ -305,7 +305,10 @@ void main() {
         const DeviceHost(id: 'remote', name: 'Remote Mac', online: false),
       ]);
       await tester.pumpAndSettle();
-      expect(find.text('No devices connected'), findsOneWidget);
+      // Back with none connected, the page shows nothing but its header's
+      // Add device (design doc, Swarm elements rule 7).
+      expect(find.text('No devices connected'), findsNothing);
+      expect(find.text('Add device'), findsOneWidget);
       expect(find.textContaining('Computer offline'), findsNothing);
       expect(find.byType(DeviceSettingsPanel), findsNothing);
       expect(
@@ -497,7 +500,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(ValueKey('device-card-$key')), findsNothing);
       expect(find.byType(DeviceSettingsPanel), findsNothing);
-      expect(find.text('No devices connected'), findsOneWidget);
+      // Back with none connected, the page shows nothing but its header's
+      // Add device (design doc, Swarm elements rule 7).
+      expect(find.text('No devices connected'), findsNothing);
+      expect(find.text('Add device'), findsOneWidget);
       expect(sent, hasLength(1));
       await tester.pumpWidget(const SizedBox());
       controller.dispose();

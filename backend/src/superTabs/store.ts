@@ -1109,12 +1109,13 @@ export class SuperTabStore {
       }
       // A person's post where only agents post is refused (commands.ts postable) before the message reads below; access first, as an
       // upload asks it (poster), so a refusal tells nothing of a conversation the person cannot read.
+      // One clock for the command: the check below and the command judge the channel exemptions' end at the same moment.
+      const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'message.send' && actor.kind === 'person') {
         author(original, actor, true)
         readConversation(original, actor, command.conversationId)
-        postable(original, actor, command.conversationId)
+        postable(original, actor, command.conversationId, context.now)
       }
-      const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
@@ -1755,7 +1756,7 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     author(state, actor, true)
     readConversation(state, actor, conversationId)
-    postable(state, actor, conversationId)
+    postable(state, actor, conversationId, this.now())
     return { state, actor }
   }
 
@@ -2080,15 +2081,16 @@ export class SuperTabStore {
 
   /** A project's Lead's first deliveries (leadStart.ts leadArrived): its person's messages sent in its chat while it had none,
    *  each written once (its id is the message's and the agent's, as writeMessages makes it), only for a stored main-chat message
-   *  of that conversation by that person. */
+   *  of that conversation by that person that they did not delete. Also a PM's first deliveries in its 1:1 chat (pmChat.ts). */
   private async writeLateDeliveries(tx: Transaction, tabId: string, state: SuperTabState, late: NonNullable<CommandEffects['lateDeliveries']>) {
     const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     // A few, each by its primary key (hotFilters.test.ts: no `in` filter on a hot collection).
     for (const l of late) {
-      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true } })
+      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true, deletedAt: true } })
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
-      if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !l.lead || author?.kind !== 'person' || author.id !== l.author.id
+      // A message its person deleted while it waited, kept only as a thread's root, is not theirs to type any more.
+      if (!row || row.deletedAt || row.tabId !== tabId || row.conversationId !== l.conversationId || !l.lead || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
       deliveries.push({ id: stableId(l.messageId, l.agentId), tabId, conversationId: l.conversationId, messageId: l.messageId, agentId: l.agentId,

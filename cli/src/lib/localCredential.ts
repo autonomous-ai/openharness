@@ -23,6 +23,11 @@ export const LOCAL_CREDENTIAL_HEADER = 'X-Harness-Local'
 /** What a refused request is answered. */
 export const LOCAL_CREDENTIAL_REQUIRED = 'LOCAL_CREDENTIAL_REQUIRED'
 
+/** What a listener answers, as a 503 with Retry-After, when the secret matched but who is calling could not be looked up in
+ *  time (lib/peerAccount.ts). Not a refusal: the client asks again (lib/localTransport.ts). */
+export const PEER_LOOKUP_UNANSWERED = 'PEER_LOOKUP_UNANSWERED'
+export const PEER_LOOKUP_UNANSWERED_MESSAGE = 'Harness could not check in time that this request comes from your account. Retry in a moment.'
+
 /** The credential as a client reads it, or null when this process may not (another OS user, no file). */
 export function readLocalCredential(dataDir: string): string | null {
   return readHookCredential(dataDir)

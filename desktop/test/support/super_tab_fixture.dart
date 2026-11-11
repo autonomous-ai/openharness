@@ -551,9 +551,6 @@ class ConversationServer {
   final receiptCommands = <String, String>{};
   final messages = <Map<String, dynamic>>[];
 
-  /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
-  Map<String, dynamic>? leaderboard;
-
   /// The Swarm's leaderboard of agents shipping (`GET .../shipping`); null answers 404, as a server before it. Reads of it are
   /// listed in [shippingReads].
   Map<String, dynamic>? shipping;
@@ -575,17 +572,6 @@ class ConversationServer {
   /// A read of a chat's messages the Swarm no longer has answers 404; off, the older tests' reads of chats they never
   /// listed keep their empty pages.
   bool chatsGoneAreNotFound = false;
-  final leaderboardReads = <String>[];
-
-  /// Answers by the read's path instead of [leaderboard], as a server does.
-  Map<String, dynamic> Function(String path)? leaderboardAnswer;
-
-  /// Holds the next reads' answers until it completes.
-  Future<void>? leaderboardGate;
-
-  /// How many leaderboard reads fail as a server that is down does, before
-  /// they answer again.
-  var failLeaderboardReads = 0;
 
   /// The followed-threads read's answer (backend read/followedThreads.ts):
   /// `{unread, read, more}`; null answers 404, as a server before it does,
@@ -1476,23 +1462,6 @@ class ConversationServer {
       }
       if (shippingGate case final gate?) await gate;
       final board = shippingAnswer?.call(path) ?? shipping;
-      if (board == null) {
-        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
-      }
-      return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
-    }
-    if (uri.pathSegments.last == 'leaderboard') {
-      leaderboardReads.add(path);
-      if (failLeaderboardReads > 0) {
-        failLeaderboardReads--;
-        throw const SuperTabFailure(
-          'OFFLINE',
-          'No connection.',
-          statusCode: 503,
-        );
-      }
-      if (leaderboardGate case final gate?) await gate;
-      final board = leaderboardAnswer?.call(path) ?? leaderboard;
       if (board == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }

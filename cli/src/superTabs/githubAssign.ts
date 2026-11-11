@@ -8,12 +8,12 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { ASKED, DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, sameChange, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -46,9 +46,6 @@ const ISSUE_PAGES = 10
 const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
-/** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
-const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?READ-OK ([0-9a-f]{7,40})/
-
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
@@ -81,7 +78,9 @@ export class GitHubAssign {
   private readonly log: (line: string) => void
 
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>
-    get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number }) {
+    get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
+    /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
+    records: VerdictRecords }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -187,9 +186,9 @@ export class GitHubAssign {
 
   /**
    * Takes back the tasks of builders that cannot work (anh Dee's plan, 2026-11-09: "when a builder stops, stalls or runs
-   * out of quota, Harness takes the task back and gives it to the next best builder"): their builder label, and
-   * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
-   * task, as the label is gone from the next read.
+   * out of quota, Harness takes the task back and gives it to the next best builder"): their builder label and
+   * status:taken come off, with one line of why; the next plan gives each to another builder. Once a task, as the label
+   * is gone from the next read.
    */
   private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string, keep: ReadonlySet<number> = new Set()): Promise<void> {
     if (!away.length) return
@@ -199,15 +198,11 @@ export class GitHubAssign {
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
       // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
       // tried again next pass.
-      let refused = 0
-      for (const label of [...back.taken ? ['status:taken'] : [], back.label]) {
-        const reply = await this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
-        if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
-      }
-      if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
+      const given = await giveBack(this.deps.send, repo, back.number, back.label, back.taken)
+      if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
+      if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
-        { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
+      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
     }
   }
@@ -256,14 +251,20 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
-      const comments = await pullTalk(this.reads, repo, number)
+      // While who made its verdicts cannot be read, nobody is asked: a READ-OK made by command would read as typed.
+      const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
+      if (!comments) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       // A verdict on an earlier head whose change is the head's is one on it, a HOLD as much as a READ-OK (sameChange): its author
       // has changed nothing to read again.
       const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].map(r => r.sha))
       const onHead = (sha: string) => head.startsWith(sha) || same.has(sha)
-      if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
+      // A HOLD of its own side (its writers' own, or an unsigned one from the login that opened it) stops nothing here: no reader
+      // of its own is asked to lift it, and another agent's READ-OK made by command does (verdicts).
+      const own = (name: string) => isWriter(people.writers, name)
+      // Nor one its reader answered with a typed READ-OK: it is asked to make that by command (below).
+      if ([...readers].some(([reader, r]) => r.verdict === 'HOLD' && onHead(r.sha) && !own(reader) && !r.ownLogin && !r.retyped)) continue
       for (const task of tasksOf(pull)) withReaders.add(task)
       // Who Harness asked, for which heads, and when.
       const now = this.now()
@@ -289,20 +290,40 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      // Its writers' own verdicts count for nothing, however the names are written, nor an unsigned READ-OK from the login that
-      // opened it (verdicts); a reader who signs two ways counts once, as the merger counts it.
-      const own = (name: string) => isWriter(people.writers, name)
-      const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
-      // An unsigned READ-OK from that login was no read, so there is nobody to ask again for it (an unsigned HOLD stands, and is).
-      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha) && !(r.ownLogin && r.verdict === 'READ-OK'))
-      const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
+      // Only a READ-OK made by command is a read, never its writers' own (verdicts); a reader who signs two ways counts once, as
+      // the merger counts it.
+      // One made before a HOLD of its own side that stands lifts nothing (verdicts): another is needed after it.
+      const ownHold = [...readers].filter(([reader, r]) => r.verdict === 'HOLD' && (own(reader) || r.ownLogin)).map(([, r]) => r.at).sort().at(-1) ?? ''
+      const ok = [...readers].filter(([reader, r]) => !own(reader) && r.recorded && r.verdict === 'READ-OK' && onHead(r.sha) && r.at > ownHold)
+      // No verdict of the login that opened it is asked about again: every agent of its person posts as that login, its writer
+      // too, which heard the ask and could answer it (review of #3708).
+      const stale = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && !onHead(r.sha))
+      // A reader whose READ-OK on the head was typed is asked again, by name, to make it by command: at most READ_ASKS times for a
+      // head, and not again before it answers (plan item 3: a typed READ-OK counts for nothing).
+      // One just made may be by command, its record not yet there (RECORD_SETTLE_MS): it is not asked about before.
+      const typed = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && onHead(r.sha)
+        && (r.verdict === 'READ-OK' ? !r.recorded : r.retyped))
+      const settling = (r: { at: string }) => now - Date.parse(r.at) < RECORD_SETTLE_MS
+      for (const [reader, r] of typed) {
+        if (settling(r) || lastAsk(reader, true) >= Date.parse(r.at) || (onThisHead.get(reader) ?? 0) >= READ_ASKS) continue
+        await this.ask(repo, number, head, r.name, `your READ-OK on ${r.sha.slice(0, 7)} was typed, and only one made by command counts: please read it again`,
+          onThisHead.get(reader) ?? 0)
+      }
+      // A writer asked before (a task taken over by the reader asked) is not reading it.
+      const waiting = [...asked.keys()].filter(name => !own(name) && !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
         if (lastAsk(reader, true)) continue
         await this.ask(repo, number, head, r.name, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
       }
       // A stale reader not asked again yet is asked just now, above.
       const rereading = stale.filter(([reader]) => { const at = lastAsk(reader, true); return at === 0 || now - at < READ_WAIT_MS })
-      let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length
+      // A typed reader asked again (or about to be, or whose record may still come) is reading, as one asked first is
+      // (READ_WAIT_MS); one asked READ_ASKS times for the head is not counted on.
+      const retyping = typed.filter(([reader, r]) => {
+        const at = lastAsk(reader, true)
+        return settling(r) || (at >= Date.parse(r.at) ? now - at < READ_WAIT_MS : (onThisHead.get(reader) ?? 0) < READ_ASKS)
+      })
+      let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length - retyping.length
       // None of its writers reads it: its label's agent nor its branch's (a task taken over carries both).
       const skip = new Set([...asked.keys(), ...readers.keys(), ...[...read.builders.values()].filter(b => own(b.name)).map(b => b.id)])
       while (need-- > 0) {
@@ -421,14 +442,13 @@ export class GitHubAssign {
     return true
   }
 
-  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
-   *  refuses is said, and asked again next pass. */
+  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the command that makes its
+   *  verdict on the head it reads (githubVerdict.ts). One GitHub refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
     const key = `${repo}#${number}@${head}:${readerKey(name)}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
-    const clock = this.clock(), sha = head.slice(0, 7)
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${clock}, to **${name}**: ${what}, `
-      + `and start your comment with your name, as in "${name}, ${clock}: READ-OK ${sha}" or "${name}, ${clock}: HOLD ${sha}" with the file, line and fix.` })
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
+      + `then run \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)} 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
     this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
@@ -506,5 +526,33 @@ function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
   return pattern.exec(String(comment.body ?? '').slice(0, 500))
 }
 
-const labelNames = (issue: Json): string[] =>
+/** What taking a task back answered: GitHub refused it (its status), or it is done, with the status GitHub answered when it kept
+ *  status:taken after the builder's label went (null when it did not). */
+export type GivenBack = { refused: number } | { takenKept: number | null }
+
+/**
+ * Takes task [number] of [repo] back from the builder [label] names (anh Dee's plan, 2026-11-09: "when a builder stops, stalls
+ * or runs out of quota, Harness takes the task back and gives it to the next best builder"), for the assigner and for an agent's
+ * own computer when it sat idle holding it (nextThing.ts). status:taken first, when it is [taken]: a task left taken with no builder
+ * is one nobody plans (readProblem), while one left queued for its builder is taken back again next pass. A label already gone
+ * is off; anything else GitHub refuses stops it. Then status:taken once more, after the builder's label: a claim made meanwhile
+ * (githubClaim.ts) marks the task taken, and takes its own mark off only when it lands after the label went. Only where this took
+ * the label off: one already gone was moved by hand, and its next builder's claim is not this one's to undo.
+ */
+export async function giveBack(send: GitHubSend, repo: string, number: number, label: string, taken: boolean): Promise<GivenBack> {
+  const remove = (name: string) => send('DELETE', `/repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`)
+  let off = false
+  for (const name of [...taken ? ['status:taken'] : [], label]) {
+    const reply = await remove(name)
+    if (reply.status !== 200 && reply.status !== 404) return { refused: reply.status }
+    off = name === label && reply.status === 200
+  }
+  const cleared = off ? await remove('status:taken') : null
+  return { takenKept: cleared && cleared.status !== 200 && cleared.status !== 404 ? cleared.status : null }
+}
+
+/** The line a task taken back says on it, as Harness at [at] (HH:MM): [why], and where it goes. */
+export const backLine = (why: string, at: string): string => `${SELF}, ${at}: ${why}, so this task goes to the builder who can start it next.`
+
+export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))

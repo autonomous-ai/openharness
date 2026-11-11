@@ -281,13 +281,13 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   it('never taken by its machine, fails', async () => {
     const { sweepLiveness, PM_PICKUP_MS } = await import('./liveness.js')
     const f = swarm()
-    f.lead('owner-mac')
+    const { chatId } = f.lead('owner-mac').result as { chatId: string }
     f.machine('owner-mac').observation = { ...f.machine('owner-mac').observation!, receivedAt: NOW + PM_PICKUP_MS + MINUTE }
     const said = sweepLiveness(f.state, NOW + PM_PICKUP_MS + MINUTE)
     expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'Its machine did not start it. Harness there may need an update.' })
-    // Said once in its project's conversation, in the name of the person who asked for it.
+    // Said once in its project's conversation, in the name of the person who asked for it, and in their chat with it (pmChat.ts).
     // A system row of its project's conversation, not the asker's own words.
-    expect(said.map(m => [m.conversationId, m.source])).toEqual([[f.app.conversationId, { kind: 'system' }]])
+    expect(said.map(m => [m.conversationId, m.source])).toEqual([[f.app.conversationId, { kind: 'system' }], [chatId, { kind: 'system' }]])
     expect(said[0]!.text).toBe('Could not start Product Manager: its machine did not start it. Harness there may need an update.')
     expect(sweepLiveness(f.state, NOW + PM_PICKUP_MS + 2 * MINUTE)).toEqual([])
   })

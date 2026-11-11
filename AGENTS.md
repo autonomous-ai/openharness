@@ -144,8 +144,8 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md), the component's AGENTS.md and
   `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Record them in the PR.
 - Heavy workflows (OS images, VM tests, CLI end to end) run only by hand, once, when the change needs them; report the
   run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
-- The merge train merges ready pull requests by itself where the project turns it on. Never push to a `harness-train/`
-  branch; add the `hold` label to keep a PR out.
+- In a Swarm project the merge train lands ready pull requests by itself, together on one run. Never push to a
+  `harness-train/` branch; add the `hold` label to keep a PR out.
 - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
   `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `main` moves, integrate it, review the combined
   change, rerun only newly affected checks, and finish the authorized merge without asking again.

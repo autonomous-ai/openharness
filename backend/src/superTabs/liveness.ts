@@ -7,6 +7,7 @@ import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPick
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
+import { pmStartEnded } from './pmChat.js'
 import { staleSwitches } from './tidy.js'
 import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
@@ -245,7 +246,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
   if (!text || !person || !state.conversations.some(c => c.id === start.request.conversationId)) return []
   return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
     author: { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation },
-    text, source: { kind: 'system' } }]
+    text, source: { kind: 'system' } }, ...pmStartEnded(state, start)]
 }
 
 /** The time checks, run on any machine's report once per Swarm sweep: every start dispatched over 3 minutes ago that is not running

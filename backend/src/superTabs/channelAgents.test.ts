@@ -22,7 +22,7 @@ function swarm() {
   const newAgent = (person: Extract<Actor, { kind: 'person' }>, name: string) => {
     const chat = run({ type: 'agent.new', kind: 'regular', name, machineId: `${person.userId}-mac`, engine: 'claude', local: true } as Command,
       person, own(person.userId)).result.conversationId as string
-    const agentId = run({ type: 'agent.add', conversationId: chat, machineId: `${person.userId}-mac`, harnessId: `h-${name}`, name, lead: false,
+    const agentId = run({ type: 'agent.add', conversationId: chat, machineId: `${person.userId}-mac`, harnessId: `h-${name.replace(/\W/g, '-')}`, name, lead: false,
       configuration: config } as Command, person, own(person.userId)).result.agentId as string
     return { kind: 'agent', agentId, machineOwnerId: person.userId } as Extract<Actor, { kind: 'agent' }>
   }
@@ -50,7 +50,7 @@ describe('a v4 agent in a project\'s channel', () => {
     const pip = f.newAgent(owner, 'Pip')
     const held = structuredClone(f.state)
     freeze(held)
-    expect(postable(held, pip, 'lead').joining).toBe(pip.agentId)
+    expect(postable(held, pip, 'lead', 1_000).joining).toBe(pip.agentId)
     expect(held.conversations.find(c => c.id === 'lead')!.agentIds).not.toContain(pip.agentId)
   })
 
@@ -59,6 +59,38 @@ describe('a v4 agent in a project\'s channel', () => {
     const pip = f.newAgent(owner, 'Pip'), juno = f.newAgent(mate, 'Juno')
     expect(f.run(post('lead', '@Juno can you review #4?'), pip).messages.at(-1)!.recipients).toEqual([juno.agentId])
     expect(f.state.conversations.find(c => c.id === 'lead')!.agentIds).toContain(juno.agentId)
+  })
+
+  // lampOS's PM is "first builder" and the sandbox has "a2a swarm": a tag was read one word at a time, so "@first builder"
+  // named nobody and woke nobody (2026-11-11).
+  it('wakes an agent whose name is several words when it is tagged whole, in any case, and no other agent for its first word', () => {
+    const f = swarm()
+    const pip = f.newAgent(owner, 'Pip'), first = f.newAgent(mate, 'first builder'), second = f.newAgent(mate, 'first')
+    expect(f.run(post('lead', '@First Builder #12 is ready for you.'), pip).messages.at(-1)!.recipients).toEqual([first.agentId])
+    expect(f.run(post('lead', 'Over to @first builder.'), pip).messages.at(-1)!.recipients).toEqual([first.agentId])
+    // Its first word alone is the other agent, and a longer word is neither.
+    expect(f.run(post('lead', '@first can you look?'), pip).messages.at(-1)!.recipients).toEqual([second.agentId])
+    expect(f.run(post('lead', '@first builders, all of you'), pip).messages.at(-1)!.recipients).toEqual([second.agentId])
+    // In code it is no tag.
+    expect(f.run(post('lead', 'Run `@first builder` as written.'), pip).messages.at(-1)!.recipients).toEqual([])
+  })
+
+  // Review of #3904.
+  it('reads a several-word name on one line only, leaves a person\'s tag theirs, and wakes nobody for a name two agents share', () => {
+    const f = swarm()
+    const pip = f.newAgent(owner, 'Pip'), first = f.newAgent(mate, 'first'), whole = f.newAgent(mate, 'first builder')
+    // A name does not run on over a line break: the next paragraph's first word is not part of the tag.
+    expect(f.run(post('lead', 'Thanks @first\n\nBuilder agents should rebase.'), pip).messages.at(-1)!.recipients).toEqual([first.agentId])
+    expect(f.run(post('lead', 'Thanks @first\tbuilder'), pip).messages.at(-1)!.recipients).toEqual([whole.agentId])
+    // "mate" is a person here: a tag of them stays theirs, though an agent is called "mate builder".
+    f.newAgent(owner, 'mate builder')
+    expect(f.run(post('lead', '@mate builder #12 is ready'), pip).messages.at(-1)!.recipients).toEqual([])
+    // Two agents of one several-word name: neither is woken, and not the agent of its first word either.
+    f.newAgent(owner, 'First Builder')
+    expect(f.run(post('lead', '@first builder ping'), pip).messages.at(-1)!.recipients).toEqual([])
+    // A name with marks that mean something to a pattern is read as written.
+    const plus = f.newAgent(mate, 'c++ dev (x)')
+    expect(f.run(post('lead', 'Over to @c++ dev (x).'), pip).messages.at(-1)!.recipients).toEqual([plus.agentId])
   })
 
   it('stays out of a private project its person does not read', () => {

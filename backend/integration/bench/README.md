@@ -1,130 +1,99 @@
-# Swarm state benchmark (#1726)
+# Swarm state benchmark
 
-A repeatable before and after measure for two goals of
-[Swarm state by parts](../../../docs/plans/2026-10-26-swarm-state-parts.md): agents in different work groups never
-conflict (goal 1), and a poll costs what changed, not the whole Swarm (goal 3). The baseline on main is
-[docs/performance/2026-10-26-swarm-state-baseline.md](../../../docs/performance/2026-10-26-swarm-state-baseline.md).
+A repeatable before and after measure of a busy Swarm v4: what each call costs while agents post in their projects'
+channels and talk with their people in their 1:1 chats, whether writers in different conversations conflict, and what a
+poll costs the database when only a little changed ([Swarm state by parts](../../../docs/plans/2026-10-26-swarm-state-parts.md),
+goals 1 and 3).
 
 ## Run it
 
 From `backend/`, after `npm ci`:
 
 ```bash
-npm run bench:swarm-state                         # the default busy Swarm, about 3 minutes
-npm run bench:swarm-state -- --lane cross-group   # goal 1: one writer per group, so any conflict is across groups
-npm run bench:swarm-state -- --done-share 0       # the hot Swarm: all 200 groups active, the same 20 workers spread over them
+npm run bench:swarm-state                                    # the default busy Swarm, about 3 minutes
+npm run bench:swarm-state -- --agents 150 --projects 50      # 200 conversations
+npm run bench:swarm-state -- --lane cross-chat               # goal 1: one writer per conversation
+npm run bench:swarm-state -- --duration 20 --profile         # every database operation through Mongo's profiler
 ```
 
 It starts its own MongoDB replica set on 127.0.0.1 (as `integration/superTabs.test.ts` does), with fixture accounts and
-machines, and never reads `DATABASE_URL` or any other database. It writes `<driver>-<time>.json` and `.md` to
-`integration/bench/results/` (or `--out DIR`) and prints the markdown.
+machines, and never reads `DATABASE_URL` or any other database. It writes `swarm-state-<time>.json` and `.md` to
+`integration/bench/results/` (or `--out DIR`) and prints the markdown. `SWARM_CACHE_DELTA=off` runs the read cache without
+patching from deltas, as a server with that setting does.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--seed N` | 1726 | Seeds every choice: who posts what, when. Same seed, same plan (the report's plan fingerprint). |
-| `--groups N` | 200 | Work groups besides the Leads group. |
-| `--done-share X` | 0.9 | Share of groups done before the load; the rest are active. |
-| `--workers N` | 20 | Workers, at most one per active group. Each takes active groups in turn and holds the task of its first (an agent holds one active task at a time); its messages go to any of its groups, its status and checks to that first group. |
-| `--lane L` | mixed | `mixed`: the busy Swarm below. `cross-group`: one writer per group at a time, for goal 1 (below). |
-| `--machines N` | 6 | Contributed machines, each its own person's; machine 0 is the owner's and runs the Lead. |
+| `--agents N` | 60 | Plain agents, each with its 1:1 chat with its person. The first of each project is its PM; the others are Members, spread over the projects. |
+| `--projects N` | 50 | Projects (at most 100, as the server allows), each with its channel and PM. The Swarm's first project is one of them. |
+| `--lane L` | mixed | `mixed`: the busy Swarm below. `cross-chat`: one writer per conversation, for goal 1 (below). |
+| `--machines N` | 6 | Machines, each its own person's; person 0 owns the Swarm. Agent n runs on machine n mod N, as its person's. |
 | `--duration S` | 120 | Load length in seconds. A slow store stretches it by up to a quarter (at least 10 s); work left after that is reported as skipped. |
-| `--desktop-readers N` | 3 | Desktop windows of the owner and the first machine owners, polling the Swarm (below). |
-| `--host-readers N` | 2 | CLI hosts of the first machines reading their roster (below). |
-| `--mix a=w,…` | `message.send=2,work.status=1,work.check=1` | Relative weights of a worker's posts in its own group. |
-| `--every k=ms,…` | see `config.ts` | Cadences: `workerPostMs` 4000, `leadSendMs` 5000, `nativeTurnMs` 10000, `observeMs` 15000, `deliveryPassMs` 3000, `desktopPollMs` 3000, `hostTickMs` 1000. |
-| `--driver NAME` | parts | Which store's clients to run (below). |
+| `--desktop-readers N` | 3 | Desktop windows of the first people, reading the Swarm's changes (below). |
+| `--host-readers N` | 2 | CLI hosts of the first machines reading their rows (below). |
+| `--every k=ms,…` | see `config.ts` | Cadences: `channelPostMs` 20000, `chatTurnMs` 30000, `observeMs` 15000, `deliveryPassMs` 3000, `desktopPollMs` 3000, `hostTickMs` 1000. |
+| `--cache C` | memory | The read cache's stamps: `memory` (one backend process), a `redis://` URL, or `off`. |
 
-The isolated poll in the report runs right after the load, while every part changed in the last 30 s still comes
-again. To see what one up-to-date poll costs the database when the Swarm is idle, and after a single post, run the
-diagnostic. It takes the same options:
-
-```bash
-NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/pollDatabaseBytes.ts
-```
-
-To see what one machine's report (`observeMachine`, every 15 s per machine) costs alone, its median time and what MongoDB
-sent the backend for it, with and without the time checks, run the report diagnostic. It takes the same options:
-
-```bash
-NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/observeReads.ts
-```
-
-To see what one `GET changes` poll costs MongoDB with many pollers on one backend process (task #2783): every person's
-windows and every worker agent poll together after nothing, one machine reading, every machine reading and one post, and
-it prints per poll the operations, part reads, bytes MongoDB sent, database and wall time, and by collection per round.
-`--windows N` (3), `--rounds N` (5), `--light` (`machines=light`), and the benchmark's options:
-
-```bash
-NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/changesPollCost.ts
-```
-
-To see what each hot call costs MongoDB once a Swarm has grown (task #2839): the benchmark's Swarm gets `--starts` finished
-starts (3000) and `--dormant` quiet Lead conversations (1500) as rows, then each call runs once after a post, and the
-profiler counts its commands and getMores by collection. `GROWN_SHAPES=1` prints each large part read and its plan:
-
-```bash
-NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/grownFeedOps.ts
-```
-
-The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
-
-```bash
-npx vitest run --config integration/bench/vitest.config.ts
-npx tsc -p integration/bench/tsconfig.json
-```
+The conversations are the agents' chats and the projects' channels: 60 agents and 50 projects make 110.
 
 ## What runs
 
-Setup builds the Swarm through real commands: members join, machines are contributed, the Lead and the workers are
-added, every group gets a brief and two checks, and each done group runs a whole task (assign, pass both checks, done).
-Then, all at once, each on its own seeded timeline:
+Setup builds the Swarm through real commands: members join and list their machines, projects are created, each PM is added
+to its project's channel (which opens its chat with its person), each Member to the chat its person opens for it (+ New
+agent). Then, all at once, each on its own seeded timeline:
 
-- each worker posts in its own group: `message.send`, `work.status`, `work.check`, in the mix;
-- each worker's terminal records a turn (a prompt and its answer, `native.append`), which also notifies the Lead;
-- the Lead sends a worker a message, which waits as a delivery;
+- each agent posts in its project's channel; a Member's post names its PM, which waits as a delivery;
+- each person writes in their chat with each of their agents, and the agent answers there;
 - each machine reports (`observeMachine`) every 15 s;
 - each machine's host passes over its agents' deliveries every 3 s: lists them, claims and acknowledges each one;
-- Desktop readers poll the full state every 3 s and host readers their roster every 1 s.
+- Desktop windows read the changes since their cursor every 3 s, and hosts their rows every 1 s.
 
-In the `cross-group` lane each worker's posts and terminal turns run in one sequence, and there are no Lead messages and
-no delivery passes, so no two calls ever write one group at once: every conflict between agents is between different
-groups. Machine reports stay, every 15 s: after the parts change they write only their machine's part, so they must not
-conflict with group writes either. The report's writer kinds table shows which kind of writer met the conflicts.
+In the `cross-chat` lane each agent posts only in its own 1:1 chat, at both its cadences in one sequence, and no person
+writes and no host passes over deliveries, so no two calls ever write one conversation at once: every conflict between
+agents is between different conversations. Machine reports stay, every 15 s: they write only their machine's part. The
+report's writer kinds table shows which kind of writer met the conflicts.
 
-After the load each reader polls once more, alone, as a client that is already up to date. That poll's response size
-and what MongoDB sent the backend for it (`serverStatus` bytes out, minus the status call's own reply) show what a poll
-costs the database: today a host roster reply is a few KB, but it loads the whole Swarm document.
+After the load each reader polls once more, alone, as a client that is already up to date. That poll's response size and
+what MongoDB sent the backend for it (`serverStatus` bytes out, minus the status call's own reply) show what a poll costs
+the database.
 
 ## What it reports
 
-Per operation, per kind of writer (worker, terminal, machine, delivery pass, Lead, Desktop and host readers) and per writer: calls, OK, failed transaction attempts (P2034 write conflicts and transient errors the
-store retried), calls that needed a retry, `SWARM_BUSY` (a call that ran out of retries), other errors, p50, p95 and
-max latency. Per reader: polls, latency, response bytes, and the isolated poll. The state's size (documents and BSON
-bytes) after setup and after the load. The run: commit, machine, MongoDB version, seed, plan fingerprint and settings.
+Per operation, per kind of writer (agents, people, machines, delivery passes, Desktop and host readers) and per writer:
+calls, OK, failed transaction attempts (P2034 write conflicts and transient errors the store retried), calls that needed a
+retry, `SWARM_BUSY` (a call that ran out of retries), other errors, p50, p95 and max latency. Per reader: polls, latency,
+response bytes, and the isolated poll. The Stability KPIs: Mongo operations per second and backend CPU during the load, and
+one write and one up-to-date Desktop poll at a time after it. The state's size (documents and BSON bytes) after setup and
+after the load. The run: commit, machine, MongoDB version, seed, plan fingerprint and settings.
 
 Retries are counted without touching the store: `attempts.ts` wraps the database client's `$transaction`, which every
-store attempt goes through (spec: "Mongo transactions through Prisma as today"), and ties each failed attempt to the
-call that made it.
+store attempt goes through, and ties each failed attempt to the call that made it.
 
-## The seam for the parts store
+The scenario reaches the backend only through `SwarmDriver` (`driver.ts`, `drivers/parts.ts`): the routes the clients call,
+in process. A Desktop window loads the Swarm once, then reads the changes since its cursor (a `reload` answer is followed by
+a first load in the same poll); a host reads its rows in full at start and at least every minute, and by change in
+between, naming the etag of the rows it holds.
 
-The scenario talks to a store only through `SwarmDriver` (`driver.ts`): create a Swarm, run a command (as a person or
-as an agent), read back setup facts (`snapshot`), a machine's generation and report, open and record a terminal, list,
-claim and acknowledge deliveries, a Desktop reader and a host reader, the state's size, close. Commands keep their
-shapes across versions, so they cross the seam as they are.
+## Diagnostics
 
-Two drivers, registered in `DRIVERS` (`bench.ts`); run either with the same seed. Nothing in `plan.ts`, `seed.ts` or
-`load.ts` differs between them.
+Each seeds the benchmark's Swarm and takes its options. From `backend/`, with the same environment as the script in
+`package.json` (`NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=… DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used`):
 
-- `legacyDriver.ts` (`--driver legacy`) is main's store through main's routes: every Desktop poll reads the whole
-  Swarm, every host tick its roster. On the store by parts those full reads answer 426, so it runs only on main (the
-  baseline).
-- `drivers/parts.ts` (`--driver parts`, the default here) is the store by parts, read the way the merged clients read
-  it: commands and the other writes through the same routes; setup facts from a first load; each Desktop window loads
-  once, then reads the changes since its cursor (a `reload` answer is followed by a first load in the same poll); each
-  host reads its host form in full at start and at least every minute, and by change in between, naming the etag of
-  the rows it holds. The state's size is its live parts.
+| Script | What it measures |
+|---|---|
+| `npx tsx integration/bench/pollDatabaseBytes.ts` | What one up-to-date Desktop and host poll cost the database, idle and after one post. |
+| `npx tsx integration/bench/changesPollCost.ts` | `GET changes` with every person's windows and every agent polling at once (`--windows N`, `--rounds N`, `--light`). |
+| `npx tsx integration/bench/machineCapCost.ts` | What a Swarm's machine count costs every host's and window's poll (`--machines N`, `--rounds N`). |
+| `npx tsx integration/bench/derivedEtagCost.ts` | A window's change poll with and without the summary etag. |
+| `npx tsx integration/bench/observeReads.ts` | One machine's report, with and without the time checks. |
+| `npx tsx integration/bench/routeCost.ts [calls]` | Backend CPU per call of each hot route. |
+| `npx tsx integration/bench/queryStatsOverhead.ts` | What the query hook costs (no Swarm). |
+| `npx tsx integration/bench/resilience.ts` | One bad client, a slow Redis and a slow SSO against good clients (no Swarm; needs `redis-server`). |
+
+## Its own tests
+
+The helpers, plus a short run of the whole scenario:
+
+```bash
+npx vitest run --config integration/bench/vitest.config.ts
+```

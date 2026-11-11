@@ -116,6 +116,22 @@ describe('a bridge key another account heard', () => {
   })
 })
 
+describe('a bridge key whose caller could not be looked up in time', () => {
+  it('is told to retry, never that the key is unknown', async () => {
+    const vault = new Store(mkdtempSync(join(tmpdir(), 'bridge-late-')), {})
+    const key = bridgeKey(vault)
+    const bridge = createBridge(vault, { key: () => key, peerAccount: async () => 'unanswered' })
+    await new Promise<void>(resolve => { bridge.listen(0, '127.0.0.1', resolve) })
+    try {
+      const port = (bridge.address() as AddressInfo).port
+      const late = await fetch(`http://127.0.0.1:${port}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
+      expect(late.status).toBe(503)
+      expect(late.headers.get('retry-after')).toBe('1')
+      expect(await late.json()).toMatchObject({ error: { message: expect.stringContaining('in time') } })
+    } finally { bridge.closeAllConnections(); bridge.close(); rmSync(vault.root, { recursive: true, force: true }) }
+  })
+})
+
 describe('the bridge', () => {
   let fake: FakeService
   let port: number

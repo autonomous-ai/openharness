@@ -62,6 +62,7 @@ static struct {
     char voice_target[CABLE_NAME_MAX], voice_engine[12];
     int pattern_mask, pattern_len, view, voice_return, offset, active, count, pressed, hit_count;
     int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
+    int touch_far2;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
     uint32_t notice_sequence, voice_retry_until, error_until;
     uint8_t status_phase;
@@ -1737,6 +1738,12 @@ static void swarm_voice_checks(const char *dir) {
     dispatch((action_t){.kind = A_VOICE_ABORT}); s.voice_waiting = false; scene_take();
     assert(s.view == HOME && swarm_mode() && !strcmp(sw.lead, "L0") && title_is("mobile"));
     FOCUS_PAGE("swarm-5d");
+    // Text carried from a pane does not redirect a Swarm face's voice: it still goes to the Lead's harness.
+    ht_carry_open(&carry,"carried-passage","a","pick-test",1,fake_ms,carry_emit,NULL);
+    assert(ht_carry_reply(&carry,carry.id,carry.request,true,"Research helper","Keep this paragraph",3,300000,NULL,fake_ms+50));
+    scene_take(); tap(fake_ms += 1000, 233, 260);
+    assert(s.view == VOICE && !strcmp(target, "h0") && !strcmp(s.voice_target, "mobile") && !s.voice_carry);
+    dispatch((action_t){.kind = A_VOICE_ABORT}); ht_carry_close(&carry); scene_take();
     // 5e an engine with no listening scene: the seven bars.
     card_begin("s2", "", "playground"); card_lead("P0", "agents", "opencode", "h9", "work", 0, 12); card_send();
     fake_ms += 3000; enter_at("s2", "P0"); tap(fake_ms, 233, 260);
@@ -2295,7 +2302,13 @@ static void swarm_buddy_checks(const char *dir) {
     assert(ui_supertab_notice("s1", "B0", HT_CHAT_LEAD, "lead-web", "", "Web is merged.", 1792560001u));
     scene_take(); sent = swarm_sent; swipe_down();
     assert(s.view == HOME && swarm_sent == sent);
-    { ht_rect_t b; assert(badge_rect(&b)); tap(fake_ms += 1000, b.x - 20, b.y + 30); }
+    { ht_rect_t b; assert(badge_rect(&b));
+      // A press on the badged pet that travels away and comes back is no touch on it.
+      uint32_t t = fake_ms += 1000;
+      habitat_touch(true, b.x - 20, b.y + 30, t); habitat_touch(true, b.x - 20 + 70, b.y + 30, t + 40);
+      habitat_touch(true, b.x - 20, b.y + 30, t + 80); habitat_touch(false, b.x - 20, b.y + 30, t + 100);
+      assert(s.view == HOME && swarm_sent == sent);
+      scene_take(); tap(fake_ms += 1000, b.x - 20, b.y + 30); }
     assert(s.view == INBOX && swarm_sent == sent);
     dispatch((action_t){.kind = A_HOME}); scene_take();
 
@@ -3270,6 +3283,17 @@ int main(int argc, char **argv) {
     assert(switches==1 && s.active==1 && !moves);
     reset(); habitat_touch(true,233,220,1000); habitat_touch(false,233,220,1700);
     assert(s.view==TABS && !starts);
+    // The face talks only if the contact stayed within 24 px of where it went down, not merely ended there.
+    reset(); scene_take(); habitat_touch(true,233,220,1000); habitat_touch(true,310,220,1030); habitat_touch(true,233,220,1060);
+    habitat_touch(false,233,220,1080); assert(!starts && !switches);
+    scene_take(); tap(2000,233,220); assert(starts==1);
+    reset(); scene_take(); congestion=true;
+    habitat_touch(true,233,220,1000); habitat_touch(true,233,330,1100); habitat_touch(true,233,222,1300);
+    habitat_touch(false,233,222,1400); assert(!starts);
+    congestion=false; scene_take(); tap(2000,233,220); assert(starts==1);
+    // A thumb that drifts about 19 px and lifts still talks.
+    reset(); scene_take(); habitat_touch(true,233,220,1000); habitat_touch(true,248,232,1150);
+    habitat_touch(false,250,232,1300); assert(starts==1);
     reset(); active()->busy=true; scene_take(); tap(1000,233,41); assert(s.view==AGENTS && !starts);
     reset(); s.connected=false; scene_take(); portrait(dir,"offline");
     assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
@@ -3326,10 +3350,14 @@ int main(int argc, char **argv) {
     tap(2800,233,220); assert(!starts); // no voice while the selected text is being frozen
     assert(ht_carry_reply(&carry,carry.id,carry.request,true,"Research helper","A highlighted paragraph",3,300000,NULL,3000));
     ht_selection_close(&selection); view(HOME); s.active=1; scene_take(); portrait(dir,"carry-home");
-    tap(3400,233,220); assert(starts==1 && !strcmp(target,"b"));   // Focus starts voice from its own touch branch, without the carry context
+    tap(3400,233,220); assert(starts==1 && !strcmp(target,"b") && s.voice_carry && !strcmp(voice_context,carry.id));
     scene_take(); portrait(dir,"carry-listening");
     dispatch((action_t){.kind=A_VOICE_ABORT}); scene_take();
-    tap(4100,233,410); assert(!carry.active && carry_drops==1 && starts==1);
+    // The Focus [ say ] control builds its voice the same way (make_action for A_VOICE): the carry goes with it too.
+    dispatch(make_action((hit_t){.action=A_VOICE}));
+    assert(starts==2 && !strcmp(target,"b") && s.voice_carry && !strcmp(voice_context,carry.id));
+    dispatch((action_t){.kind=A_VOICE_ABORT}); scene_take();
+    tap(4100,233,410); assert(!carry.active && carry_drops==1 && starts==2);
     reset(); view(SELECTION); ht_selection_open(&selection,"pick-test","a",1000,select_emit,NULL);
     assert(ht_selection_reply(&selection,selection.request,"pick-test",true,1,"A highlighted paragraph",3,true,NULL,1010));
     action_t selected_action=make_action((hit_t){.action=A_PET});

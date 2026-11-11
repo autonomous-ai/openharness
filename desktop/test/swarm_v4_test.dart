@@ -311,6 +311,9 @@ void main() {
       expect(inColumn('To read', key('swarm-pull-card-5772')), findsOneWidget);
       expect(inColumn('To fix', key('swarm-pull-card-5771')), findsOneWidget);
       expect(inColumn('Merging', key('swarm-pull-card-5770')), findsOneWidget);
+      // Harness's train carries read pull requests: it is with the ones merging, never one to read.
+      expect(inColumn('Merging', key('swarm-pull-card-5773')), findsOneWidget);
+      expect(inColumn('To read', key('swarm-pull-card-5773')), findsNothing);
       // No tasks among them.
       expect(key('swarm-task-5759'), findsNothing);
       await tester.tap(key('swarm-pull-card-5770'));
