@@ -1,3 +1,4 @@
+import { unsigned } from './signature.js'
 import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -552,7 +553,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           if (!AGENT_COMMANDS.has(String(object(payload.command).type))) return { error: 'INVALID_REQUEST' }
-          const command = await mentionCommand(object(payload.command), async () => (await swarm()).state)
+          const tagged = await mentionCommand(object(payload.command), async () => (await swarm()).state)
+          // A post it sends by command, as the channel and its person's chat show it: who wrote it, and when, are beside it
+          // (signature.ts).
+          const command = tagged.type === 'message.send' && typeof tagged.text === 'string'
+            ? { ...tagged, text: unsigned(tagged.text, [agent.displayName as string | undefined, agent.name as string | undefined]) } : tagged
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           try { return { ok: true, operationId: payload.operationId, value: await send(command) } } catch (error) {
