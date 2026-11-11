@@ -45,7 +45,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
@@ -116,12 +116,9 @@ async function swarmFolder(cwd: string): Promise<boolean> {
   return harnessMadeWorktree(cwd, root)
 }
 
-/** A create held because [engine]'s hooks are not in place: [waiting] while they may still be, the file and what to do
- *  when notify.mjs, which its hook lines run, is missing. That does not change by waiting (#3954). */
+/** A create held because [engine]'s hooks are not in place (kit/hooksHeldDetail.ts). */
 function hooksHeld(engine: string, waiting: string) {
-  const missing = missingHookScript(engine)
-  return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native',
-    detail: missing ? `Harness’s hook script is missing (${missing}). Reinstall Harness, then start the agent again.` : waiting } as const
+  return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, waiting) } as const
 }
 
 export function createAgentCreator({

@@ -43,7 +43,12 @@ export const installAmpPlugin = (port: number, options?: NativeHookOptions): Pro
 // keeps double quotes as one word and backslashes as they are, which is the line `cmd` takes (`shlex.split(posix=False)`).
 export const installHermesHooks = (port: number, selectedHome?: string, options?: NativeHookOptions, platform: NodeJS.Platform = hostPlatform()): Promise<boolean> => {
   // Once for every home, before the pool: a missing notify.mjs is a failed install said in one line, never a rejection.
-  try { requireHookScript() } catch (error) { console.error(hooksNotInstalled('hermes', error, platform)); return Promise.resolve(false) }
+  try { requireHookScript('hermes') } catch (error) {
+    const line = hooksNotInstalled('hermes', error, platform)
+    if (line) console.error(line)
+    else console.error(HERMES_HOOK_SETTINGS.messages.failed, error)
+    return Promise.resolve(false)
+  }
   return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,
     { ...options, createMissing: !!selectedHome && !!options?.environment })
 }
