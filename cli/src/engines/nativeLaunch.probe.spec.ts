@@ -75,7 +75,7 @@ it('holds inherited output pipes within a bound and recovers probe capacity afte
   const pending = Array.from({ length: 8 }, (_, index) => { fixture.identity = `held-${index}`; return inspectNativeLaunch('claude') })
   await vi.waitFor(() => expect(fixture.calls).toBe(8))
   fixture.identity = 'held-8'
-  const held = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the selected executable’s permission flags.' }
+  const held = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the selected executable’s permission flags (/fixture/permission-engine).' }
   expect(await inspectNativeLaunch('claude')).toEqual(held)
   let timer: ReturnType<typeof setTimeout> | undefined
   const answers = await Promise.race([Promise.all(pending), new Promise<'unsettled'>(done => { timer = setTimeout(() => done('unsettled'), 7000) })])
