@@ -11,8 +11,8 @@
  *
  * So the assigner, which reads the project each minute (githubAssign.ts), counts what it read: the builders it would give a task
  * to and has none for, the sized tasks nobody holds, and what landed in the last day. While such a builder has waited
- * [SHORT_AFTER_MS], the PM is typed the counts, at most once an hour: a task open that Harness gave it not is one it cannot be
- * given, and the line says so. Told [SHORT_TIMES] times with nothing landed, closed or opened since, its person is told once
+ * [SHORT_AFTER_MS], the PM is typed the counts, at most once an hour: with tasks open that Harness did not give it, the line
+ * says so. Told [SHORT_TIMES] times with nothing landed, closed or opened since, its person is told once
  * instead, and nobody again until something is: a finished project falls silent. While the team lands work and a builder still
  * waits at the hour, the PM is told each hour, as anh Dee asked. Once a day the counts are posted in the project's channel,
  * where its people read the team's talk. Nothing is read for it that the pass did not read already.
@@ -133,19 +133,20 @@ function listed(names: readonly string[]): string {
 const nothing = (names: readonly string[]): string => `${listed(names)} ${names.length === 1 ? 'has' : 'have'} nothing to do`
 const landedWords = (n: Numbers): string => `${counted(n.landed, 'pull request')}${n.more ? ' or more' : ''} landed`
 
-/** What is open, for builders Harness gave none of it: a sized task still open is one it could not give them (what their
- *  machines lack, the areas they work on, a builder's label GitHub refused). */
-const noTask = (n: Numbers): string => n.open > 0 ? `the ${counted(n.open, 'sized task')} open cannot go to ${n.open === 1 ? 'any of them' : 'them'}`
+/** What is open, for [builders] that have nothing: a sized task still open is one Harness did not give them (what their machines
+ *  lack, the areas they work on, a label GitHub refused, or a place it keeps on another builder's full list). Said as that and
+ *  no more: "cannot go to them" was untrue of the last (fifth review). */
+const noTask = (n: Numbers, builders: number): string => n.open > 0 ? `the ${counted(n.open, 'sized task')} open ${n.open === 1 ? 'was' : 'were'} not given to ${builders === 1 ? 'it' : 'them'}`
   : `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`
 
 /** What the PM is typed when work is short: the builders with nothing ([names]), what is open, what landed, and what to do. */
-export const shortLine = (names: readonly string[], n: Numbers, at: string): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n)}`
+export const shortLine = (names: readonly string[], n: Numbers, at: string): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n, names.length)}`
   + `. ${landedWords(n)} in the last 24 hours. Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
   + 'If the work is done, tell your person.'
 
 /** What the PM's person is told once the PM was told [SHORT_TIMES] times, nothing moved since, and [names] still have nothing:
  *  as Harness, in the PM's chat, with what happens next. */
-export const toldLine = (names: readonly string[], n: Numbers, pm: string): string => `Harness: ${nothing(names)}, and ${noTask(n)}. `
+export const toldLine = (names: readonly string[], n: Numbers, pm: string): string => `Harness: ${nothing(names)}, and ${noTask(n, names.length)}. `
   + `${plainName(pm)} was told ${SHORT_TIMES} times, and is told no more until a task is opened or something lands.`
 
 /** The day's numbers, for the project's people, with the [day] they are posted on. */

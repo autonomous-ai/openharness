@@ -168,7 +168,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip']), issue(9, ['size:s', 'needs:macos'])], { crew: team, numbers })
       for (let minute = 0; minute <= 16; minute++) { f.clock.now = clock.now += 60_000; await f.assigner.tick() }
       expect(f.labelled()).toEqual([])
-      expect(sent).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: Ada and Kai have nothing to do, and the 1 sized task open cannot go to any of them\. /)])
+      expect(sent).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: Ada and Kai have nothing to do, and the 1 sized task open was not given to them\. /)])
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 

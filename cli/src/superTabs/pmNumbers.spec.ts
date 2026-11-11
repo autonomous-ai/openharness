@@ -172,7 +172,7 @@ describe('what Harness says of the counts', () => {
     const next = 'Juno was told 3 times, and is told no more until a task is opened or something lands.'
     expect(toldLine(['Ada', 'Kai'], numbers(), 'Juno')).toBe(`Harness: Ada and Kai have nothing to do, and no sized task is open. ${next}`)
     expect(toldLine(['Ada', 'Bo', 'Kai'], numbers({ unsized: 2 }), 'Juno')).toBe(`Harness: Ada, Bo and Kai have nothing to do, and no sized task is open (2 open issues have no size). ${next}`)
-    expect(toldLine(['Ada'], numbers({ open: 3 }), '@Juno')).toBe(`Harness: Ada has nothing to do, and the 3 sized tasks open cannot go to them. ${next}`)
+    expect(toldLine(['Ada'], numbers({ open: 3 }), '@Juno')).toBe(`Harness: Ada has nothing to do, and the 3 sized tasks open were not given to it. ${next}`)
   })
 
   it('posts the day for the project\'s people', () => {
@@ -229,12 +229,13 @@ describe('the numbers, told as they are due', () => {
   // A sized task still open after a pass is one Harness could not give the builders that wait (what their machines lack, the
   // areas they work on): the PM can end that by opening tasks they can take, and is told so. Silent then, one such task
   // silenced every builder (fourth review).
-  it('tells the PM of builders that wait while tasks are open that cannot go to them, in those words', async () => {
+  it('tells the PM of builders that wait while tasks are open that Harness did not give them, in those words', async () => {
     const t = setup(), stuck = { ...quiet, open: 2 }
     await passes(t, 16, stuck)
-    expect(t.sent.map(([, , text]) => text)).toEqual(['Harness, 14:15: Ada and Kai have nothing to do, and the 2 sized tasks open cannot go to them. '
+    expect(t.sent.map(([, , text]) => text)).toEqual(['Harness, 14:15: Ada and Kai have nothing to do, and the 2 sized tasks open were not given to them. '
       + '0 pull requests landed in the last 24 hours. Open the next tasks as issues, each with its part:, size: and p0-p2 labels. If the work is done, tell your person.'])
-    expect(shortLine(['Ada'], { ...quiet, open: 1 }, '14:15')).toContain('Ada has nothing to do, and the 1 sized task open cannot go to any of them.')
+    expect(shortLine(['Ada'], { ...quiet, open: 1 }, '14:15')).toContain('Ada has nothing to do, and the 1 sized task open was not given to it.')
+    expect(shortLine(['Ada'], { ...quiet, open: 2 }, '14:15')).toContain('Ada has nothing to do, and the 2 sized tasks open were not given to it.')
   })
 
   it('waits each builder\'s own quarter of an hour, and names only the ones that have waited it', async () => {
@@ -289,7 +290,7 @@ describe('the numbers, told as they are due', () => {
     // And when its last landing is no longer among what GitHub lists as closed last: that is no new one.
     await passes(t, 61, { ...quiet, free: free('Ada', 'Bo'), activity: 0 })
     expect(t.sent).toHaveLength(4)
-    // The team lands a pull request, or the PM opens a task that cannot go to them: the project moves again, and its PM is
+    // The team lands a pull request, or the PM opens a task Harness does not give them: the project moves again, and its PM is
     // told of who waits, from the first time.
     const landed = { ...quiet, free: free('Ada', 'Bo'), activity: t.clock.now }
     await passes(t, 1, landed)
@@ -451,6 +452,16 @@ describe('the numbers, told as they are due', () => {
     expect(first.sent[0]![1]).toBe(late.sent[0]![1])
     expect(first.sent[1]![1]).not.toBe(first.sent[0]![1])
     expect(first.sent[0]![1]).not.toBe(elsewhere.sent[0]![1])
+    // A later tell, tried again in the next clock hour, is the same operation: its id is the tell before it, not the hour.
+    const edge = setup(NOW + 40 * MINUTE)
+    await passes(edge, 16, quiet)
+    edge.failing.set('tell', down)
+    await passes(edge, 61, quiet)
+    edge.failing.clear()
+    await passes(edge, 20, quiet)
+    expect(edge.ids.slice(1).every(id => id === edge.ids[1])).toBe(true)
+    expect(new Set(edge.ids).size).toBe(2)
+    expect(new Date(edge.clock.now).getHours()).toBeGreaterThan(new Date(NOW + 100 * MINUTE).getHours())
     // A project whose memory was lost starts from no tell before it: its next is not the first it ever sent, which the server
     // would answer as taken and never type.
     const lost = setup(NOW + 5 * HOUR)
