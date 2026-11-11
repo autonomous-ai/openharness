@@ -15,8 +15,8 @@ import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
-import 'support/real_fonts.dart';
 import 'support/loopback_websocket.dart';
+import 'support/real_fonts.dart';
 
 void main() {
   setUpAll(() async {
@@ -336,7 +336,10 @@ void main() {
         );
         hasAccess = false;
         await draw();
-        expect(find.text('Sharing ended'), findsOneWidget);
+        expect(
+          find.text('Sharing ended'),
+          findsOneWidget,
+        );
         await tester.tap(find.byTooltip('Close shared harness'));
         expect(closePressed, isTrue);
         await tester.pumpWidget(const SizedBox());

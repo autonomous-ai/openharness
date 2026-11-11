@@ -6,8 +6,6 @@ import 'dart:typed_data';
 import 'package:harness/e2ee/primitives.dart' show hmacSha256;
 import 'package:harness/ws/windows_pipe.dart';
 
-import 'loopback_websocket.dart';
-
 String _hex(List<int> bytes) =>
     [for (final b in bytes) b.toRadixString(16).padLeft(2, '0')].join();
 
@@ -142,8 +140,7 @@ class PipeDaemon {
       request.response.headers.set('x-harness-proof', '0' * 64);
     }
     if (WebSocketTransformer.isUpgradeRequest(request)) {
-      final ws = await acceptWebSocket(request);
-      if (ws == null) return;
+      final ws = await WebSocketTransformer.upgrade(request);
       _sockets.add(ws);
       ws.listen((data) {
         final frame = jsonDecode(data as String) as Map<String, dynamic>;

@@ -12,13 +12,19 @@ Future<WebSocket?> acceptWebSocket(
   HttpRequest request, {
   String? Function(List<String> protocols)? protocolSelector,
 }) async {
-  if (!WebSocketTransformer.isUpgradeRequest(request)) {
-    request.response.statusCode = HttpStatus.badRequest;
-    await request.response.close();
+  // A stray client may hang up first: its reply or handshake then fails, and
+  // that is no failure of the test.
+  try {
+    if (!WebSocketTransformer.isUpgradeRequest(request)) {
+      request.response.statusCode = HttpStatus.badRequest;
+      await request.response.close();
+      return null;
+    }
+    return await WebSocketTransformer.upgrade(
+      request,
+      protocolSelector: protocolSelector,
+    );
+  } on IOException {
     return null;
   }
-  return WebSocketTransformer.upgrade(
-    request,
-    protocolSelector: protocolSelector,
-  );
 }

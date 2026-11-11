@@ -72,13 +72,17 @@ void main() {
       // Any process on this computer may knock on a loopback port: in a
       // parallel suite that is another file's plain HTTP request. The
       // fixture refuses it and keeps serving.
-      final client = HttpClient();
-      final stray = await (await client.getUrl(
-        Uri.parse('http://127.0.0.1:${server.port}/'),
-      )).close();
-      await stray.drain<void>();
-      client.close();
-      expect(stray.statusCode, HttpStatus.badRequest);
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 3);
+      try {
+        final stray = await (await client.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/'),
+        )).close().timeout(const Duration(seconds: 3));
+        await stray.drain<void>();
+        expect(stray.statusCode, HttpStatus.badRequest);
+      } finally {
+        client.close(force: true);
+      }
 
       late AppNotifier app;
       WsConn? current;

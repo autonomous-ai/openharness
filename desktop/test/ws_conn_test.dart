@@ -12,7 +12,6 @@ import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'swarm_state_test.dart' show createApp;
-import 'support/loopback_websocket.dart';
 
 class FakeHub {
   final HttpServer server;
@@ -53,12 +52,11 @@ class FakeHub {
       hub.environments.add(request.uri.queryParameters['autonomousEnv']);
       hub.declaredClients.add(request.uri.queryParameters['client']);
       hub.declaredVersions.add(request.uri.queryParameters['v']);
-      final ws = await acceptWebSocket(
+      final ws = await WebSocketTransformer.upgrade(
         request,
         protocolSelector: (protocols) =>
             protocols.isNotEmpty ? protocols.first : null,
       );
-      if (ws == null) return;
       hub.clients.add(ws);
       ws.listen((data) {
         final frame = jsonDecode(data as String) as Map<String, dynamic>;

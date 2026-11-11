@@ -7,8 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/ws/ws_conn.dart';
 
-import 'support/loopback_websocket.dart';
-
 /// A daemon's local socket whose relay fails the first [failSelects] selects, as a dial that fails
 /// does (close 1011), and then answers. A machine in [hanging] never answers: a slow handshake.
 class _Daemon {
@@ -29,8 +27,7 @@ class _Daemon {
         await request.response.close();
         return;
       }
-      final ws = await acceptWebSocket(request);
-      if (ws == null) return;
+      final ws = await WebSocketTransformer.upgrade(request);
       daemon.sockets.add(ws);
       ws.listen((raw) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;

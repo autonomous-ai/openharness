@@ -10,7 +10,6 @@ import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
 import 'package:harness/ws/ws_conn.dart';
-import 'support/loopback_websocket.dart';
 
 const _computerId = '0123456789abcdef0123456789abcdef';
 
@@ -29,8 +28,7 @@ class _Daemon {
       hits.add(request.uri.path);
       credentials.add(request.headers.value(daemonCredentialHeader));
       if (WebSocketTransformer.isUpgradeRequest(request)) {
-        final ws = await acceptWebSocket(request);
-        if (ws == null) return;
+        final ws = await WebSocketTransformer.upgrade(request);
         ws.listen((data) {
           final frame = jsonDecode(data as String) as Map<String, dynamic>;
           if (frame['type'] == 'machine_select') {
