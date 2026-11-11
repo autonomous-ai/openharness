@@ -10,7 +10,7 @@ import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { isatty } from 'node:tty'
-import { inDaemonPane, NOT_IN_PANE, runningPane, windowsRunningPane, type PaneProbe, type RunningPane } from './callerPane.js'
+import { inDaemonPane, NOT_IN_PANE, runningPane, windowsRunningPane, type PaneProbe, type RunningPane } from '../lib/callerPane.js'
 import type { ProcessRow } from '../lib/processTable.js'
 import { sendPane } from '../messages/command.js'
 

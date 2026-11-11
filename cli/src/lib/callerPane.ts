@@ -18,10 +18,10 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readlinkSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, join, win32 } from 'node:path'
-import { ptyHostBinary } from '../lib/ptyHost/launch.js'
-import type { ProcessRow } from '../lib/processTable.js'
-import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
-import { windowsProcessRows } from '../lib/windows/processTable.js'
+import { ptyHostBinary } from './ptyHost/launch.js'
+import type { ProcessRow } from './processTable.js'
+import { managedTmuxPath, tmuxInstallDirectories } from './tmuxOnPath.js'
+import { windowsProcessRows } from './windows/processTable.js'
 
 export interface Process { pid: number; command: string }
 
