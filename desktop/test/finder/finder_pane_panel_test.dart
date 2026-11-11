@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/finder/widgets/finder_pane_panel.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/empty_state.dart';
+import 'package:harness/shared/widgets/skeleton.dart';
 
 import 'fakes.dart';
 
@@ -225,6 +227,21 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('finder-tab-close')));
     await tester.pumpAndSettle();
     expect(widths.last, 265);
+  });
+
+  // An empty list shows nothing (design doc, Swarm elements rule 7).
+  testWidgets('Changes with nothing changed shows nothing', (tester) async {
+    await pumpPanel(tester);
+    git.current = [];
+    await tester.tap(find.byKey(const ValueKey('finder-mode-changes')));
+    await tester.pumpAndSettle();
+    expect(git.reads, greaterThan(0));
+    // Read and loaded: no skeleton, no failure, no card, and no row.
+    expect(find.byType(SkeletonList), findsNothing);
+    expect(find.byType(EmptyState), findsNothing);
+    expect(find.text('No changes'), findsNothing);
+    expect(find.textContaining('matches the last commit'), findsNothing);
+    expect(find.text('lib/main.dart'), findsNothing);
   });
 
   testWidgets('Collapse folds it to a rail; the rail opens it again', (

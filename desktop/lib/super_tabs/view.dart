@@ -34,7 +34,6 @@ import '../shortcuts/app_keymap.dart' show KeymapRegion;
 import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
-import 'leaderboard/reader.dart';
 import 'leaderboard/leaderboard_page.dart';
 import 'leaderboard/shipping.dart';
 import 'jump_to_latest.dart';
@@ -353,11 +352,6 @@ class _SuperTabViewState extends State<SuperTabView>
   );
   SuperTabController get c => widget.controller;
 
-  /// The open project's week board, read for Manage's Models. Made when
-  /// Manage is first shown: a view torn down before then reads none.
-  SuperTabProjectBoard? _projectBoard;
-  SuperTabProjectBoard get _board => _projectBoard ??= SuperTabProjectBoard(c);
-
   /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is.
   SwarmAgentStates? _states;
 
@@ -515,8 +509,6 @@ class _SuperTabViewState extends State<SuperTabView>
       _states = _agentStates();
     }
     if (oldWidget.controller != c) {
-      _projectBoard?.dispose();
-      _projectBoard = null;
       _shippingBoard?.dispose();
       _shippingBoard = null;
       oldWidget.controller.threadPaneHidden();
@@ -1141,7 +1133,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
-    _projectBoard?.dispose();
     _states?.dispose();
     _shippingBoard?.dispose();
     c.removeListener(_changed);
@@ -5082,7 +5073,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               ? SuperTabManagePage(
                                   controller: c,
                                   app: widget.app,
-                                  board: _board,
                                   tab: _manageTab,
                                   onAddAgent: widget.onAddAgent,
                                   onOpenAgent: (agent) {

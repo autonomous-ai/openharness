@@ -51,46 +51,6 @@ void main() {
     });
   });
 
-  group('Manage, Models', () {
-    Map<String, dynamic> board(String project) => {
-      'projectId': project,
-      'week': 1,
-      'period': {'name': '7d', 'start': 1, 'end': 2},
-      'allProjects': true,
-      'people': <Object>[],
-      'waiting': {'total': 0, 'people': <Object>[]},
-      'byModel': [
-        {
-          'engine': 'claude',
-          'model': 'claude-opus-5-5',
-          'effort': 'high',
-          'points': 1,
-          'rank': 1,
-          'attempts': 1,
-          'shipped': {'count': 1},
-          'firstReview': {'reviewed': 1, 'passed': 1},
-          'reviews': 1,
-        },
-      ],
-    };
-
-    testWidgets("a model's mark starts under Manage's heading", (tester) async {
-      final server = swarm()
-        ..leaderboard = board('lead')
-        ..followedThreads = null;
-      await showView(tester, server);
-      await tester.tap(_key('super-manage'));
-      await tester.pumpAndSettle();
-      await tester.tap(_key('super-manage-tab-models'));
-      await tester.pumpAndSettle();
-      final heading = tester.getTopLeft(find.text('Manage').last).dx;
-      final row = find.byKey(const ValueKey('super-model-Opus 5.5'));
-      // A row keeps 12 inside its own edges.
-      expect(tester.getTopLeft(row).dx + 12, heading);
-      await tester.pump(const Duration(milliseconds: 300));
-    });
-  });
-
   group('Manage', () {
     testWidgets('its tabs and Swarm facts start under its heading', (
       tester,
