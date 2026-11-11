@@ -6,7 +6,8 @@
  * question, a new task labelled builder:<name>. Its person's own Harness reads GitHub with their own gh login (cli
  * superTabs/githubMentions.ts) and relays here each comment that names one of their agents and each issue newly labelled
  * for one. The row is the person's, since their daemon read it as them, and says it came from GitHub: their agent hears it
- * as it hears any message in its chat, and their apps show it as GitHub's, never as words the person typed.
+ * as it hears any message in its chat. Only the agent reads it (model.ts NOTICE_READERS): the person's chat with their
+ * agent is their conversation, not a feed of GitHub's (anh Dee, 2026-11-11).
  */
 import { z } from 'zod'
 import { agent, author, conversation, fail, type Actor, type MessageDraft, type SuperTabState } from './model.js'
@@ -43,7 +44,7 @@ export type GitHubRelay = z.infer<typeof githubRelaySchema>
 
 const VERDICTS = { APPROVED: 'Approved', CHANGES_REQUESTED: 'Changes requested', COMMENTED: 'Commented' } as const
 
-/** The row's words, which the agent, search and an older app read; Desktop draws the card from the row's source instead. */
+/** The row's words, which its agent reads; a Desktop that meets a server before this one draws a card from its source. */
 export function relayText(command: GitHubRelay): string {
   const where = `${command.on === 'pull' ? 'pull request' : 'issue'} ${command.repository}#${command.number}`
   const head = command.event === 'task' ? `New task for you on GitHub: ${where} ${command.text}`
