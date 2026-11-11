@@ -551,6 +551,24 @@ jobs:
             main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
           JS
           echo "### Promoted the terminal host $VERSION to production" >> "$GITHUB_STEP_SUMMARY"
+      # The owner's third production step (promote-pty-payload.sh), here instead of a laptop's gcloud: the installer
+      # people run (irm .../harness/cli/install.ps1 | iex) goes with the host it installs. Only when that host is the
+      # live CLI's version, which upload-install-ps1.sh --production checks again; a promote of another version (a
+      # rollback) leaves the installer as it is. Then the CDN must serve exactly this file.
+      - name: Publish install.ps1 to production with the host it installs
+        run: |
+          set -euo pipefail
+          curl -fsSL -H 'Cache-Control: no-cache' "https://storage.googleapis.com/${GCS_BUCKET}/harness/cli/metadata.json" -o cli-manifest.json
+          live="$(node -p 'JSON.parse(require("node:fs").readFileSync("cli-manifest.json", "utf8")).cli.version')"
+          if [ "$live" != "$VERSION" ]; then
+            echo "::notice::the live CLI is $live, not $VERSION: install.ps1 is left as it is"
+            exit 0
+          fi
+          bash cli/scripts/upload-install-ps1.sh --production
+          curl -fsSL --retry 3 --retry-all-errors --max-time 30 -H 'Cache-Control: no-cache' \
+            https://cdn.autonomous.ai/harness/cli/install.ps1 -o "$RUNNER_TEMP/install.ps1"
+          cmp cli/scripts/install.ps1 "$RUNNER_TEMP/install.ps1"
+          echo "### Published install.ps1 to production with terminal host $VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   # The GitHub Release. Notes are the tag's OWN message, verbatim — the same rule the desktop repo
   # follows. CI generates nothing: what a human wrote and reviewed at tag time is exactly what
