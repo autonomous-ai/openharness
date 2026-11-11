@@ -1309,7 +1309,17 @@ class ConversationServer {
         final projects = state['projects'] ??= <dynamic>[
           projectFixture('lead', state['name'] as String, 'lead'),
         ];
-        final id = 'project-$revision', leadId = 'lead-$revision';
+        // As the backend's (`project.create`): the id comes from the Swarm, its person and the request, so the same request
+        // from another computer names the same project.
+        final swarm = RegExp(r'/super-tabs/([^/]+)/')
+            .firstMatch(path)
+            ?.group(1);
+        final id = _backendId([
+              Uri.decodeComponent(swarm ?? 'tab'),
+              'person:${reader ?? 'owner'}',
+              operationId,
+            ]),
+            leadId = 'lead-$revision';
         (projects as List).add({
           ...projectFixture(
             id,
@@ -1376,6 +1386,16 @@ class ConversationServer {
         groups.removeWhere((g) => removed.contains(g['id']));
         messages.removeWhere((m) => removed.contains(m['conversationId']));
         revision++;
+      } else if (command['type'] == 'project.github') {
+        // As the backend's (project.github): the GitHub repository a project's board reads, set by its owner.
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        if (project != null) {
+          project['githubRepository'] = command['repository'];
+          revision++;
+        }
       } else if ([
         'project.rename',
         'project.cadence',
