@@ -1316,6 +1316,32 @@ model SuperTabGithubComment {
   @@index([createdAt], map: "github_comment_expiry")
 }
 
+/// What one agent's conversation used on one task or pull request, as its own daemon counted it (superTabs/taskTokens.ts). The id
+/// is "<tabId>|<repository lowercased>|<number>|<agentId>|<kind>": a later write of the same work replaces its totals. Counts and
+/// ids only, no words. Removed 90 days after createdAt by a TTL index.
+model SuperTabTaskTokens {
+  id         String   @id @map("_id")
+  tabId      String
+  projectId  String
+  agentId    String
+  repository String
+  number     Int
+  kind       String
+  /// Each model's counts: `[{ model, input, output, cacheRead, cacheWrite }]`, at most 16.
+  tokens     Json
+  rounds     Int
+  startedAt  DateTime
+  endedAt    DateTime
+  createdAt  DateTime
+
+  /// The rows of some issues and pull requests of a repository (taskTokens.ts taskTokens), and a Swarm's rows, removed with it
+  /// (purge.ts).
+  @@index([tabId, repository, number])
+  /// A row goes 90 days after createdAt (taskTokens.ts ensureTaskTokensExpiry). Declared so db push keeps the index; the schema
+  /// step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "task_tokens_expiry")
+}
+
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String

@@ -20,6 +20,7 @@ import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS
 import { machineAlive } from '../lib/prisma.js'
 import { githubRepository } from '../github/repository.js'
 import { commentAuthors, recordComment, sameRepository, type CommentKind } from './githubComments.js'
+import { recordTaskTokens, taskTokens, type TaskTokens } from './taskTokens.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
@@ -2344,6 +2345,34 @@ export class SuperTabStore {
       authors[id] = { agentId, name: agent ? agent.displayName ?? agent.name : null }
     }
     return { authors }
+  }
+
+  /** Keeps what agent [asAgentId]'s conversation used on a task, as its own daemon counted it (taskTokens.ts). Only the agent
+   *  the caller's own machine runs may write it (the actor check every agent call has), and only on the repository of a project
+   *  it may read, as it reads the Swarm now (not the read cache). */
+  async recordTaskTokens(user: AuthUser, tabId: string, asAgentId: string, row: TaskTokens & { repository: string }) {
+    const project = await transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId)
+      const actor = await this.actor(tx, user, state, asAgentId)
+      return projectsOf(state).find(p => sameRepository(p, row.repository) && canReadProject(state, actor, p))
+    })
+    if (!project) fail('REPOSITORY_NOT_PROJECT', 'This agent works on no project of that repository.', 422)
+    return recordTaskTokens(this.db, { tabId, projectId: project.id, agentId: asAgentId, ...row, now: this.now() })
+  }
+
+  /** What agents' conversations used on the issues and pull requests [numbers] of [repository], written for a project of it
+   *  the reader may read (taskTokens.ts), each with its agent's name; a reader who may read none hears what a project that
+   *  does not exist says. */
+  async taskTokens(user: AuthUser, tabId: string, repository: string, numbers: readonly number[], asAgentId?: string) {
+    const { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state, asAgentId)
+    const readable = new Set(projectsOf(state).filter(p => sameRepository(p, repository) && canReadProject(state, actor, p)).map(p => p.id))
+    if (!readable.size) fail('NOT_FOUND', 'This project is unavailable.', 404)
+    const rows = (await taskTokens(this.db, tabId, repository, numbers)).filter(row => readable.has(row.projectId)).map(({ projectId: _project, agentId, ...row }) => {
+      const agent = state.agents.find(a => a.id === agentId)
+      return { ...row, agentId, name: agent ? agent.displayName ?? agent.name : null }
+    })
+    return { rows }
   }
 
   /** A project's name as [userId] may see it now, for the page GitHub sends them back to after approving its repository
