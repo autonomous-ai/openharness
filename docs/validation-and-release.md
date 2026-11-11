@@ -382,6 +382,10 @@ It runs the selected files once. Hosts with at least 16 logical CPUs use three
 quarters of them, capped at 12 workers; smaller hosts use half their logical CPUs
 (at least one worker). Lower `--workers` when memory or other running checks need it.
 Its `--timeout 900` budget includes the initial test process and any recovery.
+A slower Mac may not compile every file within it; raise it with
+`ARGS="--timeout 3600"`. The `desktop-macos` receipt then records that exact
+command: only `--timeout` and `--workers` may follow, since neither changes which
+tests run.
 Dependencies must already be installed. Browser files under `test/web/` and native
 integration checks remain separate; this command does not validate those platforms.
 
