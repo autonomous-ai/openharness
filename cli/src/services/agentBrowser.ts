@@ -381,9 +381,14 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
         // Every command running or waiting is answered the stop line: the agent has read it, and is typed nothing.
         notices.stopped(agentId, toolServers.end(agentId, 'STOPPED') > 0)
       }
-      const answer = await setBrowser(agentId, false)
-      // The core told the port nothing to stop: nothing stays marked, and the agent's own end is heard as its own.
-      byPerson.delete(agentId)
+      let answer: BrowserSwitch
+      try {
+        answer = await setBrowser(agentId, false)
+      } finally {
+        // The core told the port nothing to stop, or did not answer: nothing stays marked, and the agent's own end is
+        // heard as its own.
+        byPerson.delete(agentId)
+      }
       if ('changed' in answer && answer.changed) count('agent_browser_stopped')
       return { ok: true }
     },
