@@ -257,14 +257,16 @@ export function createBinding({
    * confirmed there (core/turns/funnel.ts), and under the session key it was failed as not accepted. This pass runs inside the
    * reconcile pass's registry transaction (core/main.ts), which holds saves back: taken after it commits, the removal is
    * saved before the task is typed, so a daemon that stops in between never types it twice. A pass that reads the pane
-   * again before then takes nothing.
+   * again before then takes nothing. A submit that throws has the task off the row already: it is said, not put back.
    */
   const handOverFirstTask = (agentId: string): void => {
+    const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
     void registry.afterTransaction(() => registry.takeFirstTask(agentId)).then((task) => {
       if (!task) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
-      submitAgent(agentId, task)
-    }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${error instanceof Error ? error.message : String(error)}`))
+      try { submitAgent(agentId, task) }
+      catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${reason(error)}`) }
+    }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${reason(error)}`))
   }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
