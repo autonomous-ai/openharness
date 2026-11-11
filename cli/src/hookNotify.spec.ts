@@ -14,10 +14,8 @@ import { hookTokenPath } from './lib/hookAuth.js'
 import { isTrustedLocal, listenLocalSocket, localSocketName, socketPathIn } from './lib/localSocket.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
-// and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
-// takes well over vitest's 5s default, and the failure looks like a product bug rather than what it is.
-// The hook's own budget still bounds it; this only stops the harness from calling time first.
-vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
+// and sqlite3 on top of that: its hooks get the room the suite gives each case (vitest.config.ts).
+vi.setConfig({ hookTimeout: 30_000 })
 
 const HOOK = fileURLToPath(new URL('../hook/notify.mjs', import.meta.url))
 /** A preload that moves `Date` by the milliseconds in a file (e2e/harness/clockShift.mjs). */
