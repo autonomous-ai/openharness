@@ -29,7 +29,8 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     watched: options.watched ?? [PIP], down: false,
     // Each pull request as GitHub details it, its comments, and its head's check runs; a pull request listed and not here is
     // clean and read by nobody yet.
-    pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]> }
+    pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]>,
+    owed: [] as Array<{ number: number; sha: string }> }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
     head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
@@ -55,7 +56,8 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
   const say = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
   const log = vi.fn()
   const file = options.file ?? join(root, `next-${files++}.json`)
-  const make = () => new NextThing({ onEnd, watched: async () => state.watched, working: async () => state.working, get, tell, say, file, log })
+  const owed = vi.fn((_agent: WatchedAgent, _repo: string) => state.owed)
+  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, tell, say, file, log })
   let turns = 0
   /** A turn of [harnessId] ending, then the settle after it. */
   const end = async (extra: Partial<TurnEnd> = {}) => {
@@ -64,7 +66,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
   }
   const told = () => tell.mock.calls.map(([, , text]) => text)
-  return { state, listeners, onEnd, calls, tell, say, log, file, make, end, told, next: make() }
+  return { state, listeners, onEnd, calls, tell, say, log, file, owed, make, end, told, next: make() }
 }
 
 describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => {
@@ -177,6 +179,64 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // "A read it owes" comes before "its next task" in the plan's order: v4's sandbox #27 waited 4 hours on two readers who never
+  // answered, then was read in a minute (docs/research/2026-11-10-swarm-study/README.md).
+  it('types a read Harness asked of it, at the head it was asked, before its next task and even while it holds a task', async () => {
+    const f = setup({ items: [item(12, 'Add the export'), item(14, 'Mine', ['status:taken'])] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([`Read acme/app#24 at ${HEAD.slice(0, 7)}, as Harness asked you: harness super-tab read ok acme/app#24 ${HEAD.slice(0, 7)} `
+      + '\'what you found\' (or read hold, with the file, line and fix)'])
+    expect(f.owed).toHaveBeenCalledWith(PIP, 'acme/app')
+    f.next.stop()
+  })
+
+  it('types no read it made on that head, nor one whose pull request moved on or closed, and does not read those again', async () => {
+    const f = setup({ items: [item(12, 'Add the export')] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: 'abcdef1' }, { number: 26, sha: HEAD.slice(0, 7) }]
+    // Its READ-OK on 24's head; 25's head is not the one it was asked (Harness asks again on the new one); 26 is merged.
+    f.state.comments[24] = [said(`Pip, 05:10: READ-OK ${HEAD.slice(0, 7)}: reads well.`)]
+    f.state.pulls[26] = { state: 'closed' }
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([`Next: acme/app#12 Add the export. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    const reads = f.calls.length
+    await f.end()
+    expect(f.calls.filter(path => /pulls\/2[456]$/.test(path))).toHaveLength(3)
+    expect(f.calls.length - reads).toBe(1)
+    f.next.stop()
+  })
+
+  it('reads a pull request with no words as any other, and one with no head as gone', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 27, sha: HEAD.slice(0, 7) }, { number: 28, sha: HEAD.slice(0, 7) }]
+    f.state.pulls[27] = { head: {} }
+    f.state.pulls[28] = { body: undefined }
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#28 at /)])
+    f.next.stop()
+  })
+
+  it('remembers an ask found answered while GitHub news keeps it, and reads it again once it is asked anew', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    f.state.pulls[24] = { state: 'closed' }
+    f.next.start()
+    await f.end()
+    await f.end()
+    const pullReads = () => f.calls.filter(path => path === '/repos/acme/app/pulls/24').length
+    expect(pullReads()).toBe(1)
+    // GitHub news let it go, then it was asked of again: read once more.
+    f.state.owed = []
+    await f.end()
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    await f.end()
+    expect(pullReads()).toBe(2)
+    f.next.stop()
+  })
+
   it('waits for its turns to settle: two ends close together are one look', async () => {
     const f = setup()
     f.next.start()
@@ -239,7 +299,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     let answer: (() => void) | null = null
     const slow = new Promise<void>(resolve => { answer = resolve })
     const watched = f.state.watched
-    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, working: async () => false,
+    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false,
       get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
     next.start()
     await f.end()
@@ -263,7 +323,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   it('says a failure to read its agents by the terminal, in the daemon\'s log when it has none of its own', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = setup()
-    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, working: async () => false,
+    const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
       get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file })
     next.start()
     await f.end()

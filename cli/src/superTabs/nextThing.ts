@@ -22,6 +22,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
+import { readerKey } from './assign/crew.js'
 import { labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
@@ -44,6 +45,9 @@ export class NextThing {
   private readonly looking = new Set<string>()
   private readonly reads: GitHubReads
   private memory: Record<string, Kept> | null = null
+  /** The asks to read found made, gone or moved on (`agent:repo#N@sha`), so they are not read again while they are owed: each
+   *  goes once GitHub news no longer keeps its ask, so it holds no more than those do. */
+  private readonly answered = new Set<string>()
   private readonly log: (line: string) => void
 
   constructor(private readonly deps: {
@@ -51,6 +55,8 @@ export class NextThing {
     onEnd: (listener: (end: TurnEnd) => void) => () => void
     /** This computer's person's v4 agents running here, with their builder labels and their projects' repositories. */
     watched: () => Promise<WatchedAgent[]>
+    /** The reads [agent] was asked for in [repo] (githubMentions.ts keeps Harness's asks), the newest last. */
+    owed: (agent: WatchedAgent, repo: string) => Array<{ number: number; sha: string }>
     /** Whether a terminal's turn runs; null when it cannot be said. */
     working: (harnessId: string) => Promise<boolean | null>
     get: GitHubGet
@@ -116,6 +122,19 @@ export class NextThing {
         if (work) return this.give(agent, `${repo}#${pull.number} ${work.kind} ${work.head}`, work.typed,
           `told ${name} that its ${repo}#${pull.number} ${work.what}`)
       }
+      // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
+      // minutes for a first read): typed even while it holds a task of its own, as a read is short.
+      const asks = this.deps.owed(agent, repo)
+      const owed = new Set(asks.map(ask => this.askKey(agent, repo, ask)))
+      for (const key of this.answered) if (key.startsWith(`${agent.agentId}:${repo}#`) && !owed.has(key)) this.answered.delete(key)
+      for (const ask of asks) {
+        const short = await this.owedRead(agent, repo, ask)
+        if (short) {
+          return this.give(agent, `${repo}#${ask.number} read ${short}`, `Read ${repo}#${ask.number} at ${short}, as Harness asked you: `
+            + `harness super-tab read ok ${repo}#${ask.number} ${short} 'what you found' (or read hold, with the file, line and fix)`,
+          `asked ${name} to read ${repo}#${ask.number} at ${short}`)
+        }
+      }
       // A task it took with no pull request of its yet is its own work to go on with.
       if (tasks.filter(task => labelNames(task).includes('status:taken')).length > pulls.length) return
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
@@ -155,6 +174,26 @@ export class NextThing {
         typed: `Your ${repo}#${number} conflicts with ${base}: merge ${base} into it, fix the conflicts and push: git fetch origin ${base} && git merge origin/${base}` }
     }
     return null
+  }
+
+  /** The head [ask] still waits on [agent]'s read of, short, or null when it does not: the pull request is gone, its head moved on
+   *  (Harness asks again on the new one), or the agent's verdict is on its head. One found so is not read again. */
+  private async owedRead(agent: WatchedAgent, repo: string, ask: { number: number; sha: string }): Promise<string | null> {
+    const key = this.askKey(agent, repo, ask)
+    if (this.answered.has(key)) return null
+    const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${ask.number}`)
+    const head = String(object(pull.head).sha ?? '')
+    if (pull.state === 'open' && head.startsWith(ask.sha)) {
+      const { readers } = verdicts(await pullTalk(this.reads, repo, ask.number), String(pull.body ?? ''), pullPeople(pull, new Set()))
+      const read = agent.names.some(name => head.startsWith(readers.get(readerKey(name))?.sha ?? '\n'))
+      if (!read) return head.slice(0, 7)
+    }
+    this.answered.add(key)
+    return null
+  }
+
+  private askKey(agent: WatchedAgent, repo: string, ask: { number: number; sha: string }): string {
+    return `${agent.agentId}:${repo}#${ask.number}@${ask.sha}`
   }
 
   /** Types [typed] to [agent] for [key], or, once that was typed [NEXT_TIMES] times with no change, says to its person, once, what
