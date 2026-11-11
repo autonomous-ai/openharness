@@ -116,6 +116,17 @@ const _engines = <String, EngineIdentity>{
     homepage: 'https://pi.dev',
     blurb: "A small, extensible coding agent for the terminal.",
   ),
+  'openclaw': EngineIdentity(
+    id: 'openclaw',
+    label: 'OpenClaw',
+    category: 'Code',
+    tagline: 'Personal AI agent that works through your own Gateway',
+    creator: 'OpenClaw',
+    color: Color(0xffff4d4d),
+    asset: 'assets/engine-icons/openclaw.png',
+    homepage: 'https://openclaw.ai/',
+    blurb: "OpenClaw's agent in the terminal, working in its own workspace.",
+  ),
   'omp': EngineIdentity(
     id: 'omp',
     label: 'Oh My Pi',

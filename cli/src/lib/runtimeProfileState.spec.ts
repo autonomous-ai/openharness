@@ -242,6 +242,18 @@ describe('late optional profile observations', () => {
     expect(manager.getState(agent.sessionId).model).toBeNull()
   })
 
+  // OpenClaw prints no thinking level after a model that has none: the footer read, and the chip stayed empty (E2E 2026-11-10).
+  it('names an OpenClaw agent\'s model from a footer with no thinking level, as auto', () => {
+    const manager = new RuntimeProfileManager(), agent = { ...session('openclaw'), sessionId: 'agent:main:plain' }
+    const screen = (name: string) => readFileSync(join(import.meta.dirname, '../engines/openclaw/__fixtures__', `screen-${name}.txt`), 'utf8')
+    manager.hydrate(agent, [])
+    manager.ingestPane(agent, screen('plain'), true)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ engine: 'openclaw', model: 'deepseek/deepseek-v4.1-flash', effort: 'auto' })
+    manager.ingestPane(agent, screen('model-switch'), true)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ model: 'deepseek/deepseek-v4-flash-0731', effort: 'high' })
+    manager.forget(agent.sessionId)
+  })
+
   // Codex at its own default effort writes `reasoning_effort: null` in each turn's context (0.164, 0.165): its model was never
   // reported, so its Swarm attempts were recorded with none (Scholes, 2026-10-30).
   it('names a Codex agent\'s model from its first turn at Codex\'s own default effort, as auto', () => {

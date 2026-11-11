@@ -231,7 +231,9 @@ def latest():
 def install_package(package, version, runtime, additional=()):
     # The caller already holds the system-operation lock and made its checkpoint.
     # Keep pacman's own lock and other hooks; suppress only our duplicate checkpoint.
-    subprocess.run(['pacman', '--noconfirm', '-U', *map(str, additional), str(package)], check=True,
+    # --ask=4 answers "remove the conflicting package?" with yes: the Node 24 package conflicts with the
+    # Node 22 one it replaces, and --noconfirm alone answers no and aborts the update (or its rollback).
+    subprocess.run(['pacman', '--noconfirm', '--ask=4', '-U', *map(str, additional), str(package)], check=True,
                    env=dict(os.environ, HN_OS_UPDATE_CHECKPOINT='1'))
     if installed_version() != version:
         raise ValueError('The installed package version did not change as expected.')
@@ -242,7 +244,7 @@ def prepare_packages(package, additional=()):
     # Resolve and verify the entire transaction while the old installation is
     # still intact. Pacman retains signatures/dependency checks, and uses its
     # cache when offline. Missing downloads must not create a failed checkpoint.
-    subprocess.run(['pacman', '--noconfirm', '-U', '--downloadonly',
+    subprocess.run(['pacman', '--noconfirm', '--ask=4', '-U', '--downloadonly',
                     *map(str, additional), str(package)], check=True)
 
 

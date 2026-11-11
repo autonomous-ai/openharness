@@ -169,8 +169,7 @@ async function download(file: MessageAttachment, base: string, signedBase: strin
  * the message, which grows with its bytes; the host's single poll loop waits on it. A try whose link is over or about to be
  * starts with a fresh one from [relink]. A file that could not be downloaded is named by its name and size alone (a signed
  * link carries a credential, and is never written into a prompt), and `complete` is false, so the host tries again, with a
- * fresh claim and fresh links, before it next delivers the same message. `paths` are the files written, which a Buddy's
- * guard may list when its own person sent them (lib/buddyGuard.ts). */
+ * fresh claim and fresh links, before it next delivers the same message. `paths` are the files written. */
 /** A file being downloaded, by its address and size: a second delivery of the same file waits on the first's download
  *  rather than start its own (superTabs/host.ts keeps one such map). [wanting]: the deliveries still waiting for it; the last
  *  to leave stops it. */

@@ -232,12 +232,16 @@ describe('where the core finds the other engines\' conversations', () => {
       registry: {
         inheritName: () => {}, unbindSession: () => true, byAgent: (id: string) => agents.get(id),
         byProcess: (engine: string) => agents.get(engine), has: () => false, bySession: () => undefined,
-        register: (input: unknown) => { registered.push(input); return null },
+        register: (input: unknown) => { registered.push(input); return null }, setOpenclawStateDir: () => false,
       } as never,
       mirror: { inheritSummary: () => {} }, forgetSession: () => {}, clients: { send: () => {} }, attachSession: async () => true,
       announceSession: () => {}, stoppedAgents: { save: () => {}, finishResume: () => {}, get: () => null } as never, syncRecapPool: () => {},
       input: { forget: () => {} } as never, deviceInput: { forget: () => {} } as never,
       homes: { copilot: home('.copilot'), grok: home('.grok'), agy: home('.gemini', 'antigravity-cli') },
+      // OpenClaw's TUI names its session on its screen alone: the footer under its status line, above its composer.
+      capturePane: async (agentId: string) => agentId === 'agent-openclaw'
+        ? ` openclaw tui - ws://127.0.0.1:18789 - agent main - session plain\n\n session agent:main:plain\n connected | idle\n agent main | session plain | m/m | deliver:off | tokens ?\n${'─'.repeat(40)}\n\n${'─'.repeat(40)}\n` : null,
+      openclawPaneRead: () => {}, openclawPaneDue: () => true, openclawStateDir: async () => null,
     })
     const observed = (engine: string, over: Record<string, unknown>) => ({
       engine, cwd: '/work/g', runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux:%1',
@@ -257,6 +261,10 @@ describe('where the core finds the other engines\' conversations', () => {
     registered.length = 0
     await binding.bindObservedAgent(observed('copilot', {}) as never)
     results.push(['copilot /resume', [...registered]])
+    agents.clear(); agents.set('openclaw', { agentId: 'agent-openclaw', engine: 'openclaw', sessionId: '', registeredAt: 0 })
+    registered.length = 0
+    await binding.bindObservedAgent(observed('openclaw', {}) as never)
+    results.push(['openclaw footer', [...registered]])
     check('bind', results)
   }, 60_000)
 

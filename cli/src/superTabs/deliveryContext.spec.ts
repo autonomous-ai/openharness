@@ -4,14 +4,13 @@ import { ADDED_MAX, placeLine, recentLines, setOff, taskStateLine, threadLine, w
 const state = {
   projects: [{ id: 'app', name: 'App', leadConversationId: 'lead-app' }],
   people: [{ id: 'ken', email: 'ken@example.com', username: 'ken15' }] as Array<Record<string, unknown>>,
-  agents: [{ id: 'pm', name: 'PM' }, { id: 'dev1', name: 'Dev1' }, { id: 'buddy', name: 'Ken\'s Buddy', buddyOf: { personId: 'ken' } }],
+  agents: [{ id: 'pm', name: 'PM' }, { id: 'dev1', name: 'Dev1' }],
   conversations: [
     { id: 'lead-app', projectId: 'app', title: 'App', leadId: 'pm', agentIds: ['pm'], archived: false, assignment: null },
     { id: 'g12', projectId: 'app', number: 12, title: 'Fix login', leadId: 'pm', archived: false, assignment: { agentId: 'dev1', status: 'working' } },
     { id: 'g13', projectId: 'app', number: 13, title: 'Review: Fix login', reviewOf: 'g12', leadId: 'pm', archived: false, assignment: null },
     { id: 'g14', projectId: 'app', number: 14, title: 'Docs', leadId: 'pm', archived: false, assignment: { agentId: 'dev1', status: 'review' } },
     { id: 'g15', projectId: 'app', number: 15, title: 'Old', leadId: 'pm', archived: false, assignment: { agentId: 'dev1', status: 'done' } },
-    { id: 'chat', kind: 'buddy', projectId: 'app', title: 'Buddy', leadId: null, agentIds: ['buddy'], archived: false, assignment: null },
   ],
 }
 
@@ -21,12 +20,6 @@ describe('placeLine', () => {
   })
   it('names the project chat', () => {
     expect(placeLine(state, 'lead-app')).toBe('In the project chat of App (conversation lead-app).')
-  })
-  // By the name the Swarm shows them, never their email (task #2954).
-  it('names a Buddy chat by its person', () => {
-    expect(placeLine(state, 'chat')).toBe('In ken15\'s Buddy chat (conversation chat).')
-    const named = { ...state, people: state.people.map(p => ({ ...p, name: 'Ken' })) }
-    expect(placeLine(named, 'chat')).toBe('In Ken\'s Buddy chat (conversation chat).')
   })
   it('gives the id alone when it does not know the conversation', () => {
     expect(placeLine(state, 'gone')).toBe('In conversation gone.')
@@ -116,9 +109,8 @@ describe('taskStateLine', () => {
       ? { ...c, assignment: { agentId: 'dev1', status: 'working', result: 'Fixing review findings for 23c567b11d9a8f9d46d0f053' } } : c) }
     expect(taskStateLine(noHead, 'g12')).toMatch(new RegExp(`; PR ${PR}\\.$`))
   })
-  it('has no line for the project chat, a Buddy chat or an unknown conversation', () => {
+  it('has no line for the project chat or an unknown conversation', () => {
     expect(taskStateLine(state, 'lead-app')).toBeNull()
-    expect(taskStateLine(state, 'chat')).toBeNull()
     expect(taskStateLine(state, 'gone')).toBeNull()
   })
   it('stays under 300 characters', () => {

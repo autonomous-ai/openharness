@@ -183,7 +183,7 @@ export async function storedMessages(tx: Transaction, ids: string[]): Promise<Ar
 }
 
 /** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
-const LEAD_COPY_KINDS = new Set<unknown>(['work-lost', 'work-resumed'])
+const LEAD_COPY_KINDS = new Set<unknown>(['work-lost'])
 
 /** Of `rows`, the task chat copies stored before #2177 marked them (liveness.ts leadNoticeRows) whose project chat copy
  *  reached the Lead: that same notice, so read by no one either (re-check of #2177). A copy whose Lead copy reached no one,

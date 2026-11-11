@@ -6,7 +6,7 @@
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
-import { agentProjectId, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, watchClosed, type ConfidentialSets } from '../projects.js'
+import { agentProjectId, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, startProject, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 
@@ -70,7 +70,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
       && !state.machines?.some(m => m.machineId === machineId) && !state.removedMachines?.some(r => r.machineId === machineId)
       && !machineLimitReached(state, user.sub),
-    skillMode: home ? skillModeOf(home) : 'orchestration',
+    skillMode: 'default',
     lead: !!ledProject(state, target.id),
     // Swarm v4 restarts no PM on the server's word (timeChecks.ts): an older host still reads the field, so it stays, always empty.
     owed: null,

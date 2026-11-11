@@ -202,7 +202,7 @@ export async function readGitProject(requested: string, options: { refresh?: boo
 }
 
 /** `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec updating exactly that ref. */
-export function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
+function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
   const match = /^refs\/remotes\/([A-Za-z0-9._][A-Za-z0-9._-]*)\/([A-Za-z0-9._]\S*)$/.exec(ref ?? '')
   if (!match || match[2] === 'HEAD') return null
   return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
@@ -210,7 +210,7 @@ export function remoteBranch(ref: string | undefined): { remote: string; branch:
 
 /** The remote's default branch as the ref a clone keeps it in: `origin/HEAD`, else `origin/main` or
  *  `origin/master`, as `readGitProject` offers it. Null when the repository has no such ref. */
-export async function originDefaultRef(path: string): Promise<string | null> {
+async function originDefaultRef(path: string): Promise<string | null> {
   const head = await git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null)
   for (const ref of [head, 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
     if (ref && await git(path, ['show-ref', '--verify', '--quiet', '--', ref]).then(() => true, () => false)) return ref

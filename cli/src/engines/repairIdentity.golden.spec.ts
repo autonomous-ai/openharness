@@ -115,6 +115,8 @@ it('records which Muse files identify a conversation', async () => {
   file(join(root, 'duplicate-b', 'session.jsonl'), lines(header('/work/muse/duplicate'), event('run', 'started')))
   await check('muse:ambiguous', () => repair.findLiveSession('muse', '/work/muse/duplicate', clock.time))
   await check('muse:older-than-process', () => repair.findLiveSession('muse', '/work/muse/spoken', clock.time + 60_000))
+  // OpenClaw is bound from its TUI's header alone (core/agents/bind.ts): its store is never searched by folder.
+  await check('openclaw:never-by-folder', () => repair.findLiveSession('openclaw', '/work/muse/spoken', clock.time))
 })
 
 it('records Pi header authority and incomplete-file answers', async () => {

@@ -47,6 +47,13 @@ vi.mock('../lib/selfUpdate.js', async (real) => {
   }
 })
 
+// Which Node the machine has: what ensureNodeMeetsMinimum answers, and the lines it reports while it works.
+const nodeCheck = vi.hoisted(() => ({ answer: { node: '/managed/node', reason: null } as { node: string | null; reason: string | null } }))
+vi.mock('../lib/runtimeInstall.js', async (real) => ({
+  ...await real<object>(),
+  ensureNodeMeetsMinimum: async (log: (line: string) => void) => { log('  ✓ Node 24 ready\n'); return nodeCheck.answer },
+}))
+
 // No process runs from any build: the retirement's table, the same on every host.
 vi.mock('../lib/windows/processTable.js', () => ({ windowsProcessRows: async () => [] }))
 
@@ -107,10 +114,20 @@ describe('the updater in its own process', () => {
     return { deps, windows, calls, told, ready, cli: () => cli!, hn: () => hn!, pty: () => pty, sent: () => sent! }
   }
 
+  it('makes sure of Node for the build, passes the answer on, and logs what the check says as an update line', async () => {
+    const m = make()
+    const service = runUpdaterService(undefined, m.deps)
+    await expect(m.cli().node!.ensure()).resolves.toEqual({ node: '/managed/node', reason: null })
+    expect(m.calls).toContain('[update] ✓ Node 24 ready')
+    service.stop()
+  })
+
   it('checks for this build\'s successor, and hn\'s, on the installed copy, and stops both', () => {
     const m = make()
     const service = runUpdaterService(undefined, m.deps)
     expect(m.cli()).toMatchObject({ currentVersion: VERSION, stageWhileJudged: true })
+    // The Node the build comes up on is made sure of first, and the one this daemon runs on is the way back.
+    expect(m.cli().node).toMatchObject({ ensure: expect.any(Function), running: process.execPath })
     expect(m.hn()).toMatchObject({ currentVersion: VERSION, isInstalledCopy: true })
     expect(m.calls[0]).toMatch(new RegExp(`^\\[update\\] self-update on · v${VERSION.replace(/\./g, '\\.')} · every \\d+s`))
     service.stop()

@@ -1518,7 +1518,7 @@ function mergeRuntimes(current, observed) {
 // missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
   'claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
-  'agy', 'copilot', 'terminal',
+  'agy', 'copilot', 'openclaw', 'terminal',
 ])
 
 function validRegistryString(value, max = 4096) {
@@ -1641,7 +1641,7 @@ async function fallbackRegister(input, engine, tmuxPane) {
     ? rawSessionId
     : (transcriptPath ? basename(transcriptPath).replace(/\.jsonl$/, '') : '')
   if (!sessionId) return
-  const transcriptOptional = ['cursor', 'opencode', 'kilo', 'pi', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'copilot'].includes(engine)
+  const transcriptOptional = ['cursor', 'opencode', 'kilo', 'pi', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'copilot', 'openclaw'].includes(engine)
   if (!transcriptOptional && !transcriptPath) return
   if (transcriptPath && !validTranscriptPath(engine, transcriptPath, p)) return
   const observations = []

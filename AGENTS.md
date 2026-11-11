@@ -25,7 +25,8 @@ accounts; chat for people talking to people; work beyond code (CAD, music, games
 paused); new surfaces or hardware. The terminal interface is maintenance only.
 
 Priority, in order: production down or a security problem; data loss, a broken Swarm loop or a tech limit that got
-worse; a wall our own Swarms hit; what the outside company needs; contribution of machines and subscriptions; polish.
+worse; a wall our own Swarms hit; what the outside company needs; what lets more people join a Swarm with their own
+agents, computers and subscriptions; polish.
 
 # Scope
 
@@ -115,7 +116,7 @@ A change that stores, syncs or exposes data has a **Design** section before code
   the backend it may meet; published contracts are only extended, or versioned beside the old;
 - migration and rollback, stated in the pull request;
 - audience: the server enforces it;
-- identity: never the machine owner's login;
+- identity: an agent runs only under its own person's login, never another person's;
 - failure: nothing breaks without saying so;
 - platforms.
 

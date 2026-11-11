@@ -93,7 +93,9 @@ void main() {
     expect(identical(session.terminal, before), isTrue);
   });
 
-  test('changing input context withholds typing until the new stream is ready and preserves its terminal', () async {
+  // The daemon no longer reads an input context (cli #3917): no open or message carries one, and only watching or
+  // controlling reopens a stream.
+  test('turning watch-only off withholds typing until the new stream is ready, preserves its terminal and sends no input context', () async {
     await ready();
     await session.handleBinary(
       output(
@@ -106,13 +108,25 @@ void main() {
     );
     final terminal = session.terminal;
     expect(session.acceptsInput, isTrue);
-    session.stageInputContext('context_alpha_123456');
+    await session.setWatchOnly(true);
     expect(session.acceptsInput, isFalse);
-    await session.setInputContext('context_alpha_123456');
-    final opening = sent
+    var opening = sent
         .lastWhere((frame) => frame.type == 'terminal_open')
         .payload;
-    expect(opening['inputContext'], 'context_alpha_123456');
+    expect(opening['watchOnly'], isTrue);
+    expect(opening.containsKey('inputContext'), isFalse);
+    final opens = sent.where((frame) => frame.type == 'terminal_open').length;
+    await session.setWatchOnly(true);
+    expect(
+      sent.where((frame) => frame.type == 'terminal_open'),
+      hasLength(opens),
+    );
+    session.stageWatchOnly(false);
+    expect(session.acceptsInput, isFalse);
+    await session.setWatchOnly(false);
+    opening = sent.lastWhere((frame) => frame.type == 'terminal_open').payload;
+    expect(opening.containsKey('watchOnly'), isFalse);
+    expect(opening.containsKey('inputContext'), isFalse);
     expect(identical(session.terminal, terminal), isTrue);
     await session.handleFrame('terminal_ready', {
       'requestId': opening['requestId'],
@@ -130,25 +144,14 @@ void main() {
       ),
     );
     expect(session.acceptsInput, isTrue);
-    final latestTerminal = session.terminal;
-    expect(await session.sendComposerText('Scoped composed input'), isTrue);
+    expect(await session.sendComposerText('Composed input'), isTrue);
     expect(
       sent
           .lastWhere((frame) => frame.type == 'message')
-          .payload['inputContext'],
-      'context_alpha_123456',
-    );
-    session.stageInputContext(null);
-    expect(session.acceptsInput, isFalse);
-    await session.setInputContext(null);
-    expect(
-      sent
-          .lastWhere((frame) => frame.type == 'terminal_open')
           .payload
           .containsKey('inputContext'),
       isFalse,
     );
-    expect(identical(session.terminal, latestTerminal), isTrue);
   });
 
   test(
@@ -174,11 +177,11 @@ void main() {
     await session.handleBinary(
       output(0, 'screen'.codeUnits, keyframe: true, cols: 100, rows: 30),
     );
-    session.stageInputContext(null, watchOnly: true);
+    session.stageWatchOnly(true);
     expect(session.readOnly, isTrue);
     expect(session.acceptsInput, isFalse);
     expect(await session.sendComposerText('Do not send'), isFalse);
-    await session.setInputContext(null, watchOnly: true);
+    await session.setWatchOnly(true);
     expect(
       sent
           .lastWhere((frame) => frame.type == 'terminal_open')

@@ -91,9 +91,7 @@ Future<void> _showProjectDetails(
                 ),
               ),
               SuperTabDetailRow(
-                label:
-                    c.snapshot?.coordinatorNameOf(project.id) ??
-                    kDefaultCoordinatorName,
+                label: kDefaultCoordinatorName,
                 value: group?.leadId == null
                     ? 'Starting…'
                     : c.snapshot!.agentName(group!.leadId!),
@@ -116,7 +114,9 @@ typedef ProjectSettingsRow = ({
 });
 
 /// The project menu's Project settings… (Quiet Swarm, screen 9): the rows the
-/// reader may use, each closing the dialog and then doing its work. Under the
+/// reader may use, worked out again on each change to [c] (a save that
+/// finishes brings Rename back, task #4705), each closing the dialog and then
+/// doing its work. Under the
 /// title, the project and its Swarm; each row's current value on the right in
 /// the quieter metadata role; a destructive row in the theme's error ink,
 /// below a rule, as a menu sets one apart (task #3194).
@@ -124,7 +124,7 @@ Future<void> showProjectSettings(
   BuildContext context,
   SuperTabController c,
   SuperTabProject project,
-  List<ProjectSettingsRow> rows, {
+  List<ProjectSettingsRow> Function() rows, {
   double rowHeight = 32,
 }) => showAppDialog<void>(
   context: context,
@@ -132,57 +132,60 @@ Future<void> showProjectSettings(
     controller: c,
     projectId: project.id,
     requireWrite: false,
-    child: SuperTabDetailDialog(
-      title: 'Project settings',
-      detail: [project.name, ?c.snapshot?.name].join(' · '),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final (i, row) in rows.indexed) ...[
-            if (row.danger && i > 0)
-              Divider(
-                key: const ValueKey('super-project-setting-danger-rule'),
-                height: _gap,
-                thickness: 1,
-                color: grid.AppPalette.divider,
-              ),
-            InkWell(
-              key: ValueKey('super-project-setting-${row.label}'),
-              onTap: () {
-                Navigator.of(context).pop();
-                row.action();
-              },
-              child: Container(
-                constraints: BoxConstraints(minHeight: rowHeight),
-                alignment: Alignment.centerLeft,
-                child: Row(
-                  children: [
-                    Text(
-                      row.label,
-                      style: DesktopChrome.control(
-                        color: row.danger
-                            ? Theme.of(context).colorScheme.error
-                            : null,
-                      ),
-                    ),
-                    if (row.value case final value?) ...[
-                      const SizedBox(width: _gap),
-                      Expanded(
-                        child: Text(
-                          value,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.end,
-                          style: DesktopChrome.metadata(),
+    child: ListenableBuilder(
+      listenable: c,
+      builder: (context, _) => SuperTabDetailDialog(
+        title: 'Project settings',
+        detail: [project.name, ?c.snapshot?.name].join(' · '),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (i, row) in rows().indexed) ...[
+              if (row.danger && i > 0)
+                Divider(
+                  key: const ValueKey('super-project-setting-danger-rule'),
+                  height: _gap,
+                  thickness: 1,
+                  color: grid.AppPalette.divider,
+                ),
+              InkWell(
+                key: ValueKey('super-project-setting-${row.label}'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  row.action();
+                },
+                child: Container(
+                  constraints: BoxConstraints(minHeight: rowHeight),
+                  alignment: Alignment.centerLeft,
+                  child: Row(
+                    children: [
+                      Text(
+                        row.label,
+                        style: DesktopChrome.control(
+                          color: row.danger
+                              ? Theme.of(context).colorScheme.error
+                              : null,
                         ),
                       ),
+                      if (row.value case final value?) ...[
+                        const SizedBox(width: _gap),
+                        Expanded(
+                          child: Text(
+                            value,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.end,
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
-        ],
+        ),
       ),
     ),
   ),
@@ -381,7 +384,7 @@ Future<void> _deleteProject(
                       children: [
                         Text(
                           available
-                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its ${c.snapshot?.coordinatorNameOf(project.id) ?? kDefaultCoordinatorName}’s session will close too. This can’t be undone.'
+                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. Its $kDefaultCoordinatorName’s session will close too. This can’t be undone.'
                               : 'This project is no longer available.',
                           style: DesktopChrome.text(),
                         ),

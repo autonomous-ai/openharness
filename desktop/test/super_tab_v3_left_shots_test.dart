@@ -26,10 +26,8 @@ Map<String, dynamic> _agent(String id, String name) => {
   'configuration': {'engine': 'codex'},
 };
 
-/// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's Lead ring and an
-/// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open. Task #4192: no
-/// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded. Task #4220:
-/// Decisions in the middle keeps Tasks on the right.
+/// The Swarm's left pane and middle, in both appearances: Your Team with a PM's Lead ring and an unread name in bold, and
+/// the chat of a selected agent in the middle.
 void main() {
   setUpAll(() async {
     await loadCaptureFonts(shots);
@@ -62,9 +60,9 @@ void main() {
           server.state['agents'] = [
             // The person's own agent is of no project, as the server sends it.
             {
-              ...(_agent('buddy', 'Buddy')..remove('projectId')),
+              ...(_agent('wren', 'Wren')..remove('projectId')),
               'kind': 'regular',
-              'chatId': 'agent-chat-buddy',
+              'chatId': 'agent-chat-wren',
               'myAgent': true,
             },
             {
@@ -88,9 +86,9 @@ void main() {
             },
           ];
           groups.add({
-            ...conversationFixture('agent-chat-buddy', 'Buddy'),
+            ...conversationFixture('agent-chat-wren', 'Wren'),
             'kind': 'agent-chat',
-            'agentIds': ['buddy'],
+            'agentIds': ['wren'],
           });
           groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
           // A Regular agent's own chat with its person (backend #4116): it needs no Lead.

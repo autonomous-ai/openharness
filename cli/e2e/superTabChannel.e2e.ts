@@ -79,6 +79,8 @@ async function boot() {
       if (!value) throw new Error('Unknown delivery')
       if (value.claimId && value.claimId !== body.claimId) throw new Error('Claim changed')
       if (body.type === 'claim') { value.claimId = body.claimId; value.claims = (value.claims ?? 0) + 1; return { data: { message: value.message } } }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value.status = body.uncertain ? 'uncertain' : 'delivered'
       value.receipt = body.receipt
       return { data: {} }

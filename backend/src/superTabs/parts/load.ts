@@ -31,12 +31,12 @@ async function assemble(tx: Transaction, tabId: string, where: Record<HeldKind, 
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const group = where.group
-  const [members, agents, groups, machines, starts, progress] = await Promise.all((['member', 'agent', 'group', 'machine', 'start', 'progress'] as const)
+  const [members, agents, groups, machines, starts] = await Promise.all((['member', 'agent', 'group', 'machine', 'start'] as const)
     .map(kind => kind === 'group' && Array.isArray(group) ? liveGroups(tx, tabId, group, held).then(rows => rows.map(row => toPart(kind, row)))
       : where[kind] === null ? Promise.resolve([])
       : where[kind] === 'held' ? held!.parts(tx, kind as HeldKind).then(rows => rows.map(row => toPart(kind, row)))
       : delegate(tx, kind).findMany({ where: { tabId, ...where[kind] as Where } }).then(rows => rows.map(row => toPart(kind, row)))))
-  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress,
+  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts,
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }
 
@@ -56,14 +56,14 @@ export async function loadActive(tx: Transaction, tabId: string,
   // A group stored with no project belongs to the default one (projects.ts groupProject), as in a Swarm from before projects;
   // a null match is a missing field too.
   const projectIds = [...opts.projectIds ?? [], ...opts.projectIds?.includes('lead') ? [null] : []]
-  // The awake groups through the held index, held (task #3146), and every live agent, machine, member and progress part
+  // The awake groups through the held index, held (task #3146), and every live agent, machine and member part
   // (task #4368): each command read every one of them whole. A read of every live group (allGroups, rare) adds the dormant
   // ones; the next command's read lets them go.
   const read = held?.read(tabId)
   const kept = read ? 'held' as const : live
   const awake: GroupReads = [['held', { dormant: false }]]
   const parts = await assemble(tx, tabId, {
-    member: kept, agent: kept, machine: kept, progress: kept,
+    member: kept, agent: kept, machine: kept,
     group: opts.allGroups ? [...awake, ['dormancy', { dormant: true }]] : [...awake, ...opts.groupIds?.length ? [['key', { key: { $in: opts.groupIds } }] as const] : [],
       ...opts.agentIds?.length ? [['agents', { agentIds: { $in: opts.agentIds } }] as const] : [],
       ...projectIds.length ? [['project', { projectId: { $in: projectIds } }] as const] : []],
@@ -106,8 +106,7 @@ export async function loadNamed(tx: Transaction, loaded: SwarmParts,
  * checks read, whole, since it may write them: running work, the Lead conversations, the unfinished starts' conversations,
  * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's
  * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
- * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are. No project's report
- * progress either: only commands note reports (projectUpdates.ts), so none is loaded or committed.
+ * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are.
  * Machine parts and conversations come through `held` (parts/held.ts): whole only those changed since this process last
  * read them (B3, #2597).
  */
@@ -115,7 +114,7 @@ export async function loadObserved(tx: Transaction, tabId: string, machineId: st
   const live = { deleted: false }
   const read = held.read(tabId)
   const [loaded, machineRows] = await Promise.all([
-    assemble(tx, tabId, { member: live, agent: live, machine: null, progress: null, start: { ...live, finishedAt: null }, group: [] }),
+    assemble(tx, tabId, { member: live, agent: live, machine: null, start: { ...live, finishedAt: null }, group: [] }),
     read.parts(tx, 'machine')])
   const machines = machineRows.map(row => toPart<MachineData>('machine', row))
   const { projects } = loaded.head.data!
@@ -150,14 +149,14 @@ export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts
   // Unfinished starts only: finished ones were 59% of prod's busiest base (1,118 of 1,120, 2026-11-02) and most reads drop
   // them; the reads that name them read `loadFinishedStarts` (cachedReads.ts readParts).
   return assemble(tx, tabId, { member: live, agent: live, group: [['dormancy', { dormant: false }]], machine: null,
-    start: { ...live, finishedAt: null }, progress: live })
+    start: { ...live, finishedAt: null } })
 }
 
 /** What a read check needs of a Swarm, and no more (read/service.ts oneGroup, task #2875): its head, members and agents. The
  *  read cache holds it as `access` and patches it from those kinds alone (cachePatch.ts accessRule). */
 export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> {
   const live = { deleted: false }
-  return assemble(tx, tabId, { member: live, agent: live, group: [], machine: null, start: null, progress: null })
+  return assemble(tx, tabId, { member: live, agent: live, group: [], machine: null, start: null })
 }
 
 /** One live group by key in one indexed read: whole, or without its data when `held` is it at the same version and write time,
@@ -192,12 +191,12 @@ export async function loadGroups(tx: Transaction, tabId: string, index: GroupInd
   return (await liveGroups(tx, tabId, [[index, match]])).map(row => toPart<GroupData>('group', row))
 }
 
-/** Every part of one Swarm, tombstones included with their last data (migration verification and rollback). */
+/** Every part of one Swarm, tombstones included with their last data. */
 export function loadAll(tx: Transaction, tabId: string): Promise<SwarmParts> {
-  return assemble(tx, tabId, { member: {}, agent: {}, group: {}, machine: {}, start: {}, progress: {} })
+  return assemble(tx, tabId, { member: {}, agent: {}, group: {}, machine: {}, start: {} })
 }
 
-/** Inserts a Swarm's parts as they are (the migration, a new Swarm). An existing part fails with P2002. */
+/** Inserts a new Swarm's parts as they are. An existing part fails with P2002. */
 export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<void> {
   const { tabId } = parts
   noteChange(tx, tabId, 'main')
@@ -206,7 +205,7 @@ export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<v
     ...extracted(kind, part.data, part.changedAt),
     ...(kind === 'head' ? { groupCounter: parts.groupCounter, visibilityEpoch: parts.visibilityEpoch, sequenceBase: parts.sequenceBase } : {}) }))
   for (const [kind, list] of [['head', [parts.head]], ['member', parts.members], ['agent', parts.agents], ['group', parts.groups],
-    ['machine', parts.machines], ['start', parts.starts], ['progress', parts.progress]] as Array<[PartKind, Part[]]>) {
+    ['machine', parts.machines], ['start', parts.starts]] as Array<[PartKind, Part[]]>) {
     if (list.length) await delegate(tx, kind).createMany({ data: rows(kind, list) })
   }
 }
@@ -319,8 +318,8 @@ export async function loadStartsOfAgents(tx: Transaction, tabId: string, agentId
   return rows.map(row => toPart<AgentStart>('start', rawPartRow(row)))
 }
 
-const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgent', group: 'SwarmGroup', machine: 'SwarmMachine', start: 'SwarmStart',
-  progress: 'SwarmProgress' } as const satisfies Record<PartKind, NamedCollection>
+const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgent', group: 'SwarmGroup', machine: 'SwarmMachine', start: 'SwarmStart' } as const satisfies
+  Record<PartKind, NamedCollection>
 /** What a changed part is made of: its other fields are indexed copies of its data. */
 const CHANGED_FIELDS = { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, data: 1, dormant: 1, readAt: 1, contentAt: 1,
   // A group's stored host digest (no other kind has one): the host signature's entry patches from it.

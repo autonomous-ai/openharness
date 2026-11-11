@@ -10,26 +10,14 @@ import 'package:harness/super_tabs/machines.dart';
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 
-// Task #4289: Swarm v3 has no Team accounts (#4120). Every agent runs on its own person's computer, as them, so a
-// machine's menu offers no choice of where teammates' work runs, and its row says nothing of it.
+// Every agent runs on its own person's computer, as them (#4120), so a machine's menu is Details and Remove from Swarm.
 final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
 
-Map<String, dynamic> _machine(
-  String id, {
-  bool? ownAccountChoice,
-  Map<String, dynamic>? teamWork,
-}) => {
+Map<String, dynamic> _machine(String id) => {
   'machineId': id,
   'name': "Gray's Mac",
   'contributorId': 'owner',
   'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
-  if (ownAccountChoice != null)
-    'ownAccountChoice': {
-      'allowed': ownAccountChoice,
-      'by': 'owner',
-      'at': '2026-11-04T09:00:00Z',
-    },
-  'teamWork': ?teamWork,
 };
 
 const _people = [
@@ -85,53 +73,19 @@ void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   testWidgets(
-    "the owner's menu on their Mac is Details and Remove from Swarm, whatever it chose before",
+    "the owner's menu on their Mac is Details and Remove from Swarm",
     (tester) async {
-      for (final choice in [null, false, true]) {
-        final server = ConversationServer();
-        server.state['machines'] = [
-          _machine('studio', ownAccountChoice: choice),
-        ];
-        final c = await _mount(tester, server);
-        await _rightClick(tester, 'studio');
-        expect(find.text('Details'), findsOneWidget, reason: '$choice');
-        expect(find.text('Remove from Swarm'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('super-machine-menu-own-account')),
-          findsNothing,
-          reason: '$choice',
-        );
-        expect(find.textContaining("teammates' work"), findsNothing);
-        expect(find.textContaining('Team account'), findsNothing);
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await tester.pumpAndSettle();
-        await _done(tester, c);
-      }
+      final server = ConversationServer();
+      server.state['machines'] = [_machine('studio')];
+      final c = await _mount(tester, server);
+      await _rightClick(tester, 'studio');
+      expect(find.text('Details'), findsOneWidget);
+      expect(find.text('Remove from Swarm'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await _done(tester, c);
     },
   );
-
-  testWidgets("a row says nothing of where teammates' work runs", (
-    tester,
-  ) async {
-    final server = ConversationServer();
-    server.state['machines'] = [
-      // An older Swarm's note that its owner let teammates' work run in their own account.
-      _machine(
-        'studio',
-        ownAccountChoice: true,
-        teamWork: {
-          'allowed': true,
-          'ownAccount':
-              "Gray's Mac runs teammates' work in Gray's own account.",
-        },
-      ),
-    ];
-    final c = await _mount(tester, server);
-    expect(find.byKey(const ValueKey('super-machine-studio')), findsOneWidget);
-    expect(find.textContaining("teammates' work"), findsNothing);
-    expect(find.textContaining('own account'), findsNothing);
-    await _done(tester, c);
-  });
 
   testWidgets('screenshots of the menu, light and dark', (tester) async {
     await tester.binding.setSurfaceSize(const Size(900, 560));
@@ -141,7 +95,7 @@ void main() {
       (Brightness.dark, 'dark'),
     ]) {
       final server = ConversationServer();
-      server.state['machines'] = [_machine('studio', ownAccountChoice: true)];
+      server.state['machines'] = [_machine('studio')];
       final c = await _mount(tester, server, brightness: brightness);
       await _rightClick(tester, 'studio');
       await captureWindow(tester, shots, 'machine-menu-$name');

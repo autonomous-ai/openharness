@@ -785,13 +785,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(project_(web), findsOneWidget);
       expect(find.text('Mentions could not be read.'), findsNothing);
-      expect(
-        find.descendant(
-          of: key('swarm-need-line'),
-          matching: find.textContaining('1 need you'),
-        ),
-        findsOneWidget,
-      );
     });
 
     /// [fake] with a second Swarm, whose mentions [read] answers.

@@ -31,10 +31,10 @@ class _CloseConnection extends WsConn {
   final requests = <String>[];
   final closedOnInspect = <String>{};
 
-  /// Swarm Buddies, as the daemon guards them (CLI closeAgentService.ts
-  /// BUDDY_PROTECTED): an inspect reads them and says they keep running, and
-  /// every close is refused, saying the same.
-  final buddies = <String>{};
+  /// Agents the daemon guards (CLI closeAgentService.ts): an inspect reads
+  /// them and says they keep running, and every close is refused, saying the
+  /// same.
+  final guarded = <String>{};
   Completer<Map<String, dynamic>>? inspecting;
 
   /// Runs as the daemon takes a close, before it answers: what the window
@@ -56,17 +56,17 @@ class _CloseConnection extends WsConn {
     final mode = payload['mode'] as String;
     final agentId = payload['agentId'] as String;
     await whileClosing?.call(mode);
-    if (buddies.contains(agentId) && mode != 'cancel') {
+    if (guarded.contains(agentId) && mode != 'cancel') {
       if (mode == 'inspect') {
         return {'activity': activities[agentId] ?? 'idle', 'keptRunning': true};
       }
       throw WsRequestFailure(
         responseType: 'agent_close_result',
-        code: 'BUDDY_PROTECTED',
-        detail: 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
+        code: 'LEAD_PROTECTED',
+        detail: 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.',
         payload: const {
-          'error': 'BUDDY_PROTECTED',
-          'detail': 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
+          'error': 'LEAD_PROTECTED',
+          'detail': 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.',
           'keptRunning': true,
         },
       );
@@ -941,14 +941,14 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  // Diego's Buddy, 10-30: closing the tab that showed it stopped it, and two
-  // proposals waited 30 minutes. The tab closes; the Buddy, mid-answer, keeps
+  // Diego's agent, 10-30: closing the tab that showed it stopped it, and his
+  // work waited 30 minutes. The tab closes; the agent, mid-answer, keeps
   // running: no prompt to stop it, no Stop, no Stop Harness.
   for (final activity in ['idle', 'working']) {
     testWidgets(
-      'closing a tab holding only a Buddy ($activity) closes the tab and keeps the Buddy',
+      'closing a tab holding only a guarded agent ($activity) closes the tab and keeps it running',
       (tester) async {
-        connection.buddies.add('a0');
+        connection.guarded.add('a0');
         connection.activities['a0'] = activity;
         app.adoptSessionForTest(terminal('a0', []));
         final tab = app.activeSwarm;

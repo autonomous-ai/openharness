@@ -76,7 +76,7 @@
   ],
   "cursor first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Cursor cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Cursor cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "opencode fresh": [
     "opencode"
@@ -118,7 +118,7 @@
   ],
   "pi first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Pi cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Pi cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "omp fresh": [
     "omp"
@@ -178,7 +178,7 @@
   ],
   "commandcode first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Command Code cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Command Code cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "devin fresh": [
     "devin"
@@ -198,7 +198,7 @@
   ],
   "devin first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Devin cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Devin cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "muse fresh": [
     "muse"
@@ -218,7 +218,7 @@
   ],
   "muse first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Muse cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Muse cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "amp fresh": [
     "amp"
@@ -239,7 +239,7 @@
   ],
   "amp first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Amp cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Amp cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "kilo fresh": [
     "kilo"
@@ -259,7 +259,7 @@
   ],
   "kilo first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Kilo cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Kilo cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "grok fresh": [
     "grok"
@@ -279,7 +279,7 @@
   ],
   "grok first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Grok cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Grok cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "agy fresh": [
     "agy"
@@ -299,7 +299,7 @@
   ],
   "agy first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Antigravity cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Antigravity cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
   "copilot fresh": [
     "copilot"
@@ -319,8 +319,33 @@
   ],
   "copilot first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "Copilot cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+    "detail": "Copilot cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one."
   },
+  "openclaw fresh": [
+    "openclaw",
+    "tui"
+  ],
+  "openclaw resume": [
+    "openclaw",
+    "tui",
+    "fixture-conversation"
+  ],
+  "openclaw fork": [
+    "openclaw",
+    "tui"
+  ],
+  "openclaw permission": [
+    "openclaw",
+    "tui",
+    "--model",
+    "fixture/model"
+  ],
+  "openclaw first": [
+    "openclaw",
+    "tui",
+    "--message",
+    "literal ; $(first message)"
+  ],
   "installation installed": {
     "code": 0,
     "trace": [

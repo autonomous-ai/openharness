@@ -32,7 +32,7 @@ const engines = [
   ['claude','Claude Code'],['codex','Codex'],['cursor','Cursor'],['opencode','OpenCode'],
   ['pi','Pi'],['hermes','Hermes'],['commandcode','Command Code'],['devin','Devin'],
   ['muse','Muse Code'],['amp','Amp'],['agy','Antigravity'],['copilot','GitHub Copilot'],
-  ['grok','Grok Build'],['kilo','Kilo Code'],
+  ['grok','Grok Build'],['kilo','Kilo Code'],['openclaw','OpenClaw'],
 ];
 function output(path, content) {
   const full = resolve(root, path);

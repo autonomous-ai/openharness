@@ -26,7 +26,11 @@ void main() {
   var terminalOpen = false;
 
   /// This computer's view of `host`, where lampOS's agents run: up, and the first builder at work in its folder.
-  AppNotifier app({bool online = true, String folder = '/Users/dee/lampOS'}) {
+  AppNotifier app({
+    bool online = true,
+    String folder = '/Users/dee/lampOS',
+    String? workspace,
+  }) {
     final app = createApp(connected: true);
     addTearDown(app.dispose);
     final machine = Machine(
@@ -46,6 +50,7 @@ void main() {
           name: 'first builder',
           engine: 'claude',
           modelName: 'Opus 5.5',
+          workspace: workspace,
           project: AgentProject(name: 'lampOS', cwd: folder),
           terminalAvailable: true,
         ),
@@ -160,6 +165,22 @@ void main() {
     await tap(tester, key('swarm-info-close'));
     expect(key('swarm-agent-info'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Info names the workspace beside the folder when the daemon says it, and draws nothing when it does not', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      const Size(1440, 900),
+      app: app(workspace: '/Users/dee/.openclaw/workspace'),
+    );
+    await tap(tester, key('swarm-info-button'));
+    expectRow('folder', '/Users/dee/lampOS');
+    expectRow('workspace', '/Users/dee/.openclaw/workspace');
+    await show(tester, const Size(1440, 900), app: app());
+    await tap(tester, key('swarm-info-button'));
+    expect(key('swarm-info-workspace'), findsNothing);
   });
 
   testWidgets(
