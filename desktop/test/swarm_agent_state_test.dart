@@ -119,6 +119,11 @@ void main() {
   int channelReads(List<String> paths) =>
       paths.where((p) => p.contains('/conversations/lead/messages')).length;
 
+  /// The board reads among [calls], each by its taken tasks: its pull requests are read with them while one is taken.
+  int boards(List<List<String>> calls) => calls
+      .where((a) => a.any((x) => x.contains('labels:["status:taken"]')))
+      .length;
+
   /// An app that reads the Swarm's computer, `host`, as Desktop reads its person's own: each agent's terminal on it.
   AppNotifier hostApp() {
     final app = createApp(connected: true);
@@ -235,6 +240,60 @@ void main() {
       expect(stateOf(states, c, 'second'), 'free');
     });
 
+    // "Waiting on a build": its task's pull request's checks run (the board's Checks), and no turn of its runs.
+    test('says waiting on a build while its task\'s pull request\'s checks run and it works on nothing', () async {
+      final c = await read(world());
+      final app = hostApp();
+      final states = reader(
+        c,
+        app: app,
+        github: swarmV4GitHub(firstBuilderChecks: 'PENDING'),
+      );
+      await idle(states);
+      String? row() => SwarmAgentStates.rowOf(
+        c.snapshot!.agent('first builder')!,
+        states: states,
+        app: app,
+        me: 'owner',
+      );
+      expect(row(), 'waiting on a build');
+      await app.handleEventForTest('host', {
+        'type': 'turn_started',
+        'agentId': 'session-first builder',
+      });
+      expect(row(), 'on #5759');
+      // With no app to say whether it works, its task alone.
+      expect(stateOf(states, c, 'first builder'), 'on #5759');
+      // Its checks done, it is at its task.
+      final done = reader(c, app: hostApp(), github: swarmV4GitHub());
+      await idle(done);
+      expect(
+        SwarmAgentStates.rowOf(
+          c.snapshot!.agent('first builder')!,
+          states: done,
+          app: hostApp(),
+          me: 'owner',
+        ),
+        'on #5759',
+      );
+    });
+
+    test(
+      'reads a board\'s pull requests beside its taken tasks, once a read',
+      () async {
+        final calls = <List<String>>[];
+        final c = await read(world());
+        final states = reader(c, github: swarmV4GitHub(calls: calls));
+        await idle(states);
+        int reads(String what) =>
+            calls.where((a) => a.any((x) => x.contains(what))).length;
+        expect(
+          [reads('labels:["status:taken"]'), reads('pullRequests(')],
+          [1, 1],
+        );
+      },
+    );
+
     test('redraws its rows when what one says moves, and not for a change that moves none', () async {
       final c = await read(world());
       final app = hostApp();
@@ -303,14 +362,14 @@ void main() {
           final states = reader(c, github: swarmV4GitHub(calls: calls));
           await idle(states);
           expect(channelReads(paths), 1);
-          expect(calls, hasLength(1));
-          final before = (channelReads(paths), calls.length);
+          expect(boards(calls), 1);
+          final before = (channelReads(paths), boards(calls));
 
           // The Swarm changes in ways that leave the channel and the board as they were: nothing more is read.
           await c.refresh();
           await c.refresh();
           await idle(states);
-          expect((channelReads(paths), calls.length), before);
+          expect((channelReads(paths), boards(calls)), before);
 
           // second takes a task: its next post is read, from where the last one ended.
           say(server, 'second', 'Taking #5760.');
@@ -325,7 +384,7 @@ void main() {
           );
           expect(stateOf(states, c, 'second'), isNull);
           expect(
-            calls.length,
+            boards(calls),
             before.$2,
             reason: 'the board is not read again within its minute',
           );
@@ -334,7 +393,7 @@ void main() {
           now = now.add(const Duration(minutes: 2));
           await c.refresh();
           await idle(states);
-          expect(calls.length, before.$2 + 1);
+          expect(boards(calls), before.$2 + 1);
           expect(channelReads(paths), 2);
         });
       },
@@ -351,8 +410,8 @@ void main() {
           boardEvery: const Duration(milliseconds: 60),
         );
         await idle(states);
-        expect(calls, hasLength(1));
-        await until(() => calls.length >= 2);
+        expect(boards(calls), 1);
+        await until(() => boards(calls) >= 2);
       },
     );
 
@@ -370,7 +429,7 @@ void main() {
         await c.refresh();
         await idle(states);
       }
-      expect(calls, hasLength(1));
+      expect(boards(calls), 1);
     });
 
     test('a reply in a thread is not an agent\'s latest word, unless it is also in the chat', () async {
@@ -461,7 +520,7 @@ void main() {
       expect(stateOf(states, c, 'second'), isNull);
       c.toggleAgentsGroup();
       await idle(states);
-      expect(calls, hasLength(1));
+      expect(boards(calls), 1);
       expect(channelReads(paths), 1);
       expect(stateOf(states, c, 'second'), 'free');
     });
@@ -699,7 +758,7 @@ void main() {
       final calls = <List<String>>[];
       final states = reader(c, github: swarmV4GitHub(calls: calls));
       await idle(states);
-      expect(calls, hasLength(1));
+      expect(boards(calls), 1);
       expect(stateOf(states, c, 'first builder'), 'on #5759');
     });
 
@@ -756,6 +815,7 @@ void main() {
       ConversationServer? server,
       bool withApp = true,
       AppNotifier? app,
+      SwarmGitHub? github,
       Size size = const Size(1440, 900),
       Brightness brightness = Brightness.light,
     }) async {
@@ -782,7 +842,7 @@ void main() {
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              github: swarmV4GitHub(),
+              github: github ?? swarmV4GitHub(),
             ),
           ),
         ),
@@ -862,6 +922,28 @@ void main() {
         );
         await tester.pump();
         expect(detail('super-agent-second'), 'needs you');
+      },
+    );
+
+    // "Waiting on a build": its pull request's checks run and it works on nothing; it is at its task once a turn of its runs.
+    testWidgets(
+      'an agent whose pull request builds says waiting on a build, and on #N again once a turn of its runs',
+      (tester) async {
+        final app = hostApp();
+        await show(
+          tester,
+          app: app,
+          github: swarmV4GitHub(firstBuilderChecks: 'PENDING'),
+        );
+        expect(detail('super-agent-first builder'), 'waiting on a build');
+        await tester.runAsync(
+          () => app.handleEventForTest('host', {
+            'type': 'turn_started',
+            'agentId': 'session-first builder',
+          }),
+        );
+        await tester.pump();
+        expect(detail('super-agent-first builder'), 'on #5759');
       },
     );
 

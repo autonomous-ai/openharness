@@ -89,6 +89,12 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   then passes breakaway to every child it starts (`setup_user_rlimits`), which would take an ordinary `npm run dev` out
   of the pane's job (`job::breakaway_allowed`). A program that breaks away on purpose is no longer listed by `jobPids`
   and is not ended with the pane — that is what asking to outlive it means.
+- **A program found by an engine's name may be another app.** A Microsoft Store app's alias in `WindowsApps` (older
+  Claude desktop apps registered `claude.exe`) cannot be stat'ed or run by Node (`EACCES`): it is no engine, and with
+  nothing else found the engine is installed (`storeAppAlias` in `cli/src/engines/kit/launchExecutable.ts`). The Claude
+  desktop app's own `Claude.exe` answers `--help` by opening its window and never exiting, so a `claude` on Windows is
+  asked `--version` first and refused unless it says Claude Code (`notClaudeCode` in `cli/src/engines/nativeLaunch.ts`).
+  A customer's launches held at "permission flags" for good (2026-11-10).
 
 ## 3. Files
 
@@ -100,6 +106,17 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **There is no `ps`.** Read the process table through `lib/windows/processTable.ts`. A check that treats a failed `ps` as "gone"
   quietly does nothing on Windows: viewers piled up for that reason (`dsh/viewerLedger.ts`).
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
+- **An unsigned program can be blocked outright.** Smart App Control (Windows 11) blocks an `.exe` or `.dll` without a valid
+  signature, and a blocked `harness-launch.exe` means Harness cannot start, so cannot update itself either (2026-11-09,
+  Code Integrity event 3077 at a customer). Nothing installs, updates to or promotes a terminal host unless every file is
+  signed ([Windows code signing](windows-code-signing.md#only-signed-terminal-hosts-reach-a-computer)). The Desktop app
+  reads the signatures of `bin\harness.exe` and `bin\harness-launch.exe` at start and sets the CLI up again when they
+  are not the release's (`_windowsProgramsSigned` in `desktop/lib/bootstrap/environment_provisioner.dart`). Whether Smart
+  App Control blocks a given unsigned file depends on its reputation (a fresh unsigned program ran on DESKTOP-0TFH0OJ
+  with it on, 2026-11-11), so read the signature; a trial run proves nothing.
+- **`Get-AuthenticodeSignature` needs its module imported by path** (`$PSHOME\Modules\Microsoft.PowerShell.Security`): a
+  PowerShell 7 `PSModulePath` makes 5.1 autoload 7's module, as with `Get-FileHash`. A file that is no program at all
+  reads `UnknownError`, not `NotSigned`.
 
 ## 4. Screens a person sees
 

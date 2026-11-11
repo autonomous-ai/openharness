@@ -171,6 +171,22 @@ describe('createAndRegisterPane', () => {
     expect(plain.ok && plain.pending).not.toHaveProperty('browser')
   })
 
+  it('a first task goes onto the row the pane is registered as', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
+    await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
+      argv: ['openclaw', 'tui'], firstTask: 'Fix the parser',
+    })
+    expect(openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ firstTask: 'Fix the parser' }))
+    await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-2',
+      argv: ['openclaw', 'tui'],
+    })
+    expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('firstTask')
+  })
+
   it('does not retry a tmux spawn failure', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

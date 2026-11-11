@@ -41,7 +41,13 @@ describe('the Windows release workflows', () => {
     // no build job: promote-pty-payload.sh re-checks every zip's sha256 and size itself, so a version released earlier
     // can be promoted without republishing bytes the bucket holds as immutable.
     expect(release).toMatch(/promote_pty:\n\s+description:[\s\S]*?\n\s+type: boolean\n\s+default: false/)
-    expect(release).toMatch(/promote-pty:\n\s+needs: \[version\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'/)
+    expect(release).toMatch(/promote-pty:\n\s+needs: \[version, pty-signatures\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'/)
+    // Only zips whose every file Windows' own check found signed (2026-11-04 to 11-09 production named an unsigned
+    // host, and Smart App Control blocked Harness's own start): the Windows job's list is the promote's input.
+    expect(release).toMatch(/pty-signatures:\n\s+needs: \[version\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'\n\s+runs-on: windows-latest/)
+    expect(release).toContain('powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\\scripts\\windows-ci\\check-pty-signatures.ps1')
+    expect(release).toContain('PTY_SIGNED_ZIPS: ${{ needs.pty-signatures.outputs.signed_zips }}')
+    expect(release).toContain('signed_zips: ${{ steps.check.outputs.signed_zips }}')
     // A promote-only dispatch builds nothing: the bytes are already published, and the bucket refuses a republish.
     expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]\n(?:\s+#[^\n]*\n)*\s+if: \$\{\{ !inputs\.promote_pty \}\}/)
     expect(release).toMatch(/pty-build:\n\s+needs: version\n\s+if: \$\{\{ !inputs\.promote_pty \}\}/)
@@ -50,7 +56,14 @@ describe('the Windows release workflows', () => {
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)
     expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]/)
     expect(release).not.toMatch(/METADATA_PATH=harness\/pty\/metadata\.json/)
-    expect(release).not.toContain('upload-install-ps1.sh --production')
+    // The production installer goes up only in promote-pty, after the host it installs, and only for the live CLI's
+    // version: never on a tag push.
+    const promote = release.match(/\n  promote-pty:\n[\s\S]*?(?=\n  [a-z][a-z-]*:\n)/)?.[0] ?? ''
+    expect(release.split('bash cli/scripts/upload-install-ps1.sh --production')).toHaveLength(2)
+    expect(promote).toContain('bash cli/scripts/upload-install-ps1.sh --production')
+    expect(promote.indexOf('upload-install-ps1.sh --production')).toBeGreaterThan(promote.indexOf('bash cli/scripts/promote-pty-payload.sh'))
+    expect(promote).toContain('if [ "$live" != "$VERSION" ]; then')
+    expect(promote).toContain('cmp cli/scripts/install.ps1 "$RUNNER_TEMP/install.ps1"')
   })
 
   it('lets the Node runtime workflow write only a runtime manifest, and fail plainly when the read-back is not served', () => {

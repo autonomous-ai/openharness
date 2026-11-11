@@ -63,6 +63,7 @@ import { externalReservations, externalResumePending, externalResumeIds, parseEx
 import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
+import { sid } from './log.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -236,6 +237,12 @@ export interface RegisteredSession {
    * usage and checkpoint are read from.
    */
   openclawStateDir?: string | null
+  /**
+   * The first task its launch carried, for an engine that is handed it by typing rather than in argv (OpenClaw), until
+   * it is typed into the pane. Saved with the row, so a daemon restart before the engine is ready still types it; taken
+   * off durably before it is typed (`takeFirstTask`), so it is typed at most once. Never on the agent's frame.
+   */
+  firstTask?: string
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -728,7 +735,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, firstTask: rawFirstTask, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -737,9 +744,11 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // review), and is kept as this release keeps it (project instructions, phase 4).
   const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   const launchArgs = storedLaunchArgs(rawLaunchArgs)
+  const firstTask = storedFirstTask(rawFirstTask)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
+    ...(firstTask ? { firstTask } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
@@ -790,6 +799,16 @@ export function parentAgentIdOf(value: unknown): string | null {
 /** Only a non-empty array of strings is a saved flag list; anything else on disk is dropped, never launched with. */
 function storedLaunchArgs(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
+}
+
+/** Only a non-empty string is a saved first task; anything else on disk is dropped, never typed into a pane. */
+function storedFirstTask(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
+}
+
+/** Says a first task is on the agent's row, by the agent's short id only: the task is the person's words. */
+function firstTaskKept(agentId: string): void {
+  console.log(`[agent] ${sid(agentId)} first task kept`)
 }
 
 /** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
@@ -1434,6 +1453,7 @@ class Registry {
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
+          ...(storedFirstTask(raw.firstTask) ? { firstTask: storedFirstTask(raw.firstTask) } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -1781,6 +1801,8 @@ class Registry {
     guest?: string | null
     /** Its Browser is on from the start (an older Desktop's create) — see RegisteredSession.browser. */
     browser?: boolean
+    /** The first task to type once the engine is ready — see RegisteredSession.firstTask. */
+    firstTask?: string
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1825,6 +1847,7 @@ class Registry {
       ...normalizedParent(input.startedBy, input.parentAgentId),
       ...(input.guest ? { guest: input.guest } : {}),
       ...(input.browser ? { browser: true as const } : {}),
+      ...(input.firstTask ? { firstTask: input.firstTask } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -1848,6 +1871,7 @@ class Registry {
       this.terminalAvailableAgents.delete(entry.agentId)
       return null
     }
+    if (entry.firstTask) firstTaskKept(agentId)
     return this.byAgent(entry.agentId) ?? null
   }
 
@@ -2189,6 +2213,8 @@ class Registry {
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
       ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
+      // And the task not yet typed: the bind is what lets it be typed, so dropping it here would lose it every time.
+      ...(existing?.firstTask ? { firstTask: existing.firstTask } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
       ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
@@ -2406,6 +2432,13 @@ class Registry {
       delete entry.browser
       entry.previousAgentId = original.agentId
     }
+    // And its first task: the shell under a new identity would carry a copy beside the archived agent's. A row that stays
+    // has had its launch end before the task was typed, and an engine the person starts in its shell is theirs: one they
+    // typed the task into themselves would get it twice.
+    if (entry.firstTask) {
+      delete entry.firstTask
+      if (!separateShell) console.log(`[agent] ${sid(agentId)} first task dropped · its engine exited before it was typed`)
+    }
     this.releaseBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
@@ -2528,14 +2561,39 @@ class Registry {
     return true
   }
 
-  /** A launch dispatch is durable before tmux may replace the inert shell. */
-  beginExternalDispatch(agentId: string): RegisteredSession | null {
+  /**
+   * A launch dispatch is durable before tmux may replace the inert shell. A [firstTask] the launch carries is committed
+   * in the same save: a dispatch on disk without it would start an engine that is never told what to do.
+   */
+  beginExternalDispatch(agentId: string, firstTask?: string): RegisteredSession | null {
     const row = this.byAgent(agentId)
     if (row?.externalResume?.phase !== 'admitted' || row.launch?.state !== 'held') return null
-    const prior = row.launch, active = row.active, intent = row.externalResume
+    const prior = row.launch, active = row.active, intent = row.externalResume, priorTask = row.firstTask
     row.launch = { state: 'starting' }; row.active = true; row.externalResume = { ...intent, dispatched: true }
-    try { this.save(true, false, agentId) } catch (error) { row.launch = prior; row.active = active; row.externalResume = intent; throw error }
+    if (firstTask) row.firstTask = firstTask
+    try { this.save(true, false, agentId) } catch (error) {
+      row.launch = prior; row.active = active; row.externalResume = intent
+      if (priorTask) row.firstTask = priorTask
+      else delete row.firstTask
+      throw error
+    }
+    if (firstTask) firstTaskKept(agentId)
     return row
+  }
+
+  /**
+   * The agent's first task, taken off its row for the one caller that types it (core/agents/bind.ts). The removal is
+   * saved before the task is returned, so a daemon that stops in between never types it a second time. Null for an
+   * agent that is gone, has no session bound yet (nothing to type into) or has no task. A save that fails puts the task
+   * back and throws; inside a registry transaction every strict save does, so the caller takes it in `afterTransaction`.
+   */
+  takeFirstTask(agentId: string): string | null {
+    const row = this.agents.get(agentId)
+    const task = row?.firstTask
+    if (!row?.sessionId || !task) return null
+    delete row.firstTask
+    try { this.save(true) } catch (error) { row.firstTask = task; throw error }
+    return task
   }
 
   setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null): RegisteredSession | null {
@@ -2686,7 +2744,7 @@ class Registry {
     return true
   }
 
-  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  /** An agent its person attached takes its Swarm role at restart, once; later roster reads cannot replace a saved role. */
   setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
     const session = this.agents.get(agentId)
     if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false

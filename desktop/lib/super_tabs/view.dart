@@ -53,6 +53,8 @@ import 'attachment_image.dart';
 import 'channel_talk.dart';
 import 'places.dart';
 import 'agent_state.dart';
+import 'terminal_button.dart';
+import '../state/harness_activity.dart';
 import 'back_to_chat.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -1191,13 +1193,6 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
-    // In the person's Personal Swarm a project chat with no Lead starts one
-    // on their computer; the message waits for it (task #2633).
-    final app = widget.app;
-    if (result != null && app != null) {
-      final lead = PersonalLeadStarter.of(app);
-      if (lead.wants(c, id)) unawaited(lead.start(c, id));
-    }
     setState(() {
       if (result == null && dropped != null) {
         // Not sent: its paths are still offered as zips, in a new record
@@ -2675,14 +2670,14 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Whether [group]'s empty chat offers to start its Lead: a Personal
+  /// Whether [group]'s empty channel offers to start its PM: a Personal
   /// project with none, read by someone who may write (task #2815).
   bool _offersLead(SuperTabConversation group) => switch (widget.app) {
     final app? => c.canWrite && PersonalLeadStarter.of(app).wants(c, group.id),
     null => false,
   };
 
-  /// A Personal project's empty chat with no Lead: the card that starts one
+  /// A Personal project's empty channel with no PM: the card that starts one
   /// (Huy 11-04, task #2815), and under it its panes when it holds any.
   Widget _leadWaiting(SuperTabConversation group) => Center(
     child: SingleChildScrollView(
@@ -2950,21 +2945,23 @@ class _SuperTabViewState extends State<SuperTabView>
             }),
           ),
           const SizedBox(width: 4),
-          AppIconButton(
-            key: const ValueKey('swarm-terminal-button'),
-            icon: AppIcons.terminal,
-            size: AppIcons.inlineSize,
-            tooltip: 'Terminal',
-            selected: terminalOpen,
-            onPressed: terminalOpen
-                ? widget.onCloseTerminal
-                : () {
-                    setState(
-                      () =>
-                          _instructionsOpen = _infoOpen = _browserOpen = false,
-                    );
-                    _openTerminals(group)?.call();
-                  },
+          // Redrawn as its computer's daemon tells of a question, through the agents' states, which move only when a row's
+          // word does: the app itself notifies on every word an agent writes.
+          ListenableBuilder(
+            listenable: _states ?? c,
+            builder: (context, _) => SwarmTerminalButton(
+              stuck: _terminalStuck(agent),
+              selected: terminalOpen,
+              onPressed: terminalOpen
+                  ? widget.onCloseTerminal
+                  : () {
+                      setState(
+                        () => _instructionsOpen = _infoOpen = _browserOpen =
+                            false,
+                      );
+                      _openTerminals(group)?.call();
+                    },
+            ),
           ),
           if (_offersBrowser(agent)) ...[
             const SizedBox(width: 4),
@@ -2984,6 +2981,14 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
     );
   }
+
+  /// Whether [agent]'s terminal waits on its person: a question on its screen, as its computer's daemon tells this Desktop, or a
+  /// prompt its computer has seen it sit on for 3 minutes ([SuperTabAgent.atPrompt]).
+  bool _terminalStuck(SuperTabAgent agent) =>
+      agent.atPrompt ||
+      (widget.app != null &&
+          harnessActivity(widget.app!, agent.machineId, agent.harnessId) ==
+              HarnessActivity.needsInput);
 
   Widget _header(SuperTabConversation? group, bool narrow) {
     final chatAgent = _chatAgent(group);

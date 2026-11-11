@@ -7,6 +7,7 @@ import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallPaths, engineInstallRecipe, type EngineInstallRecipe } from '../../lib/engineInstall.js'
 import { engineShellArgv, interactiveEngineShell, npmEngineBins } from '../../lib/engineLaunch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { storeAppAlias } from '../../lib/windows/storeAppAlias.js'
 import { probeExecFile } from '../../lib/offThreadExec.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { LAUNCH_LOCATION_VARIABLES } from './nativeLocations.js'
@@ -101,8 +102,14 @@ export function launchSearchNames(command: string, recipeNames: readonly string[
   return [...new Set([command, ...recipeNames])].filter((name) => platform !== 'win32' || name.toLowerCase() !== 'cmd')
 }
 
+/** A Store app's alias (lib/windows/storeAppAlias.ts) is no engine: with only an older Claude desktop app's `claude.exe`,
+ * every Claude Code launch held at "Waiting to confirm access" for good, where a computer with nothing installed has
+ * Claude Code installed for it (a customer, 2026-11-10). Each one looked past is logged once. */
+const reportedAliases = new Set<string>()
+
 /** A complete absence can authorize installation. Unreadable routes and failed
- * shell capture cannot: installing then would risk replacing a working engine. */
+ * shell capture cannot: installing then would risk replacing a working engine. A Windows Store app's alias is no
+ * engine at all (storeAppAlias): looked past, and absent when nothing else is found. */
 export async function captureLaunchExecutable(engine: AgentEngine, shell?: string): Promise<LaunchExecutableResult> {
   const environment = await launchEnvironment(shell)
   if (!environment || !environment.HOME || !isAbsolute(environment.HOME)) return held('Waiting to read the engine’s launch environment.')
@@ -123,7 +130,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   if (recipe?.executable.npmGlobal) candidates.push(...npmEngineBins().flatMap(bin => recipe.executable.names.map(name => join(bin, name))))
   // A candidate this account may not reach. Looked past, for a later one it can run; with none, held as before rather
   // than installing over what may be there.
-  let unreachable = false
+  let unreachable: string | null = null
   // A dangling link on the way to a candidate (POSIX): a person's choice, so it never proves the engine absent. Looked
   // past as bash and zsh look past it (ENOENT), for a later candidate it can run; with none, held rather than
   // installing. Held at the
@@ -166,15 +173,26 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
       // Homebrew is its owner's alone (mode 770) held every Claude Code launch here for good, its own Claude Code in
       // ~/.local/bin never reached (2026-10-27).
       const code = (error as NodeJS.ErrnoException).code
-      if (code === 'EACCES' || code === 'EPERM') { unreachable = true; continue }
-      return held('Waiting to confirm access to the selected engine executable.')
+      if (code === 'EACCES' || code === 'EPERM') {
+        const app = process.platform === 'win32' ? storeAppAlias(path) : null
+        if (app) {
+          if (!reportedAliases.has(path)) {
+            reportedAliases.add(path)
+            console.warn(`[launch] ${engine}: looked past ${path}, a Windows Store app's alias for ${app}, which is not ${engine}`)
+          }
+          continue
+        }
+        unreachable ??= path
+        continue
+      }
+      return held(`Waiting to confirm access to the selected engine executable (${path}).`)
     }
     const executable = executableSnapshot(nativeVersionProbe({ args: [], output: /^$/, timeoutMs: 5_000 }, () => path))
     if (!executable) return held('Waiting for the selected engine executable to stop changing.')
     return { state: 'ready', executable, environment: withNodeForScript(path, environment) }
   }
   if (aliased) return held('Waiting to confirm the engine search path and its aliases.')
-  if (unreachable) return held('Waiting to confirm access to the selected engine executable.')
+  if (unreachable) return held(`Waiting to confirm access to the selected engine executable (${unreachable}).`)
   return recipe ? { state: 'install', recipe, environment: environment as Record<string, string> } : held('Waiting for the configured engine executable to become available.')
 }
 

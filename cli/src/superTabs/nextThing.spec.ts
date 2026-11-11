@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { IDLE_ASK_MS, IDLE_BACK_MS, NEXT_SETTLE_MS, NEXT_TIMES, NextThing } from './nextThing.js'
+import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS } from './nextThing.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -30,7 +30,9 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     // Each pull request as GitHub details it, its comments, and its head's check runs; a pull request listed and not here is
     // clean and read by nobody yet.
     pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]>,
-    owed: [] as Array<{ number: number; sha: string }> }
+    owed: [] as Array<{ number: number; sha: string }>,
+    // The team's builder labels, and who the backend recorded as each verdict comment's writer, by its id.
+    team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
     head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
@@ -65,7 +67,11 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     const status = [...refuse].find(([end]) => path.endsWith(end))?.[1] ?? 200
     return { status, etag: null, body: null, resetAt: null }
   })
-  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log })
+  const team = vi.fn(async (_agent: WatchedAgent) => state.team)
+  const named = vi.fn(async (_agent: WatchedAgent, _repo: string, comments: Json[]) => state.recordsDown ? null
+    : comments.map(c => state.recorded[Number(c.id)] ? { ...c, recorded: state.recorded[Number(c.id)] } : c))
+  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log,
+    team, named })
   let turns = 0
   /** A turn of [harnessId] ending, then the settle after it. */
   const end = async (extra: Partial<TurnEnd> = {}) => {
@@ -74,7 +80,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
   }
   const told = () => tell.mock.calls.map(([, , text]) => text)
-  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, next: make() }
+  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, team, named, next: make() }
 }
 
 describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => {
@@ -412,7 +418,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const slow = new Promise<void>(resolve => { answer = resolve })
     const watched = f.state.watched
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
+      get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log })
     next.start()
     await f.end()
     await f.end()
@@ -436,7 +442,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = setup()
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file })
+      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named })
     next.start()
     await f.end()
     expect(warn).toHaveBeenCalledWith('[super-tab] next thing of agent h-pip: Error.')
@@ -466,6 +472,48 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     g.next.stop()
   })
 
+  // Swarm plan, step 1, item 2: "Harness types it once after a restart". A turn that ended while the daemon was down (an update,
+  // a restart) was never heard, and its agent slept with its next thing until something else woke it.
+  it('looks at each of its agents once as it starts: an idle one is typed its next thing, a busy one is left to its turn', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug')] })
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS - 1)
+    expect(f.tell).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    // Once: started again while running, it looks no more.
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.tell).toHaveBeenCalledOnce()
+    f.next.stop()
+    // Busy, or one whose turn just ended and is looked at by that: nothing more.
+    const busy = setup({ working: true })
+    busy.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(busy.tell).not.toHaveBeenCalled()
+    busy.next.stop()
+    const ended = setup()
+    ended.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS - NEXT_SETTLE_MS)
+    await ended.end()
+    expect(ended.tell).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(ended.tell).toHaveBeenCalledOnce()
+    ended.next.stop()
+    // Stopped before it looked: nothing; and a failure to list its agents is said.
+    const stopped = setup()
+    stopped.next.start()
+    stopped.next.stop()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(stopped.tell).not.toHaveBeenCalled()
+    const failing = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
+      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log })
+    failing.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next things as Harness started: Error.')
+    failing.stop()
+  })
+
   it('hears turn ends once however often it is started, and none once stopped', async () => {
     const f = setup()
     f.next.start()
@@ -477,5 +525,119 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
     expect(f.tell).not.toHaveBeenCalled()
     f.next.stop()
+  })
+})
+
+// Swarm plan, step 1, item 2: "One command, harness inbox, lists what waits for an agent." Each line is what its turns' ends type
+// it, one at a time, in the same order: a compaction or a restart loses nothing it can read again.
+describe('what waits for an agent, as harness super-tab inbox lists it (nextThing.ts inbox)', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('lists its own pull requests\' HOLD and branch behind, the reads it owes and the task it holds, and types nothing', async () => {
+    const f = setup({ items: [item(14, 'Tidy the docs', ['status:taken']), item(15, 'Next one'),
+      { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' }, item(12, 'Fix the login bug', ['status:taken']),
+      { ...item(31, 'Add the export', [], true), body: 'Closes #13' }, item(13, 'Add the export', ['status:taken'])] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12 checks the old token.`)]
+    f.state.pulls[31] = { mergeable_state: 'behind' }
+    f.state.owed = [{ number: 40, sha: HEAD.slice(0, 7) }]
+    expect(await f.next.inbox('h-pip')).toEqual([
+      `Your acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)}: fix what it asks and push, and it is read again. Read it: gh pr view 30 --repo acme/app --comments`,
+      'Your acme/app#31 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push',
+      `Read acme/app#40 at ${HEAD.slice(0, 7)}, as Harness asked you: harness super-tab read ok acme/app#40 ${HEAD.slice(0, 7)} 'what you found' (or read hold, with the file, line and fix)`,
+      'You hold acme/app#14 (Tidy the docs): go on with it: gh issue view 14 --repo acme/app',
+    ])
+    expect(f.tell).not.toHaveBeenCalled()
+    expect(f.say).not.toHaveBeenCalled()
+  })
+
+  it('lists its next task when it holds none, and nothing when nothing waits or the terminal is no Swarm agent of its person\'s', async () => {
+    const f = setup({ items: [item(15, 'Next one'), item(12, 'Fix the login bug')] })
+    const next = `Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`
+    for (let i = 0; i <= NEXT_TIMES; i++) expect(await f.next.inbox('h-pip')).toEqual([next])
+    // Listed, it was not typed: its turn's end types it as the first time.
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([next])
+    expect(await f.next.inbox('h-other')).toEqual([])
+    f.state.items = []
+    expect(await f.next.inbox('h-pip')).toEqual([])
+    f.next.stop()
+  })
+
+  // "Harness types it once after a compaction": what it was told before is a summary now (core/turns/ends.ts TurnEnd.compacted).
+  it('types an agent whose context was compacted all that waits for it, once it is idle, then its next thing as before', async () => {
+    const BEHIND = 'Your acme/app#30 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push'
+    const NEXT = `Next: acme/app#15 Next one. It is given to you and nobody has taken it: ${TAKE} acme/app#15`
+    const ALL = 'Your context was compacted. What waits for you, as Harness reads it now (harness super-tab inbox lists it again):\n'
+    const f = setup({ working: true, items: [item(15, 'Next one'), { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' },
+      item(12, 'Fix the login bug', ['status:taken'])] })
+    f.state.pulls[30] = { mergeable_state: 'behind' }
+    f.next.start()
+    // Compacted in a turn that ended busy, or that its person stopped: typed at the end that finds it idle.
+    await f.end({ compacted: true })
+    await f.end({ aborted: true })
+    expect(f.tell).not.toHaveBeenCalled()
+    f.state.working = false
+    await f.end()
+    expect(f.told()).toEqual([`${ALL}- ${BEHIND}\n- ${NEXT}`])
+    await f.end()
+    expect(f.told()).toEqual([`${ALL}- ${BEHIND}\n- ${NEXT}`, BEHIND])
+    // Nothing waits: nothing is typed, and its next end types nothing either.
+    f.state.items = []
+    await f.end({ compacted: true, aborted: true })
+    await f.end()
+    await f.end()
+    expect(f.tell).toHaveBeenCalledTimes(2)
+    f.next.stop()
+    // A terminal that is no agent of its person's here keeps nothing for later.
+    const g = setup({ watched: [] })
+    g.next.start()
+    await g.end({ compacted: true })
+    g.state.watched = [PIP]
+    await g.end()
+    expect(g.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    g.next.stop()
+  })
+
+  // The sandbox, 2026-11-11: every agent of a person posts as its person's login, and so did the pull request's opener. Read
+  // with no team and no records, a reader's HOLD read as "from deehw", and a read made by command was asked for again.
+  it('reads verdicts as the merger does where every comment is one login\'s: the backend\'s record, and the team\'s names', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    const short = HEAD.slice(0, 7)
+    f.state.team = new Set(['builder:pip', 'builder:amari'])
+    f.state.pulls[30] = { user: { login: 'juno-gh' } }
+    f.state.comments[30] = [said(`Amari, 05:00, to **Pip**: HOLD ${short}: README.md: say it there too.`)]
+    // Pip owes a read of #24, and made it by command: its record names it.
+    f.state.owed = [{ number: 24, sha: short }]
+    f.state.pulls[24] = { user: { login: 'juno-gh' }, head: { sha: HEAD, ref: 'juno/24' } }
+    f.state.comments[24] = [{ ...said(`Pip, 05:10, to **Juno**: READ-OK ${short}`), id: 901 }]
+    f.state.recorded = { 901: 'Pip' }
+    const held = `Your acme/app#30 has a HOLD from Amari at ${short}: fix what it asks and push, and it is read again. Read it: `
+      + 'gh pr view 30 --repo acme/app --comments'
+    expect(await f.next.inbox('h-pip')).toEqual([held])
+    // A HOLD stands typed or by command, so it is still said while the records cannot be read, by the team's signature.
+    f.state.recordsDown = true
+    expect(await f.make().inbox('h-pip')).toEqual([held])
+    // Typed, not made by command, it is no read: still owed.
+    const g = setup({ items: [] })
+    g.state.owed = [{ number: 24, sha: short }]
+    g.state.pulls[24] = { user: { login: 'juno-gh' }, head: { sha: HEAD, ref: 'juno/24' } }
+    g.state.comments[24] = [{ ...said(`Pip, 05:10, to **Juno**: READ-OK ${short}`), id: 902 }]
+    expect(await g.next.inbox('h-pip')).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
+    // The records cannot be read: whether it read is not known, so it is not asked, and asked once they can be.
+    g.state.recordsDown = true
+    expect(await g.make().inbox('h-pip')).toEqual([])
+    g.state.recordsDown = false
+    expect(await g.make().inbox('h-pip')).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
+  })
+
+  it('lists at most INBOX_MAX, and fails by GitHub\'s code when GitHub cannot be read', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = Array.from({ length: INBOX_MAX + 3 }, (_, i) => ({ number: 40 + i, sha: HEAD.slice(0, 7) }))
+    expect(await f.next.inbox('h-pip')).toHaveLength(INBOX_MAX)
+    f.state.down = true
+    // A new one, as the one before holds what it read this instant.
+    await expect(f.make().inbox('h-pip')).rejects.toMatchObject({ code: expect.any(String) })
   })
 })

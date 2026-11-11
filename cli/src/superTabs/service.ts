@@ -20,12 +20,12 @@ import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
 import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
-import { crewOf } from './assign/crew.js'
+import { crewOf, labelOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
 
@@ -128,7 +128,7 @@ export interface SuperTabServiceOptions {
   /** What posts an agent's answer to its launch line in its chat (superTabs/firstAnswers.ts), for a spec. */
   firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
   /** What types an agent its next thing as its turn ends (superTabs/nextThing.ts), for a spec. */
-  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop'>
+  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop' | 'inbox'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -239,6 +239,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     say: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
       command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } }),
     file: join(api.dataDir, 'super-tab-next-things.json'),
+    // Verdicts read as the merger reads them (githubMerge.ts verdicts): every agent of a person posts as that person's login, so a
+    // signature names its reader only when it names one of the team, and only a READ-OK the backend recorded is a read.
+    team: async agent => new Set(list((await held().reads.read(agent.tabId, agent.agentId)).state.agents)
+      .map(a => labelOf(String(a.displayName ?? a.name ?? a.id)))),
+    named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '' }, comments),
   })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
@@ -436,6 +441,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         wake()
         if (payload.action === 'status') {
           return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
+        }
+        // What waits for this agent, a line each, as its turns' ends type it (`harness super-tab inbox`, nextThing.ts); GitHub's
+        // refusal by its code, as GitHub news and the assigner say it (githubRest.ts).
+        if (payload.action === 'inbox') {
+          try { return { ok: true, value: { waiting: await nextThings.inbox(agent.harnessId) } } } catch (error) {
+            if (error instanceof GitHubStop) return { error: error.code, detail: error.message }
+            throw error
+          }
         }
         // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts) and a builder's claim on a task (`take`,
         // githubClaim.ts): made with this computer's gh under the calling agent's name, on a repository of a project it reads,

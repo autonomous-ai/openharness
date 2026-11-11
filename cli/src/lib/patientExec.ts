@@ -41,15 +41,23 @@ export interface PatientExecOptions {
  */
 export function patientDeadline(ms: number, expire: () => void, clock: () => number = () => performance.now()): () => void {
   let cancelled = false
-  let windows = 0
+  let windows = 1
+  let left = ms
   let timer: NodeJS.Timeout | undefined
+  // The window runs in slices of at most HELD_MS, each of which sees a hold that began in it. One timer for the whole
+  // window missed a hold that began as the child started and ended just past the deadline: the timer fired barely late
+  // and the answer sitting unread was lost (5181 ms on a 5000 ms probe, e2e/stall.e2e.ts). A hold this misses is short.
+  // A slice a busy loop ran late counts the time it took, so the window never stretches.
   const arm = (): void => {
-    windows++
-    const due = clock() + ms
+    const slice = Math.min(left, HELD_MS)
+    const start = clock(), due = start + slice
     timer = setTimeout(() => {
-      if (clock() - due > HELD_MS && windows < MAX_WINDOWS) { arm(); return }
+      const now = clock()
+      if (now - due > HELD_MS && windows < MAX_WINDOWS) { windows++; left = ms; arm(); return }
+      left -= Math.max(slice, now - start)
+      if (left > 0) { arm(); return }
       setImmediate(() => { if (!cancelled) expire() })
-    }, ms)
+    }, slice)
   }
   arm()
   return () => {

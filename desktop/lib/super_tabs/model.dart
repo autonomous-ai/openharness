@@ -161,6 +161,9 @@ class SuperTabAgent {
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      atPrompt =
+          row['alerting'] is List &&
+          (row['alerting'] as List).contains('prompt'),
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
@@ -185,6 +188,10 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
+
+  /// Whether its computer has seen its terminal sit on a prompt for 3 minutes: a question, a menu or a screen only its person
+  /// can answer (the Swarm host's terminal watch, cli superTabs/terminal.ts; the backend's `alerting`).
+  final bool atPrompt;
 
   /// A Product Manager's engine switch that is asked for and not yet
   /// done (backend `switchRequest`); null otherwise.
@@ -331,8 +338,15 @@ class SuperTabProject {
       repositoryCreation = SuperTabRepositoryCreation.read(
         row['repositoryCreation'],
       ),
-      archived = row['archived'] == true;
+      archived = row['archived'] == true,
+      pmChatId = row['pmChat'] is Map
+          ? superTabMap(row['pmChat'])['id'] as String?
+          : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts): only its person reads it, so null
+  /// for anyone else, once a PM took it, and from a backend before it.
+  final String? pmChatId;
 
   /// Kept read-only and out of the project list: a v3 tab's project that had messages when it was closed (backend
   /// commands.ts `project.closeTab`).
@@ -620,6 +634,10 @@ class SuperTabSnapshot {
 
   bool isProjectLead(String conversationId) =>
       projects.any((p) => p.leadConversationId == conversationId);
+
+  /// The project whose PM [chatId], the reader's 1:1 chat with it, waits for while it starts.
+  SuperTabProject? projectWaitingIn(String chatId) =>
+      projects.where((p) => p.pmChatId == chatId).firstOrNull;
 
   /// The agents whose terminals [conversationId] opens: a project chat's
   /// coordinator alone, whoever else an older Swarm still holds there (#2207);

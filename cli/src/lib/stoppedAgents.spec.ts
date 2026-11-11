@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, constants, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -7,6 +7,11 @@ import type { RegisteredSession } from './registry.js'
 vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), readFileSync: vi.fn(fs.readFileSync) } })
 
 let directory = ''
+// The first import compiles registry.js's whole module graph: seconds on a loaded Mac. Paid once here, it stays out of the
+// first test's 5 s; each test's own import after resetModules only runs the compiled modules again.
+beforeAll(async () => {
+  await import('./stoppedAgents.js')
+}, 60_000)
 beforeEach(() => {
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'harness-stopped-'))
@@ -168,24 +173,25 @@ describe('saved catalog reads', () => {
   })
 
   it('bounds cached record count without thrashing or hiding a larger catalog', async () => {
-    const { saved, store } = await fixture()
-    store.save(saved)
+    const { saved, StoppedAgentStore } = await fixture()
     const base = join(directory, 'stopped-agents')
+    // A bound of 8 behaves as the real 2,048 does, with 10 files instead of 2,050: writing and deleting those outlasted
+    // the test's 30 s and its cleanup's 10 s on a loaded Mac.
+    const store = new StoppedAgentStore(base, 8)
+    store.save(saved)
     rmSync(join(base, `${saved.agentId}.json`))
-    for (let i = 0; i < 2050; i++) {
-      const agentId = `bounded-${String(i).padStart(4, '0')}`
+    for (let i = 0; i < 10; i++) {
+      const agentId = `bounded-${String(i).padStart(2, '0')}`
       writeFileSync(join(base, `${agentId}.json`), JSON.stringify({ version: 1,
         session: { ...saved, agentId } }), { mode: 0o600 })
     }
-    expect(store.list()).toHaveLength(2050)
+    expect(store.list()).toHaveLength(10)
     for (let pass = 0; pass < 2; pass++) {
       vi.mocked(readFileSync).mockClear()
-      expect(store.list()).toHaveLength(2050)
+      expect(store.list()).toHaveLength(10)
       expect(readFileSync).toHaveBeenCalledTimes(2)
     }
-  // 2,050 files written and listed three times: 0.8 to 0.9 s alone on the Mac Studio, 7.7 s inside `npm run test:resume`
-  // beside six other files at a load of 6 to 7, past the 5 s default (task #4405).
-  }, 30_000)
+  })
 })
 
 async function fixture() {

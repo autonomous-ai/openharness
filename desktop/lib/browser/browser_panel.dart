@@ -391,7 +391,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
     grid.AppTheme.watch(context);
     return ColoredBox(
       key: const ValueKey('swarm-browser-panel'),
-      color: DesktopChrome.surface,
+      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
+      color: grid.AppPalette.swarmField,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

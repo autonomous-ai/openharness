@@ -468,8 +468,39 @@ jobs:
   #
   # A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
   # (docs/testing/windows-cli-e2e.md) is the owner's gate before it is worth promoting.
-  promote-pty:
+  #
+  # First, Windows' own check of every file's signature in the staging zips (pty-signatures), the one Smart App Control
+  # applies: the script promotes only the zips that job names (PTY_SIGNED_ZIPS). From 2026-11-04 to 11-09 production
+  # named an unsigned host, and on computers with Smart App Control on Harness could neither start nor update itself.
+  pty-signatures:
     needs: [version]
+    if: >-
+      inputs.promote_pty &&
+      needs.version.outputs.metadata_path == 'harness/cli/metadata.json'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    outputs:
+      signed_zips: ${{ steps.check.outputs.signed_zips }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /cli/scripts/install.ps1
+            /cli/scripts/windows-ci/check-pty-signatures.ps1
+          sparse-checkout-cone-mode: false
+      # Windows PowerShell 5.1, which a person's install runs in.
+      - name: Check every file's signature in the staging zips
+        id: check
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\windows-ci\check-pty-signatures.ps1 `
+            -Version $env:VERSION -ManifestUrl "https://storage.googleapis.com/$env:GCS_BUCKET/harness/staging/pty/metadata.json"
+          if ($LASTEXITCODE -ne 0) { throw "check-pty-signatures.ps1 exited $LASTEXITCODE" }
+
+  promote-pty:
+    needs: [version, pty-signatures]
     if: >-
       inputs.promote_pty &&
       needs.version.outputs.metadata_path == 'harness/cli/metadata.json'
@@ -477,6 +508,7 @@ jobs:
     timeout-minutes: 15
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      PTY_SIGNED_ZIPS: ${{ needs.pty-signatures.outputs.signed_zips }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -519,6 +551,24 @@ jobs:
             main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
           JS
           echo "### Promoted the terminal host $VERSION to production" >> "$GITHUB_STEP_SUMMARY"
+      # The owner's third production step (promote-pty-payload.sh), here instead of a laptop's gcloud: the installer
+      # people run (irm .../harness/cli/install.ps1 | iex) goes with the host it installs. Only when that host is the
+      # live CLI's version, which upload-install-ps1.sh --production checks again; a promote of another version (a
+      # rollback) leaves the installer as it is. Then the CDN must serve exactly this file.
+      - name: Publish install.ps1 to production with the host it installs
+        run: |
+          set -euo pipefail
+          curl -fsSL -H 'Cache-Control: no-cache' "https://storage.googleapis.com/${GCS_BUCKET}/harness/cli/metadata.json" -o cli-manifest.json
+          live="$(node -p 'JSON.parse(require("node:fs").readFileSync("cli-manifest.json", "utf8")).cli.version')"
+          if [ "$live" != "$VERSION" ]; then
+            echo "::notice::the live CLI is $live, not $VERSION: install.ps1 is left as it is"
+            exit 0
+          fi
+          bash cli/scripts/upload-install-ps1.sh --production
+          curl -fsSL --retry 3 --retry-all-errors --max-time 30 -H 'Cache-Control: no-cache' \
+            https://cdn.autonomous.ai/harness/cli/install.ps1 -o "$RUNNER_TEMP/install.ps1"
+          cmp cli/scripts/install.ps1 "$RUNNER_TEMP/install.ps1"
+          echo "### Published install.ps1 to production with terminal host $VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   # The GitHub Release. Notes are the tag's OWN message, verbatim — the same rule the desktop repo
   # follows. CI generates nothing: what a human wrote and reviewed at tag time is exactly what

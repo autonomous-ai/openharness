@@ -1,5 +1,5 @@
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
-import { command, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
+import { command, requireHookScript, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -40,6 +40,7 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that is
     // a failed install with its reason, not a rejection (B4.1 review).
+    requireHookScript()
     const cmd = command(port, rule.engine, undefined, undefined, options.environment, platform === 'win32' ? rule.win32Runner! : 'bash')
     return await runHookPreparation([rule.file], async attempt => {
       const observed = inspectHookFile(rule.file)

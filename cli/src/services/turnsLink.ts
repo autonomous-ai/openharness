@@ -38,7 +38,8 @@ export function endIn(payload: Payload): TurnEnd | null {
   const event = payload.kind === 'turn_end' ? payload.event as Payload | undefined : undefined
   if (!event || typeof event.agentId !== 'string' || typeof event.sessionId !== 'string' || typeof event.aborted !== 'boolean'
     || typeof event.prompt !== 'string' || !/^[0-9a-f]{32}$/.test(event.prompt) || !Number.isSafeInteger(event.turnId) || (event.turnId as number) < 1) return null
-  return { agentId: event.agentId, sessionId: event.sessionId, aborted: event.aborted, prompt: event.prompt, turnId: event.turnId as number }
+  return { agentId: event.agentId, sessionId: event.sessionId, aborted: event.aborted, prompt: event.prompt, turnId: event.turnId as number,
+    ...event.compacted === true ? { compacted: true as const } : {} }
 }
 
 /** The core could not give the answer of a turn, named by its own code (the error it answered, or INVALID_ANSWER): read as no

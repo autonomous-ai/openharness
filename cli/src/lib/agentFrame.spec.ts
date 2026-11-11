@@ -90,6 +90,13 @@ describe('agentFrame', () => {
     expect(JSON.stringify(frame)).not.toContain('gridkey-SECRET')
   })
 
+  // The task is the person's words, typed into the pane once (core/agents/bind.ts); no client is ever sent it.
+  it('a first task never rides the agent\'s frame', async () => {
+    const row = { ...session(null), engine: 'openclaw' as const, firstTask: 'Fix the parser' }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(JSON.stringify(frame)).not.toContain('Fix the parser')
+  })
+
   it('F1 sends a fork origin to clients as name and id only, never its transcript', async () => {
     const row = session(null)
     row.forkedFrom = { agentId: 'p', name: 'P', sessionId: 'p-sess', transcriptPath: '/x/p-sess.jsonl' }

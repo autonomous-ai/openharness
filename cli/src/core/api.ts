@@ -614,8 +614,8 @@ export type TurnDelivery = SessionInputDelivery
 /** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session, whether it was cut short (an interrupt), and
  *  which turn it was, whatever any transcript shows by the time it is asked: its prompt as a hash (lib/promptIdentity.ts), which
  *  says which message it answers, and its number among the turns this core has told, which tells it from another turn asked the same
- *  words. */
-export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number }
+ *  words. [compacted] when its agent's context was compacted in it, or since the turn before (core/turns/ends.ts). */
+export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number; compacted?: true }
 
 /** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */
@@ -1329,15 +1329,17 @@ type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
-   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics). */
-  basics(lead: boolean): string
+   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics), then the agent's own `agents/<name>.md` in its folder ([own]: the
+   *  folder it starts in and the name it was started under). */
+  basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
 }
 
-/** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
- *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
+/** Give an agent its person attached (Desktop's Attach, started outside the Swarm) its Swarm role at its first restart or
+ *  resume (superTabs/inCore/adoption.ts): the row to launch, or null when the launch is no longer this one's. Absent while
+ *  the Swarm is off. */
 export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
   /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
    *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller

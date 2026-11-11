@@ -6,9 +6,8 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts, type NativePathFact } from '../engines/kit/nativePaths.js'
-import { HookPreparationHeld, hookPreparationRoutes, inspectHookFile, runHookPreparation, type HookPreparationAttempt, type HookPreparationProof } from '../engines/kit/nativeHookFiles.js'
+import { HookPreparationHeld, directoryChanged, flushDirectory, hookPreparationRoutes, inspectHookFile, runHookPreparation, type HookPreparationAttempt, type HookPreparationProof } from '../engines/kit/nativeHookFiles.js'
 import type { GridConfigFile, GridConfigLink } from './gridLaunchWire.js'
-import { directorySyncSupported } from './secureState.js'
 
 const identity = (info: NonNullable<ReturnType<typeof lstatSync>>) => `${info.dev}:${info.ino}:${info.mode}:${info.uid}`
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -25,8 +24,7 @@ async function syncDirectory(path: string, attempt: HookPreparationAttempt): Pro
   const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     if (identity(fstatSync(fd)) !== expected) throw new HookPreparationHeld('the directory changed before confirmation')
-    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
-    if (directorySyncSupported()) await attempt.flush(fd)
+    await flushDirectory(attempt, fd)
     if (identity(lstatSync(path)) !== expected) throw new HookPreparationHeld('the directory changed during confirmation')
   } finally { closeSync(fd) }
 }
@@ -71,6 +69,7 @@ export async function publishGridConfigDir(key: string, inputFiles: readonly Gri
       // A crash before its identity is durable leaves a visible hold, not an
       // invitation to adopt another directory at the same name.
       mkdirSync(directory, { mode: 0o700 })
+      directoryChanged(attempt, root)
     }
     privateDirectory(directory, false)
     const directoryPaths = new NativePaths(new NativeEvidenceBudget()), selectedDirectory = directoryPaths.resolveSync(directory)!
@@ -103,7 +102,8 @@ export async function publishGridConfigDir(key: string, inputFiles: readonly Gri
       }
       const route = hookPreparationRoutes([join(link.target, '.harness-route')])
       targetRoutes?.verify(); route.verify(); attempt.verify()
-      mkdirSync(link.target, { recursive: true, mode: 0o700 })
+      const created = mkdirSync(link.target, { recursive: true, mode: 0o700 })
+      if (created) directoryChanged(attempt, dirname(created))
       route.verify()
       // The borrowed native directory may be an existing, verified alias.
       const targetPaths = new NativePaths(new NativeEvidenceBudget()), target = targetPaths.resolveSync(link.target)
@@ -126,6 +126,7 @@ export async function publishGridConfigDir(key: string, inputFiles: readonly Gri
         if (!missing(error)) throw error
         if (settled.content !== null || completedBefore.content !== null) throw new HookPreparationHeld('a published native link was removed')
         symlinkSync(link.target, path, 'dir')
+        directoryChanged(attempt, directory)
       }
       const selected = new NativePaths(new NativeEvidenceBudget())
       selected.resolveSync(path)

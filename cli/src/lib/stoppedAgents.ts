@@ -25,7 +25,11 @@ export class StoppedAgentStore {
   private readonly catalogCache = new Map<string, { fingerprint: string; bytes: number; at: number; session: RegisteredSession }>()
   private catalogCacheBytes = 0
 
-  constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents')) {}
+  constructor(
+    private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents'),
+    // Only tests pass another: going past the real bound would take 2,049 files on disk.
+    private readonly cacheRecords = CATALOG_CACHE_RECORDS,
+  ) {}
 
   get(agentId: string): RegisteredSession | null {
     if (!SAFE_ID.test(agentId)) return null
@@ -93,7 +97,7 @@ export class StoppedAgentStore {
     this.forgetCatalogRecord(agentId)
     const session = this.get(agentId)
     const bytes = Number(before.size)
-    if (session && this.catalogCache.size < CATALOG_CACHE_RECORDS
+    if (session && this.catalogCache.size < this.cacheRecords
       && this.catalogCacheBytes + bytes <= CATALOG_CACHE_BYTES
       && catalogFingerprint(lstatSync(file, { bigint: true })) === fingerprint) {
       this.catalogCache.set(agentId, { fingerprint, bytes, at: now, session: structuredClone(session) })

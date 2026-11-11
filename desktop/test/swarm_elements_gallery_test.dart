@@ -23,6 +23,7 @@ import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
+import 'package:harness/super_tabs/terminal_button.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
 import 'package:harness/shared/theme/app_type.dart';
@@ -43,6 +44,7 @@ import 'package:harness/super_tabs/message_receipt.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
+import 'package:harness/super_tabs/personal_lead_card.dart' show SwarmPmStart;
 import 'package:harness/super_tabs/project_sidebar.dart'
     show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
@@ -240,7 +242,7 @@ Future<List<SuperTabController>> _show(
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
-  tester.view.physicalSize = const Size(760, 6000);
+  tester.view.physicalSize = const Size(760, 6600);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -586,6 +588,7 @@ class _Gallery extends StatelessWidget {
                         ('Ash', false, false, false, 'working'),
                         ('Juno', false, false, false, 'needs you'),
                         ('Pip', false, false, false, 'limited until 15:40'),
+                        ('Rue', false, false, false, 'waiting on a build'),
                       ])
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.agent(
@@ -912,6 +915,27 @@ class _Gallery extends StatelessWidget {
               ),
             ],
           ),
+          // anh Dee, 2026-11-11: a terminal stuck on its person carries a red 1 on its button, as a notification does.
+          section('terminal-button', 'Terminal: at rest, and waiting on you', [
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  SwarmTerminalButton(
+                    stuck: false,
+                    selected: false,
+                    onPressed: () {},
+                  ),
+                  const SizedBox(width: 24),
+                  SwarmTerminalButton(
+                    stuck: true,
+                    selected: false,
+                    onPressed: () {},
+                  ),
+                ],
+              ),
+            ),
+          ]),
           // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
           // is not there.
           section('empty-row', 'Empty: a row', [
@@ -955,6 +979,25 @@ class _Gallery extends StatelessWidget {
               width: 400,
               height: 60,
               child: SuperTabEmptyWords(superTabEmptyChannel),
+            ),
+          ]),
+          // A Personal project's channel with no PM (Swarm v4): one line and Start PM, which opens the PM's own chat; and
+          // why it could not start.
+          section('pm-start', 'Start PM: a Personal project with no PM', [
+            const SizedBox(
+              width: 440,
+              child: SwarmPmStart(
+                line: 'This project has no Product Manager.',
+                onStart: _noop,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const SizedBox(
+              width: 440,
+              child: SwarmPmStart(
+                line: 'Couldn’t start the Product Manager: Claude Code isn’t signed in on Mac Studio',
+                onStart: _noop,
+              ),
             ),
           ]),
           // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
@@ -1279,3 +1322,5 @@ class _NearlyComparator extends LocalFileComparator {
     throw FlutterError('$golden: $problem. What it drew: ${drawn.path}');
   }
 }
+
+void _noop() {}

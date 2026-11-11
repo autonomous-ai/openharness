@@ -115,6 +115,15 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ dsh: null, agent: null, startedBy: null, gridLaunch: grid }), 'a1', expect.any(Function), undefined)
   })
 
+  // A Swarm agent's own agents/<name>.md is under the name it was started with (superTabs/inCore/launch.ts).
+  it('hands the build the name the row was started under, or none', async () => {
+    const { helpers } = setup()
+    await helpers.relaunchOverrides(session({ defaultName: 'Faye' } as Partial<RegisteredSession>))
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(expect.anything(), 'claude', expect.objectContaining({ name: 'Faye' }), 'a1', expect.any(Function), undefined)
+    await helpers.relaunchOverrides(session())
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(expect.anything(), 'claude', expect.objectContaining({ name: null }), 'a1', expect.any(Function), undefined)
+  })
+
   it('carries the row\'s launch flags into the build, so restart, restore and retarget all apply them', async () => {
     const { deps, helpers } = setup()
     await helpers.relaunchOverrides(session({ launchArgs: ['--chrome'] }))

@@ -16,10 +16,8 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { createLaunchHelpers } from './launch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
-// Real native preparation asks a real `/bin/sh` engine for its help. On a loaded machine its 5 s deadline, not the code,
-// decided (5155 ms at load 60): a creation held, and the DSH launch it left queued answered the next test. What a deadline
-// does is patientExec.spec.ts's to test.
-vi.mock('../../lib/patientExec.js', async (real) => ({ ...await real<object>(), patientDeadline: () => () => {} }))
+// Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
+vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
@@ -90,7 +88,8 @@ describe('forking an agent', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%3' } }, pending } as never)
   })
-  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+  // A launch or an installed harness one test queued and never used answers no other test.
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
   it.each(['initial', 'source', 'inspect', 'harness', 'overrides', 'hooks', 'permission', 'instructions'] as const)(
     'cannot dispatch a fork whose original owner is revoked during %s', async stage => {
@@ -163,11 +162,9 @@ describe('forking an agent', () => {
 
   it.each(['claude', 'codex'] as const)('keeps real %s launch preparation authorized and records its final harness-selected home', async engine => {
     const executable = await import('../../engines/kit/launchExecutable.js')
-    // An engine that runs: a launch that names no mode still asks for its help (nativeLaunch.ts).
-    const engineFile = join(root, 'engine')
-    writeFileSync(engineFile, '#!/bin/sh\necho "Usage: engine"\n', { mode: 0o755 })
+    // An engine that runs (the child_process mock above): a launch that names no mode still asks for its help.
     vi.spyOn(executable, 'captureLaunchExecutable').mockResolvedValue({ state: 'ready',
-      executable: { command: engineFile, identity: 'fixture', current: () => true },
+      executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
@@ -182,7 +179,8 @@ describe('forking an agent', () => {
     vi.mocked(installedDsh).mockReturnValueOnce({ manifest: { name: 'Fixture' } } as never)
     launchDsh.mockResolvedValueOnce({ ok: true, launch: { env: { CODEX_HOME: finalHome }, args: [] } })
     const run = setup(source({ engine, codexHome: join(root, 'selected-codex'), dsh: 'fixture/tools' }), { native: (engine, source) => inspectNativeLaunch(engine, source), prepareNative, relaunchOverrides: helpers.relaunchOverrides })
-    expect(await run.fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    const forked = await run.fork({ agentId: 'a1', name: null, prompt: null })
+    expect(forked, JSON.stringify(forked)).toMatchObject({ ok: true })
     expect(executable.captureLaunchExecutable).toHaveBeenCalledOnce()
     const request = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
     expect(request.current?.()).toBe(true)
@@ -289,6 +287,19 @@ describe('forking an agent', () => {
     expect(options).toMatchObject({ firstPrompt: 'You are continuing…' })
     expect(options).not.toHaveProperty('forkSessionId')
     expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ defaultName: 'Builder 2' })
+  })
+
+  it('a fork of an OpenClaw agent keeps its handoff for typing', async () => {
+    const realPlan = await vi.importActual<typeof import('../../lib/forkAgent.js')>('../../lib/forkAgent.js')
+    const realLaunch = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
+    vi.mocked(planFork).mockImplementationOnce(realPlan.planFork)
+    // The argv the pane really gets, without the install step whose recipe this spec stubs.
+    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => realLaunch.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+    const { fork } = setup(source({ engine: 'openclaw', sessionId: 'agent:main:harness-a1' }))
+    expect(await fork({ agentId: 'a1', name: null, prompt: 'next' })).toMatchObject({ level: 'handoff' })
+    const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+    expect(pane.firstTask).toEqual(expect.stringContaining('next'))
+    expect(pane.argv.some(arg => arg.includes(pane.firstTask!))).toBe(false)
   })
 
   it('forks an agent with no session from what little it has, and opens a native fork with no first prompt', async () => {
