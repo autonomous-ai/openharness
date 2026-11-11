@@ -157,7 +157,7 @@ describe('createAndRegisterPane', () => {
     expect(person.ok && person.pending).not.toHaveProperty('parentAgentId')
   })
 
-  it('records Browser ticked on the row it opens', async () => {
+  it('records a Browser on from the start on the row it opens', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     const ticked = await createAndRegisterPane({

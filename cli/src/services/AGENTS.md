@@ -151,7 +151,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   each under an id of its own through `core.turns.deliver`, hears what became of it through `onDelivery`, and
   takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
-  only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below) and Agent Messages.
+  only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below), Agent Messages and the agent
+  browser.
   The Swarm's host, which answers a person in their agent's own chat when the agent's turn ends, also hears each
   live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on), which
   names its turn by a hash of its prompt and a number, and asks the core for the answer of that turn (`core.turns.answerOf`, the
@@ -228,7 +229,7 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
   devices, models and the gateway became on demand at protocol 4, which may also ask before it binds; the
-  viewers at protocol 5; the agent browser at protocol 7, asked for by an agent with Browser or as the core starts
+  viewers at protocol 5; the agent browser at protocol 7, asked for by an agent whose Browser is on or as the core starts
   when its state file is there (`core/agentBrowserLink.ts`). Making another process on demand needs a protocol bump, and that number in its
   `askedSince`. A newer core under an older master asks for a process that master started with the others,
   which changes nothing.

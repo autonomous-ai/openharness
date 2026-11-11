@@ -100,6 +100,14 @@ class _App extends AppNotifier {
       asked.add('retry $agentId');
 
   @override
+  Future<void> agentBrowserStart(String machineId, String agentId) async =>
+      asked.add('start $agentId');
+
+  @override
+  Future<void> agentBrowserStop(String machineId, String agentId) async =>
+      asked.add('stop $agentId');
+
+  @override
   Future<BrowserSettings> agentBrowserSettings(
     String machineId,
     String agentId,
@@ -262,7 +270,7 @@ void main() {
     await show(tester, needsSetup, thisComputer: false);
     expect(find.text('Set up Browser on Ken Mac first'), findsOneWidget);
     expect(find.byType(FilledButton), findsNothing);
-    expect(find.byType(TextButton), findsNothing);
+    expect(find.text('Install'), findsNothing);
   });
 
   testWidgets('podman_install_failed shows Retry on this computer only, and '
@@ -471,6 +479,62 @@ void main() {
     app.answer();
     await tester.pump();
     expect(key('browser-screen'), findsOneWidget);
+  });
+
+  testWidgets('off shows the line and Start, and the gear opens the '
+      'settings', (tester) async {
+    await show(tester, null);
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+    expect(key('swarm-browser-stop'), findsNothing);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.descendant(
+              of: key('swarm-browser-paste'),
+              matching: find.byType(IconButton),
+            ),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(key('swarm-browser-start'));
+    await tester.pump();
+    expect(app.asked, ['start a1']);
+    expect(app.streams, isEmpty);
+
+    await tester.tap(key('swarm-browser-settings'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Browser settings'), findsOneWidget);
+    await tester.tap(key('browser-settings-back'));
+    await tester.pump();
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+  });
+
+  testWidgets('Stop is in the header in every state but off', (tester) async {
+    for (final browser in [
+      const AgentBrowser(state: 'setup', step: 'installing'),
+      const AgentBrowser(state: 'starting'),
+      ready,
+      const AgentBrowser(state: 'failed', error: 'podman_down'),
+      const AgentBrowser(state: 'failed', error: 'needs_setup'),
+    ]) {
+      app.asked.clear();
+      await show(tester, browser);
+      expect(key('swarm-browser-stop'), findsOneWidget, reason: browser.state);
+      expect(find.text('Stop'), findsOneWidget);
+      // Before the gear.
+      expect(
+        tester.getRect(key('swarm-browser-stop')).right,
+        lessThanOrEqualTo(tester.getRect(key('swarm-browser-settings')).left),
+      );
+      await tester.tap(key('swarm-browser-stop'));
+      await tester.pump();
+      expect(app.asked, ['stop a1'], reason: browser.state);
+      await tester.pumpWidget(const SizedBox());
+    }
+    await show(tester, null);
+    expect(key('swarm-browser-stop'), findsNothing);
   });
 
   testWidgets('the panel closes from its ×', (tester) async {

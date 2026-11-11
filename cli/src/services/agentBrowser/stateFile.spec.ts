@@ -33,6 +33,25 @@ describe('StateFile', () => {
     expect(readFileSync(path, 'utf8')).toBe(before)
   })
 
+  it('a file with no told reads as nobody told, and update keeps a told it does not know', () => {
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings }, deleting: [], setup: null }))
+    const file = new StateFile(path)
+    expect(file.read().told?.a1).toBeUndefined()
+    file.update(s => { s.told = { a1: true } })
+    file.update(s => { s.deleting.push('a2') })
+    expect(file.read()).toEqual({ browsers: { a1: settings }, deleting: ['a2'], setup: null, told: { a1: true } })
+  })
+
+  it("an entry's profile is read back as written, and an entry without one is read as before", () => {
+    // a2 took a1's browser with its pane; a3's never moved, and its entry is what an older CLI writes and reads.
+    writeFileSync(path, JSON.stringify({ browsers: { a3: settings }, deleting: [], setup: null }))
+    const file = new StateFile(path)
+    file.update(s => { s.browsers.a2 = { ...settings, profile: 'a1' } })
+    expect(file.read().browsers).toEqual({ a2: { ...settings, profile: 'a1' }, a3: settings })
+    expect(file.read().browsers.a2!.profile).toBe('a1')
+    expect(Object.keys(JSON.parse(readFileSync(path, 'utf8')).browsers.a3)).toEqual(Object.keys(settings))
+  })
+
   it('a file that cannot be parsed throws state_unreadable and is not rewritten', () => {
     for (const broken of ['{"browsers": {', '[]', '{"browsers": {}, "deleting": "a1", "setup": null}']) {
       writeFileSync(path, broken)

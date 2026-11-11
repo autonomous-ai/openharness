@@ -2,6 +2,8 @@
 
 **Status:** design, not built. Reviewed independently nine times on 2026-11-10; rewritten after the fifth and
 corrected after each later one.
+How a browser is turned on, off and driven is changed by
+[2026-11-11-browser-from-chat-design.md](2026-11-11-browser-from-chat-design.md).
 **Date:** 2026-11-10
 **Scope of v1:** Desktop on macOS and Linux. Windows, the web and the phone come later; see the last section.
 

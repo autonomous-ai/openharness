@@ -39,7 +39,8 @@ describe('what a guest may ask', () => {
   it('the guest policy refuses every agent_browser type', () => {
     for (const type of ['agent_browser_open', 'agent_browser_ack', 'agent_browser_close',
       'agent_browser_available', 'agent_browser_setup', 'agent_browser_retry', 'agent_browser_state',
-      'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+      'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
+      'agent_browser_start', 'agent_browser_stop', 'agent_browser_window', 'agent_browser_run']) {
       expect(verdict(type, { agentId: 'mine' }), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
     }
   })

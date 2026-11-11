@@ -146,3 +146,19 @@ export function settingsHash(s: BrowserSettings): string {
 export function humanMode(s: BrowserSettings): 'off' | 'slow' | 'normal' | 'fast' {
   return s.humanInput ? s.humanSpeed : 'off'
 }
+
+// The smallest window a page lays out for a desktop; below it pages switch to their phone layout.
+const MIN_WINDOW = { width: 1024, height: 640 }
+
+const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
+
+/** The size Chrome's window takes for the panel's (spec: The window fits the panel): whole numbers, at least
+ *  1024x640, at most `screen` ("1920x1080"); null for anything that is not two positive numbers. */
+export function clampWindow(width: unknown, height: unknown, screen: string): { width: number; height: number } | null {
+  if (!isSize(width) || !isSize(height)) return null
+  const [maxWidth, maxHeight] = screen.split('x').map(Number) as [number, number]
+  return {
+    width: Math.min(maxWidth, Math.max(MIN_WINDOW.width, Math.round(width))),
+    height: Math.min(maxHeight, Math.max(MIN_WINDOW.height, Math.round(height))),
+  }
+}

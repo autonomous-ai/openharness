@@ -4,7 +4,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import '../widgets/terminal_prompt.dart';
 
-/// Set up Browser: asked once, on Start, only at the computer being set up. True on Install.
+/// Set up Browser: asked from the Browser panel's Install, only at the computer being set up. True on Install.
 Future<bool> showBrowserSetupDialog(
   BuildContext context, {
   required bool ownMachine,

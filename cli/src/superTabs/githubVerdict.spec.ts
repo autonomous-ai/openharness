@@ -33,7 +33,7 @@ function setup() {
     return { status: 201, etag: null, body: made, resetAt: null }
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const juno = { name: 'Juno', repositories: new Set(['acme/app']) }
+  const juno = { name: 'Juno', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
   const ok: Verdict = { repository: 'acme/app', number: 27, verdict: 'READ-OK', sha: 'f6edb44', text: 'Ran the tests on the head: 12 pass.' }
   const run = (asked: Verdict = ok, reader = juno) => postVerdict({ get, send, record, login: async () => 'reader-login', now: () => NOW }, reader, asked)
   return { repo, sent, asked, record, run, ok, juno }

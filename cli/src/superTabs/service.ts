@@ -20,7 +20,7 @@ import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
 import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { currentNames, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
@@ -166,6 +166,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   const github = (options.github ?? githubRest)()
+  // What GitHub names a project's repository now: a take, a read or a cut may name it either way (githubVerdict.ts ProjectRepositories).
+  const currentName = currentNames(github.get)
   // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.
   const commands = new Map<string, Promise<unknown>>()
   // Each agent's cuts here, one after another and no more than an hour holds (githubSplit.ts Cuts).
@@ -481,17 +483,31 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
               : claim ? 'A task is taken with its person\'s own GitHub login, on that person\'s computer.'
               : 'A task is cut with its person\'s own GitHub login, on that person\'s computer.' }
           }
-          const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
+          const slugs = list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null)
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
+          // Each project's repository by its project's name and by what GitHub names it now, for one renamed since
+          // (githubVerdict.ts ProjectRepositories), and a name asked that is neither by what GitHub names it now (renamed twice).
+          // A project's own name is never another's; GitHub's answers are kept, so a command refused once it runs (a cut past its
+          // limit) asks GitHub again for none of them.
+          const asked = (verdict ?? claim ?? piece!).repository.toLowerCase()
+          const currents = await Promise.all(slugs.map(slug => currentName(slug)))
+          const repositories = new Map<string, { project: string; github: string }>(slugs.map((slug, i) => [slug, { project: slug, github: currents[i]! }]))
+          slugs.forEach((slug, i) => { if (!repositories.has(currents[i]!)) repositories.set(currents[i]!, { project: slug, github: currents[i]! }) })
+          if (!repositories.has(asked)) {
+            const now = await currentName(asked)
+            const found = [...repositories.values()].find(repository => repository.github === now)
+            if (found) repositories.set(asked, found)
+          }
+          const builder = { name, repositories }, resolved = repositories.get(asked)?.github ?? asked
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
-          // joins the one still running, or both would find no comment yet and each post its own.
+          // joins the one still running, or both would find no comment yet and each post its own. By either name of its repository.
           // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
-          const same = JSON.stringify([agentId, verdict ?? claim ?? sameCut(piece!)])
+          const same = JSON.stringify([agentId, verdict ? { ...verdict, repository: resolved } : claim ? { ...claim, repository: resolved } : sameCut({ ...piece!, repository: resolved })])
           const deps = { get: github.get, send: github.send, login: loginOf, record }
-          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict)
-            : claim ? takeTask(deps, { name, repositories }, claim)
-            : cuts.run(agentId, () => splitTask(deps, { name, repositories }, piece!)))
+          const made = commands.get(same) ?? (verdict ? postVerdict(deps, builder, verdict)
+            : claim ? takeTask(deps, builder, claim)
+            : cuts.run(agentId, () => splitTask(deps, builder, piece!)))
             .finally(() => commands.delete(same))
           commands.set(same, made)
           return { ok: true, value: await made }

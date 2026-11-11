@@ -520,6 +520,8 @@ export class GitHubMerge {
   /** What commits change (sameChange). */
   private readonly patches = new Map<string, unknown>()
   private projects: { at: number; list: LedProject[] } | null = null
+  /** What GitHub names each project's repository now, as its last pass read it: a renamed one's reads are kept under both. */
+  private readonly named = new Map<string, string>()
   private offUntil = 0
   private logged = ''
   private readonly now: () => number
@@ -564,6 +566,9 @@ export class GitHubMerge {
         if (this.waits.held(project.repo, this.now())) { held = true; continue }
         try { await this.mergeReady(project); this.waits.ok(project.repo) } catch (error) {
           this.reads.forget(project.repo)
+          // And what the train read under the name GitHub has for it now, for a repository renamed since its project was made.
+          const now = this.named.get(project.repo)
+          if (now) this.reads.forget(now)
           if (error instanceof GitHubStop && error.everywhere) throw error
           held = true
           // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so).
@@ -583,7 +588,11 @@ export class GitHubMerge {
 
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
-    const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
+    // GitHub answers a repository renamed since its project was made under its new name: a pull request's own branch is in
+    // that one, and compared with the project's name every one read as a fork and no train as one (code review of #4056).
+    const about = await this.reads.one(repo, `/repos/${repo}`)
+    const base = String(about.default_branch ?? ''), current = String(about.full_name ?? repo).toLowerCase()
+    this.named.set(repo, current)
     // Every open pull request, drafts too, for what one may carry of another's (carriedPull); the ones that may merge.
     const listed = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
     const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
@@ -593,7 +602,7 @@ export class GitHubMerge {
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
-    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, repo, base, listed, {
+    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, current, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
       login: () => this.login(repo),
       conflicts,
@@ -668,7 +677,7 @@ export class GitHubMerge {
       // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
       if (this.said(comments, head, 'red')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), checked: !checks.none, author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments })
     }
     for (const pull of await train.carry(ready, waiting)) {
       // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each
@@ -683,8 +692,10 @@ export class GitHubMerge {
   /** Merges one pull request on its own, squashed at its head, as every ready one was before the train. */
   private async mergeAlone(repo: string, pull: Ready): Promise<boolean> {
     const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${pull.number}/merge`, { merge_method: 'squash', sha: pull.head })
-    // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass.
+    // Merged, its head moved (409) or refused by GitHub (405): the repository is read again next pass, by either name.
     this.reads.forget(repo)
+    const now = this.named.get(repo)
+    if (now && now !== repo) this.reads.forget(now)
     if (merged.status !== 200) { this.note('MERGE_REFUSED', `${repo}#${pull.number}: GitHub answered ${merged.status}`); return false }
     const by = pull.readers.join(' and ')
     await this.comment(repo, pull.number, `${SELF}, ${this.clock()}: merged. READ-OK on ${pull.head.slice(0, 7)} by ${by}, checks green.`)

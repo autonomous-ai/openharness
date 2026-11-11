@@ -12,7 +12,7 @@ function setup(live: RegisteredSession[] = []) {
   const sync = vi.fn()
   const count = vi.fn()
   const ids = vi.fn(async () => ({ live: ['a1'], stopped: ['a2'] }))
-  const ofPane = vi.fn(async (pane: string) => (pane === '%7' ? 'a1' : null))
+  const ofPane = vi.fn(async (pane: string, _ancestors?: number[]) => (pane === '%7' ? { agentId: 'a1', guest: false } : pane === '%8' ? { agentId: 'kim', guest: true } : null))
   const core = fakeCore({ count, agents: { sync, ids, ofPane, live: () => live, byAgent: (agentId: string) => live.find(s => s.agentId === agentId) } })
   const notify = vi.fn(() => true)
   const want = vi.fn()
@@ -120,19 +120,91 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(closed).toEqual(['a1', 'a2'])
   })
 
-  it('answers the ids of its agents and the agent of a pane', async () => {
+  it('answers the ids of its agents and the agent of a pane, whether it is a guest\'s, held to the parents it was given', async () => {
     const { link, ids, ofPane } = setup()
     expect(await link.answer('agent_ids', {})).toEqual({ live: ['a1'], stopped: ['a2'] })
     expect(ids).toHaveBeenCalled()
-    expect(await link.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: 'a1' })
-    expect(await link.answer('agent_of_pane', { pane: '%9' })).toEqual({ agentId: null })
-    expect(await link.answer('agent_of_pane', {})).toEqual({ error: 'INVALID_REQUEST' })
-    expect(ofPane).toHaveBeenCalledTimes(2)
+    expect(await link.answer('agent_of_pane', { pane: '%7', ancestors: [4242, 1] })).toEqual({ agentId: 'a1', guest: false })
+    expect(await link.answer('agent_of_pane', { pane: '%8', ancestors: [4343] })).toEqual({ agentId: 'kim', guest: true })
+    expect(await link.answer('agent_of_pane', { pane: '%9', ancestors: [4242] })).toEqual({ agentId: null })
+    // An older relay's `agent_browser_state` names its pane alone.
+    expect(await link.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: 'a1', guest: false })
+    for (const payload of [{}, { pane: 7 }, { pane: '%7', ancestors: 4242 }, { pane: '%7', ancestors: [4242, '1'] }, { pane: '%7', ancestors: [-1] }, { pane: '%7', ancestors: [1.5] }]) {
+      expect(await link.answer('agent_of_pane', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(ofPane.mock.calls).toEqual([['%7', [4242, 1]], ['%8', [4343]], ['%9', [4242]], ['%7', undefined]])
     expect(await link.answer('anything', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     // A core without the calls has no answer to give.
     const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })
     expect(await bare.answer('agent_ids', {})).toEqual({ error: 'UNSUPPORTED' })
     expect(await bare.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: null })
+  })
+
+  // The person's Start and Stop, from the agent browser's own process: the core sets the flag and tells the browser.
+  it('set_browser sets the flag through the core and answers what it said; a payload without an id or a boolean is INVALID_REQUEST', async () => {
+    const setBrowser = vi.fn((agentId: string, on: boolean) => Promise.resolve(agentId === 'a1'
+      ? { ok: true as const, changed: on } : { error: 'NOT_RUNNING' as const }))
+    const link = createAgentBrowserLink({ core: fakeCore({ agents: { setBrowser } }), notify: () => true, want: () => {} })
+    expect(await link.answer('set_browser', { agentId: 'a1', on: true })).toEqual({ ok: true, changed: true })
+    expect(await link.answer('set_browser', { agentId: 'a1', on: false })).toEqual({ ok: true, changed: false })
+    expect(await link.answer('set_browser', { agentId: 'gone', on: true })).toEqual({ error: 'NOT_RUNNING' })
+    for (const payload of [{ on: true }, { agentId: 7, on: true }, { agentId: 'a1' }, { agentId: 'a1', on: 'yes' }]) {
+      expect(await link.answer('set_browser', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(setBrowser.mock.calls).toEqual([['a1', true], ['a1', false], ['gone', true]])
+    // A core without the call has no answer to give.
+    const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })
+    expect(await bare.answer('set_browser', { agentId: 'a1', on: true })).toEqual({ error: 'UNSUPPORTED' })
+  })
+
+  // Decision 19: the pane's new agent takes the browser of the agent that ended there.
+  it('a move is said to the process with both ids and the flag, held until it hears, and asks for the process only when the flag is on', () => {
+    const { link, notify, want } = setup()
+    const to = row('shell', false)
+    link.port.moved('ended', to, false)
+    expect(want).not.toHaveBeenCalled()
+    link.port.moved('ended', to, true)
+    expect(want).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls).toEqual([
+      [{ type: 'service_event', payload: { kind: 'moved', from: 'ended', session: to, on: false } }, { untilDelivered: true }],
+      [{ type: 'service_event', payload: { kind: 'moved', from: 'ended', session: to, on: true } }, { untilDelivered: true }],
+    ])
+    // Once there, it is not asked for again.
+    link.connected()
+    link.port.moved('ended', to, true)
+    expect(want).toHaveBeenCalledTimes(1)
+  })
+
+  it('the previous agent\'s state, command and viewers go at once', async () => {
+    const { link } = setup([row('ended')])
+    const closed: string[] = []
+    link.port.onCloseViewers(agentId => closed.push(agentId))
+    const argv = ['/opt/podman/bin/podman', 'exec', '-i', 'harness-browser-ended', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
+    link.port.attached(row('ended'))
+    await link.answer('browser_state', { agentId: 'ended', state: { state: 'ready' }, command: argv })
+    expect(link.port.streamCommand('ended')).toEqual({ argv })
+    link.port.moved('ended', row('shell', false), true)
+    expect(link.port.frameContext('ended')).toBeUndefined()
+    expect(link.port.streamCommand('ended')).toEqual({ error: 'NO_BROWSER' })
+    expect(closed).toEqual(['ended'])
+    // A late word of it brings nothing back.
+    await link.answer('browser_state', { agentId: 'ended', state: { state: 'ready' }, command: argv })
+    expect(link.port.frameContext('ended')).toBeUndefined()
+  })
+
+  it('move_browser asks the core and answers what it said; anything but two ids is INVALID_REQUEST', async () => {
+    const moveBrowser = vi.fn((_from: string, to: string) => Promise.resolve(to === 'shell'
+      ? { ok: true as const, changed: true } : { error: 'NOT_RUNNING' as const }))
+    const link = createAgentBrowserLink({ core: fakeCore({ agents: { moveBrowser } }), notify: () => true, want: () => {} })
+    expect(await link.answer('move_browser', { from: 'ended', to: 'shell' })).toEqual({ ok: true, changed: true })
+    expect(await link.answer('move_browser', { from: 'ended', to: 'gone' })).toEqual({ error: 'NOT_RUNNING' })
+    for (const payload of [{}, { from: 'ended' }, { to: 'shell' }, { from: '', to: 'shell' }, { from: 'ended', to: '' }, { from: 7, to: 'shell' }, { from: 'ended', to: ['shell'] }]) {
+      expect(await link.answer('move_browser', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(moveBrowser.mock.calls).toEqual([['ended', 'shell'], ['ended', 'gone']])
+    // A core without the call has no answer to give.
+    const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })
+    expect(await bare.answer('move_browser', { from: 'ended', to: 'shell' })).toEqual({ error: 'UNSUPPORTED' })
   })
 
   it('hands on the agent browser\'s own counters, and no other', async () => {

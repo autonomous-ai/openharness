@@ -407,7 +407,7 @@ describe('production resume handler', () => {
   })
 
   // Its browser and its login were kept while it was stopped: the resume starts it again.
-  it('attaches the browser of an agent created with Browser', async () => {
+  it('attaches the browser of an agent whose Browser is on', async () => {
     const attachBrowser = vi.fn()
     rewrite({ browser: true })
     expect(await createResumeAgentService({ ...deps, attachBrowser })(saved.agentId)).toMatchObject({ ok: true })

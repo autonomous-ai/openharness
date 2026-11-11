@@ -28,6 +28,7 @@ function setup(over: Partial<RecapDeps> = {}) {
     sessionTurnOpen: vi.fn((sessionId: string) => sessionId === 's1'),
     orchestratorRoleOf: vi.fn(() => null),
     quietOnDevices: vi.fn(() => false),
+    turnRunning: vi.fn(() => true),
     ...over,
   }
   const recaps = createRecaps(deps)
@@ -37,6 +38,7 @@ function setup(over: Partial<RecapDeps> = {}) {
 const watching = { device: true, active: false, remote: false }
 const started = { type: 'turn_started', payload: { userMessage: 'hi' } } as LiveEvent
 const ended = { type: 'turn_ended', payload: {} } as LiveEvent
+const said = { type: 'text_delta', payload: { content: 'Looking.' } } as LiveEvent
 
 describe('recaps, as the core keeps them', () => {
   afterEach(() => { vi.restoreAllMocks() })
@@ -212,6 +214,71 @@ describe('recaps, as the core keeps them', () => {
     recaps.recentAsks('s9', 1)
     expect(recent.mock.calls).toEqual([['s1', 3], ['old-s', 2], ['s9', 1]])
     expect(asks.mock.calls).toEqual([['s1', 5], ['old-s', undefined], ['s9', 1]])
+  })
+
+  describe('a turn a quiet delivery started', () => {
+    /** Whether each batch the recaps heard was said quiet, in order. */
+    const quiets = (port: ReturnType<typeof setup>['port']) =>
+      port.lifecycle.mock.calls.flatMap(([event]) => (event.kind === 'events' ? [event.quiet ?? false] : []))
+
+    it('says a turn\'s end is quiet when a quiet delivery started it, once: the batches before the end, and the next turn\'s end, do not say it', () => {
+      const { recaps, port } = setup()
+      recaps.mirror.ingest([started], 's1')
+      recaps.quietTurn('a1')
+      recaps.mirror.ingest([said], 's1')
+      recaps.mirror.ingest([ended], 's1')
+      recaps.mirror.ingest([started], 's1')
+      recaps.mirror.ingest([ended], 's1')
+      expect(quiets(port)).toEqual([false, false, true, false, false])
+      expect(port.lifecycle.mock.calls[2]![0]).toMatchObject({ kind: 'events', session: { sessionId: 's1', agentId: 'a1' }, events: [ended], replay: false, quiet: true })
+    })
+
+    // Review Focus 6: the input says `started` inside the funnel, before the recaps hear that batch, for an exact echo; and a
+    // moment later, after the engine's own record is read, for a prompt the engine wrapped. The mark is read at the end, so
+    // either order is quiet.
+    it('the mark holds whether it comes before the recaps hear the turn start or after', () => {
+      const { recaps, port } = setup()
+      recaps.quietTurn('a1')
+      recaps.mirror.ingest([started], 's1')
+      recaps.mirror.ingest([ended], 's1')
+      recaps.mirror.ingest([started], 's1')
+      recaps.quietTurn('a1')
+      recaps.mirror.ingest([ended], 's1')
+      // A turn that starts and ends in one batch.
+      recaps.quietTurn('a1')
+      recaps.mirror.ingest([started, said, ended], 's1')
+      // The person's next turn tells as any turn does.
+      recaps.mirror.ingest([started], 's1')
+      recaps.mirror.ingest([ended], 's1')
+      expect(quiets(port)).toEqual([false, true, false, true, true, false, false])
+    })
+
+    it('a mark for an agent with no session, or with no turn running, is dropped and logged', () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const turnRunning = vi.fn(() => false)
+      const { recaps, port } = setup({ turnRunning, resolve: (id) => id === 'a1' ? { agentId: 'a1', sessionId: 's1' } as RegisteredSession : id === 'unbound' ? { agentId: 'unbound', sessionId: '' } as RegisteredSession : undefined })
+      recaps.quietTurn('nobody')
+      recaps.quietTurn('unbound')
+      recaps.quietTurn('a1')
+      expect(turnRunning.mock.calls).toEqual([['s1']])
+      // The end was already told, and cannot be taken back: the next end is anyone's.
+      recaps.mirror.ingest([ended], 's1')
+      expect(quiets(port)).toEqual([false])
+      expect(log.mock.calls).toEqual([['[recap] quiet · no open turn'], ['[recap] quiet · no open turn'], ['[recap] quiet · no open turn']])
+    })
+
+    it('a replayed end leaves the mark; a cancel, a forget and a purge take it off', () => {
+      const { recaps, port } = setup()
+      recaps.quietTurn('a1')
+      recaps.mirror.ingest([ended], 's1', { replay: true })
+      recaps.mirror.ingest([ended], 's1')
+      for (const takeOff of [() => recaps.mirror.cancel('s1'), () => recaps.mirror.forget('s1'), () => recaps.mirror.deleteHistory('s1')]) {
+        recaps.quietTurn('a1')
+        takeOff()
+        recaps.mirror.ingest([ended], 's1')
+      }
+      expect(quiets(port)).toEqual([false, true, false, false, false])
+    })
   })
 
   it('answers agent_recent with an agent\'s summaries and questions, two of each unless one to five are asked for', () => {

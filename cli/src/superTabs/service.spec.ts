@@ -1009,7 +1009,8 @@ describe('a verdict by command', () => {
     expect(await t.service.requests.super_tabs({ action: 'read', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 27, verdict: 'READ-OK', sha: 'f6edb44', text: '' },
       { local: false, owner: true, accountOwner: true })).toMatchObject({ error: 'AGENT_LOCAL_ONLY' })
     expect(t.sent).toEqual([])
-    expect(t.github.get).not.toHaveBeenCalled()
+    // Only what GitHub names the project's repository and the one asked now: a repository renamed answers its old name (ProjectRepositories).
+    expect(t.github.get.mock.calls.map(([path]) => path)).toEqual(['/repos/acme/app', '/repos/other/thing'])
     t.service.port.stop()
   })
   it('takes a task as the calling agent, under its name, and records its claim as that agent\'s', async () => {

@@ -34,7 +34,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
 | devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`) | on demand: once there is a device; on Windows, starts unconditionally with the core when inline, or is requested once at startup by `core/devicesWake.ts` when out of process and cable support is enabled |
 | orchestrator, sharing, memory, router, cloud (cloud agents) | the experiments | on demand: on a request, or saved state at start |
-| agentBrowser | the agent browser: Podman, its setup, one container per agent created with Browser (`src/services/agentBrowser.ts`) | on demand: an agent with Browser, a request, or its state file at start |
+| agentBrowser | the agent browser: Podman, its setup, one container per agent whose Browser is on (`src/services/agentBrowser.ts`) | on demand: an agent whose Browser is on, a request, or its state file at start |
 
 `HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.
 `HARNESSD_SERVICES=none` runs every service in the core's process, for debugging or a quick way back. How
