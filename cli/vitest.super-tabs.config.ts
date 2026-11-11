@@ -20,6 +20,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/goal.ts', 'src/superTabs/goalStarter.ts',
   // The leaderboard's daemon half: what its person's agents shipped, read with their own gh and reported as counts.
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
+  // Tokens for a task, counted on its builder's own computer, and the cost said on a landed change (Swarm allocator, package 12).
+  'src/superTabs/taskTokens.ts',
 ]
 export default defineConfig({
   test: {
