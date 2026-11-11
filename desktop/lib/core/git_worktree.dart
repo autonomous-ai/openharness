@@ -638,11 +638,11 @@ Future<String> prepareGitProject(
   if (common == null) {
     throw const RepositoryCloneException('Could not read the project folder.');
   }
-  // The name is chosen and the branch made in turn with the repository's other
-  // starts: [taken] is read before the branch exists, so two at once could
-  // draw the same name, and Git refuses a second writer of .git/config rather
-  // than waiting for it. The checkout, the slow part, runs after the turn.
-  final (:branch, :destination) = await _inTurn(common, () async {
+  // The repository's starts take turns: [taken] is read before the branch
+  // exists, so two at once could draw the same name; Git refuses a second
+  // writer of .git/config rather than waiting for it; and `worktree add` reads
+  // every worktree's files, failing on one another add has half written.
+  final destination = await _inTurn(common, () async {
     final locals = await git([
       'for-each-ref',
       '--format=%(refname)',
@@ -666,7 +666,11 @@ Future<String> prepareGitProject(
           'That branch is no longer available. Choose another branch.',
         );
       }
-      if (trees.any((tree) => tree.ref == 'refs/heads/$branch')) {
+      // Read again in the turn: a start just before this one may have
+      // checked the branch out.
+      final now = await git(['worktree', 'list', '--porcelain']);
+      final current = now.code == 0 ? _parseWorktrees(now.output) : trees;
+      if (current.any((tree) => tree.ref == 'refs/heads/$branch')) {
         throw RepositoryCloneException(
           '$branch is checked out in another worktree. Turn Worktree off to open it there.',
         );
@@ -771,23 +775,23 @@ Future<String> prepareGitProject(
         madeUp ? 'placeholder' : 'created',
       ]);
     }
-    return (branch: branch, destination: destination);
+    final result = await git([
+      'worktree',
+      'add',
+      '--',
+      destination,
+      branch,
+    ], timeout: const Duration(minutes: 2));
+    if (result.code != 0) {
+      // A partial checkout or branch stays available for recovery.
+      throw RepositoryCloneException(
+        _diskFullMessage(result.errorOutput)
+            ? _worktreeDiskFull
+            : 'Could not create the worktree at $destination. Check Git and folder permissions, then retry.',
+      );
+    }
+    return destination;
   });
-  final result = await git([
-    'worktree',
-    'add',
-    '--',
-    destination,
-    branch,
-  ], timeout: const Duration(minutes: 2));
-  if (result.code != 0) {
-    // A partial checkout or branch stays available for recovery.
-    throw RepositoryCloneException(
-      _diskFullMessage(result.errorOutput)
-          ? _worktreeDiskFull
-          : 'Could not create the worktree at $destination. Check Git and folder permissions, then retry.',
-    );
-  }
   await _copyIncluded(root.output, destination, startProcess);
   return inside(destination);
 }
@@ -795,8 +799,8 @@ Future<String> prepareGitProject(
 final _repositoryTurns = <String, Future<void>>{};
 
 /// Runs [body] after every turn already queued for the repository whose git
-/// directory is [common]: the work that reads its branch names and then writes
-/// them or its .git/config.
+/// directory is [common]: the work that reads its branch names, worktrees or
+/// .git/config and then changes them.
 Future<T> _inTurn<T>(String common, Future<T> Function() body) async {
   final previous = _repositoryTurns[common];
   final done = Completer<void>();
@@ -887,16 +891,17 @@ Future<bool> discardPreparedWorktree(
   // `worktree add` may take: a deadline mid-delete leaves half a folder.
   // From the common directory: `-C folder` would stand git inside the folder
   // it deletes, and Windows refuses to delete a process's current folder.
-  final removed = await git(common, [
-    'worktree',
-    'remove',
-    '--',
-    top,
-  ], timeout: const Duration(minutes: 2));
-  if (removed.code != 0) return false;
-  if (made) {
-    // The tip proven above; one that moved since is kept.
-    await _inTurn(await _realPath(common), () async {
+  // In turn with the repository's starts, as `worktree add` is.
+  return _inTurn(await _realPath(common), () async {
+    final removed = await git(common, [
+      'worktree',
+      'remove',
+      '--',
+      top,
+    ], timeout: const Duration(minutes: 2));
+    if (removed.code != 0) return false;
+    if (made) {
+      // The tip proven above; one that moved since is kept.
       final deleted = await git(common, [
         'update-ref',
         '-d',
@@ -906,9 +911,9 @@ Future<bool> discardPreparedWorktree(
       if (deleted.code == 0) {
         await git(common, ['config', '--remove-section', 'branch.$branch']);
       }
-    });
-  }
-  return true;
+    }
+    return true;
+  });
 }
 
 /// `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec that
