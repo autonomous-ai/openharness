@@ -26,6 +26,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
   // Every write to GitHub in its person's name, said once and held under GitHub's limits (anh Dee, 11-11: "never spam github").
   'src/superTabs/githubWrites.ts',
+  // Tokens for a task, counted on its builder's own computer, and the cost said on a landed change (Swarm allocator, package 12).
+  'src/superTabs/taskTokens.ts',
 ]
 export default defineConfig({
   test: {

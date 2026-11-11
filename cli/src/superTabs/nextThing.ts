@@ -29,6 +29,7 @@ import type { WatchedAgent } from './githubMentions.js'
 import { FailingHeads, headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { hhmm } from './githubVerdict.js'
+import type { Hand } from './taskTokens.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
@@ -126,6 +127,9 @@ export class NextThing {
     /** [comments] with the agent the backend recorded as each verdict's writer (githubMerge.ts VerdictRecords.named), asked as
      *  [agent]; null while the records cannot be read. Only a READ-OK made by command is a read. */
     named: (agent: WatchedAgent, repo: string, comments: Record<string, unknown>[]) => Promise<Record<string, unknown>[] | null>
+    /** What a look as a turn ended found [agent] with, in each repository it read: the tokens of its tasks are counted by it
+     *  (taskTokens.ts), from what the look read anyway. */
+    looked: (agent: WatchedAgent, hands: Hand[]) => void
     file: string
     log?: (line: string) => void
   }) {
@@ -242,26 +246,39 @@ export class NextThing {
     return lines
   }
 
-  /** Its next thing: the first that waits, typed; or the task it holds, watched while it sits idle with it. */
+  /** Its next thing: the first that waits, typed; or the task it holds, watched while it sits idle with it. What the look read on
+   *  its way is said, however it ends: a look GitHub did not answer read nothing. */
   private async next(agent: WatchedAgent): Promise<void> {
-    for await (const thing of this.waiting(agent)) {
-      if ('held' in thing) return this.watch(agent, thing.repo, thing.held, Date.now(), false)
-      // One its person has waits for them: the next is typed, or the task it holds watched.
-      if (await this.give(agent, thing.key, thing.typed, thing.did)) return
+    const hands: Hand[] = []
+    try {
+      for await (const thing of this.waiting(agent, hands)) {
+        if ('held' in thing) return this.watch(agent, thing.repo, thing.held, Date.now(), false)
+        // One its person has waits for them: the next is typed, or the task it holds watched.
+        if (await this.give(agent, thing.key, thing.typed, thing.did)) return
+      }
+    } finally {
+      this.deps.looked(agent, hands)
     }
   }
 
-  /** What waits for [agent], in lampOS's order, read a thing at a time, so its next thing reads no further than itself. */
-  private async *waiting(agent: WatchedAgent): AsyncGenerator<Waiting> {
+  /** What waits for [agent], in lampOS's order, read a thing at a time, so its next thing reads no further than itself. What it
+   *  reads of each repository on its way is put in [hands]. */
+  private async *waiting(agent: WatchedAgent, hands: Hand[] = []): AsyncGenerator<Waiting> {
     for (const repo of agent.repos) {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
-      // Each as GitHub details it, read once for its own work and kept for the branch its next task may be built on.
+      const held = heldTask(items)
+      const hand: Hand = { repo, held: held ? Number(held.number) : null, pulls: pulls.map(pull => Number(pull.number)), heads: [] }
+      hands.push(hand)
+      // Each as GitHub details it, read once for its own work and kept for the branch its next task may be built on. Its head as
+      // it was read is put in [hand].
       const details: Record<string, unknown>[] = []
       for (const pull of pulls) {
-        details.push(await this.reads.one(repo, `/repos/${repo}/pulls/${pull.number}`))
-        const work = await this.ownWork(agent, repo, Number(pull.number), details.at(-1)!)
+        const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${pull.number}`), head = String(object(detail.head).sha ?? '')
+        details.push(detail)
+        if (head) hand.heads.push({ number: Number(pull.number), head, draft: detail.draft === true })
+        const work = await this.ownWork(agent, repo, Number(pull.number), detail)
         if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told me that my pull request ${repo}#${pull.number} ${work.what}` }
       }
       // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
@@ -278,7 +295,6 @@ export class NextThing {
         }
       }
       // A task it took with no pull request of its yet is its own work to go on with, before another: one task at a time.
-      const held = heldTask(items)
       if (held) {
         yield { held, repo }
         continue

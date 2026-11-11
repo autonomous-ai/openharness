@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubMerge, VerdictRecords } from './githubMerge.js'
+import { GitHubMerge, VerdictRecords, type LedProject } from './githubMerge.js'
+import type { ReadRow } from './taskTokens.js'
 import { commandRecords } from './commandRecords.fake.js'
 import { landingMessage, nextTrain, splitRed, trainBody, trainEnd, trainOfBody } from './githubTrain.js'
 import type { Crew } from './assign/crew.js'
@@ -179,10 +180,12 @@ function setup(project = 'acme/app') {
   const log = vi.fn()
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  // What the server keeps of what each change cost its builder (taskTokens.ts): nothing, unless a test says.
+  const costs = vi.fn(async (_project: LedProject, _numbers: number[]): Promise<ReadRow[]> => [])
   const start = () => new GitHubMerge({ projects: async () => [{ repo: project, pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log) })
+    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log), costs })
   const f = {
-    state, log, clock, merger: start(), mark: repo.mark,
+    state, log, clock, costs, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */
     restart: () => { f.merger = start() },
     say: (number: number, body: string) => state.comments.set(number, [...state.comments.get(number) ?? [],
@@ -250,6 +253,40 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
     expect(f.said(4)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${pull.head.sha.slice(0, 7)} by Juno, checks green\\.$`))])
     expect(pull.state).toBe('closed')
+  })
+
+  // Swarm allocator, package 12: each change a train lands is told what it cost its own builder, in the comment that says it
+  // landed, from the rows its builder's daemon wrote (taskTokens.ts). One read of the server for each, and no more comments.
+  it('says in each landed change\'s comment what that change cost its builder', async () => {
+    const f = setup()
+    const first = f.add(4, { body: 'Closes #2' }), second = f.add(5)
+    const taken = f.clock.now
+    const row = (number: number, kind: ReadRow['kind'], n: number, rounds = 0): ReadRow => ({ number, kind, name: 'Pip', rounds, startedAt: taken, endedAt: taken,
+      tokens: [{ model: 'claude-sonnet-5-5', input: n, output: 0, cacheRead: 0, cacheWrite: 0 }] })
+    f.costs.mockImplementation(async (_project, numbers) => numbers[0] === 4 ? [row(2, 'build', 1_200_000), row(4, 'fix', 50_000, 2)] : [])
+    await f.settle()
+    await f.ends(PASSED)
+    const minutes = Math.round((f.clock.now - taken) / 60_000)
+    expect(f.said(4)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${first.head.sha.slice(0, 7)} by Juno, checks green\\. `
+      + `Built by pip on \`claude-sonnet-5-5\`: ${minutes} min, 1\\.3M tokens, 2 fix rounds\\.$`))])
+    // One whose builder's daemon wrote nothing is told it landed as before.
+    expect(f.said(5)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${second.head.sha.slice(0, 7)} by Juno, checks green\\.$`))])
+    expect(f.costs.mock.calls.map(([project, numbers]) => [project.repo, numbers])).toEqual([['acme/app', [4, 2]], ['acme/app', [5]]])
+    // A pass later finds them told: nothing more is read or said.
+    await f.tick()
+    expect(f.costs).toHaveBeenCalledTimes(2)
+  })
+
+  it('waits once, not once for each rider, on a server that does not give the costs', async () => {
+    const f = setup()
+    f.add(4)
+    f.add(5)
+    f.costs.mockRejectedValue(new Error('the server did not answer'))
+    await f.settle()
+    await f.ends(PASSED)
+    expect(f.said(4)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.said(5)).toEqual([expect.stringMatching(/landed in #900 as \w{7}\. READ-OK on \w{7} by Juno, checks green\.$/)])
+    expect(f.costs).toHaveBeenCalledTimes(1)
   })
 
   // Code review of #4056: autonomous-harness, renamed openharness, keeps its old name in its project, and GitHub answers for it under
