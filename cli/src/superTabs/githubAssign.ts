@@ -544,5 +544,5 @@ function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
   return pattern.exec(String(comment.body ?? '').slice(0, 500))
 }
 
-const labelNames = (issue: Json): string[] =>
+export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))
