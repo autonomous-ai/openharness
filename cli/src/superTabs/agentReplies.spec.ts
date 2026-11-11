@@ -496,6 +496,16 @@ describe('what is owed, kept small', () => {
     expect(t.lines()).toContain('Dropped the reply owed for delivery old of agent agent: its turn was not seen in 24 hours.')
   })
 
+  it('posts nothing for a turn that ends as the last reply owed goes, a day on', async () => {
+    const t = setup()
+    t.owe('old')
+    t.wait(OWED_GIVE_UP_MS)
+    await t.end()
+    expect(t.posts()).toHaveLength(0)
+    expect(t.journal.replies).toBeUndefined()
+    expect(t.lines()).toContain('Dropped the reply owed for delivery old of agent agent: its turn was not seen in 24 hours.')
+  })
+
   it('keeps at most a few replies owed an agent, the oldest going first, saying so', () => {
     const t = setup()
     for (let i = 0; i < OWED_PER_AGENT + 2; i++) { t.owe(`d${i}`); t.wait(1) }
