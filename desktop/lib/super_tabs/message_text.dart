@@ -106,6 +106,12 @@ class SuperTabMessageText extends StatelessWidget {
       '${match[1]}${match[2] ?? ''}'.toLowerCase(),
   ];
 
+  /// Whether [text] tags [name], as a post's tags are read here: its `@name`, or a name of several words written whole after
+  /// an `@`. Not in code or a link.
+  static bool tags(String text, String name) =>
+      tagsIn(text).any((tag) => _says(tag, name, const {})) ||
+      _Mention.whole(name)?.hasMatch(_prose(text)) == true;
+
   static final _opensBlock = RegExp(
     r'^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t\n]|$)|#{1,6}(?:[ \t\n]|$)|>'
     r'|\d{1,9}[.)](?:[ \t\n]|$)|```|~~~|\||\[[^\]\n]+\]:'

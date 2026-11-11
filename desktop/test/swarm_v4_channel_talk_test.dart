@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -42,6 +43,30 @@ void main() {
   /// How many times [tag] is in what the row of the message whose text holds [text] reads.
   int tagsIn(WidgetTester tester, String text, String tag) =>
       RegExp(RegExp.escape(tag)).allMatches(readOf(tester, text)).length;
+
+  /// The words the row of the message whose text holds [text] draws as tags (message_text.dart _MentionName).
+  List<String> drawnTags(WidgetTester tester, String text) {
+    final found = <String>[];
+    void visit(InlineSpan span, TextStyle? inherited) {
+      if (span is! TextSpan) return;
+      final style = inherited?.merge(span.style) ?? span.style;
+      if (span.text case final words?
+          when style?.backgroundColor == grid.AppSurface.accentWash &&
+              style?.fontWeight == FontWeight.w600) {
+        found.add(words);
+      }
+      for (final child in span.children ?? const <InlineSpan>[]) {
+        visit(child, style);
+      }
+    }
+
+    for (final rich in tester.widgetList<RichText>(
+      find.descendant(of: rowOf(text), matching: find.byType(RichText)),
+    )) {
+      visit(rich.text, null);
+    }
+    return found;
+  }
 
   /// No name line anywhere says who a post is to: its tags do.
   final noToLine = find.byWidgetPredicate(
@@ -191,10 +216,17 @@ void main() {
     )['name'] = 'Product Manager';
     say(server, 'Pip', '@Faye #9 is up as #19, ready to read.', to: ['faye']);
     say(server, 'Juno', 'the CI on #19 passed.', to: ['faye']);
+    // The backend routes a tag of either of its names: one by its stored name is its tag already (review of #4075).
+    say(server, 'Kai', '@Product Manager #21 is ready.', to: ['faye']);
     await openSwarmV4(tester, server);
     expect(tagsIn(tester, '#9 is up as #19', '@Faye'), 1);
     expect(tagsIn(tester, 'the CI on #19 passed.', '@Faye'), 1);
-    expect(find.textContaining('Product Manager'), findsNothing);
+    expect(tagsIn(tester, '#21 is ready.', '@Faye'), 0);
+    expect(tagsIn(tester, '#21 is ready.', '@Product Manager'), 1);
+    // Each is drawn as a tag, not as words.
+    expect(drawnTags(tester, '#9 is up as #19'), ['@Faye']);
+    expect(drawnTags(tester, 'the CI on #19 passed.'), ['@Faye']);
+    expect(drawnTags(tester, '#21 is ready.'), ['@Product Manager']);
   });
 
   testWidgets('an agent named twice in a post is tagged once', (tester) async {

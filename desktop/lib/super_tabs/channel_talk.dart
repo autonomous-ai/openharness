@@ -1,8 +1,10 @@
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/swarm_layout.dart';
 import '../widgets/desktop_chrome.dart';
+import 'message_text.dart';
 import 'model.dart';
 
 /// What a project's channel says while nobody has posted in it (anh Dee, 2026-11-09: a blank page under the project's name
@@ -66,9 +68,12 @@ List<SuperTabAgent> superTabPostRecipients(
 List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) =>
     [
       // By the name people know it by: a PM is stored under its role's name, "Product Manager" (anh Dee, 2026-11-11:
-      // "the tag Product Manager is also weird just tag the agent").
+      // "the tag Product Manager is also weird just tag the agent"). One its text tags by that stored name, which the backend
+      // routes too, is tagged already (review of #4075).
       for (final agent in superTabPostRecipients(swarm, message))
-        agent.displayName ?? agent.name,
+        if (agent.displayName == null ||
+            !SuperTabMessageText.tags(message.text, agent.name))
+          agent.displayName ?? agent.name,
     ];
 
 /// What waits under a post that names an agent that was offline when it was posted and still is (`downSince`: its machine has
