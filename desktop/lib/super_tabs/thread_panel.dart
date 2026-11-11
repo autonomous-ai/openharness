@@ -433,7 +433,8 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _measureAfterFrame();
     return Material(
       key: const ValueKey('super-thread-panel'),
-      color: DesktopChrome.surface,
+      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
+      color: grid.AppPalette.swarmField,
       child: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.escape): c.closeThread,
