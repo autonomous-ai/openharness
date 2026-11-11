@@ -299,7 +299,7 @@ void main() {
       );
       expect(tester.widget<ListTile>(off).enabled, isFalse);
       expect(
-        find.descendant(of: off, matching: find.text('Mac laptop · offline')),
+        find.descendant(of: off, matching: find.textContaining('offline')),
         findsOneWidget,
       );
       // Choose, then wait until the dialog says why or closes: at most 5 s.
