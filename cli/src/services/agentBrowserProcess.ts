@@ -5,10 +5,11 @@
  *
  * The core tells it what happens to agents (`service_event` `attached`, `stopped`, `deleted`) and reads each browser's
  * state from what this process last told it (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it.
- * It asks the core for what only the core knows: its agents' ids (`agent_ids`), the agent of a pane (`agent_of_pane`),
- * and to hand on a product counter (`count`). It asks the core to turn an agent's Browser on or off, its person's Start
- * and Stop (`set_browser`): the core tells it `attached` or `stopped` before it answers. And it has the core type its
- * two lines into an agent (`deliver`, services/turnsLink.ts), and hears what became of them.
+ * It asks the core for what only the core knows: its agents' ids (`agent_ids`), the agent of a pane and whether it is a
+ * guest's, held to the parents of the command that names it (`agent_of_pane`), and to hand on a product counter
+ * (`count`). It asks the core to turn an agent's Browser on or off, its person's Start and Stop (`set_browser`): the core
+ * tells it `attached` or `stopped` before it answers. And it has the core type its two lines into an agent (`deliver`,
+ * services/turnsLink.ts), and hears what became of them.
  */
 import type { BrowserSwitch, CoreApi, CorePorts } from '../core/api.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -25,6 +26,9 @@ type Ask = (query: string, payload: Payload) => Promise<Payload>
 const IDS_TIMEOUT_MS = 10_000
 // The core switches in the same turn it is asked: a person's Start or Stop it does not answer in this is a failed one.
 const SWITCH_TIMEOUT_MS = 10_000
+// The core reads the pane's process from tmux within 2 s. An agent's command waits on this answer: a core that does not
+// give it in time names no agent, and the command is refused rather than left hanging.
+const PANE_TIMEOUT_MS = 10_000
 
 export interface AgentBrowserServiceOptions {
   dataDir: string
@@ -66,9 +70,10 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: Retur
         if (!live || !stopped) throw new Error('the core gave no answer for its agents')
         return { live, stopped }
       },
-      ofPane: async (pane) => {
-        const answer = await ask('agent_of_pane', { pane }).catch(() => null)
-        return typeof answer?.agentId === 'string' ? answer.agentId : null
+      ofPane: async (pane, ancestors) => {
+        const answer = await within(PANE_TIMEOUT_MS, ask('agent_of_pane', { pane, ...(ancestors ? { ancestors } : {}) })).catch(() => null)
+        // An answer that does not say whose the agent is names none: a command is never run for a guest's on a guess.
+        return typeof answer?.agentId === 'string' && typeof answer.guest === 'boolean' ? { agentId: answer.agentId, guest: answer.guest } : null
       },
       setBrowser: async (agentId, on) => {
         const answer = switchOf(await within(SWITCH_TIMEOUT_MS, ask('set_browser', { agentId, on })))

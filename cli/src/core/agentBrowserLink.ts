@@ -12,8 +12,9 @@
  * last of them, a viewer's stream command too. The core keeps them
  * only for the agents it attached and has not since stopped or deleted, so a late word never brings a browser back.
  *
- * The process asks the core what only the core knows: its agents' ids (`agent_ids`), the agent of a pane
- * (`agent_of_pane`), and to hand on one of its own product counters (`count`), none other. And it asks the core to
+ * The process asks the core what only the core knows: its agents' ids (`agent_ids`), the agent of a pane and whether it
+ * is a guest's, held to the parents of the command that names it (`agent_of_pane`), and to hand on one of its own
+ * product counters (`count`), none other. And it asks the core to
  * turn an agent's Browser on or off (`set_browser`), its person's Start and Stop: the core sets the row's flag and
  * tells this port `attached` or `stopped` before it answers.
  */
@@ -37,6 +38,11 @@ function browserState(value: unknown): AgentBrowserFrame | null {
   if (typeof state !== 'string' || !STATES.has(state)) return null
   if ((step !== undefined && typeof step !== 'string') || (error !== undefined && typeof error !== 'string')) return null
   return { state: state as AgentBrowserFrame['state'], ...(step !== undefined ? { step } : {}), ...(error !== undefined ? { error } : {}) }
+}
+
+/** A command's parents' pids, as `harness browser` sends them; null for anything else. */
+function pidsOf(value: unknown): number[] | null {
+  return Array.isArray(value) && value.every(pid => Number.isSafeInteger(pid) && pid > 0) ? value as number[] : null
 }
 
 /** A command line the process gave, or null for anything else: the core starts it as it is. */
@@ -109,8 +115,11 @@ export function createAgentBrowserLink(deps: {
     }
     if (query === 'agent_ids') return core.agents.ids ? { ...await core.agents.ids() } : { error: 'UNSUPPORTED' }
     if (query === 'agent_of_pane') {
-      if (typeof payload.pane !== 'string') return INVALID
-      return { agentId: (await core.agents.ofPane?.(payload.pane)) ?? null }
+      // No parents: an older relay's `agent_browser_state` (core/api.ts `ofPane`).
+      const ancestors = payload.ancestors === undefined ? undefined : pidsOf(payload.ancestors)
+      if (typeof payload.pane !== 'string' || ancestors === null) return INVALID
+      const agent = await core.agents.ofPane?.(payload.pane, ancestors)
+      return agent ? { ...agent } : { agentId: null }
     }
     if (query === 'set_browser') {
       if (typeof payload.agentId !== 'string' || typeof payload.on !== 'boolean') return INVALID

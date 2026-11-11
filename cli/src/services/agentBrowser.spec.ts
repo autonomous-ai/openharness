@@ -952,6 +952,15 @@ const PANES: Record<string, { agentId: string; guest: boolean }> = {
 }
 const page = (text: string) => ({ content: [{ type: 'text', text }] })
 
+/** Resolves once [check] holds, looked at on each turn of the event loop. Not vi.waitFor: under fake timers that moves
+ *  the clock on each look, and a limit the spec counts to would pass early. */
+async function until(check: () => boolean) {
+  for (let turns = 0; !check(); turns++) {
+    if (turns > 100_000) throw new Error('what the spec waits for never happened')
+    await new Promise(done => setImmediate(done))
+  }
+}
+
 /**
  * The person's agent a1 in pane %7, whose browser its person started and is ready; a2 in %8, whose browser is off; and
  * a guest's agent, kim, in %9. `run` is `harness browser <command>` from a pane.
@@ -965,9 +974,9 @@ async function commands(over: { count?: (name: string) => void; core?: Parameter
   await ready(sw.port, 'a1')
   const run = (command: string, args: Record<string, unknown> = {}, more: { pane?: string; asker?: Asker; closed?: AbortSignal } = {}) =>
     sw.requests.agent_browser_run!({ pane: more.pane ?? '%7', ancestors: ANCESTORS, command, args }, more.asker ?? LOCAL, more.closed)
-  /** The [n]th line the tool server of [agentId] heard (from 1), once it has. */
+  /** The [n]th line (from 1) the [tool]th tool server started heard, once it has. */
   const line = async (n: number, tool = 0) => {
-    await eventually(() => expect(tools.tools[tool]?.heard.length).toBeGreaterThanOrEqual(n))
+    await until(() => (tools.tools[tool]?.heard.length ?? 0) >= n)
     return tools.tools[tool]!.heard[n - 1]!
   }
   return { ...sw, ...tools, ofPane, run, line }
@@ -1068,7 +1077,7 @@ describe('the agent\'s commands', () => {
     await unset.requests.agent_browser_setup!({}, LOCAL)
     await eventually(() => expect(unset.port.frameContext('a1')).toEqual({ state: 'setup', step: 'installing' }))
     expect(await runThere(unset.requests)).toEqual({ error: 'NOT_READY', state: 'setup' })
-    expect(spawn).not.toHaveBeenCalled()
+    expect(spawn.mock.calls.filter(([args]) => args[0] === 'exec')).toEqual([])
 
     // A Podman too old.
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
@@ -1078,7 +1087,7 @@ describe('the agent\'s commands', () => {
     await eventually(() => expect(failed.port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
     expect(await runThere(failed.requests)).toEqual({ error: 'NOT_READY', state: 'podman_old' })
     expect(old.tools).toEqual([])
-    expect(asked().filter(call => call.startsWith('exec '))).toEqual([])
+    expect(asked().filter(call => call.includes('browser-tools.mjs'))).toEqual([])
   })
 
   it('the first command starts the tool server once; it starts again after it exits; a state that leaves ready ends it', async () => {

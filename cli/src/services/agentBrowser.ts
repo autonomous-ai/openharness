@@ -10,6 +10,12 @@
  * the person asked, and comes back with its agent while the flag is on. The agent learns of it from two lines typed
  * into it (agentBrowser/notices.ts): when its person's Start is ready, and at its person's Stop.
  *
+ * The agent drives it with `harness browser <command>` from its own pane (`agent_browser_run`, from this computer only):
+ * the core proves the pane and names its agent, and the command runs on that agent's tool server, which this service
+ * holds while the browser is ready (agentBrowser/toolServers.ts), one at a time. A command never starts or stops a
+ * browser, never wakes Podman, and reads neither the backend nor the Swarm. The person's panel sizes Chrome's window
+ * through the same tool server (`agent_browser_window`).
+ *
  * The settings are its person's before the first Start too: a proxy set then is the one the browser first connects
  * through, never the machine's own address.
  *
@@ -21,6 +27,7 @@ import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
 import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { resolveViaLoginShell } from '../lib/tmuxOnPath.js'
@@ -32,9 +39,10 @@ import { download, run, sha256 } from './agentBrowser/hostTools.js'
 import { ensureImage } from './agentBrowser/image.js'
 import { Notices } from './agentBrowser/notices.js'
 import { createPodman, PodmanError, type Podman } from './agentBrowser/podman.js'
-import { humanMode, parseSettings, publicSettings, type BrowserHost } from './agentBrowser/settings.js'
+import { clampWindow, humanMode, parseSettings, publicSettings, type BrowserHost } from './agentBrowser/settings.js'
 import { canAskForPassword, Setup } from './agentBrowser/setup.js'
 import { StateFile } from './agentBrowser/stateFile.js'
+import { ToolServers, type ToolChild, type ToolReply } from './agentBrowser/toolServers.js'
 
 export { AGENT_BROWSER_REQUESTS } from '../core/api.js'
 
@@ -42,12 +50,16 @@ type SetupDeps = ConstructorParameters<typeof Setup>[0]
 type Reply = Record<string, unknown>
 
 const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
+const INVALID_REQUEST = { error: 'INVALID_REQUEST' }
 /** Setup's own failures whose Retry installs Podman again (agentBrowser/setup.ts); no start fails with them. */
 const SETUP_INSTALL_FAILURES = new Set(['podman_install_failed', 'podman_manual'])
 // Xvnc listens on 5900 inside the container only (no published port): a viewer's bytes reach it through an exec.
 const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
-/** Answered by name on Windows, so Desktop says Browser does not run there rather than "update Harness" (spec § Desktop). */
-const NAMED_ON_WINDOWS: ReadonlySet<string> = new Set(['agent_browser_start', 'agent_browser_stop'])
+// The tool server in the image (cli/assets/browser/browser-tools.mjs), one JSON-RPC message per line on its stdio.
+const TOOL_SERVER = ['node', '/opt/harness-browser/browser-tools.mjs']
+/** Answered by name on Windows, so Desktop says Browser does not run there rather than "update Harness" (spec § Desktop),
+ *  and an agent's `harness browser` that asks anyway reads the same. */
+const NAMED_ON_WINDOWS: ReadonlySet<string> = new Set(['agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'])
 
 export interface AgentBrowserOptions {
   /** How the core hears a browser's state when this runs in a process of its own (services/agentBrowserProcess.ts);
@@ -72,6 +84,19 @@ export function daemonIdOf(dataDir: string): string {
 function machineHost(): BrowserHost {
   const { timeZone, locale } = Intl.DateTimeFormat().resolvedOptions()
   return { timeZone, languages: locale }
+}
+
+/** What a browser that is not ready is, as the agent reads it: `setup`, `starting`, or its failure's name. One that reads
+ *  ready, or reads nothing, is coming back: its tool server ended with its container before Podman's event said so. */
+function notReady(shown: BrowserState | undefined): Reply {
+  return { error: 'NOT_READY', state: shown && shown.state !== 'ready' ? shown.error ?? shown.state : 'starting' }
+}
+
+/** A tool's answer as `harness browser` prints it: its words, its image, and whether the tool failed. */
+function commandReply(reply: ToolReply): Reply {
+  const text = reply.content.flatMap(part => (part.type === 'text' ? [part.text] : [])).join('\n')
+  const image = reply.content.find(part => part.type === 'image')
+  return { ok: true, text, ...(image ? { image: image.data } : {}), ...(reply.isError ? { failed: true } : {}) }
 }
 
 /** A failure the apps can act on, named; anything else is the service's own and counts against it. */
@@ -113,6 +138,10 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
 
   const containers = new Containers(podman, daemonId, log)
   const notices = new Notices({ state, turns: core.turns, measure: count, log })
+  // podman.spawn pipes all three: the child's stdin and stdout are there.
+  const toolServers = new ToolServers({ spawn: agentId => podman.spawn(containers.execArgs(agentId, TOOL_SERVER)) as ToolChild, log })
+  /** The commands an agent may run: the tools of `browser-tools.json`, by the name `harness browser` gives them. */
+  const tools: ReadonlySet<string> = new Set(browserTools().tools.map(tool => tool.name))
   /**
    * The agents whose person's Stop is under way: marked before the core is asked, so the port's `stopped` that follows
    * is told apart from the agent's own end, and a browser that turns ready meanwhile is owed nothing.
@@ -137,6 +166,8 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     exitZone: proxy => exitZone(proxy, options.lookup),
     changed: (agentId) => {
       const shown = browsers.state(agentId)
+      // A browser that leaves ready takes its tool server with it: what runs or waits is answered the state now.
+      if (shown?.state !== 'ready') toolServers.end(agentId, 'ENDED')
       if (shown?.state === 'ready' && !byPerson.has(agentId)) notices.ready(agentId)
       if (options.told) return options.told(agentId, shown)
       const session = core.agents.byAgent(agentId)
@@ -210,6 +241,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       stopped = true
       events?.close()
       notices.close()
+      toolServers.endAll()
     },
   }
 
@@ -232,6 +264,14 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const isHere = async (agentId: string): Promise<boolean> => {
     const ids = await core.agents.ids?.().catch(() => null)
     return !!ids && (ids.live.includes(agentId) || ids.stopped.includes(agentId))
+  }
+
+  /** The agent of the pane a command runs in, and whether it is a guest's; null for a pane with no parents to hold it to. */
+  const paneAgent = async (payload: Reply) => {
+    const pane = typeof payload.pane === 'string' ? payload.pane : ''
+    const ancestors = Array.isArray(payload.ancestors) ? payload.ancestors.filter((pid): pid is number => typeof pid === 'number') : null
+    if (!pane || !ancestors || !core.agents.ofPane) return null
+    return core.agents.ofPane(pane, ancestors).catch(() => null)
   }
 
   /** Retry, and the person's Start of a failed browser: it starts again from the agent's queue. */
@@ -267,7 +307,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       if (!asker.local) return LOCAL_ONLY
       begin()
       const pane = typeof payload.pane === 'string' ? payload.pane : ''
-      const agentId = pane && core.agents.ofPane ? await core.agents.ofPane(pane).catch(() => null) : null
+      const agentId = pane && core.agents.ofPane ? (await core.agents.ofPane(pane).catch(() => null))?.agentId : undefined
       const shown = agentId ? browsers.state(agentId) : undefined
       if (!agentId || !shown) return { error: 'NO_BROWSER' }
       // The connection, when Harness runs its own machine: the relay's exec must reach the machine the browser is on.
@@ -298,13 +338,52 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const agentId = idOf(payload)
       if (attached.has(agentId)) {
         byPerson.add(agentId)
-        notices.stopped(agentId, false)
+        // Every command running or waiting is answered the stop line: the agent has read it, and is typed nothing.
+        notices.stopped(agentId, toolServers.end(agentId, 'STOPPED') > 0)
       }
       const answer = await setBrowser(agentId, false)
       // The core told the port nothing to stop: nothing stays marked, and the agent's own end is heard as its own.
       byPerson.delete(agentId)
       if ('changed' in answer && answer.changed) count('agent_browser_stopped')
       return { ok: true }
+    },
+    // One of the agent's commands, on its own browser and nothing else's. It never wakes Podman: a browser that is not
+    // ready says what it is, and the agent asks its person.
+    agent_browser_run: async (payload, asker, closed) => {
+      if (!asker.local) return LOCAL_ONLY
+      const agent = await paneAgent(payload)
+      if (!agent) return { error: 'NO_AGENT' }
+      // The machine's Podman, memory and network are its owner's.
+      if (agent.guest) return { error: 'NOT_ALLOWED' }
+      const command = typeof payload.command === 'string' ? payload.command : ''
+      const args = payload.args
+      if (!tools.has(`browser_${command}`) || typeof args !== 'object' || args === null || Array.isArray(args)) return INVALID_REQUEST
+      const { agentId } = agent
+      if (byPerson.has(agentId)) return { error: 'STOPPED' }
+      const shown = browsers.state(agentId)
+      if (!shown) return { error: 'OFF' }
+      if (shown.state !== 'ready') return notReady(shown)
+      const result = await toolServers.call(agentId, `browser_${command}`, args as Reply, humanMode(browsers.settings(agentId)), closed)
+      const answer = 'reply' in result ? commandReply(result.reply) : result.error === 'ENDED' ? notReady(browsers.state(agentId)) : { error: result.error }
+      const done = answer.ok === true && answer.failed !== true
+      count(done ? 'agent_browser_command_ok' : 'agent_browser_command_failed')
+      // Its name and outcome only: its arguments and the page's words are the person's.
+      log(`agent browser ${agentId}: ${command} ${done ? 'ok' : answer.ok ? 'failed' : String(answer.error).toLowerCase()}`)
+      return answer
+    },
+    // The panel's size, on Chrome's window: not stored, as Chrome keeps the window's last size in its profile.
+    agent_browser_window: async (payload, asker) => {
+      if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
+      const agentId = idOf(payload)
+      const shown = browsers.state(agentId)
+      if (!shown) return { error: 'NO_BROWSER' }
+      if (shown.state !== 'ready') return { error: 'NOT_READY' }
+      const size = clampWindow(payload.width, payload.height, browsers.settings(agentId).screen)
+      if (!size) return INVALID_REQUEST
+      const set = await toolServers.window(agentId, size.width, size.height)
+      // The panel keeps scaling the whole screen, and asks again at its next resize.
+      if ('error' in set) log(`agent browser ${agentId}: window_failed`)
+      return set
     },
     agent_browser_settings: ownBrowser(agentId => publicSettings(browsers.settings(agentId)), true),
     agent_browser_settings_save: ownBrowser(async (agentId, payload) => {

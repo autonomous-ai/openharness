@@ -284,7 +284,7 @@ describe('the core API services stand on', () => {
     const live = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
     const kim = { ...row('kim'), guest: 'kim@acme.io', runtimes: [{ backend: 'tmux', paneId: '%8' }] } as RegisteredSession
     const registry = { ...deps.registry, list: vi.fn(() => [live, kim]) } as unknown as CoreApiDeps['registry']
-    const panePid = vi.fn(async (session: RegisteredSession) => (session.agentId === 'live' ? 4242 : 4343))
+    const panePid = vi.fn(async (session: RegisteredSession): Promise<number | null> => (session.agentId === 'live' ? 4242 : 4343))
     const core = createCoreApi({ ...deps, registry, panePid })
     // Run in a private server's %7 inside kim's pane: its parents are kim's pane's, never live's.
     expect(await core.agents.ofPane!('%7', [9001, 9000, 4343, 1])).toBeNull()

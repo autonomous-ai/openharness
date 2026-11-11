@@ -117,7 +117,7 @@ import { prepareTerminalBackends, TerminalBackendCoordinator } from '../lib/term
 import { canRestart, heldIn, noBackendCode, type TerminalBackend } from '../lib/terminalBackend.js'
 import { handoffAgentId } from '../lib/terminalHandoff.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
-import { ownedPanesOf, terminalRouteKey, terminalRuntimeLabel } from '../lib/terminalRuntime.js'
+import { ownedPanesOf, primaryRuntime, terminalRouteKey, terminalRuntimeLabel } from '../lib/terminalRuntime.js'
 import { probeTerminalAgents } from '../lib/terminalAgentDiscovery.js'
 import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from '../lib/terminalAgentReconciler.js'
 import { Watcher } from '../watcher/watcher.js'
@@ -1035,6 +1035,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     // The person's Start and Stop of an agent's browser, which the agent browser asks of the core.
     setBrowser: agentBrowsers.set,
+    // The process a pane runs, as `terminal_info` reads it: `harness browser`'s parents are held to it (`agents.ofPane`).
+    panePid: (session) => {
+      const runtime = primaryRuntime(session)
+      return terminals.backendFor(runtime)?.paneInfo(runtime).then(info => info?.pid ?? null) ?? Promise.resolve(null)
+    },
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
       members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
