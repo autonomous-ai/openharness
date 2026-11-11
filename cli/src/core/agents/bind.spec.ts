@@ -71,6 +71,8 @@ function setup(over: Partial<BindDeps> = {}) {
       has: vi.fn(() => false),
       bySession: vi.fn((sessionId: string) => bySession.get(sessionId)),
       setOpenclawStateDir: vi.fn(() => true),
+      afterTransaction: vi.fn(async (run: () => unknown) => run()),
+      takeFirstTask: vi.fn(),
     } as unknown as BindDeps['registry'],
     mirror: { inheritSummary: vi.fn() },
     forgetSession: vi.fn(),
@@ -79,7 +81,7 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn() },
+    input: { forget: vi.fn(), submit: vi.fn() },
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
@@ -1150,5 +1152,119 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(await openclawSessionDb('agent:work:x', { pid: 9003 }, held)).toBe('/moved/work/openclaw-agent.sqlite')
     expect(await openclawSessionDb('not-a-key', { pid: 9003 }, held)).toBeNull()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  // OpenClaw takes its first task typed, not in argv: the bind pass that reads the pane hands it to the session input.
+  describe('its first task', () => {
+    const TASK = 'Fix the parser'
+    const ready = screen('screen-plain')
+    const running = screen('screen-abort-running').replace(/abort/g, 'plain')
+    const taken = (sessionId = 'agent:main:plain') => ({ sessionId, task: TASK })
+    /** The pane bound to `agent:main:plain` with its first task on the row, its stream attached. */
+    const handing = (shown: () => string, over: Partial<BindDeps> = {}) => {
+      const run = setup({ capturePane: vi.fn(async () => shown()), openclawPaneRead: vi.fn(() => true), ...over })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', firstTask: TASK }))
+      return run
+    }
+
+    it('a first task is handed over on the first pass that reads the pane ready', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(taken())
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.input.submit).toHaveBeenCalled())
+      // The person's own message: no delivery id.
+      expect(vi.mocked(run.deps.input.submit).mock.calls).toEqual([['agent:main:plain', TASK]])
+      expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
+      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1')
+      expect(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(run.deps.input.submit).mock.invocationCallOrder[0])
+      expect(console.log).toHaveBeenCalledWith('[agent] a1 first task handed over')
+      // The task is the person's words: never in a log line.
+      const said = [...vi.mocked(console.log).mock.calls, ...error.mock.calls].flat().map(String)
+      expect(said.filter((line) => line.includes(TASK))).toEqual([])
+    })
+
+    it('not while the pane reads no Gateway or a run, before a stream is attached, or unbound', async () => {
+      const noGateway = screen('screen-no-gateway').replace(/session no-gateway/g, 'session plain')
+      for (const [name, shown, over] of [
+        ['no Gateway', noGateway, {}],
+        ['a run', running, {}],
+        ['no stream', ready, { openclawPaneRead: vi.fn(() => false) }],
+      ] as const) {
+        const run = handing(() => shown, over)
+        await run.binding.bindObservedAgent(tui())
+        expect(run.deps.capturePane, name).toHaveBeenCalled()
+        // The pane shows the bound key: nothing else kept the task back.
+        expect(run.deps.registry.register, name).not.toHaveBeenCalled()
+        expect(run.deps.registry.takeFirstTask, name).not.toHaveBeenCalled()
+      }
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ firstTask: TASK }))
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.register).toHaveBeenCalled()
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('ready, busy, ready hands it over once', async () => {
+      let shown = ready
+      const run = handing(() => shown)
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValueOnce(taken()).mockReturnValue(null)
+      await run.binding.bindObservedAgent(tui())
+      shown = running
+      await run.binding.bindObservedAgent(tui())
+      shown = ready
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledTimes(2))
+      expect(run.deps.input.submit).toHaveBeenCalledOnce()
+    })
+
+    it('a row whose task was handed over before a restart types nothing', async () => {
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawPaneRead).toHaveBeenCalled()
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.input.submit).not.toHaveBeenCalled()
+    })
+
+    it.each([new Error('disk full'), 'disk full'])('a registry that cannot save keeps the task and types nothing', async (failure) => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => { throw failure })
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task kept · disk full'))
+      expect(run.deps.input.submit).not.toHaveBeenCalled()
+    })
+
+    // The reconcile pass holds registry saves back until it commits (core/main.ts): a removal not yet saved is undone
+    // by a daemon that stops, and the next one would type the task again.
+    it('the removal waits for the reconcile pass to commit', async () => {
+      let commit = () => {}
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise((resolve) => { commit = () => resolve(action()) })) as never)
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(taken())
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.input.submit).not.toHaveBeenCalled()
+      commit()
+      await vi.waitFor(() => expect(run.deps.input.submit).toHaveBeenCalledWith('agent:main:plain', TASK))
+    })
+
+    it('a pane that moved to another key binds first', async () => {
+      // `/new` before the task was typed: the pane shows a session the agent is not bound to yet.
+      const run = handing(() => ready.replace(/session plain/g, 'session other'))
+      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:other', firstTask: TASK }), ...meta({ isNew: true }) } as never)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:other', source: 'openclaw-new' })
+      // The next pass reads the row bound to the key the pane shows, and hands the task to that session.
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:other', firstTask: TASK }))
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(taken('agent:main:other'))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.input.submit).toHaveBeenCalledWith('agent:main:other', TASK))
+    })
   })
 })
