@@ -33,8 +33,11 @@ export interface RuntimeStage {
 
 const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway,
   s.active, s.tmuxPane, s.primaryRuntimeKey, s.runtimes]) : ''
+// With the model and effort it was launched with: an engine whose flags override its settings reads its configured effort from
+// them (claude/runtimeProfile.ts).
 const snapshot = (s: RegisteredSession): RuntimeSession => ({ agentId: s.agentId, sessionId: s.sessionId, engine: s.engine,
-  model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome })
+  model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome,
+  ...(s.launchModel ? { launchModel: { model: s.launchModel.model, effort: s.launchModel.effort } } : {}) })
 const controlCopy = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && { ...control, target: { ...control.target } }
 const unavailable = (): never => { throw new EngineReadError('ENGINE_STALE_REPLY') }
 

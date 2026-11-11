@@ -411,6 +411,23 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ model: 'opus', effort: 'medium' })
   })
 
+  // A session launched with --effort runs at it, whatever its settings say: read as the settings' effortLevel until its first
+  // reply, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its project as running at high.
+  it('reads a session launched with an effort at that effort, not its settings\', until it shows its own', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    await writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel: 'high' }))
+    const manager = new RuntimeProfileManager()
+    const value = { ...session('claude'), cwd, launchModel: { model: 'opus', effort: 'xhigh' } }
+    manager.hydrate(value, [JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } })])
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'xhigh' })
+    manager.ingest(value, JSON.stringify({ message: { content: [{ text: 'Set effort level to medium' }] } }))
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'medium' })
+  })
+
   // Settings fill high, a reply (or the screen) shows high, then the settings change to medium: the session still runs
   // high, and the row said medium (#1966 delta review). Showing an effort makes it the session's, even an equal one.
   it.each(['a reply', 'the screen'])('keeps an effort %s showed that equals the settings when they change', async by => {

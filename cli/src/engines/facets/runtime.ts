@@ -24,7 +24,7 @@ export interface RuntimeState {
 
 export type RuntimeField = 'model' | 'effort' | 'mode'
 export type RuntimeSession = Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine' | 'model'
-  | 'cliVersion' | 'cwd' | 'transcriptPath' | 'codexHome'>
+  | 'cliVersion' | 'cwd' | 'transcriptPath' | 'codexHome' | 'launchModel'>
 
 /** The transaction belongs to core. An engine interprets evidence against a supplied snapshot. */
 export interface RuntimeControl {

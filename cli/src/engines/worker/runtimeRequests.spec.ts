@@ -133,6 +133,9 @@ describe('runtime worker contract', () => {
     const ctx = context()
     for (const bad of [undefined, [], {}, { ...ctx, session: { ...ctx.session, engine: 'codex' } },
       { ...ctx, session: { ...ctx.session, cwd: 'relative' } }, { ...ctx, state: { ...ctx.state, observedAt: Infinity } },
+      { ...ctx, session: { ...ctx.session, launchModel: 'xhigh' } }, { ...ctx, session: { ...ctx.session, launchModel: { model: 1, effort: null } } },
+      { ...ctx, session: { ...ctx.session, launchModel: { model: null, effort: 'xhigh', more: true } } },
+      { ...ctx, session: { ...ctx.session, launchModel: { model: 'opus', effort: 7 } } },
       { ...ctx, control: { target: target(ctx), before: null, modelConfirmed: true } },
       { ...ctx, control: { target: { ...target(ctx), sessionId: 'other' }, before: null, modelConfirmed: false, effortConfirmed: false } }]) {
       expect(await t.send({ context: bad })).toEqual(failure('ENGINE_INVALID_REQUEST', false))
@@ -143,9 +146,24 @@ describe('runtime worker contract', () => {
     }
     expect(await t.send({ surplus: 'x'.repeat(1024 * 1024) })).toEqual(failure('ENGINE_INVALID_REQUEST', false))
     expect(t.load).not.toHaveBeenCalled()
-    const copied = runtimeContext({ ...ctx, session: { ...ctx.session, processIdentity: { pid: 1 } }, control: null }, 'claude')!
+    const launchModel = { model: 'opus', effort: 'xhigh' }
+    const copied = runtimeContext({ ...ctx, session: { ...ctx.session, processIdentity: { pid: 1 }, launchModel }, control: null }, 'claude')!
     expect(copied.session).not.toHaveProperty('processIdentity')
+    expect(copied.session.launchModel).toEqual(launchModel)
+    expect(copied.session.launchModel).not.toBe(launchModel)
     expect(copied.state).not.toBe(ctx.state)
+  })
+
+  // The engine's own process reads a session's configured effort: one launched with --effort runs at it, whatever its
+  // settings say (the 2026-11-11 rehearsal's Product Manager, launched at xhigh, read as high until its first reply).
+  it('reads the effort a Claude session was launched with as its configured one', async () => {
+    const requests = engineRuntimeRequests('claude', { load: async () => runtimeFor('claude')!, recycle: vi.fn() })
+    const ctx = context(); ctx.session.launchModel = { model: 'opus', effort: 'xhigh' }
+    const read = async () => (await requests[RUNTIME_READ]({ version: 1, context: ctx, operation: { kind: 'config' } }, who) as Record<string, any>).answer.state.effort
+    expect(await read()).toBe('xhigh')
+    // An effort Claude has no word for is not one it runs at: its settings say, and with none, its own default.
+    ctx.session.launchModel = { model: 'opus', effort: 'warp' }
+    expect(await read()).toBe('auto')
   })
 
   it('bounds concurrent work and drops results after a connection closes', async () => {

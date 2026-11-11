@@ -154,6 +154,18 @@ describe('core runtime profile authority', () => {
     expect(() => t.sessions.stage({ ...copy, boundAt: 2 }, false, true)).toThrow('ENGINE_STALE_REPLY')
   })
 
+  // A session launched with --effort runs at it, whatever its settings say: the engine reads its configured effort from what
+  // the core sends it (the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced as running at high).
+  it('sends the engine the model and effort a session was launched with, and nothing for one launched with none', async () => {
+    const t = setup()
+    await t.sessions.read(t.s, { kind: 'config' })
+    expect(t.read.mock.calls[0]![1].session).not.toHaveProperty('launchModel')
+    t.s.launchModel = { model: 'opus', effort: 'xhigh' }
+    await t.sessions.read(t.s, { kind: 'config' })
+    expect(t.read.mock.calls[1]![1].session.launchModel).toEqual({ model: 'opus', effort: 'xhigh' })
+    expect(t.read.mock.calls[1]![1].session.launchModel).not.toBe(t.s.launchModel)
+  })
+
   it('accepts a copy holding an older non-null version', async () => {
     const t = setup(); t.s.cliVersion = '2.1.303'
     const staged = t.sessions.stage({ ...t.s, cliVersion: '2.1.300' }, false, true)
