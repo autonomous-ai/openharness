@@ -30,8 +30,8 @@ String switchPmTime(BuildContext context, DateTime at) {
   return '$day, $time';
 }
 
-/// Moves [projectId]'s Product Manager to another machine, engine/account, or
-/// model. The host starts the replacement and sends the handoff note.
+/// Moves [projectId]'s Product Manager to another machine, engine or model.
+/// The host starts the replacement and sends the handoff note.
 Future<void> showSwitchPm(
   BuildContext context,
   SuperTabController c,
@@ -161,19 +161,10 @@ Future<void> showSwitchPm(
             final activePool = machineRows
                 .where((pool) => pool['machineId'] == machineId)
                 .firstOrNull;
-            // The server runs a PM on its machine's default account alone (backend pmAccount.ts): another account the
-            // machine reports would be refused, so it is not offered.
+            // One account per engine: the server keeps a machine's default accounts alone, the only ones a PM runs on
+            // (backend machines.ts storedObservation, pmAccount.ts).
             List<SuperTabProfile> profilesFor(Map<String, dynamic>? pool) {
-              final rows = [
-                for (final p in superTabProfilesOf(pool))
-                  if (p.id ==
-                      swarmProfileId(
-                        pool?['machineId'] as String? ?? '',
-                        p.engine,
-                        'default',
-                      ))
-                    p,
-              ];
+              final rows = superTabProfilesOf(pool);
               if (rows.isNotEmpty) return rows;
               final offered = (pool?['engines'] as List?)?.whereType<String>();
               return [
@@ -184,7 +175,6 @@ Future<void> showSwitchPm(
                     (
                       engine: engine,
                       id: 'default',
-                      label: 'Default',
                       leftPercent: null,
                       resetsAt: null,
                     ),
@@ -285,7 +275,8 @@ Future<void> showSwitchPm(
                       if (profiles.isEmpty) ...[
                         const SizedBox(height: 12),
                         Text(
-                          unavailable(activePool ?? const {}) ?? 'No engine or account is available on this machine.',
+                          unavailable(activePool ?? const {}) ??
+                              'No engine is available on this machine.',
                           style: DesktopChrome.metadata(),
                         ),
                       ],
@@ -360,8 +351,8 @@ Future<void> showSwitchPm(
                         const SizedBox(height: 12),
                         Text(
                           otherMachines.isEmpty
-                              ? 'No other machine or account can run a Product Manager right now.'
-                              : 'No engine or account can run a Product Manager right now.',
+                              ? 'No other machine or engine can run a Product Manager right now.'
+                              : 'No engine can run a Product Manager right now.',
                           key: const ValueKey('switch-pm-no-choice'),
                           style: DesktopChrome.metadata(),
                         ),
