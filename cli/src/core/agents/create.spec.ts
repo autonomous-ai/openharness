@@ -31,6 +31,10 @@ import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
+// Real native preparation asks a real `/bin/sh` engine for its help. On a loaded machine its 5 s deadline, not the code,
+// decided (5155 ms at load 60): a creation held, and the DSH launch it left queued answered the next test. What a deadline
+// does is patientExec.spec.ts's to test.
+vi.mock('../../lib/patientExec.js', async (real) => ({ ...await real<object>(), patientDeadline: () => () => {} }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
