@@ -60,7 +60,7 @@ export interface PartsPayload extends ReadMeta {
   groups: PartEnvelope[]
   machines: PartEnvelope[]
   starts: PartEnvelope[]
-  /** Absent from a backend on or after 2026-12-12 when there is none (backend S19). */
+  /** Always empty since Swarm v4; the backend stops sending it 30 days after the CLI release that reads it as optional (S19). */
   progress?: PartEnvelope[]
   derived: Derived
 }

@@ -75,14 +75,17 @@ describe('a Swarm read as parts', () => {
     expect(keys(store, 'machine')).toEqual([FIXTURE.machineId])
   })
 
-  // The backend stops sending an empty progress list on or after 2026-12-12 (backend S19), 30 days after this CLI.
+  // The backend stops sending the always-empty progress list 30 days after the CLI release that reads it as optional (S19).
   it('reads a first load and changes that send no progress list', () => {
     const { progress: _first, ...load } = readFixture<FirstLoad>('parts-lead')
-    const loaded = storeOf(load as FirstLoad)
+    const loaded = storeOf(load)
     expect(keys(loaded, 'progress')).toEqual([])
     const held = first()
     const { progress: _changes, ...changed } = changes({})
-    expect(keys(mergeChanges(held, changed as ChangedParts), 'progress')).toEqual(keys(held, 'progress'))
+    expect(keys(mergeChanges(held, changed), 'progress')).toEqual(keys(held, 'progress'))
+    // Any other list is still required: a read without one fails rather than showing an empty Swarm.
+    const { agents: _agents, ...noAgents } = readFixture<FirstLoad>('parts-lead')
+    expect(() => storeOf(noAgents as FirstLoad)).toThrow()
   })
 
   it('leaves the store it merged into unchanged', () => {
