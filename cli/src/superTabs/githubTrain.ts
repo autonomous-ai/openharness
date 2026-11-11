@@ -14,9 +14,9 @@
  * on 2026-11-10) reads them back from GitHub. One train is open at a time.
  *
  * Anyone who can write to the repository can write that body, so before it lands a train is read from its branch: one merge
- * commit for each member the body names, the member's head its second parent, down to the base's tip (`holds`). What that
- * does not catch: a merge commit made by hand with those same parents and other content, pushed in the train's place with the
- * body's tip changed to it. That takes a record only this login can write, and there is none yet.
+ * commit for each member the body names, the member's head its second parent, down to the base's tip (`holds`). Merge commits
+ * made by hand with those same parents and other content get onto the branch only by rewriting it, which GitHub notes on the
+ * pull request where nobody can write: a train with such an event does not land (REWRITTEN).
  *
  * It never force-pushes, writes no ref outside `harness-train/`, and merges nothing on an answer it does not expect: any other
  * answer is a GitHubStop, which stops this repository's pass until the merger's next try (githubRest.ts Waits). The GitHub
@@ -43,6 +43,9 @@ const SHA = /^[0-9a-f]{40}$/
 /** A member as a train's body names it. Its readers are there for the note that it landed, which a restart must write the same. */
 const MEMBER = /^#([1-9]\d{0,9}) at ([0-9a-f]{40}), READ-OK by ([\w -]{1,200})$/
 const BUILT = /\bbuilt to ([0-9a-f]{40})\b/
+/** What GitHub notes on a pull request whose branch was rewritten or made again, or whose base was: a train with one is not
+ *  the one that was built and checked. Nobody can write a pull request's events. */
+const REWRITTEN = new Set(['head_ref_force_pushed', 'head_ref_deleted', 'head_ref_restored', 'reopened', 'base_ref_changed', 'base_ref_force_pushed'])
 /** GitHub's closing keywords before an issue of this repository. */
 const CLOSES = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#([1-9]\d{0,9})\b/gi
 /** The most issues one landing closes: a body is anyone's text, and can name any number of them. */
@@ -212,6 +215,10 @@ export class GitHubTrain<T extends TrainPull> {
       return this.close(train, false, 'a pull request it carries is no longer ready at its head')
     }
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, false, 'its branch does not hold what its body names')
+    // And it is the branch the train built: merge commits made again by hand have the same parents and other content, and get
+    // onto it only by a forced push, or by deleting the branch and making it again. GitHub notes each on the pull request.
+    const events = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${train.number}/events?per_page=${PAGE}`, 1)
+    if (events.some(event => REWRITTEN.has(String(event.event)))) return this.close(train, false, 'its branch was rewritten after the train built it')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged
     // under its author, and the work counts as theirs (shippingRead.ts). Squashed, the members are only closed and the one
     // commit is this login's. Else a squash, else a rebase, which takes no message. The next way is tried too when GitHub
