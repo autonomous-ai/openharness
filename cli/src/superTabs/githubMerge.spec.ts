@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, recordedAuthors, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, verdicts } from './githubMerge.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
+import { commandRecords } from './commandRecords.fake.js'
 
 type Json = Record<string, unknown>
 const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
@@ -14,6 +15,7 @@ const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false
 
 /** One repository as GitHub's REST API answers for it, with ETags, and what was sent to it. */
 function fakeGitHub() {
+  const records = commandRecords()
   const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(), commits: new Map<number, Json[]>(), compare: new Map<string, Json>(),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
@@ -31,7 +33,7 @@ function fakeGitHub() {
       // A page of the list, as GitHub pages it.
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
-      : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
+      : /\/issues\/\d+\/comments$/.test(p) ? (repo.comments.get(Number(p.split('/').at(-2))) ?? []).map(records.served)
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
       : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.has(compared) ? { behind_by: 0, ...repo.compare.get(compared) } : compared === HEAD ? { behind_by: 0, files: [] } : null
@@ -49,7 +51,7 @@ function fakeGitHub() {
     if (method === 'PUT') return { status: repo.mergeAnswer, etag: null, body: { merged: repo.mergeAnswer === 200 }, resetAt: null }
     return { status: 201, etag: null, body: {}, resetAt: null }
   }
-  return { repo, sent, get, send }
+  return { repo, sent, get, send, authors: records.authors }
 }
 
 function setup() {
@@ -60,7 +62,7 @@ function setup() {
   const team = vi.fn(async () => crew)
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: team, get: github.get, send: github.send, now: () => clock.now, log })
+    crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
   return { github, merger, log, merges, comments, clock, crew: team }
@@ -211,16 +213,16 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   })
 
   // Every agent of a person posts as that person's GitHub login, the login that opened its pull request: an unsigned READ-OK from
-  // it may be the author's own, so it never counts, and a reader on that login signs. Another login's unsigned READ-OK is that
-  // person's (the lead's decision, 2026-11-10).
-  it('takes no unsigned READ-OK from the login that opened the pull request, a signed one from a teammate on it, and another login\'s', async () => {
+  // it may be the author's own. Plan item 3 (review of #3708): a READ-OK typed by hand, from any login, is no read; one made by
+  // command is its agent's.
+  it('takes a READ-OK made by command from a teammate on the login that opened it, and no typed one from any login', async () => {
     // Words before the first comma or colon are a signature only when they name one of the team (its builders and PM): a verdict's
     // own words, or "LGTM", are no one, from the login that opened it.
     for (const [said, merges] of [[comment('READ-OK f6edb44'), 0], [comment('**READ-OK f6edb44**'), 0], [comment('READ-OK f6edb44', { user: { login: 'DeeHW' } }), 0],
       [comment('READ-OK f6edb44: looks good'), 0], [comment('READ-OK f6edb44, checks green'), 0], [comment('READ-OK f6edb44 (tests pass)'), 0],
       [comment('LGTM: READ-OK f6edb44'), 0],
-      [comment('Juno, 14:20: READ-OK f6edb44'), 1], [comment('READ-OK f6edb44', { user: { login: 'kenmore' } }), 1],
-      [comment('READ-OK f6edb44: looks good', { user: { login: 'kenmore' } }), 1]] as const) {
+      [comment('Juno, 14:20: READ-OK f6edb44'), 1], [comment('READ-OK f6edb44', { user: { login: 'kenmore' } }), 0],
+      [comment('READ-OK f6edb44: looks good', { user: { login: 'kenmore' } }), 0], [comment('Juno, 14:20: READ-OK f6edb44', { typed: true }), 0]] as const) {
       const f = setup()
       f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
       f.github.repo.comments.set(4, [said])
@@ -235,10 +237,10 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(named.merges()).toHaveLength(1)
   })
 
-  it('says once on the pull request that an unsigned READ-OK from its own login does not count, so its reader signs it', async () => {
+  it('says once on the pull request that a typed READ-OK from its own login does not count, so its reader makes it by command', async () => {
     const f = setup()
     f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
-    f.github.repo.comments.set(4, [comment('READ-OK f6edb44')])
+    f.github.repo.comments.set(4, [comment('READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' })])
     await f.merger.tick()
     // A minute later, and the next: swarm-sandbox #24-#26 got it again every minute (46 times each, 2026-11-10), as its words
     // carried the time of day, so each was a new thing to say.
@@ -246,7 +248,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await f.merger.tick()
     f.clock.now += 60_000
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, HH:MM: READ-OK f6edb44"\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is typed, and only a READ-OK made by command counts: its reader runs `harness super-tab read ok acme\/app#4 f6edb44`\.$/)])
   })
 
   // Review of #3708: a writer's own HOLD, which no reader is asked to lift (githubAssign.ts askReaders), stopped the merge and
@@ -258,14 +260,17 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     own.clock.now += 60_000
     await own.merger.tick()
     expect(own.merges()).toEqual([])
-    expect(own.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: the HOLD from pip on f6edb44 is a writer's own: pip lifts it with a READ-OK on f6edb44\.$/)])
+    expect(own.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: the HOLD from Pip on f6edb44 is a writer's own: another agent's READ-OK made by command on f6edb44 lifts it\.$/)])
     // Harness posts as the login that opened it, in a Swarm of one person: its note read back lifts nothing and reads nothing.
     own.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
     own.github.repo.comments.set(4, [...own.github.repo.comments.get(4)!, comment(own.comments()[0]!, { author_association: 'OWNER', created_at: '2026-11-09T12:10:00Z' })])
     await settle(own)
     expect(own.merges()).toEqual([])
-    // Its writer lifts it.
+    // Its writer's READ-OK lifts nothing; another agent's, made by command after it, lifts it.
     own.github.repo.comments.set(4, [...own.github.repo.comments.get(4)!, comment('Pip, 14:40: READ-OK f6edb44', { created_at: '2026-11-09T12:20:00Z' })])
+    await settle(own)
+    expect(own.merges()).toEqual([])
+    own.github.repo.comments.set(4, [...own.github.repo.comments.get(4)!, comment('Juno, 14:45: READ-OK f6edb44', { created_at: '2026-11-09T12:25:00Z' })])
     await settle(own)
     expect(own.merges()).toHaveLength(1)
     // A reader's HOLD beside it is the reader's to say: nothing is said that a writer's READ-OK would not answer.
@@ -293,16 +298,95 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     }
   })
 
+  // Review of #3708, gap 1: a task taken over has a writer posting from another login, whose unsigned READ-OK read as that login's
+  // read; and a writer types a teammate's name from its own login. Plan item 3: a READ-OK typed by hand is no read.
+  it('merges on no typed READ-OK: a writer\'s from another login, nor one typed in a teammate\'s name', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+      { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'box', engine: 'codex' }], machines: [] })
+    f.github.repo.pulls = [pull({ labels: [{ name: 'builder:atlas' }], head: { sha: HEAD, ref: 'pip/2' }, user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [comment('READ-OK f6edb44', { user: { login: 'kenmore' } })])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    const typed = setup()
+    typed.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    typed.github.repo.comments.set(4, [comment('Juno, 14:20: READ-OK f6edb44', { typed: true })])
+    await settle(typed)
+    expect(typed.merges()).toEqual([])
+  })
+
+  // Review of #3708, gap 3 without an @: a reader's "**Pip**: HOLD" reads as signed by Pip, its writer, and Pip's own READ-OK
+  // lifted it. A HOLD of the pull request's own side is lifted only by another agent's READ-OK made by command.
+  it('lets no writer lift a HOLD that reads as its own, and lifts it with another agent\'s READ-OK made by command', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:00: READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' }),
+      comment('**Pip**: HOLD f6edb44 quotes.py:12 is off by one.', { user: { login: 'kenmore' }, created_at: '2026-11-09T07:05:00Z' }),
+      comment('Pip, 14:30: READ-OK f6edb44', { created_at: '2026-11-09T07:10:00Z' })])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, comment('Juno, 14:40: READ-OK f6edb44', { created_at: '2026-11-09T07:20:00Z' })])
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  // Review of #3708, gap 4: an unsigned HOLD from the login that opened it was lifted by that login's unsigned READ-OK, which its
+  // writer posts as.
+  it('lifts an unsigned HOLD from the login that opened it only by another agent\'s READ-OK made by command, and says so', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [comment('Juno, 14:00: READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' }),
+      comment('HOLD 1234567: off by one', { created_at: '2026-11-09T07:05:00Z' }), comment('READ-OK f6edb44', { created_at: '2026-11-09T07:10:00Z' })])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(/to \*\*pip\*\*: not merged yet at f6edb44: the HOLD from deehw on 1234567 is unsigned, from the login that opened it: another agent's READ-OK made by command on f6edb44 lifts it\.$/)])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, comment('Juno, 14:40: READ-OK f6edb44', { created_at: '2026-11-09T07:20:00Z' })])
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  // A person has no command to run: a login takes back its own unsigned HOLD by typing, never another's, nor the opener's login.
+  it('lets a login lift its own unsigned HOLD by typing, and no other', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [comment('Juno, 14:00: READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' }),
+      comment('HOLD f6edb44 not yet', { user: { login: 'alice' }, created_at: '2026-11-09T07:05:00Z' }),
+      comment('READ-OK f6edb44', { user: { login: 'kenmore' }, created_at: '2026-11-09T07:10:00Z' })])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, comment('READ-OK f6edb44 fine now', { user: { login: 'alice' }, created_at: '2026-11-09T07:15:00Z' })])
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  // Review of #3708, gap 6: a verdict of one kind replaced another's, so a login that reads as a reader's name lifted its HOLD in
+  // two steps (a HOLD, then a READ-OK), and a teammate's READ-OK was lost under its own login's typed one.
+  it('lifts no reader\'s HOLD by a login that reads as its name, and loses no READ-OK made by command to a typed one', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:00: READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' }),
+      comment('Kai Lee, 14:10: HOLD f6edb44 fix the test', { user: { login: 'kenmore' }, created_at: '2026-11-09T07:05:00Z' }),
+      comment('HOLD f6edb44', { user: { login: 'kai-lee' }, created_at: '2026-11-09T07:10:00Z' }),
+      comment('READ-OK f6edb44', { user: { login: 'kai-lee' }, created_at: '2026-11-09T07:15:00Z' })])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    const named = setup()
+    named.github.repo.pulls = [pull({ user: { login: 'juno' } })]
+    named.github.repo.comments.set(4, [comment('Juno, 14:20: READ-OK f6edb44', { user: { login: 'juno' }, created_at: '2026-11-09T07:00:00Z' }),
+      comment('READ-OK f6edb44', { user: { login: 'juno' }, created_at: '2026-11-09T07:10:00Z' })])
+    await settle(named)
+    expect(named.merges()).toHaveLength(1)
+  })
+
   // lampOS #5212 (4 Nov): El posted its reads as reviews, and four pull requests each counted one read short. A review's body reads
   // exactly as a comment's, in time order with them; its state is never a read (markers.py merge_reviews, lib.sh coord_pr_comments).
-  it('reads a review\'s body as a comment: a READ-OK posted as a review merges, and a HOLD posted as one stops the merge', async () => {
+  // A READ-OK made by command is a comment (githubVerdict.ts): one posted as a review was typed, and is no read (plan item 3).
+  it('reads a review\'s body as a comment: a READ-OK posted as one is typed and merges nothing, and a HOLD posted as one stops the merge', async () => {
     const review = (body: string, state: string, at = '2026-11-09T12:10:00Z', extra: Json = {}) =>
       ({ id: 7, body, state, submitted_at: at, author_association: 'MEMBER', user: { login: 'deehw' }, ...extra })
     const read = setup()
     read.github.repo.comments.set(4, [])
     read.github.repo.reviews.set(4, [review('Juno, 14:20, to **Pip**: READ-OK f6edb44', 'APPROVED')])
     await settle(read)
-    expect(read.merges()).toHaveLength(1)
+    expect(read.merges()).toEqual([])
     const held = setup()
     held.github.repo.reviews.set(4, [review('Kai, 14:30: HOLD f6edb44: the day count is off by one.', 'CHANGES_REQUESTED', '2026-11-09T12:30:00Z')])
     await settle(held)
@@ -342,7 +426,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     example.github.repo.comments.set(4, [comment('Kai, 14:30: start with "Kai, HH:MM: READ-OK f6edb44" once you have read it.', { user: { login: 'kenmore' } })])
     await settle(example)
     expect(example.merges()).toEqual([])
-    for (const line of ['**READ-OK** `f6edb44`', 'Juno, 14:20: READ-OK #4 f6edb44', 'Juno, 14:20: **READ-OK f6edb44**']) {
+    for (const line of ['Juno, 14:20: **READ-OK** `f6edb44`', 'Juno, 14:20: READ-OK #4 f6edb44', 'Juno, 14:20: **READ-OK f6edb44**']) {
       const f = setup()
       f.github.repo.comments.set(4, [comment(line, { user: { login: 'kenmore' } })])
       await settle(f)
@@ -554,8 +638,9 @@ describe('the rule\'s parts', () => {
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
       comment('Kai, 14:00: TWO READS for this one')], '', { writers: [], opener: '', team: new Set() })
     const at = '2026-11-09T12:00:00Z'
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false, at },
-      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false, at }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false, at } })
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false, recorded: false, byCommand: false, retyped: false, at },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false, recorded: false, byCommand: false, retyped: false, at },
+      kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false, recorded: false, byCommand: false, retyped: false, at } })
     expect(twoReads).toBe(true)
   })
 
@@ -607,7 +692,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
     const log = vi.fn()
     const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, authors })
+      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log) })
     return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
       comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
   }
@@ -671,7 +756,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     // No record after two minutes: typed by hand, and said so.
     f.clock.now += 3 * 60_000
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringContaining('is unsigned')])
+    expect(f.comments()).toEqual([expect.stringContaining('is typed')])
     // The reader ran the command again and the record was made: read within ten minutes, with no restart.
     names['issue:701'] = 'Juno'
     f.clock.now += 11 * 60_000
@@ -686,7 +771,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     for (let pass = 0; pass < 4; pass++) { await f.merger.tick(); f.clock.now += 5_000 }
     expect(f.authors).toHaveBeenCalledTimes(1)
     expect(f.log.mock.calls.map(call => String(call[0])).filter(line => line.includes('AUTHORS_UNREAD'))).toEqual([
-      '[super-tab] verdicts are read as typed · AUTHORS_UNREAD acme/app: Could not reach this Super Tab.'])
+      '[super-tab] verdicts\' records cannot be read: nothing merges and no reader is asked · AUTHORS_UNREAD acme/app: Could not reach this Super Tab.'])
     f.clock.now += 60_000
     await f.merger.tick()
     expect(f.authors).toHaveBeenCalledTimes(2)
@@ -705,7 +790,8 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     down.authors.mockRejectedValue(new Error('Could not reach this Super Tab.'))
     down.github.repo.comments.set(4, [from(504, `Juno, 14:20: READ-OK ${HEAD}`)])
     await settle(down)
-    expect(down.merges()).toHaveLength(1)
+    // Only a READ-OK made by command is a read: while records cannot be read, nothing merges.
+    expect(down.merges()).toEqual([])
     expect(down.log.mock.calls.filter(call => String(call[0]).includes('AUTHORS_UNREAD'))).toHaveLength(1)
   })
 })
