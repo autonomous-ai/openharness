@@ -8,13 +8,13 @@
  * ready line was the conversation's first prompt, and the agents were called "Harness browser setup" and "Run harness browser --help".
  *
  * An agent is in a quiet stretch from the start of a turn a quiet delivery started (core/deliveries.ts `quietStarted`) to the start
- * of its next turn (core/turns/funnel.ts). A title first read in it is the quiet line's: never taken, then or later
+ * of its next turn (core/turns/funnel.ts), or to its end (core/main.ts `agentEnded`). A title first read in it is the quiet line's: never taken, then or later
  * (lib/registry.ts `updateTitle`, `quietTitle`). The title sync reads every 5 s, and an engine titles a prompt seconds after it, so
  * each edge waits for one more read: a title that came before the edge is judged by the stretch it came in. None is from the
  * turn that moved the edge: an engine titles a prompt with a model call, which takes longer than the read.
  */
 
-/** The most stretches kept: one is left only by its agent's next turn, which an agent deleted in its stretch never starts. */
+/** The most stretches kept: one is left by its agent's next turn or its end, and an end no path tells would keep it for good. */
 export const QUIET_STRETCHES_KEPT = 1_000
 
 export interface QuietTitlesDeps {
@@ -34,6 +34,8 @@ export function createQuietTitles(deps: QuietTitlesDeps) {
       .catch((error: unknown) => { deps.log(`[terminal-title] read at a quiet edge failed · ${error instanceof Error ? error.message : String(error)}`) })
       .then(() => { if (said.has(agentId)) quiet.add(agentId); else quiet.delete(agentId) })
   }
+  /** [agentId]'s stretch ends, if it is in one. */
+  const end = (agentId: string): void => { if (said.delete(agentId)) settle(agentId) }
   return {
     /** A turn a quiet delivery started is open in [agentId]. */
     started(agentId: string): void {
@@ -47,9 +49,10 @@ export function createQuietTitles(deps: QuietTitlesDeps) {
       settle(agentId)
     },
     /** A live turn started in [agentId]: a stretch there ends with it. Told before the input can say a quiet delivery started it. */
-    turnStarted(agentId: string): void {
-      if (said.delete(agentId)) settle(agentId)
-    },
+    turnStarted: end,
+    /** [agentId] stopped running here: resumed, its engine shows its conversation's titles again before any turn, and one it
+     *  had before the quiet line is its own. */
+    ended: end,
     /** Whether a title [agentId]'s engine shows now came from a line typed for it alone. */
     quiet: (agentId: string): boolean => quiet.has(agentId),
   }

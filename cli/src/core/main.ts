@@ -1097,7 +1097,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
-  const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId) }
+  const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId); quietTitles.ended(agentId) }
 
   // The folders agents work in: branch names and unused worktrees (services/workspaces.ts), started below.
   const syncTerminalTitles = async (): Promise<void> => {

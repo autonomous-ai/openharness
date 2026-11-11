@@ -82,7 +82,7 @@ describe('quiet titles', () => {
     ])
   })
 
-  // An agent deleted in its stretch never starts the turn that would end it.
+  // An agent whose end no path tells never ends its stretch.
   it('keeps the latest stretches only', async () => {
     const titles = createQuietTitles({ read: async () => {}, log: vi.fn() })
     for (let i = 0; i < QUIET_STRETCHES_KEPT; i++) titles.started(`a${i}`)
