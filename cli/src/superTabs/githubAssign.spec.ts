@@ -88,7 +88,7 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
-    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers })
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
@@ -104,7 +104,12 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     // Juno was given #2 this pass, so nobody is free and no task is open: one in hand before, one given.
     expect(f.labelled()).toEqual([[2, 'builder:juno']])
-    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false }]])
+    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false, activity: Date.parse(merged) }]])
+    // A landing more than a day old is the team's last, and no landing of the day: the pass counts from its own clock.
+    const old = new Date(Date.parse('2026-11-09T07:31:00Z') - 30 * 3_600_000).toISOString()
+    const g = setup([], { closed: [{ number: 9, pull_request: { merged_at: old }, labels: [{ name: 'builder:pip' }], updated_at: old }] })
+    await g.assigner.tick()
+    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ landed: 0, activity: Date.parse(old) })
   })
   it('counts a builder with nothing when no task is open, when none can be given, and when the team has no builder', async () => {
     const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])])
@@ -148,6 +153,13 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       labels: [{ name: 'builder:pip' }], body: 'Closes #14' }]
     await f.assigner.tick()
     expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }, { id: 'pip', name: 'Pip' }], held: 1 })
+    // A second task of Pip's in review fills its list: Harness gives it nothing whatever is open, and does not count it as
+    // waiting for a task (third review: the PM was told to open tasks that could not help).
+    f.github.state.open.push(issue(15, ['size:s', 'builder:pip', 'status:taken']), issue(16, ['size:s']))
+    f.github.state.pulls.push({ number: 31, draft: false, base: { ref: 'main' }, head: { sha: 'a6edb44c0ffee0000000000000000000000000ab', ref: 'pip/15' },
+      labels: [{ name: 'builder:pip' }], body: 'Closes #15' })
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toEqual([])
     // Juno's subscription is spent until a reset three hours off: it is given nothing, and is not counted as waiting for work.
     const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * 3_600_000).toISOString()
     const g = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])], { crew: { builders: [crew().builders[0]!, { ...crew().builders[1]!, machineId: 'spent' }],

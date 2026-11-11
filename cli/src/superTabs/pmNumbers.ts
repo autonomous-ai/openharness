@@ -9,24 +9,26 @@
  * section 7). On lampOS a free agent waited 432 minutes at the median for its next task, and six agents were gone eight days
  * before anyone said so.
  *
- * So the assigner, which reads the project each minute (githubAssign.ts), counts what it read: the builders with nothing to work
- * on after its plan, the sized tasks nobody holds, and what landed in the last day. While a builder has had nothing for
- * [SHORT_AFTER_MS] the PM is typed the counts, at most once an hour. Told [SHORT_TIMES] hours running with a builder still
- * waiting, its person is told once instead, and nobody again until the builders it named have work: a finished project falls
- * silent. Once a day the counts are posted in the project's channel, where its people read the team's talk. Nothing is read
- * for it that the pass did not read already.
+ * So the assigner, which reads the project each minute (githubAssign.ts), counts what it read: the builders it would give a task
+ * to and has none for, the sized tasks nobody holds, and what landed in the last day. While such a builder has waited
+ * [SHORT_AFTER_MS] and no sized task is open, the PM is typed the counts, at most once an hour: that is the one shortage a PM
+ * ends, by opening or sizing tasks. (A task that is open and cannot start is said on the task itself, githubAssign.ts
+ * sayBlocked.) Told [SHORT_TIMES] times with nothing landed or closed since, its person is told once instead, and nobody
+ * again until something lands: a finished project falls silent. Once a day the counts are posted in the project's channel,
+ * where its people read the team's talk. Nothing is read for it that the pass did not read already.
  *
- * It says only what is so now: who has nothing, what is open, what landed. Its first two reviews found what a longer memory
- * cost: a person told of a night nobody watched, a message kept and typed three hours late, and a file written every five
- * minutes for a project at rest. So what a builder has waited is counted in memory, from this process's own passes, and four
- * things are kept on disk, written as they change: when the PM was last told, how many hours running, the builders its person
- * was told of, and the day last posted. A message's id is its project, its kind and its hour or day: the server takes each once, and answers one
- * sent again in other words as taken (OPERATION_REUSED).
+ * It says only what is so now: who has nothing, what is open, what landed. Its first three reviews found what more memory and
+ * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
+ * five minutes at rest, a healthy team's person told every few hours, one builder nobody could help silencing the rest. So
+ * what a builder has waited is counted in memory, from this process's own passes, and five things are kept on disk, written as
+ * they change: when the PM was last told, how many times since the team last landed or closed anything, when that was,
+ * whether its person was told, and the day last posted. A message's id is its project, its kind and the tell before it (or
+ * its day): the server takes each once, and answers one sent again in other words as taken (OPERATION_REUSED).
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { labelOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { DEEP, labelOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import { refusedForGood } from './githubMentions.js'
 import type { LedProject } from './githubMerge.js'
 import { PAGE, retryIn } from './githubRest.js'
@@ -41,46 +43,51 @@ type Json = Record<string, unknown>
 export const SHORT_AFTER_MS = 5 * 60_000
 /** How often the PM is told while work is short. */
 export const SHORT_EVERY_MS = 60 * 60_000
-/** How many times the PM is told before its person is told instead (nextThing.ts NEXT_TIMES). */
+/** How many times the PM is told, with nothing landed or closed since, before its person is told instead (nextThing.ts NEXT_TIMES). */
 export const SHORT_TIMES = 3
 /** The hour of this computer's day from which the day's numbers are posted, once. */
 export const DAY_HOUR = 9
 const DAY_MS = 24 * 60 * 60_000
 /** The most names a line lists, the most letters of a name it says, and the most projects whose counts are kept. */
 const NAMES_MAX = 5, NAME_MAX = 24, MAX_KEPT = 200
-/** The most builders kept as the ones a person was told of. */
-const SAID_MAX = 100
 
-/** One project's counts after an assigner's pass. `free`: its builders with nothing to work on, by id, with the name a line
- *  says. `unsized`: open issues nobody holds that have no size, which Harness gives nobody. `landedBy`: the team's pull requests
- *  landed in the last 24 hours, by builder, the most first. `more`: the closed list read was full of that day's, so there may be
- *  more landed and closed than counted. */
+/** One project's counts after an assigner's pass. `free`: its builders with nothing to work on that would be given a task were
+ *  one open, by id, with the name a line says. `unsized`: open issues nobody holds that have no size, which Harness gives
+ *  nobody. `landedBy`: the team's pull requests landed in the last 24 hours, by builder, the most first. `more`: the closed list
+ *  read was full of that day's, so there may be more landed and closed than counted. `activity`: when the team last landed a
+ *  pull request or closed a task, as far as that list goes back; 0 when it shows none. */
 export interface Numbers { builders: number; free: Array<{ id: string; name: string }>; open: number; unsized: number; held: number
-  landed: number; landedBy: Array<[name: string, count: number]>; closed: number; more: boolean }
+  landed: number; landedBy: Array<[name: string, count: number]>; closed: number; more: boolean; activity: number }
 
 /** A name as a line of Harness's says it: its letters, digits, spaces, dashes and underscores, [NAME_MAX] at most. An agent's
  *  name is its person's own words, and the line is typed to another person's agent and posted where an @ tags and a dot links. */
 export const plainName = (name: string): string =>
-  name.normalize('NFKC').replace(/\s+/g, ' ').replace(/[^\p{L}\p{M}\p{N} _-]/gu, '').replace(/ +/g, ' ').trim().slice(0, NAME_MAX).trim() || 'a builder'
+  [...name.normalize('NFKC').replace(/\s+/g, ' ').replace(/[^\p{L}\p{M}\p{N} _-]/gu, '').replace(/ +/g, ' ').trim()].slice(0, NAME_MAX).join('').trim() || 'a builder'
 
 /**
  * The counts of a pass: the open [issues], [read] and [crew] as the assigner read them, the tasks whose pull request waits for
  * its readers or its merge ([withReaders]), the builders out of quota ([short]), the tasks given this pass ([picks]), the
- * repository's issues and pull requests closed last ([closed], one page), and the project's [pm]. A builder is free when every
- * task it holds waits on a pull request, it has room in its subscription and it was given nothing this pass.
+ * repository's issues and pull requests closed last ([closed], one page), and the project's [pm]. A builder is free when it
+ * would be given a task were one open: its list is not full (DEEP), every task in it waits on its pull request, it has room in
+ * its subscription and it was given nothing this pass. One with a full list all in review is given nothing whatever is open,
+ * so it is not counted: its PM cannot end that wait by opening tasks (third review).
  */
 export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: readonly Json[]; read: Read; withReaders: ReadonlySet<number>
   short: readonly AwayBuilder[]; picks: readonly Pick[]; closed: readonly Json[] }): Numbers {
   const { now, crew, read, picks } = input
   const tasks = input.issues.filter(issue => !issue.pull_request)
   const given = new Set(picks.map(pick => pick.builder)), out = new Set(input.short.map(away => away.label))
-  const working = new Set(tasks.filter(task => !input.withReaders.has(Number(task.number))).flatMap(labelsOf))
-  const free = crew.builders.filter(b => !working.has(b.label) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
+  const lists = new Map<string, number[]>()
+  for (const task of tasks) for (const label of labelsOf(task)) lists.set(label, [...lists.get(label) ?? [], Number(task.number)])
+  const idle = (label: string) => { const list = lists.get(label) ?? []; return list.length < DEEP && list.every(number => input.withReaders.has(number)) }
+  const free = crew.builders.filter(b => idle(b.label) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
     .sort((a, b) => a.name.localeCompare(b.name))
   // The team's own, as the merger lands only those (assign/crew.ts teamOf): a person's pull request, or an issue anyone
   // opened and closed, is theirs.
   const names = new Map([...crew.builders, ...crew.away ?? [], { label: labelOf(input.pm), name: input.pm }].map(b => [b.label, plainName(b.name)]))
-  const within = (at: unknown) => { const time = Date.parse(String(at ?? '')); return Number.isFinite(time) && now - time < DAY_MS }
+  const timeOf = (at: unknown) => { const time = Date.parse(String(at ?? '')); return Number.isFinite(time) ? time : 0 }
+  const within = (at: unknown) => timeOf(at) > 0 && now - timeOf(at) < DAY_MS
+  let activity = 0
   const pulls = input.closed.filter(item => item.pull_request)
   // A train that landed squashed closed its members and merged only itself (githubTrain.ts): its title names them.
   const carried = new Set(pulls.filter(pull => String(pull.title ?? '').startsWith(TRAIN_TITLE) && within(object(pull.pull_request).merged_at))
@@ -88,17 +95,22 @@ export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: 
   const by = new Map<string, number>()
   for (const pull of pulls) {
     const label = labelsOf(pull).find(name => names.has(name))
-    if (!label || !(within(object(pull.pull_request).merged_at) || carried.has(Number(pull.number)) && within(pull.closed_at))) continue
-    by.set(label, (by.get(label) ?? 0) + 1)
+    const landedAt = timeOf(object(pull.pull_request).merged_at || (carried.has(Number(pull.number)) ? pull.closed_at : null))
+    if (!label || !landedAt) continue
+    activity = Math.max(activity, landedAt)
+    if (now - landedAt < DAY_MS) by.set(label, (by.get(label) ?? 0) + 1)
   }
   // A task closed as not planned ended without its work.
-  const closed = input.closed.filter(item => !item.pull_request && within(item.closed_at) && labelsOf(item).some(label => names.has(label))
-    && (item.state_reason === undefined || item.state_reason === null || item.state_reason === 'completed')).length
+  const done = input.closed.filter(item => !item.pull_request && labelsOf(item).some(label => names.has(label))
+    && (item.state_reason === undefined || item.state_reason === null || item.state_reason === 'completed'))
+  for (const task of done) activity = Math.max(activity, timeOf(task.closed_at))
+  const closed = done.filter(task => within(task.closed_at)).length
   const landedBy = [...by].map(([label, count]): [string, number] => [names.get(label)!, count]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
   return { builders: crew.builders.length, free, open: read.free.size - picks.length,
-    unsized: tasks.filter(task => !labelsOf(task).some(label => label.startsWith('size:') || label.startsWith('builder:') || label === 'status:taken')).length,
+    // No size Harness reads (assign/crew.ts SIZES): one labelled size:xl is given to nobody as surely as one with none.
+    unsized: tasks.filter(task => !labelsOf(task).some(label => /^size:[sml]$/.test(label) || label.startsWith('builder:') || label === 'status:taken')).length,
     held: [...read.open.values()].reduce((sum, count) => sum + count, 0) + picks.length,
-    landed: landedBy.reduce((sum, [, count]) => sum + count, 0), landedBy, closed, more: input.closed.length >= PAGE && within(input.closed.at(-1)?.updated_at) }
+    landed: landedBy.reduce((sum, [, count]) => sum + count, 0), landedBy, closed, more: input.closed.length >= PAGE && within(input.closed.at(-1)?.updated_at), activity }
 }
 
 const labelsOf = (item: Json): string[] => (Array.isArray(item.labels) ? item.labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
@@ -111,15 +123,15 @@ function listed(names: readonly string[]): string {
 const nothing = (names: readonly string[]): string => `${listed(names)} ${names.length === 1 ? 'has' : 'have'} nothing to do`
 const landedWords = (n: Numbers): string => `${counted(n.landed, 'pull request')}${n.more ? ' or more' : ''} landed`
 
-/** What the PM is typed when work is short: the builders with nothing ([names]), what is open, what landed, and what to do. */
-export const shortLine = (names: readonly string[], n: Numbers, at: string): string => `Harness, ${at}: ${nothing(names)}, and `
-  + (n.open > 0 ? `the ${counted(n.open, 'sized task')} open cannot start yet`
-    : `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`)
+const noTask = (n: Numbers): string => `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`
+
+/** What the PM is typed when work is short: the builders with nothing ([names]), that no task is open, what landed, and what to do. */
+export const shortLine = (names: readonly string[], n: Numbers, at: string): string => `Harness, ${at}: ${nothing(names)}, and ${noTask(n)}`
   + `. ${landedWords(n)} in the last 24 hours. Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
   + 'If the work is done, tell your person.'
 
-/** What the PM's person is told once the PM was told [SHORT_TIMES] times and [names] still have nothing. */
-export const toldLine = (names: readonly string[], pm: string): string => `${nothing(names)}. ${plainName(pm)} was told ${SHORT_TIMES} times.`
+/** What the PM's person is told once the PM was told [SHORT_TIMES] times, nothing landed since, and [names] still have nothing. */
+export const toldLine = (names: readonly string[], n: Numbers, pm: string): string => `${nothing(names)}, and ${noTask(n)}. ${plainName(pm)} was told ${SHORT_TIMES} times.`
 
 /** The day's numbers, for the project's people, with the [day] they are posted on. */
 export const dayLine = (n: Numbers, day: string): string => `Harness, ${day}, the last 24 hours: ${landedWords(n)}`
@@ -156,9 +168,9 @@ export const numbersSender = (read: (project: LedProject) => Promise<Json>, post
   async (how: How, project: LedProject, operationId: string, text: string): Promise<unknown> =>
     post(`/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId, command: messageOf(how, project, await read(project), text) })
 
-/** What is kept of a project on disk: when its PM was last told, how many hours running, the builders its person was told
- *  of that still have nothing, and the day its numbers were last posted. */
-interface Kept { typedAt: number; told: number; saidOf: string[]; day: string }
+/** What is kept of a project on disk: when its PM was last told, how many times since the team last landed or closed
+ *  anything, when that was, whether its person was told, and the day its numbers were last posted. */
+interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string }
 
 const dayOf = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -187,29 +199,31 @@ export class PmNumbers {
   /** One project's counts after an assigner's pass: its PM told, its person told or its day posted, as each is due. */
   async pass(project: LedProject, numbers: Numbers): Promise<void> {
     const memory = this.memory ??= this.load(), now = this.now(), at = new Date(now), id = project.projectId
-    const kept = memory[id] ?? { typedAt: 0, told: 0, saidOf: [], day: '' }
+    const kept = memory[id] ?? { typedAt: 0, told: 0, said: false, activity: 0, day: '' }
     const before = JSON.stringify(kept)
     const waits = this.waits.get(id) ?? new Map<string, number>()
     for (const builder of waits.keys()) if (!numbers.free.some(free => free.id === builder)) waits.delete(builder)
     // New to waiting, or waiting since a moment still to come (a clock set back): from now.
     for (const free of numbers.free) if (!(waits.get(free.id)! <= now)) waits.set(free.id, now)
+    this.waits.delete(id)
     if (waits.size) this.waits.set(id, waits)
-    else this.waits.delete(id)
-    const waiting = numbers.free.filter(free => now - waits.get(free.id)! >= SHORT_AFTER_MS)
-    // The builders its person was told of have work again: the PM is told of the next that waits, from the first time.
-    if (kept.saidOf.length && !kept.saidOf.some(builder => waits.has(builder))) Object.assign(kept, { saidOf: [], told: 0 })
+    // Of the projects passed last, as the file's: one no longer led here is let go.
+    if (this.waits.size > MAX_KEPT) this.waits.delete(this.waits.keys().next().value!)
+    const waiting = numbers.free.filter(free => now - waits.get(free.id)! >= SHORT_AFTER_MS).map(free => free.name)
+    // The team landed or closed something since: what the PM was told is answered, or the project moves all the same.
+    if (numbers.activity > kept.activity) Object.assign(kept, { activity: numbers.activity, told: 0, said: false })
     // A clock set back: the hour since the PM was told is not waited from a moment still to come.
     if (kept.typedAt > now) kept.typedAt = 0
-    if (waiting.length && !kept.saidOf.length && now - kept.typedAt >= SHORT_EVERY_MS) {
-      // Hours running: a tell with none due the hour before it starts the count again, as nobody waited then.
-      const told = now - kept.typedAt >= 2 * SHORT_EVERY_MS ? 0 : kept.told, names = waiting.map(free => free.name)
-      if (told >= SHORT_TIMES) {
+    // Short as a PM can end it: a builder waits and no sized task is open.
+    if (waiting.length && numbers.open <= 0 && !kept.said && now - kept.typedAt >= SHORT_EVERY_MS) {
+      if (kept.told >= SHORT_TIMES) {
         // Refused for good, it is not said again either: the log has it.
-        if (await this.send('say', project, `${kept.typedAt}`, toldLine(names, project.pm)) !== 'later') kept.saidOf = waiting.map(free => free.id).slice(0, SAID_MAX)
+        if (await this.send('say', project, `${kept.typedAt}`, toldLine(waiting, numbers, project.pm)) !== 'later') kept.said = true
       } else {
-        const sent = await this.send('tell', project, `${Math.floor(now / SHORT_EVERY_MS)}`, shortLine(names, numbers, hhmm(now)))
+        // Under the tell before it, so one whose answer was lost is the same operation when it is tried again, whatever the hour.
+        const sent = await this.send('tell', project, `${kept.typedAt}`, shortLine(waiting, numbers, hhmm(now)))
         // Taken, it counts; refused for good, the hour passes all the same, and nothing is counted that was not typed.
-        if (sent !== 'later') Object.assign(kept, { typedAt: now, told: told + (sent === 'taken' ? 1 : 0) })
+        if (sent !== 'later') Object.assign(kept, { typedAt: now, told: kept.told + (sent === 'taken' ? 1 : 0) })
       }
     }
     const day = dayOf(at)
@@ -268,9 +282,9 @@ export class PmNumbers {
     try {
       for (const [id, value] of Object.entries(object(JSON.parse(readFileSync(this.deps.file, 'utf8'))))) {
         const row = object(value)
-        if (identifier(id) && Number.isSafeInteger(row.typedAt) && Number.isSafeInteger(row.told) && typeof row.day === 'string'
-          && Array.isArray(row.saidOf) && row.saidOf.length <= SAID_MAX && row.saidOf.every(builder => typeof builder === 'string')) {
-          kept[id] = { typedAt: row.typedAt as number, told: row.told as number, saidOf: row.saidOf as string[], day: row.day }
+        if (identifier(id) && Number.isSafeInteger(row.typedAt) && Number.isSafeInteger(row.told) && typeof row.said === 'boolean' && Number.isSafeInteger(row.activity)
+          && typeof row.day === 'string') {
+          kept[id] = { typedAt: row.typedAt as number, told: row.told as number, said: row.said, activity: row.activity as number, day: row.day }
         }
       }
     } catch { /* none kept yet, or unreadable: counted from now */ }

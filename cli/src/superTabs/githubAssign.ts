@@ -87,8 +87,8 @@ export class GitHubAssign {
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
-    /** What a pass counted of a project, for its PM and its people (pmNumbers.ts). */
-    numbers: (project: LedProject, numbers: Numbers) => Promise<void> }) {
+    /** Takes what a pass counted of a project, for its PM and its people (pmNumbers.ts PmNumbers). */
+    numbers: { pass: (project: LedProject, numbers: Numbers) => Promise<void> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -171,7 +171,7 @@ export class GitHubAssign {
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
-    await this.deps.numbers(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }))
+    await this.deps.numbers.pass(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }))
   }
 
   /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot
