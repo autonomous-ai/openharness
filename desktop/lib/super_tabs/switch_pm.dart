@@ -161,8 +161,19 @@ Future<void> showSwitchPm(
             final activePool = machineRows
                 .where((pool) => pool['machineId'] == machineId)
                 .firstOrNull;
+            // The server runs a PM on its machine's default account alone (backend pmAccount.ts): another account the
+            // machine reports would be refused, so it is not offered.
             List<SuperTabProfile> profilesFor(Map<String, dynamic>? pool) {
-              final rows = superTabProfilesOf(pool);
+              final rows = [
+                for (final p in superTabProfilesOf(pool))
+                  if (p.id ==
+                      swarmProfileId(
+                        pool?['machineId'] as String? ?? '',
+                        p.engine,
+                        'default',
+                      ))
+                    p,
+              ];
               if (rows.isNotEmpty) return rows;
               final offered = (pool?['engines'] as List?)?.whereType<String>();
               return [
@@ -295,18 +306,17 @@ Future<void> showSwitchPm(
                                 selected:
                                     picked?.engine == p.engine &&
                                     picked?.id == p.id,
-                                title: Text(
-                                  '${leadEngineLabel(p.engine)} · ${p.label}',
-                                ),
-                                subtitle: Text(
-                                  [
-                                    if (current(p)) 'Current',
-                                    if (p.leftPercent != null)
-                                      '${p.leftPercent}% left',
-                                    if (p.resetsAt != null)
-                                      'resets ${switchPmTime(context, p.resetsAt!)}',
-                                  ].join(' · '),
-                                ),
+                                title: Text(leadEngineLabel(p.engine)),
+                                subtitle: switch ([
+                                  if (current(p)) 'Current',
+                                  if (p.leftPercent != null)
+                                    '${p.leftPercent}% left',
+                                  if (p.resetsAt != null)
+                                    'resets ${switchPmTime(context, p.resetsAt!)}',
+                                ]) {
+                                  [] => null,
+                                  final words => Text(words.join(' · ')),
+                                },
                                 onTap: () => update(() {
                                   picked = (engine: p.engine, id: p.id);
                                   model = null;

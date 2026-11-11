@@ -714,7 +714,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted.
+  archived, so no other way to them is wanted. Switch PM… opens a dialog of the
+  machine, its engines and the model: each engine is one row, `Claude Code`
+  with `Current · 40% left` under it, for its machine's default account,
+  the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
