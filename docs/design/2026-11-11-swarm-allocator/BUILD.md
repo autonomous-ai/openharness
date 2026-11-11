@@ -143,7 +143,7 @@ builder may raise conflicts: the scoreboard says.
 
 ### 3. A task waits for what it depends on
 
-**Built** (#NNNN): in `cli/src/superTabs/assign/crew.ts` (`readProblem`: `up`, `bases`, `looped`; `builtOn`),
+**Built** (#4121): in `cli/src/superTabs/assign/crew.ts` (`readProblem`: `up`, `bases`, `looped`; `builtOn`),
 `githubAssign.ts` (`askReaders`, the line that gives a task), `nextThing.ts` (the "Next:" line) and `githubMerge.ts`
 (`earlierPull`). *It also waits while that builder holds four or lacks what the task needs. A task a builder holds
 already is planned as before. Tasks whose "after" lines wait on each other are named to their PM. The merger gained a
