@@ -4,6 +4,7 @@ import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { personView } from './profile.js'
+import { removedPanesFor } from './removedPanes.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
@@ -30,6 +31,9 @@ export interface Person {
   nameFollowsAccount?: true
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
+  /** The sessions they took out of this Swarm that keep running (removedPanes.ts), so their apps do not offer them to join.
+   *  Only they read it. */
+  removedPanes?: import('./removedPanes.js').RemovedPane[]
 }
 export interface AgentConfiguration {
   engine: string
@@ -857,7 +861,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
-  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) }))
+  visible.people = visible.people.map(p => ({ ...removedPanesFor(personView(p), actor.kind === 'person' ? actor.userId : null, now), username: names.get(p.id) }))
   visible.agents = visible.agents.map(personView)
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {

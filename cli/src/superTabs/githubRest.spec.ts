@@ -64,6 +64,24 @@ describe('reads with their ETags kept (GitHubReads)', () => {
     expect(etags).toEqual([null, null, null])
   })
 
+  it('asks outright for a list by its pages, as many as it may, and keeps nothing of them', async () => {
+    const path = '/repos/acme/app/issues/7/comments?per_page=100', full = Array.from({ length: 100 }, (_, id) => ({ id }))
+    const asked: string[] = [], etags: Array<string | null> = []
+    const get = answering({ [path]: full, [`${path}&page=2`]: full, [`${path}&page=3`]: [{ id: 'last' }] })
+    const reads = new GitHubReads(async (url, etag) => { asked.push(url); etags.push(etag); return get(url, etag) })
+    expect(await reads.freshPages('acme/app', path, 2)).toHaveLength(200)
+    expect(await reads.freshPages('acme/app', path, 3)).toHaveLength(201)
+    expect(asked).toEqual([path, `${path}&page=2`, path, `${path}&page=2`, `${path}&page=3`])
+    expect(etags).toEqual([null, null, null, null, null])
+    // An answer that is no list stops the repository's read, as any list's does.
+    await expect(new GitHubReads(answering({ [path]: { message: 'no' } })).freshPages('acme/app', path, 3)).rejects.toMatchObject({ code: 'GH_FAILED' })
+    // Nor one whose body did not arrive (a 200 cut off on its way): asked outright there is no 304, and read as the list's end
+    // it would count as nothing. A feed's 304 is still nothing new.
+    const cut = new GitHubReads(async () => ({ status: 200, etag: '"cut"', body: null, resetAt: null }))
+    await expect(cut.freshPages('acme/app', path, 3)).rejects.toMatchObject({ code: 'GH_FAILED', message: 'GitHub\'s answer did not arrive whole.', everywhere: false })
+    expect(await new GitHubReads(async () => ({ status: 304, etag: '"same"', body: null, resetAt: null })).changed('acme/app', path)).toEqual([])
+  })
+
   it('stops one repository it cannot read and every repository while gh is signed out', async () => {
     const unreadable = new GitHubReads(async () => ({ status: 404, etag: null, body: null, resetAt: null }))
     await expect(unreadable.current('acme/secret', '/repos/acme/secret/pulls')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
