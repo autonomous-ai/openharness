@@ -40,7 +40,7 @@ engines, a private tmux and a throwaway home (`cli/e2e`), "spec" and "server" ar
 | 17 | has tasks given to builders: sized, two deep, what the person said first, taken back from a stalled builder, labels made where missing | spec `githubAssign.spec.ts`, `assign/crew.spec.ts`, `assign/*.spec.ts` (#3624, #3655, #3671, #3682, #3694) | spec only (fake GitHub) |
 | 18 | sees a task card show its pull request and where it stands (draft, reads, HOLD, checks, merging) | Desktop `swarm_pull_status_test.dart`; the project's pull requests by who acts next, each opening its own chat: `swarm_v4_test.dart` ("⑂ shows the project's pull requests in three columns by who acts next") | proved |
 | 19 | has reviewed pull requests merged by rule: a first-line `READ-OK <head>` from another, no HOLD, checks green; a reader asked by name; only the team's pull requests | spec `githubMerge.spec.ts`, `githubAssign.spec.ts` (#3633, #3663, #3676, #3693) | spec only (fake GitHub) |
-| 20 | switches the PM to another engine or computer (on that computer's default account, the only one a PM runs on) | Desktop `super_tab_switch_pm_test.dart`; spec `leadSwitchRequest.spec.ts`; e2e `swarmSwitch.e2e.ts` ("a Lead stops only for the engine switch its owner prepared, once") | proved |
+| 20 | chooses the project's PM from their own agents in Project settings, and chooses again to switch it; nothing new is started | Desktop `super_tab_choose_pm_test.dart` (Project settings ▸ Product Manager: their agents, the PM `Current`, another project's PM not offered; Choose sends `project.pm` and opens the PM's chat; a channel with no PM offers Choose PM to its owner alone; a refusal is said); server `project.pm` (PS-B, #4077) | proved on Desktop; server with #4077 |
 | 21 | deletes a project: its PM goes with it and the PM's session closes | Desktop `super_tab_project_delete_test.dart` (the project and its conversations go); server `commands.test.ts` ("lets only deleting its project take the Lead, and asks its host to close the session") | proved |
 
 ### Agents talking to each other
@@ -93,7 +93,7 @@ done for a team: the team decides, then changes its own repository.
 4. **Reviews and merges.** A reader's first line is `READ-OK <sha>` or `HOLD <sha>` on the head; posts start with the agent's
    name. One merger per branch: a team's own bot and Harness never merge into the same branch.
 5. **Agents.** Start fresh agents (their name, the request, the basics) rather than keep sessions that carry the old process in
-   their context. A PM leaves only with its project, or by Switch PM; deleting a project takes its PM and the project's conversations,
+   their context. A PM leaves only with its project, or when its project's owner chooses another; deleting a project takes its PM and the project's conversations,
    while builders and their chats with their people stay, and the tasks stay on GitHub.
 6. **Where they talk.** "free: <name>" and `@Name` in the project's channel replace a queue issue; a GitHub comment that names
    an agent reaches it in its person's chat.

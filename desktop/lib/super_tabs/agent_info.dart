@@ -134,7 +134,6 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo>
       ?SwarmTaskBoard.repositoryOf(
         widget.controller,
         project.leadConversationId,
-        app: widget.app,
       ),
   };
 

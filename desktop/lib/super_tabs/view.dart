@@ -40,8 +40,6 @@ import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'profile_actions.dart';
 import 'personal_agents.dart';
-import 'personal_lead.dart';
-import 'personal_lead_card.dart';
 import 'personal_projects.dart';
 import 'private_project_lock.dart';
 import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
@@ -56,6 +54,7 @@ import 'agent_state.dart';
 import 'terminal_button.dart';
 import '../state/harness_activity.dart';
 import 'back_to_chat.dart';
+import 'choose_pm.dart';
 import 'controller.dart';
 import 'file_links.dart';
 import 'dialog_scope.dart';
@@ -86,7 +85,6 @@ import 'sharing.dart';
 import 'project_sidebar.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
-import 'switch_pm.dart';
 import 'pane_layout.dart';
 import 'composer_actions.dart';
 import 'view_room.dart';
@@ -1692,9 +1690,9 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _groupAction(String action, SuperTabConversation group) async {
     final c = this.c;
-    if (action == 'switch-pm') {
+    if (action == 'choose-pm') {
       final project = c.snapshot?.projectFor(group.id);
-      if (project != null) await showSwitchPm(context, c, project.id);
+      if (project != null) await showChoosePm(context, c, project.id);
       return;
     }
     if (c.snapshot?.isProjectLead(group.id) == true) {
@@ -2673,15 +2671,21 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Whether [group]'s empty channel offers to start its PM: a Personal
-  /// project with none, read by someone who may write (task #2815).
-  bool _offersLead(SuperTabConversation group) => switch (widget.app) {
-    final app? => c.canWrite && PersonalLeadStarter.of(app).wants(c, group.id),
-    null => false,
-  };
+  /// Whether [group]'s empty channel offers its owner to choose its PM: a project's channel with none (anh Dee, 2026-11-11:
+  /// the person chooses the PM from their agents).
+  bool _offersLead(SuperTabConversation group) {
+    final snapshot = c.snapshot;
+    if (!c.canWrite || snapshot == null || group.archived) return false;
+    if (!snapshot.isProjectLead(group.id)) return false;
+    final project = snapshot.projectFor(group.id);
+    // A PM New project is starting (its chat waits for it, `pmChatId`) is the one: nothing to choose meanwhile.
+    return project != null &&
+        project.ownerId == c.accountId &&
+        project.pmChatId == null &&
+        snapshot.leadOf(project.id) == null;
+  }
 
-  /// A Personal project's empty channel with no PM: the card that starts one
-  /// (Huy 11-04, task #2815), and under it its panes when it holds any.
+  /// A project's empty channel with no PM: the card that chooses one, and under it its panes when it holds any.
   Widget _leadWaiting(SuperTabConversation group) => Center(
     child: SingleChildScrollView(
       padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
@@ -2691,10 +2695,15 @@ class _SuperTabViewState extends State<SuperTabView>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            PersonalLeadStartCard(
-              controller: c,
-              conversationId: group.id,
-              app: widget.app!,
+            SwarmPmChoose(
+              onChoose: c.saving
+                  ? null
+                  : () {
+                      final project = c.snapshot?.projectFor(group.id);
+                      if (project != null) {
+                        unawaited(showChoosePm(context, c, project.id));
+                      }
+                    },
             ),
             // Nothing more for a chat with no panes (rule 7, task #4465).
             if (_personalPaneCount(group) > 0) _panesWaiting(group),
@@ -3011,7 +3020,7 @@ class _SuperTabViewState extends State<SuperTabView>
             !_phone &&
             !_devicesVisible &&
             !_listViewHoldsThePane
-        ? SwarmTaskBoard.repositoryOf(c, group.id, app: widget.app)
+        ? SwarmTaskBoard.repositoryOf(c, group.id)
         : null;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
@@ -3310,14 +3319,16 @@ class _SuperTabViewState extends State<SuperTabView>
             repository?['cwd'] as String? ??
             'Not set',
       ),
-      // While the PM has a switch under way, there is nothing to ask for.
-      if (editable &&
-          c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
-          c.snapshot?.leadOf(project.id)?.switchRequest == null)
+      // Its owner chooses its PM from their own agents (backend `project.pm`).
+      if (editable && owner)
         row(
-          'Switch PM…',
-          'switch-pm',
-          value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
+          'Product Manager',
+          'choose-pm',
+          value: leadId != null
+              ? c.snapshot!.agentName(leadId)
+              : project.pmChatId != null
+              ? 'Starting…'
+              : 'None',
         ),
       if (editable && owner) row('Delete Project', 'delete', danger: true),
     ];
@@ -3682,7 +3693,17 @@ class _SuperTabViewState extends State<SuperTabView>
             onResolve: (delivery, resolution) =>
                 unawaited(_resolveDelivery(message, delivery, resolution)),
             onAddLead: () {
-              if (c.selected case final group?) widget.onAddAgent(group);
+              final group = c.selected;
+              if (group == null) return;
+              // A project's channel: its PM is chosen from its owner's agents, never started here.
+              if (c.snapshot?.isProjectLead(group.id) == true) {
+                final project = c.snapshot!.projectFor(group.id);
+                if (project != null) {
+                  unawaited(showChoosePm(context, c, project.id));
+                }
+                return;
+              }
+              widget.onAddAgent(group);
             },
           ),
       ],
@@ -4916,7 +4937,6 @@ class _SuperTabViewState extends State<SuperTabView>
               controller: c,
               conversationId: c.selectedId,
               github: _github,
-              app: widget.app,
               pulls: _boardPulls,
               openNumber: _boardPulls ? null : _issue?.number,
               refreshEvery: kUnderTest ? null : const Duration(minutes: 1),
