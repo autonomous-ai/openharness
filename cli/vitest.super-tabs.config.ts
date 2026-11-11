@@ -20,6 +20,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/goal.ts', 'src/superTabs/goalStarter.ts',
   // The leaderboard's daemon half: what its person's agents shipped, read with their own gh and reported as counts.
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
+  // The unit suite's workers, sized to its Swarm agent's share of the machine's cores (anh Dee, 11-11).
+  'src/testing/suiteWorkers.ts',
 ]
 export default defineConfig({
   test: {

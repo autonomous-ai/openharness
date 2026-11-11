@@ -29,10 +29,10 @@ const row = async (client: LocalClient, agentId: string): Promise<Row | undefine
   (await client.request<{ agents: Row[] }>('agents_list', { includeStopped: true }, 30_000)).agents.find((agent) => agent.id === agentId)
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
 
-async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine | 'terminal', folder: string): Promise<Row> {
+async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine | 'terminal', folder: string, over: Record<string, unknown> = {}): Promise<Row> {
   const cwd = join(d.projectsDir, folder)
   mkdirSync(cwd, { recursive: true })
-  const created = await client.request('agent_create', { engine, cwd, ...(engine === 'terminal' ? {} : { bypassPermission: true }) }, 90_000)
+  const created = await client.request('agent_create', { engine, cwd, ...(engine === 'terminal' ? {} : { bypassPermission: true }), ...over }, 90_000)
   expect(created.error, `${folder}: ${JSON.stringify(created)}`).toBeUndefined()
   return until(`${folder} to start`, async () => {
     const agent = await row(client, created.agent.id)
@@ -131,6 +131,32 @@ describe('a pane\'s environment', () => {
     expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(AGENT_SESSION).sort().join(', ')} from the environment new panes start with`)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client, SESSION)
+    client.close()
+  }, 300_000)
+
+  // anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint" (docs/research/2026-11-11-agents-share-cpu.md). A Swarm's
+  // agent starts with its share of this machine's cores (superTabs/inCore/launch.ts); a person's own session with none, not
+  // even when the daemon was started from the shell of a Swarm agent that has one.
+  it('gives a Swarm\'s agent its share of the machine\'s cores at its start and when it is resumed, and a person\'s own session none', async () => {
+    const d = await IsolatedDaemon.create({ env: { ANTHROPIC_API_KEY: 'fixture-not-a-credential', HARNESS_CORES: '3' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const own = await create(d, client, 'claude', 'own')
+    expect(await engineHas(client, own.id, 'HARNESS_CORES')).toBe('(none)')
+    const agent = await create(d, client, 'claude', 'swarm', { swarmRole: 'dev' })
+    expect(await engineHas(client, agent.id, 'HARNESS_CORES')).toBe('HARNESS_CORES')
+    // Stopped and resumed, it is in a new pane, whose environment is built again (lib/launchOverrides.ts).
+    expect((await client.request('agent_delete', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    await until('the Swarm\'s agent to stop', async () => (await row(client, agent.id))?.status === 'stopped' || null, 60_000, 500)
+    expect((await client.request('agent_resume', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    await until('the Swarm\'s agent to be active again', async () => {
+      const again = await row(client, agent.id)
+      return again?.sessionId && again.status === 'active' ? again : null
+    }, 60_000, 500)
+    // Asked by another prefix: the thread still holds the first answer.
+    expect(await engineHas(client, agent.id, 'HARNESS_CORE')).toBe('HARNESS_CORES')
     client.close()
   }, 300_000)
 })

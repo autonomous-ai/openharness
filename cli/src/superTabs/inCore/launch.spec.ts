@@ -1,14 +1,17 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { env } from '../../config/env.js'
 import { PM_BASICS, SWARM_BASICS, swarmBasics, swarmBasicsSince } from '../../lib/swarmSkills.js'
-import { OWN_CARRIED_MAX, SWARM_LAUNCH } from './launch.js'
+import { coreShare, OWN_CARRIED_MAX, swarmLaunch, type MachineSession } from './launch.js'
 
 // The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
 vi.mock('../../lib/swarmGitHub.js', () => ({ swarmGitHubLaunch: vi.fn(() => null) }))
+
+/** The Swarm's part of a launch on a machine with no session yet. */
+const SWARM_LAUNCH = swarmLaunch(() => [])
 
 it('lets a start ask for the two role kinds, and nothing else', () => {
   // The wire's older values (lead, dev, review) are read into kinds before this check (core/agents/launches.ts roleFromWire).
@@ -59,4 +62,32 @@ it('hands the GitHub App\'s git and gh for the session it is asked for', () => {
   vi.mocked(swarmGitHubLaunch).mockReturnValueOnce({ env: { GH_CONFIG_DIR: '/fixture/gh' }, clearEnv: ['GH_TOKEN'] })
   expect(SWARM_LAUNCH.github('harness-codex-2')).toEqual({ env: { GH_CONFIG_DIR: '/fixture/gh' }, clearEnv: ['GH_TOKEN'] })
   expect(swarmGitHubLaunch).toHaveBeenCalledWith('harness-codex-2')
+})
+
+// anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint". Every agent's test runner sized its workers to the whole
+// machine: four runs at once took twice as long as one, and every one failed (docs/research/2026-11-11-agents-share-cpu.md).
+it('starts each of the Swarm\'s agents with its share of this machine\'s cores, among the Swarm\'s agents here', () => {
+  /** The machine's sessions: a key for one the Swarm started, null for a person's own. */
+  const machine = (...keys: Array<string | null>) => (): MachineSession[] => keys.map(key => key ? { swarmSkill: { key } } : {})
+  const share = (sessions: () => MachineSession[], key: string) => swarmLaunch(sessions, () => 16).cores(key)
+  // A first launch: its row is not among the machine's sessions yet.
+  expect(share(machine(), 'one')).toEqual({ HARNESS_CORES: '16' })
+  expect(share(machine('one'), 'two')).toEqual({ HARNESS_CORES: '8' })
+  expect(share(machine('one', 'two', 'three'), 'four')).toEqual({ HARNESS_CORES: '4' })
+  // A relaunch: its row is there, and it is counted once.
+  expect(share(machine('one', 'two', 'three', 'four'), 'four')).toEqual({ HARNESS_CORES: '4' })
+  expect(share(machine('one'), 'one')).toEqual({ HARNESS_CORES: '16' })
+  // A person's own sessions take no part of it.
+  expect(share(machine('one', null, null, null), 'two')).toEqual({ HARNESS_CORES: '8' })
+})
+
+it('rounds a share of the cores down, and never below one core', () => {
+  expect(coreShare(16, 3)).toBe(5)
+  expect(coreShare(16, 6)).toBe(2)
+  expect(coreShare(4, 6)).toBe(1)
+  expect(coreShare(1, 1)).toBe(1)
+})
+
+it('shares the cores this machine has', () => {
+  expect(swarmLaunch(() => []).cores('one')).toEqual({ HARNESS_CORES: String(availableParallelism()) })
 })
