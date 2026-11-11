@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, noteOf, recordedAuthors, verdictOf, VerdictRecords, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, noteOf, pmRunsHere, recordedAuthors, verdictOf, VerdictRecords, verdicts } from './githubMerge.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
@@ -834,10 +834,28 @@ describe('the rule\'s parts', () => {
     expect(authorOf(pull({ labels: [], head: { sha: HEAD, ref: 'fix-tests' } }))).toBeNull()
   })
 
+  // Code review of #4060: a roster row holds its agent (row.agent); a PM looked up by the wrong id was never asked to read.
+  it('finds the PM of a project running here by the agent of its roster row, and that agent\'s harness id', () => {
+    const project = { repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }
+    const roster = [{ agent: { id: 'pip', harnessId: 'h-pip' } }, { agent: { id: 'juno', harnessId: 'h-juno' } }]
+    expect(pmRunsHere(roster, project, id => id === 'h-juno')).toBe(true)
+    expect(pmRunsHere(roster, project, id => id === 'h-pip')).toBe(false)
+    expect(pmRunsHere([{ agent: { id: 'juno' } }], project, () => true)).toBe(false)
+    expect(pmRunsHere([], project, () => true)).toBe(false)
+  })
+
   it('passes checks only when every run and status passed, and none at all passes', () => {
     expect(checksOf([], {}).state).toBe('passed')
     expect(checksOf([{ status: 'completed', conclusion: 'skipped' }], { statuses: [{ state: 'success' }] }).state).toBe('passed')
     expect(checksOf([{ status: 'queued' }], {}).state).toBe('running')
+    // GitHub lists each check's latest run, so two of one name are two checks (two workflows' jobs): either failing fails the
+    // head, and a failed name is said once (#4055 listed ci/required twice).
+    expect(checksOf([{ id: 2, name: 'test', status: 'completed', conclusion: 'success' }, { id: 1, name: 'test', status: 'completed', conclusion: 'failure' }], {}).state)
+      .toBe('failed')
+    expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }, { id: 2, name: 'ci/required', status: 'completed', conclusion: 'failure' }], {}).failed)
+      .toEqual(['ci/required'])
+    expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'failure', context: 'ci/required' }] }).failed)
+      .toEqual(['ci/required'])
     expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
       .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure' })
     // What was read, in any order GitHub lists it, as one line: two looks that read the same are the same.

@@ -101,6 +101,10 @@ building and in fixes come with package 12's boundaries, and which files a confl
 
 ### 2. One task building, at most four open
 
+**Built** (#4091): in `cli/src/superTabs/assign/crew.ts` (`heldTasks`, `hasRoom`), `githubAssign.ts` and `pmNumbers.ts`.
+*`CLAIM_LIMIT` is defined in `assign/crew.ts`. No free task is planned on a builder that holds four. A pull request that
+is red or in conflict counts as in review: the assigner reads no checks.*
+
 **Why.** Two faults. A change waiting for its read fills its builder's list, so a builder with two in review is given
 nothing and is not counted idle. And a second task is given ahead, which in the model costs 0 to 6% of
 priority-weighted time on a light day and 17 to 19% on a heavy one with the cores the product plans (3 to 12% and 21
@@ -191,6 +195,9 @@ change. No check they added is loosened: a READ-OK on the head that rides, rider
 built, a tip the train itself marked.
 
 ### 5. An area is its label, however it is spelled
+
+**Built** (#4093): `partOf` in `cli/src/superTabs/assign/crew.ts`. *Also: `githubAssign.ts` makes no `part:` label for
+an area the repository already has one for in its own spelling.*
 
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 

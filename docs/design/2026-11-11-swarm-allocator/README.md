@@ -195,7 +195,7 @@ with `CORES=8` for the second. The solver's rows vary a little with the computer
 Priority-weighted minutes from a task's arrival to the end of its build, means of three seeds, with a machine's cores
 at 6 (the script's default):
 
-| Day | First come | Solver, two ahead (today) | Solver, one ahead | Rule, decided when free |
+| Day | First come | Solver, two ahead (until package 2) | Solver, one ahead (since package 2) | Rule, decided when free |
 |---|---|---|---|---|
 | Light, no noise | 90 | 59 | 57 | 53 |
 | Light, noise | 91 | 60 | 55 | 52 |
@@ -206,7 +206,7 @@ at 6 (the script's default):
 At 8 cores, which the product plans with when a machine reports none (the review's run of 11 November, on this
 branch):
 
-| Day | First come | Solver, two ahead (today) | Solver, one ahead | Rule, decided when free |
+| Day | First come | Solver, two ahead (until package 2) | Solver, one ahead (since package 2) | Rule, decided when free |
 |---|---|---|---|---|
 | Light, no noise | 93 | 53 | 53 | 53 |
 | Light, noise | 90 | 54 | 51 | 51 |
@@ -215,7 +215,8 @@ branch):
 | Heavy, noise | 293 | 104 | 86 | 86 |
 
 - **One ahead, not two, is the gain**: 0 to 6% on light days and 17 to 19% on heavy ones at 8 cores; 3 to 12% and 21
-  to 26% at 6. "One ahead" is a list one deep: a task is given only to a builder with nothing.
+  to 26% at 6. "One ahead" is a list one deep: a task is given only to a builder with nothing. It is the product's rule
+  since package 2: the script's `solver1` runs the product's own picks, and its `solver` keeps the picks of before.
 - **The rule's last 4 to 7% at 6 cores is not real.** With 6 cores two large tasks cannot share a machine, and the
   table holds the solver's builder to that. The product plans with a machine's cores (8 when unreported) and checks
   none when a task is taken. At 8 cores the one-ahead solver and the rule are level. The second critique found the
