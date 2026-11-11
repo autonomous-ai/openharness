@@ -22,6 +22,7 @@ import { NextThing } from './nextThing.js'
 import { GitHubMentions, repositorySlug, watchedAgents, type WatchedAgent } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
 import { currentNames, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { gatedWrites } from './githubWrites.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
@@ -166,7 +167,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
-  const github = (options.github ?? githubRest)()
+  // Every write passes the gate: nothing of Harness's said twice in a day, and none past its hourly limits (githubWrites.ts).
+  const github = gatedWrites((options.github ?? githubRest)())
   // What GitHub names a project's repository now: a take, a read or a cut may name it either way (githubVerdict.ts ProjectRepositories).
   const currentName = currentNames(github.get)
   // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.
