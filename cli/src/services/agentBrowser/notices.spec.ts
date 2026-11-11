@@ -244,6 +244,22 @@ describe('Notices', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('notice_failed: the stopped line was not typed after 3 tries (rejected)'))
   })
 
+  // The person's Stop leaves nothing for the agent's own end to take back: a stop line still waiting when the agent stops
+  // is refused by the core as gone, and typing it again would only show "This harness is no longer available".
+  it('a line refused because its agent is gone is never tried again or counted, and a ready line leaves the browser owed', () => {
+    state.update(s => { s.told = { a1: true } })
+    notices.stopped('a1', false)
+    core.hear(core.last().deliveryId, 'rejected', 'agent_gone')
+    notices.ready('a2')
+    core.hear(core.last().deliveryId, 'rejected', 'agent_gone')
+    vi.advanceTimersByTime(10 * NOTICE_RETRY_MS)
+    expect(core.typed.map(t => [t.agentId, t.text])).toEqual([['a1', STOPPED_LINE], ['a2', READY_LINE]])
+    expect(measure).not.toHaveBeenCalled()
+    expect(told()).toEqual({})
+    notices.ready('a2')
+    expect(core.typed.map(t => [t.agentId, t.text])).toEqual([['a1', STOPPED_LINE], ['a2', READY_LINE], ['a2', READY_LINE]])
+  })
+
   it('a stop while the ready line waits for its next try: it is never tried again and no stop line follows', () => {
     notices.ready('a1')
     core.hear(core.last().deliveryId, 'rejected', 'queue_expired')
