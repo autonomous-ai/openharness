@@ -6,13 +6,15 @@
  * bridge port, 51793; the other ran `lsof` every 5.5 s, about 7% of a core around the clock. Nothing in a dying worker can
  * be trusted to clean up (a SIGKILL runs no handler), so this process, started in a session of its own, does it: its stdin is
  * a pipe from the worker, and the kernel closes it when the worker exits, by any path. Then every process group the worker
- * still has registered gets SIGTERM, and SIGKILL for whatever is left after the grace, and every tmux server it registered is
- * stopped (tmux daemonizes into a session of its own).
+ * still has registered gets SIGTERM, and SIGKILL for whatever is left after the grace; every tmux server it registered is
+ * stopped (tmux daemonizes into a session of its own) and its throwaway root removed.
  *
  * The worker's lines on stdin, one JSON object each: {"group":N} a process group to end, {"leaderGone":N} its leader exited,
- * {"forget":N} it was closed; {"tmux":socket} a tmux server to stop, {"forgetTmux":socket} it was.
+ * {"forget":N} it was closed; {"tmux":socket,"root":folder} a tmux server to stop and its root to remove, {"forgetTmux":socket}
+ * they were.
  */
 import { execFileSync } from 'node:child_process'
+import { rmSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 /** How long a daemon gets to stop on SIGTERM before SIGKILL: as IsolatedDaemon.stop gives it. */
@@ -20,7 +22,8 @@ const GRACE_MS = 15_000
 
 /** Process group → whether its leader has exited. */
 const groups = new Map()
-const tmuxServers = new Set()
+/** tmux socket → the throwaway root it is in. */
+const tmuxServers = new Map()
 // Its stderr is the dead worker's: with nobody reading it, a write fails with EPIPE, which must not end the reaping.
 process.stderr.on('error', () => {})
 
@@ -50,8 +53,11 @@ async function reap() {
     console.error(`[e2e reaper] process group ${pgid} outlived SIGTERM by ${GRACE_MS} ms: SIGKILL`)
     signal(pgid, 'SIGKILL')
   }
-  for (const socket of tmuxServers) {
+  for (const [socket, root] of tmuxServers) {
     try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore', timeout: 5_000 }) } catch { /* already gone */ }
+    try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } catch (error) {
+      console.error(`[e2e reaper] could not remove ${root}: ${error.code ?? error.message}`)
+    }
   }
 }
 
@@ -60,9 +66,9 @@ createInterface({ input: process.stdin })
     let message
     try { message = JSON.parse(line) } catch { console.error(`[e2e reaper] unreadable line from the worker: ${line.slice(0, 200)}`); return }
     if (message.group) groups.set(message.group, false)
-    else if (message.leaderGone && groups.has(message.leaderGone)) groups.set(message.leaderGone, true)
+    else if (message.leaderGone) groups.set(message.leaderGone, true)
     else if (message.forget) groups.delete(message.forget)
-    else if (message.tmux) tmuxServers.add(message.tmux)
+    else if (message.tmux) tmuxServers.set(message.tmux, message.root)
     else if (message.forgetTmux) tmuxServers.delete(message.forgetTmux)
   })
   .on('close', () => { void reap() })

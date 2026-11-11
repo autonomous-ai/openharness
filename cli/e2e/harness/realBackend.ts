@@ -109,9 +109,10 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
     env: { ...env, PORT: String(port), PORT_APP_PROXY: String(proxyPort), BACKEND_INSTANCE_ID: 'spike-0' } })
   if (child.pid) {
     watchGroup(child.pid)
-    child.once('exit', () => forgetGroup(child.pid!))
+    // Whatever it started goes with it.
+    child.once('exit', () => { IsolatedDaemon.killGroup(child); forgetGroup(child.pid!) })
   }
-  // Wait for the exit, with a SIGKILL after 5 s (as IsolatedDaemon.stop does), before Mongo and Redis go.
+  // Wait for the exit, with a SIGKILL after 5 s, before Mongo and Redis go.
   stops.push(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return
     const exited = new Promise<void>(done => child.once('exit', () => done()))

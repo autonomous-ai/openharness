@@ -23,6 +23,7 @@ import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { alive } from '../../src/testing/spawnedRuns.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -222,8 +223,8 @@ export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & 
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
-  /** The process group of every start not yet closed: its master's pid, as it leads one (`start`). */
-  private readonly groups = new Map<number, ChildProcess>()
+  /** Every start not yet closed: each master leads a process group, numbered by its pid (`start`). */
+  private readonly groups = new Set<ChildProcess>()
 
   private constructor(
     readonly root: string,
@@ -239,7 +240,7 @@ export class IsolatedDaemon {
     const beside = options.beside
     const tmux = beside?.tmux ?? await isolatedTmux()
     // Stopped by the worker's reaper should this worker go before `close` (reaper.ts).
-    if (!beside) watchTmux(tmux.socket)
+    if (!beside) watchTmux(tmux.socket, tmux.root)
     const root = tmux.root
     const port = options.port ?? await freePort()
     // What a daemon beside another keeps for itself; everything else is the computer's, and shared. Short
@@ -380,7 +381,7 @@ export class IsolatedDaemon {
     })
     this.child = child
     if (child.pid) {
-      this.groups.set(child.pid, child)
+      this.groups.add(child)
       watchGroup(child.pid)
       child.once('exit', () => leaderGone(child.pid!))
     }
@@ -431,10 +432,10 @@ export class IsolatedDaemon {
    * SIGKILL what is left of [leader]'s process group. While a group has members no new process gets its number; once
    * the leader has exited, a process with its pid is a stranger leading a group of its own, and ours is empty.
    */
-  private static killGroup(leader: ChildProcess): void {
+  static killGroup(leader: ChildProcess): void {
     const pgid = leader.pid
     const exited = leader.exitCode !== null || leader.signalCode !== null
-    if (!pgid || (exited && IsolatedDaemon.alive(pgid))) return
+    if (!pgid || (exited && alive(pgid))) return
     try { process.kill(-pgid, 'SIGKILL') } catch { /* empty */ }
   }
 
@@ -511,9 +512,9 @@ export class IsolatedDaemon {
     // A core or service whose master died during the test must not outlive it: 20 such cores, left by a
     // run whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. They
     // are in their master's process group, every start's.
-    for (const [pgid, leader] of this.groups) {
+    for (const leader of this.groups) {
       IsolatedDaemon.killGroup(leader)
-      forgetGroup(pgid)
+      forgetGroup(leader.pid!)
     }
     this.groups.clear()
     // A daemon beside another shares its tmux server: that one closes it.
