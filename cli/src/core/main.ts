@@ -66,7 +66,7 @@ import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAut
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt } from '../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
 import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
@@ -2569,10 +2569,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
     launch: (entry, opts, overrides, permission) => {
       const { env: launchEnv, extraArgs, ownerArgs, clearEnv } = overrides
+      const firstPrompt = entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? 'continue' : undefined
+      // An engine that takes it typed gets it on its row with the dispatch instead (lib/restoreAgents.ts).
+      const firstTask = typedFirstPrompt(entry.engine, firstPrompt)
       const argv = buildEngineLaunchArgv(entry.engine, {
         ...opts,
         ...(overrides.native ? { native: overrides.native } : {}),
-        ...(entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? { firstPrompt: 'continue' } : {}),
+        ...(firstPrompt ? { firstPrompt } : {}),
         bypassPermission: permission.bypassPermission === true,
         ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
         installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
@@ -2586,6 +2589,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
       return { argv, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
+        ...(firstTask ? { firstTask } : {}),
         // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
         paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held: isWindowsHeldPane(argv) }) }
     },
