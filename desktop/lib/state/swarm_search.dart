@@ -1458,7 +1458,8 @@ class SwarmSearchController extends ChangeNotifier {
       sessionFilter == SessionFilter.all &&
       query.trim().isEmpty;
   bool get showsTypeHints => _emptyFinder && selected == null;
-  String get hint => isAgentMode
+  // A picker that brings an agent into a Swarm (Attach) finds agents, a Swarm's word.
+  String get hint => isAgentMode || harnessContext != null
       ? 'Search agents'
       : isCommandMode
       ? 'Search commands'
