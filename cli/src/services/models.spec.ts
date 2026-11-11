@@ -115,7 +115,7 @@ vi.mock('../dsh/installed.js', async (importOriginal) => ({
 /** The Model Manager's local models: what the service built it with, and its list and act. */
 const local = vi.hoisted(() => ({
   options: {} as Record<string, any>,
-  list: vi.fn(async (_grid: string | null, _force?: boolean): Promise<Record<string, unknown>> => ({ models: [], busy: false, observedAt: 'now' })),
+  list: vi.fn(async (_grid: string | null, _force?: boolean, _scan?: boolean): Promise<Record<string, unknown>> => ({ models: [], busy: false, observedAt: 'now' })),
   act: vi.fn(async (_grid: string | null, _modelId: unknown, _action: string): Promise<Record<string, unknown>> => ({})),
   communityGrid: vi.fn(async (): Promise<string | null> => 'Omagrid'),
   servedApps: vi.fn(async (_grid: string): Promise<string[]> => []),
@@ -725,12 +725,15 @@ describe('the models service', () => {
           const { core, ask } = setup([], named)
           expect(await ask('grid_fleet_models_list')).toEqual({ models: [], busy: false, observedAt: 'now', gridSetupNeeded: true })
           expect(access.ensure).not.toHaveBeenCalled()
-          expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', false)
+          expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', false, true)
           expect(core.clients.gridModelsChanged).not.toHaveBeenCalled()
           // Asked to, it reads afresh; still nothing set up.
           await ask('grid_fleet_models_list', { refresh: true })
-          expect(local.list).toHaveBeenLastCalledWith('kelvin-1a2b3c4d', true)
+          expect(local.list).toHaveBeenLastCalledWith('kelvin-1a2b3c4d', true, true)
           expect(access.ensure).not.toHaveBeenCalled()
+          // A Swarm machine reading (`scan: false`) reads without starting a scan of other apps' models.
+          await ask('grid_fleet_models_list', { scan: false })
+          expect(local.list).toHaveBeenLastCalledWith('kelvin-1a2b3c4d', false, false)
         } finally {
           vi.mocked(signedInGridEmail).mockReturnValue('me@example.com')
         }
@@ -744,7 +747,7 @@ describe('the models service', () => {
         expect(answer).not.toHaveProperty('gridSetupNeeded')
         expect(answer).not.toHaveProperty('gridSetupError')
         // Read fresh: the catalog was unreachable a moment ago.
-        expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true)
+        expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true, true)
         expect(core.clients.gridModelsChanged).toHaveBeenCalledOnce()
       })
 

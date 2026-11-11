@@ -406,14 +406,17 @@ describe('the startup probe on Windows', () => {
   })
 
   it('probes no engine without a startup probe, and nothing elsewhere but whether it runs', async () => {
-    // One probe of each: whether the engine runs, as a launch that names no mode asks; never one for startup options.
+    // Whether the engine runs, as a launch that names no mode asks; never one for startup options. Claude on Windows is
+    // first asked its version, which must say Claude Code (nativeLaunch.claudeIdentity.spec.ts).
+    fixture.version = '2.0.0 (Claude Code)'
     const claude = await inspectNativeLaunch('claude')
     expect(claude.ok && claude.launch.startupArgs).toBeUndefined()
-    expect(fixture.calls).toEqual(['/fixture/engine'])
+    expect(fixture.calls).toEqual(['/fixture/engine', '/fixture/engine'])
+    fixture.calls = []
     Object.defineProperty(process, 'platform', platform)
     if (process.platform === 'win32') return
     const codex = await inspectNativeLaunch('codex')
     expect(codex.ok && codex.launch.startupArgs).toBeUndefined()
-    expect(fixture.calls).toEqual(['/fixture/engine', '/fixture/engine'])
+    expect(fixture.calls).toEqual(['/fixture/engine'])
   })
 })

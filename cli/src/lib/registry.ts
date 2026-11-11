@@ -2715,7 +2715,7 @@ class Registry {
     return true
   }
 
-  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  /** An agent its person attached takes its Swarm role at restart, once; later roster reads cannot replace a saved role. */
   setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
     const session = this.agents.get(agentId)
     if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false

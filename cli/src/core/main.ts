@@ -2654,7 +2654,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
       // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
-      // An older Swarm session's role (core/agents/restoreLaunch.ts): one unanswered read holds the rest of the pass unasked.
+      // An attached agent's Swarm role (core/agents/restoreLaunch.ts): one unanswered read holds the rest of the pass unasked.
       needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : []), ...(adoptSwarmSkill?.needed?.(entry) ? ['superTabs'] : [])],
       waitingLaunch: (entry, held) => ({ argv: heldPaneArgv(held.detail, entry.externalResume?.token ?? held.nativeToken) }),
       killPane: restoreOn.killPane,

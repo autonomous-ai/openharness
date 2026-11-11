@@ -136,8 +136,11 @@ describe('canonical engine CLI commands', () => {
     const root = mkdtempSync(join(tmpdir(), 'engine-bin-deleted-image-'))
     tempDirs.push(root)
     const executable = join(root, 'native-agent')
-    copyFileSync('/bin/sleep', executable)
-    const child = spawn(executable, ['30'], { stdio: 'ignore' })
+    // Node, not /bin/sleep: on Ubuntu 25.10 and later (the ubuntu-26.04 runner) sleep is Rust coreutils' multicall
+    // binary, which picks its utility by the name it runs under. Copied as native-agent it knows no such utility and
+    // exits at once, and /proc/<pid>/exe was read from a process already gone: CI failed this case twice of three runs.
+    copyFileSync(process.execPath, executable)
+    const child = spawn(executable, ['-e', 'setTimeout(() => {}, 30_000)'], { stdio: 'ignore' })
     await new Promise<void>((resolve, reject) => {
       child.once('spawn', resolve)
       child.once('error', reject)

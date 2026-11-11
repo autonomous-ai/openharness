@@ -89,6 +89,12 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   then passes breakaway to every child it starts (`setup_user_rlimits`), which would take an ordinary `npm run dev` out
   of the pane's job (`job::breakaway_allowed`). A program that breaks away on purpose is no longer listed by `jobPids`
   and is not ended with the pane — that is what asking to outlive it means.
+- **A program found by an engine's name may be another app.** A Microsoft Store app's alias in `WindowsApps` (older
+  Claude desktop apps registered `claude.exe`) cannot be stat'ed or run by Node (`EACCES`): it is no engine, and with
+  nothing else found the engine is installed (`storeAppAlias` in `cli/src/engines/kit/launchExecutable.ts`). The Claude
+  desktop app's own `Claude.exe` answers `--help` by opening its window and never exiting, so a `claude` on Windows is
+  asked `--version` first and refused unless it says Claude Code (`notClaudeCode` in `cli/src/engines/nativeLaunch.ts`).
+  A customer's launches held at "permission flags" for good (2026-11-10).
 
 ## 3. Files
 
