@@ -46,17 +46,28 @@ export interface ConnectorsDeps {
 /** How many tries a held port gets before asking whose it is. */
 const TRIES_BEFORE_ASKING = 3
 
+/**
+ * The longest wait between two asks while the holder is this account's, or no one can say. Asking is lsof on macOS, about
+ * 60 ms of a core: at every 5 s try it was about 1% of a core for as long as a second Harness home, a dev build or a
+ * leftover core held the port (2026-11-11). Another account taking the port over from such a holder is seen within this,
+ * and only where agents reach the bridge through its socket or pipe, so the port's holder hears none of their calls.
+ */
+const MOST_BETWEEN_ASKS_MS = 5 * 60_000
+
 interface Moving {
   /** Whether this account holds the port: a daemon handing over, or a second daemon of this account sharing the vault. */
   holderIsMine(port: number): Promise<boolean | null>
   moved(port: number, from: number): void
+  /** Agents reach the bridge through its socket or pipe: the asking may slow down ([MOST_BETWEEN_ASKS_MS]). */
+  local: boolean
 }
 
 /**
  * Listen on [port]. Another process holding it means agents' connections reach that process, not this bridge, so that is
  * said once. Only another account's hold moves the bridge ([moving]): it can last from boot until this user logs in
  * (audit H1). A hold of this account's own is waited out, however long: the vault and the agents' configurations are the
- * account's, so a second daemon or a slow handover that moved would take the agents with it.
+ * account's, so a second daemon or a slow handover that moved would take the agents with it. The port is tried every
+ * [retryMs] all along; only the asking slows down while the answer is this account or none.
  */
 function listen(bridge: Server, port: number, retryMs: number, moving?: Moving): void {
   let tries = 0
@@ -64,6 +75,11 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   // macOS reads a listener that has just gone as another account's, so one answer may be a handover ending: it takes two
   // in a row, with a try of the port between them.
   let notMine = 0
+  // Tries left before the next ask, and how many the one after waits: doubling, up to MOST_BETWEEN_ASKS_MS. Another
+  // account's answer is asked again at the next try, as before.
+  let skip = 0
+  let gap = 1
+  let toldMine = false
   bridge.on('listening', () => {
     if (leaving) moving!.moved((bridge.address() as AddressInfo).port, port)
     leaving = false
@@ -74,9 +90,19 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
     tries++
     if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${error.message}); trying again every ${retryMs} ms`)
     if (!moving || tries < TRIES_BEFORE_ASKING || leaving) { again(); return }
+    if (skip > 0) { skip--; again(); return }
     void moving.holderIsMine(port).then((mine) => {
       notMine = mine === false ? notMine + 1 : 0
       leaving = notMine >= 2
+      if (mine !== false && moving.local) {
+        skip = gap
+        // An ask's own try and the ones it skips: at the default 5 s, 60 tries, 5 minutes.
+        gap = Math.min(gap * 2, Math.max(1, Math.floor(MOST_BETWEEN_ASKS_MS / retryMs) - 1))
+      }
+      if (mine === true && !toldMine) {
+        toldMine = true
+        console.warn(`[connections] a process of this account holds bridge port ${port} (another Harness home, a dev build?); the bridge takes the port once it lets go`)
+      }
       again()
     })
   })
@@ -132,6 +158,7 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
   // A port a test or HARNESS_CONNECTIONS_PORT names stays that port.
   const movable = overrides.port === undefined && env.HARNESS_CONNECTIONS_PORT === undefined
   listen(bridge, deps.port, deps.retryMs, movable ? {
+    local,
     holderIsMine: overrides.holderIsMine ?? portHolderIsThisAccount,
     moved: (port, from) => {
       console.warn(`[connections] another account holds port ${from}; the bridge moved to port ${port}, and agents started from now on use it`)
