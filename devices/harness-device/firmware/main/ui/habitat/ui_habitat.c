@@ -251,6 +251,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t timer_at;      // when the working line's elapsed text next changes (ms() clock), 0 = never (elapsed.h)
     uint32_t pet_next_ms;   // when the pet's (or the voice screen's listening scene's) drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
+    int touch_far2;         // the largest squared distance from (start_x, start_y) this contact has reached, release included
     uint32_t touch_started;
 } s;
 static QueueHandle_t actions;
@@ -3507,6 +3508,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         // Classify this sample before the hold deadline. A delayed MOVE/UP
         // must not turn a long swipe into a stationary hold.
         ht_gesture_move(&gesture, x, y);
+        int far2 = (x - s.start_x) * (x - s.start_x) + (y - s.start_y) * (y - s.start_y);
+        if (far2 > s.touch_far2) s.touch_far2 = far2;
         surface_tick(now);
     }
     surface = s.view == HOME || s.view == AGENT;
@@ -3520,6 +3523,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         scroll = (ht_scroll_t){0};
         s.start_x = x;
         s.start_y = y;
+        s.touch_far2 = 0;
         s.touch_started = now;
         if (s.view == SWARM_PICK) { s.pick_until = now + 5000; if (!s.pick_until) s.pick_until = 1; }
         if (question_view(s.view)) s.q.drag=0;
@@ -3682,19 +3686,20 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (result == HT_TOUCH_TAP || (on_target && now - s.touch_started < 1800))
                 dispatch(pressed_action);
             change();
-        } else if (surface && pressed_action.kind == A_PET_INBOX && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
+        } else if (surface && pressed_action.kind == A_PET_INBOX && s.touch_far2 < 24 * 24 && now - s.touch_started < 650) {
             // The companion wears the notice badge: a touch on it, read as a thumb's (the face's talk rule below), opens the
             // inbox. It is no footer button, so a swipe that starts on it still moves to the next project.
             dispatch((action_t){.kind = A_INBOX});
         } else if (surface && pressed_action.kind == A_PET &&
-                   !gesture.guarded && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
+                   !gesture.guarded && s.touch_far2 < 24 * 24 && now - s.touch_started < 650) {
             /*
              * ON FOCUS A TOUCH ANYWHERE ON THE FACE TALKS (owner, 2026-10-01), and it is a THUMB's
              * touch, not an idealised tap. ht_gesture_end() calls a contact a tap only inside 12 px
              * (1.20 mm on this glass) and 350 ms; a real press drifts past both, which is the fault
              * the old microphone button had (21 presses in 49). So the face answers what a button
-             * answers: a contact that did not scroll, came up within 24 px of where it went down,
-             * and let go before the 650 ms that opens the tabs.
+             * answers: a contact that did not scroll, never went more than 24 px from where it went
+             * down (a drag that comes back is still a drag), and let go before the 650 ms that opens
+             * the tabs.
              */
             ht_gesture_guard(&gesture, now);
             if (s.connected && !s.loading && (active() || swarm_mode())) {

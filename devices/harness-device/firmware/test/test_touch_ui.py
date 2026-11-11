@@ -62,6 +62,7 @@ static struct {
     char voice_target[CABLE_NAME_MAX], voice_engine[12];
     int pattern_mask, pattern_len, view, voice_return, offset, active, count, pressed, hit_count;
     int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
+    int touch_far2;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
     uint32_t notice_sequence, voice_retry_until, error_until;
     uint8_t status_phase;
@@ -2295,7 +2296,13 @@ static void swarm_buddy_checks(const char *dir) {
     assert(ui_supertab_notice("s1", "B0", HT_CHAT_LEAD, "lead-web", "", "Web is merged.", 1792560001u));
     scene_take(); sent = swarm_sent; swipe_down();
     assert(s.view == HOME && swarm_sent == sent);
-    { ht_rect_t b; assert(badge_rect(&b)); tap(fake_ms += 1000, b.x - 20, b.y + 30); }
+    { ht_rect_t b; assert(badge_rect(&b));
+      // A press on the badged pet that travels away and comes back is no touch on it.
+      uint32_t t = fake_ms += 1000;
+      habitat_touch(true, b.x - 20, b.y + 30, t); habitat_touch(true, b.x - 20 + 70, b.y + 30, t + 40);
+      habitat_touch(true, b.x - 20, b.y + 30, t + 80); habitat_touch(false, b.x - 20, b.y + 30, t + 100);
+      assert(s.view == HOME && swarm_sent == sent);
+      scene_take(); tap(fake_ms += 1000, b.x - 20, b.y + 30); }
     assert(s.view == INBOX && swarm_sent == sent);
     dispatch((action_t){.kind = A_HOME}); scene_take();
 
@@ -3270,6 +3277,17 @@ int main(int argc, char **argv) {
     assert(switches==1 && s.active==1 && !moves);
     reset(); habitat_touch(true,233,220,1000); habitat_touch(false,233,220,1700);
     assert(s.view==TABS && !starts);
+    // The face talks only if the contact stayed within 24 px of where it went down, not merely ended there.
+    reset(); scene_take(); habitat_touch(true,233,220,1000); habitat_touch(true,310,220,1030); habitat_touch(true,233,220,1060);
+    habitat_touch(false,233,220,1080); assert(!starts && !switches);
+    scene_take(); tap(2000,233,220); assert(starts==1);
+    reset(); scene_take(); congestion=true;
+    habitat_touch(true,233,220,1000); habitat_touch(true,233,330,1100); habitat_touch(true,233,222,1300);
+    habitat_touch(false,233,222,1400); assert(!starts);
+    congestion=false; scene_take(); tap(2000,233,220); assert(starts==1);
+    // A thumb that drifts about 19 px and lifts still talks.
+    reset(); scene_take(); habitat_touch(true,233,220,1000); habitat_touch(true,248,232,1150);
+    habitat_touch(false,250,232,1300); assert(starts==1);
     reset(); active()->busy=true; scene_take(); tap(1000,233,41); assert(s.view==AGENTS && !starts);
     reset(); s.connected=false; scene_take(); portrait(dir,"offline");
     assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
