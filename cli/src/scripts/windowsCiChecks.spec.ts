@@ -200,6 +200,10 @@ describe('check-pty-signatures.ps1', () => {
     expect(text).toContain(". (Join-Path $PSScriptRoot '..\\install.ps1')")
     expect(text).toContain('Get-HarnessPtySignatureProblems $unpacked')
     expect(text).not.toMatch(/^\s*\$manifest\s*=/im)
+    // Windows PowerShell 5.1's Out-File -Encoding utf8 starts the empty GITHUB_OUTPUT with a BOM: the output would be
+    // read as "﻿signed_zips", and every promote refused.
+    expect(text).toContain('[IO.File]::AppendAllText($env:GITHUB_OUTPUT, "signed_zips=$line`n")')
+    expect(text).not.toMatch(/Out-File[^\n]*GITHUB_/)
     expect(text.split(/\r?\n/).filter((line) => /[^\t\r\x20-\x7e]/.test(line))).toEqual([])
   })
 
