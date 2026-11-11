@@ -1277,6 +1277,16 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
     } finally { await close() }
   })
 
+  // A lookup that gave no answer is not kept on the socket (lib/peerAccount.ts): both checks asking it waited a slow lsof out twice.
+  it('asks who is calling once for a request whose hook token and credential both match', async () => {
+    const asked = vi.fn(async () => true)
+    const { port, close } = await serve(asked)
+    try {
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': credential(), 'X-Harness-Local': credential() }, 'POST')).status).not.toBe(401)
+      expect(asked).toHaveBeenCalledOnce()
+    } finally { await close() }
+  })
+
   it('a wrong credential never makes the daemon ask who is calling', async () => {
     const asked = vi.fn(async () => true)
     const { port, close } = await serve(asked)

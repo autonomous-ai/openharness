@@ -3,7 +3,7 @@
  * terminal with `harness new`:
  *
  *  - OpenCode 1.19.0 prints its help to standard error. Read from standard output alone, its permission flag was never
- *    confirmed and every launch of it held for good.
+ *    confirmed and every launch of it held for good (asked for in auto mode here: with no --mode there is no flag, #3466).
  *  - Codex installed by Harness with its own Node is a `#!/usr/bin/env node` script, and such a computer has no `node`
  *    on its PATH. Its probe failed, so every launch held; its pane would have failed the same way.
  *  - A Codex that cannot run at all is refused at once, with its own reason, instead of being held and said only to be
@@ -90,7 +90,7 @@ console.log('fixture-opencode-ready');
 setInterval(() => {}, 1000);
 `, { mode: 0o755 })
   })
-  const started = await harness(d, ['new', 'opencode', project(d, 'stderr-help'), '--name', 'helpful', '--', 'hello'])
+  const started = await harness(d, ['new', 'opencode', project(d, 'stderr-help'), '--name', 'helpful', '--mode', 'auto', '--', 'hello'])
   expect(started.code, started.out + started.err).toBe(0)
   expect(started.out).toContain('Created helpful on this computer')
   const launch = await until('OpenCode to start', () => {
