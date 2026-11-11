@@ -6,7 +6,8 @@
  * question, a new task labelled builder:<name>. Its person's own Harness reads GitHub with their own gh login (cli
  * superTabs/githubMentions.ts) and relays here each comment that names one of their agents and each issue newly labelled
  * for one. The row is the person's, since their daemon read it as them, and says it came from GitHub: their agent hears it
- * as it hears any message in its chat, and their apps show it as GitHub's, never as words the person typed.
+ * as it hears any message in its chat. Only the agent reads it (model.ts NOTICE_READERS): the person's chat with their
+ * agent is their conversation, not a feed of GitHub's (anh Dee, 2026-11-11).
  */
 import { z } from 'zod'
 import { agent, author, conversation, fail, type Actor, type MessageDraft, type SuperTabState } from './model.js'
