@@ -831,10 +831,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   its words and `--to` address) stands on its own row, however soon after the
   agent's last, and each of those agents its words do not tag opens the bubble
   as a tag (`@Juno`, `SuperTabMessageText.addressed`): the agents the Swarm has,
-  each once, never its author. One its words name as a teammate writes a name
-  (`thanks Juno, confirmed`) is addressed already and opens nothing: its tag
-  besides read `@Juno thanks Juno`. A post that names nobody (`free: Pip`) has no
-  tag. Under a post that names an agent that was offline
+  each once, never its author. A post to one agent whose words name it as a
+  teammate writes a name (`thanks Juno, confirmed`: the whole name, in its own
+  case, not in a path, an address, code or a link's address) opens nothing: its
+  tag besides read `@Juno thanks Juno`. A post to several keeps each tag. A post
+  to nobody (`free: Pip`) has no tag. Under a post that names an agent that was offline
   when it was posted and still is (`downSince`), one quiet line
   (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
   `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when

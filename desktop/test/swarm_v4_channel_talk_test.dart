@@ -262,6 +262,73 @@ void main() {
     expect(drawnTags(tester, 'once more'), ['@Pip']);
   });
 
+  // Its review (#4097): only a post to that one agent, and only the name as words, never in a path, an address, a link's
+  // address or code.
+  testWidgets(
+    'a name in words counts for a post to that agent alone, and never in a path, an address, a link or code',
+    (tester) async {
+      final server = swarmV4Channel();
+      // To two: whom it is to stays said, though its words name one of them.
+      say(
+        server,
+        'Faye',
+        "Juno, Pip's fix in #12 needs a review.",
+        to: ['juno', 'pip'],
+      );
+      say(server, 'Faye', 'Juno/README.md is updated.', to: ['juno']);
+      say(server, 'Faye', 'Juno.md is updated.', to: ['juno']);
+      say(server, 'Faye', 'see src/Juno now.', to: ['juno']);
+      say(server, 'Faye', 'mail Juno@example.com about it.', to: ['juno']);
+      say(
+        server,
+        'Faye',
+        'see [the docs](https://example.com/Juno) first.',
+        to: ['juno'],
+      );
+      say(
+        server,
+        'Faye',
+        'see https://example.com/?who=Juno later.',
+        to: ['juno'],
+      );
+      say(server, 'Faye', 'the fence:\n~~~\nJuno\n~~~\nruns.', to: ['juno']);
+      say(server, 'Faye', 'the block:\n\n    Juno\n\nruns too.', to: ['juno']);
+      say(server, 'Faye', 'done, Juno.', to: ['juno']);
+      // Tall enough that every post's row is drawn.
+      await openSwarmV4(tester, server, size: const Size(1440, 2400));
+      expect(drawnTags(tester, 'needs a review'), ['@Juno', '@Pip']);
+      for (final kept in [
+        'README.md is updated',
+        'Juno.md is updated',
+        'see src/Juno now.',
+        'about it',
+        'first.',
+        'later.',
+        'runs.',
+        'runs too.',
+      ]) {
+        expect(drawnTags(tester, kept), ['@Juno'], reason: kept);
+      }
+      expect(drawnTags(tester, 'done, Juno.'), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'a name of several words, or not in English letters, counts the same way',
+    (tester) async {
+      final server = swarmV4Channel(pip: 'First Builder', juno: 'Huy');
+      say(server, 'Faye', 'thanks First Builder, merged.', to: ['pip']);
+      say(server, 'Faye', 'thanks First\nBuilder, rebased.', to: ['pip']);
+      say(server, 'Faye', 'thanks Huy, landed.', to: ['juno']);
+      say(server, 'Faye', 'Huyền’s fix is in.', to: ['juno']);
+      await openSwarmV4(tester, server);
+      expect(drawnTags(tester, 'merged.'), isEmpty);
+      expect(drawnTags(tester, 'rebased.'), ['@First Builder']);
+      expect(drawnTags(tester, 'landed.'), isEmpty);
+      expect(drawnTags(tester, 'fix is in.'), ['@Huy']);
+    },
+  );
+
   testWidgets('an agent named twice in a post is tagged once', (tester) async {
     final server = swarmV4Channel();
     say(server, 'Faye', 'read #12.', to: ['juno', 'pip', 'juno']);
