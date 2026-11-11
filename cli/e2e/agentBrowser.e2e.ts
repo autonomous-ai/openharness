@@ -76,6 +76,11 @@ describe('the agent browser on the real daemon', () => {
 
     const createdAt = Date.parse(agent.createdAt)
     await until('the agent to bind its conversation', async () => (await row(client, agent.id))?.sessionId || null, 45_000, 500)
+    // A turn first, as agentBrowserPodman.e2e.ts takes before its stop: until one ends, the fake engine's conversation
+    // has no opening, and a purge is held (IDENTITY_UNAVAILABLE, retryable).
+    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
+    client.send('message', { agentId: agent.id, content: 'One turn before the purge' })
+    await ended
     const bound = await row(client, agent.id)
     const review = await client.request('agent_purge', { agentId: agent.id, sessionId: bound!.sessionId, createdAt, mode: 'inspect' }, 60_000)
     expect(review.error, JSON.stringify(review)).toBeUndefined()
