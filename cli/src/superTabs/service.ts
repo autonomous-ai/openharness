@@ -8,7 +8,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { backend, identifier, object, SuperTabHostError, within } from './wire.js'
 import { isCoordinator, isStep } from './agentContext.js'
-import { wireRole } from '../lib/swarmSkills.js'
+import { swarmBasics, wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution } from './contribution.js'
 import { ClaudeSignIns } from './claudeSignIn.js'
@@ -322,6 +322,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in
           // these alone; a Reviewer's keeps its kind.
           return { ok: true, role: grant ? wireRole(grant) : grant }
+        }
+        // What Harness adds to an agent's instructions at every start, for its person to read in Desktop's Instructions beside the
+        // rest (anh Dee, 2026-11-11: "show users what goes into the agent"): the Swarm's basics for its role, as this release gives
+        // them (lib/swarmSkills.ts). Its own agents/<name>.md, which comes after them, is read apart. No role, or an unreadable
+        // roster, answers no `text`.
+        if (payload.action === 'basics') {
+          const grant = await port.swarmRole(String(payload.harnessId ?? ''))
+          return grant ? { ok: true, text: swarmBasics(grant.role === 'coordinator').text } : { ok: true }
         }
         // Import agent (Desktop): whether any Swarm lists this harness here. An unreadable roster answers no `listed`, on which
         // Desktop refuses rather than share.

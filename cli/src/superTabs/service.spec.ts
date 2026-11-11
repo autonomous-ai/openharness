@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { swarmBasics } from '../lib/swarmSkills.js'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
@@ -56,6 +57,23 @@ describe('restart role lookup through the service', () => {
     expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
     call.mockRejectedValueOnce(new Error('Offline'))
     expect(await service.port.swarmRole('old-native')).toBeUndefined()
+    service.port.stop()
+  })
+  // Desktop's Instructions shows what Harness adds to an agent's instructions at every start (anh Dee, 2026-11-11: "show users what
+  // goes into the agent"): the Swarm's basics for its role, as this release gives them, for the owner only.
+  it('gives the basics Harness starts an agent with, for its role, for the owner only', async () => {
+    const lead = { id: 'lead', machineId: 'machine-1', harnessId: 'lead-native' }, builder = { id: 'builder', machineId: 'machine-1', harnessId: 'builder-native' }
+    const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data: path.includes('/hosts/')
+      ? hostForm([{ tabId: 'tab', agent: lead }, { tabId: 'tab', agent: builder }])
+      : swarmReply(path, { agents: [lead, builder], conversations: [{ leadId: 'lead', agentIds: ['builder'] }] }) } }))
+    const service = superTabService(fakeCore({ account: { backend: call } }))
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, owner)).toEqual({ ok: true, text: swarmBasics(true).text })
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'builder-native' }, owner)).toEqual({ ok: true, text: swarmBasics(false).text })
+    expect(swarmBasics(true).text).not.toBe(swarmBasics(false).text)
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'personal' }, owner)).toEqual({ ok: true })
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
+    call.mockRejectedValueOnce(new Error('Offline'))
+    expect(await service.requests.super_tabs({ action: 'basics', harnessId: 'lead-native' }, owner)).toEqual({ ok: true })
     service.port.stop()
   })
   // Import an agent (security review of #2783): whether any Swarm lists the harness here, for its owner only; an unreadable

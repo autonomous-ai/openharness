@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, syml
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { InstructionsError, readInstructions, readInstructionsAtLaunch, readSharedInstructions, writeInstructions } from './agentInstructions.js'
+import { InstructionsError, readInstructions, readInstructionsAtLaunch, readPersonalInstructions, readSharedInstructions, writeInstructions } from './agentInstructions.js'
 
 /** The protocol's limit for a file and for a text, written out: the apps are built against this number. */
 const LIMIT = 65_536
@@ -1071,6 +1071,84 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
           expect(JSON.stringify(result)).not.toContain('SECRET')
         })
       })
+    })
+  })
+
+  // What the agent's engine reads for every session of its person on this computer, before any project's (anh Dee, 2026-11-11:
+  // "show users what goes into the agent"): read only, beside the project's, and the person's own, so a link among them is followed.
+  describe('the file its engine reads for every session of its person on this computer (read only)', () => {
+    /** [outside] is the person's home folder here. */
+    const own = async (rel: string, content: string | Buffer) => {
+      await mkdir(dirname(join(outside, rel)), { recursive: true })
+      await writeFile(join(outside, rel), content)
+    }
+    const read = (session: { engine: string; claudeHome?: string | null; codexHome?: string | null; transcriptPath?: string | null }) =>
+      readPersonalInstructions(session as never, outside)
+    const shown = (name: string, path: string, engine: string, text: string, truncated = false) => ({ name, path, loadedBy: [engine], text, truncated })
+
+    it('gives Claude Code\'s CLAUDE.md in ~/.claude, named from the home folder, and nothing when there is none', async () => {
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [], skipped: [] })
+      await own('.claude/CLAUDE.md', 'Be brief.\n')
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [shown('CLAUDE.md', '~/.claude/CLAUDE.md', 'claude', 'Be brief.\n')], skipped: [] })
+    })
+
+    it('gives Codex\'s AGENTS.override.md in ~/.codex over its AGENTS.md, as Codex takes it, and nothing of an empty one', async () => {
+      await own('.codex/AGENTS.md', 'Plain.\n')
+      expect(await read({ engine: 'codex' })).toEqual({ shared: [shown('AGENTS.md', '~/.codex/AGENTS.md', 'codex', 'Plain.\n')], skipped: [] })
+      await own('.codex/AGENTS.override.md', 'Override.\n')
+      expect(await read({ engine: 'codex' })).toEqual({ shared: [shown('AGENTS.override.md', '~/.codex/AGENTS.override.md', 'codex', 'Override.\n')], skipped: [] })
+      await own('.codex/AGENTS.override.md', '  \n')
+      expect(await read({ engine: 'codex' })).toEqual({ shared: [], skipped: [] })
+    })
+
+    it('reads the folder the session keeps its own in: its profile, or where its transcript is, else the default', async () => {
+      await own('.claude/CLAUDE.md', 'Default.\n')
+      await own('work/CLAUDE.md', 'Work.\n')
+      await own('moved/CLAUDE.md', 'Moved.\n')
+      await own('codex-work/AGENTS.md', 'Codex work.\n')
+      expect((await read({ engine: 'claude', claudeHome: join(outside, 'work') })).shared).toEqual([shown('CLAUDE.md', '~/work/CLAUDE.md', 'claude', 'Work.\n')])
+      // A person who moved it (CLAUDE_CONFIG_DIR, CODEX_HOME in their shell) keeps their sessions there.
+      expect((await read({ engine: 'claude', transcriptPath: join(outside, 'moved', 'projects', '-p', 'id.jsonl') })).shared)
+        .toEqual([shown('CLAUDE.md', '~/moved/CLAUDE.md', 'claude', 'Moved.\n')])
+      expect((await read({ engine: 'codex', transcriptPath: join(outside, 'codex-work', 'sessions', '2026', '11', '11', 'rollout-1.jsonl') })).shared)
+        .toEqual([shown('AGENTS.md', '~/codex-work/AGENTS.md', 'codex', 'Codex work.\n')])
+      expect((await read({ engine: 'claude', transcriptPath: join(outside, 'elsewhere.jsonl') })).shared).toEqual([shown('CLAUDE.md', '~/.claude/CLAUDE.md', 'claude', 'Default.\n')])
+    })
+
+    it('names a folder outside the home folder by its whole path', async () => {
+      await mkdir(join(cwd, 'profile'))
+      await writeFile(join(cwd, 'profile', 'CLAUDE.md'), 'Elsewhere.\n')
+      expect((await read({ engine: 'claude', claudeHome: join(cwd, 'profile') })).shared)
+        .toEqual([shown('CLAUDE.md', join(cwd, 'profile', 'CLAUDE.md').split('\\').join('/'), 'claude', 'Elsewhere.\n')])
+    })
+
+    it('follows a link, which is the person\'s own, to the plain file it leads to wherever it is', async () => {
+      await own('dotfiles/CLAUDE.md', 'From dotfiles.\n')
+      await mkdir(join(outside, '.claude'))
+      await symlink(join(outside, 'dotfiles', 'CLAUDE.md'), join(outside, '.claude', 'CLAUDE.md'))
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [shown('CLAUDE.md', '~/.claude/CLAUDE.md', 'claude', 'From dotfiles.\n')], skipped: [] })
+    })
+
+    it('says why one is not shown, and cuts one at the limit', async () => {
+      const left = (why: string) => ({ name: 'CLAUDE.md', path: '~/.claude/CLAUDE.md', loadedBy: ['claude'], why })
+      await mkdir(join(outside, '.claude'))
+      await symlink(join(outside, 'nowhere.md'), join(outside, '.claude', 'CLAUDE.md'))
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [], skipped: [left('link')] })
+      await rm(join(outside, '.claude', 'CLAUDE.md'))
+      await mkdir(join(outside, '.claude', 'CLAUDE.md'))
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [], skipped: [left('not_a_file')] })
+      await rm(join(outside, '.claude', 'CLAUDE.md'), { recursive: true })
+      await own('.claude/CLAUDE.md', Buffer.from([0x66, 0xff, 0xfe, 0x66]))
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [], skipped: [{ ...left('not_text'), error: expect.any(InstructionsError) }] })
+      await own('.claude/CLAUDE.md', 'a'.repeat(LIMIT + 10))
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [shown('CLAUDE.md', '~/.claude/CLAUDE.md', 'claude', 'a'.repeat(LIMIT), true)], skipped: [] })
+      disk.failOpenOf = join('.claude', 'CLAUDE.md')
+      expect(await read({ engine: 'claude' })).toEqual({ shared: [], skipped: [{ ...left('unreadable'), error: expect.objectContaining({ code: 'EIO' }) }] })
+    })
+
+    it('reads nothing for an engine that keeps no such file', async () => {
+      await own('.claude/CLAUDE.md', 'Be brief.\n')
+      expect(await read({ engine: 'opencode' })).toEqual({ shared: [], skipped: [] })
     })
   })
 })

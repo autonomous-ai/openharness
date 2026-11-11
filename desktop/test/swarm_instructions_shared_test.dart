@@ -700,4 +700,154 @@ void main() {
       await height('one\ntwo\nthree'),
     );
   });
+
+  // What goes into the agent (anh Dee, 2026-11-11: "show users what goes into the agent. and what they can edit"): beside its
+  // own file, which alone has Edit, what Harness adds at every start and its person's own CLAUDE.md on its computer, each read
+  // only and folded, and a last line for its engine's own instructions, which nobody sees here.
+  group('what goes into the agent', () {
+    const basics =
+        'You are a Swarm agent on a team shipping one project.\n- Your tasks are GitHub issues.';
+
+    testWidgets(
+      'Harness\'s Swarm basics and its person\'s own CLAUDE.md, read only, each a click from its text, then its engine\'s own',
+      (tester) async {
+        final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
+          ..shared = [file('AGENTS.md', 'Ship small.')]
+          ..basics = basics
+          ..personal = [
+            {
+              'name': 'CLAUDE.md',
+              'path': '~/.claude/CLAUDE.md',
+              'text': 'Answer in plain words.\n',
+            },
+          ];
+        await show(tester, computer, open: false);
+        expect(computer.asked, [
+          {'action': 'basics', 'harnessId': 'h'},
+        ]);
+        // Each under its own heading, after the agent's own file and its folder's.
+        Text text(String k) => tester.widget<Text>(key(k));
+        expect(text('swarm-harness-heading').data, 'From Harness');
+        expect(text('swarm-personal-heading').data, 'From Mac Studio');
+        expect(text('swarm-harness-name-0').data, 'Swarm basics');
+        expect(text('swarm-harness-size-0').data, '2 lines');
+        expect(text('swarm-personal-name-0').data, '~/.claude/CLAUDE.md');
+        expect(text('swarm-personal-size-0').data, '2 lines');
+        expect(
+          text('swarm-engine-own').data,
+          'And Claude Code\'s own instructions, from Anthropic.',
+        );
+        final order = [
+          'swarm-instructions-text',
+          'swarm-shared-heading',
+          'swarm-harness-heading',
+          'swarm-personal-heading',
+          'swarm-engine-own',
+        ].map((k) => top(tester, key(k))).toList();
+        expect(order, [...order]..sort());
+        // Folded until opened, as a person clicks each.
+        expect(find.text(basics), findsNothing);
+        expect(find.text('Answer in plain words.\n'), findsNothing);
+        for (final row in ['swarm-harness-row-0', 'swarm-personal-row-0']) {
+          await tester.ensureVisible(key(row));
+          await tester.tap(key(row));
+          await tester.pumpAndSettle();
+        }
+        expect(
+          tester.widget<SelectableText>(key('swarm-harness-text-0')).data,
+          basics,
+        );
+        expect(
+          tester.widget<SelectableText>(key('swarm-personal-text-0')).data,
+          'Answer in plain words.\n',
+        );
+        // Only the agent's own file has Edit: the others are changed where they are kept.
+        expect(key('swarm-instructions-edit'), findsOneWidget);
+        await tester.tap(key('swarm-harness-row-0'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-harness-text-0'), findsNothing);
+      },
+    );
+
+    testWidgets('a file there and not shown is said in its own group', (
+      tester,
+    ) async {
+      final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
+        ..shared = [file('AGENTS.md', 'Ship small.')]
+        ..skipped = [
+          {'name': 'CLAUDE.local.md', 'why': 'link'},
+        ]
+        ..basics = basics
+        ..personalSkipped = [
+          {'name': 'CLAUDE.md', 'path': '~/.claude/CLAUDE.md', 'why': 'link'},
+        ];
+      await show(tester, computer, open: false);
+      expect(
+        tester.widget<Text>(key('swarm-personal-skipped-0')).data,
+        '~/.claude/CLAUDE.md is a link.',
+      );
+      expect(
+        tester.widget<Text>(key('swarm-skipped-0')).data,
+        'CLAUDE.local.md is a link.',
+      );
+      final order = [
+        'swarm-shared-heading',
+        'swarm-skipped-0',
+        'swarm-harness-heading',
+        'swarm-personal-heading',
+        'swarm-personal-skipped-0',
+      ].map((k) => top(tester, key(k))).toList();
+      expect(order, [...order]..sort());
+    });
+
+    testWidgets('a Codex agent\'s last line names Codex\'s own, from OpenAI', (
+      tester,
+    ) async {
+      final computer = SwarmV4Computer(files: {'h/Kai': 'Review fast.'});
+      final codex = SuperTabAgent.fromJson({
+        'id': 'id-Kai',
+        'name': 'Kai',
+        'machineId': 'm',
+        'harnessId': 'h',
+        'contributorId': 'p',
+        'configuration': {'engine': 'codex'},
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SwarmAgentInstructions(
+              agent: codex,
+              machineName: 'Mac Studio',
+              onClose: () {},
+              link: computer.link,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(key('swarm-engine-own')).data,
+        'And Codex\'s own instructions, from OpenAI.',
+      );
+    });
+
+    testWidgets(
+      'a computer from before them shows neither, and still the last line',
+      (tester) async {
+        final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
+          ..shared = [file('AGENTS.md', 'Ship small.')];
+        await show(tester, computer);
+        expect(key('swarm-harness-heading'), findsNothing);
+        expect(key('swarm-personal-heading'), findsNothing);
+        expect(find.text('Ship small.'), findsOneWidget);
+        expect(key('swarm-engine-own'), findsOneWidget);
+        // A refused read keeps what Harness said before it.
+        computer.basics = basics;
+        await tester.pumpWidget(const SizedBox());
+        await show(tester, computer, open: false);
+        expect(key('swarm-harness-heading'), findsOneWidget);
+      },
+    );
+  });
 }

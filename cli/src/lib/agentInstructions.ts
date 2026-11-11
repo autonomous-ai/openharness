@@ -32,7 +32,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type Stats } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
-import { basename, dirname, join, parse, relative, sep } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, parse, relative, sep } from 'node:path'
+import type { RegisteredSession } from './registry.js'
 
 /** The most a file may hold, read or written: far more than instructions need, and the most a request can make the
  *  daemon hold in memory. */
@@ -237,21 +239,29 @@ async function readFile(root: string, dir: string, rel: string, room: boolean): 
     }
     const target = path === file ? info : await entry(path)
     if (!target?.isFile()) return { why: 'not_a_file' }
-    const bytes = await readPrefix(path, path === file ? undefined : target)
-    const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
-    try {
-      // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
-      // stops at the last whole character; a file that is whole and ends inside one is not text.
-      const text = truncated ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, INSTRUCTIONS_MAX_BYTES), { stream: true })
-        : utf8.decode(bytes)
-      return { text, truncated }
-    } catch { throw new InstructionsError('NOT_UTF8') }
-  } catch (error) {
-    const code = error instanceof InstructionsError ? error.code : undefined
-    // Swapped for a named pipe between the check and the open: not a plain file, as it was said above.
-    if (code === 'UNSAFE_PATH') return { why: 'not_a_file' }
-    return { why: code === 'NOT_UTF8' ? 'not_text' : 'unreadable', error }
-  }
+    return await shownText(path, path === file ? undefined : target)
+  } catch (error) { return unshown(error) }
+}
+
+/** A plain file's text as it is shown: to the limit, with `truncated` saying it was cut. [looked] as readPrefix takes it. */
+async function shownText(path: string, looked?: Stats): Promise<Read> {
+  const bytes = await readPrefix(path, looked)
+  const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
+  try {
+    // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
+    // stops at the last whole character; a file that is whole and ends inside one is not text.
+    const text = truncated ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, INSTRUCTIONS_MAX_BYTES), { stream: true })
+      : utf8.decode(bytes)
+    return { text, truncated }
+  } catch { throw new InstructionsError('NOT_UTF8') }
+}
+
+/** Why a file whose read failed is not shown. */
+function unshown(error: unknown): Read {
+  const code = error instanceof InstructionsError ? error.code : undefined
+  // Swapped for a named pipe between the check and the open: not a plain file, as it was said above.
+  if (code === 'UNSAFE_PATH') return { why: 'not_a_file' }
+  return { why: code === 'NOT_UTF8' ? 'not_text' : 'unreadable', error }
 }
 
 /** The files that instruct the agent besides its own, for a person to read beside it and never to change: what its engines
@@ -329,4 +339,51 @@ export async function writeInstructions(cwd: string, name: unknown, text: unknow
     } finally { await rm(temporary, { force: true }) }
     return { version: versionOf(bytes) }
   })
+}
+
+/** The files Claude Code and Codex read for every session of their person on this computer, before any project's: Claude Code the
+ *  CLAUDE.md in its folder, Codex the first of AGENTS.override.md and AGENTS.md in its home that is there, and nothing of it when
+ *  that one is empty. Shown read only beside the project's (anh Dee, 2026-11-11: "show users what goes into the agent"). These are
+ *  the person's own, not a checkout's: a link among them (dotfiles kept in a repository of their own) is followed to the plain file
+ *  it leads to. Named from the home folder (`~/.claude/CLAUDE.md`), or by the whole path of a folder outside it. */
+export async function readPersonalInstructions(session: Pick<RegisteredSession, 'engine' | 'claudeHome' | 'codexHome' | 'transcriptPath'>,
+  home: string = homedir()): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
+  const engine = session.engine
+  if (engine !== 'claude' && engine !== 'codex') return { shared: [], skipped: [] }
+  const folder = engineFolder(session) ?? join(home, engine === 'claude' ? '.claude' : '.codex')
+  for (const name of engine === 'claude' ? ['CLAUDE.md'] : CODEX_LOADS) {
+    const file = join(folder, name)
+    const read = await readOwn(file)
+    if (!read) continue
+    const fromHome = relative(home, file)
+    const path = fromHome.startsWith('..') || isAbsolute(fromHome) ? file.split(sep).join('/') : `~/${fromHome.split(sep).join('/')}`
+    const located: Located = { name, path, loadedBy: [engine] }
+    if (!('text' in read)) return { shared: [], skipped: [{ ...located, ...read }] }
+    return { shared: read.text.trim() ? [{ ...located, ...read }] : [], skipped: [] }
+  }
+  return { shared: [], skipped: [] }
+}
+
+/** The folder a session's engine keeps the person's own in: the profile it was started with, or the one its transcript is in
+ *  (`<folder>/projects/…` for Claude Code, `<folder>/sessions/…` for Codex), where a person who moved it (CLAUDE_CONFIG_DIR,
+ *  CODEX_HOME, in their shell) keeps their sessions; null for the default. */
+function engineFolder(session: Pick<RegisteredSession, 'engine' | 'claudeHome' | 'codexHome' | 'transcriptPath'>): string | null {
+  const profile = session.engine === 'claude' ? session.claudeHome : session.codexHome
+  if (profile) return profile
+  const transcript = session.transcriptPath ?? ''
+  const at = transcript.lastIndexOf(`${sep}${session.engine === 'claude' ? 'projects' : 'sessions'}${sep}`)
+  return at > 0 ? transcript.slice(0, at) : null
+}
+
+/** One of the person's own files as it is shown, through a link too, or why it is not, or null where there is none. */
+async function readOwn(file: string): Promise<Read | null> {
+  try {
+    const info = await entry(file)
+    if (!info) return null
+    const real = info.isSymbolicLink() ? await realOrNull(file) : file
+    if (!real) return { why: 'link' }
+    const target = real === file ? info : await entry(real)
+    if (!target?.isFile()) return { why: 'not_a_file' }
+    return await shownText(real, real === file ? undefined : target)
+  } catch (error) { return unshown(error) }
 }

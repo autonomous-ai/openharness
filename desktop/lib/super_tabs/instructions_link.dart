@@ -42,19 +42,29 @@ class SwarmSkippedFile {
   final String why;
 }
 
-/// What else instructs an agent in its folder, read only. Empty from a computer that sends none (an older one), and never
-/// an error: what is not understood is left out and logged, without its content.
+/// What else instructs an agent, read only: the files of its folder, and its person's own on its computer that its engine
+/// reads for every session there (`~/.claude/CLAUDE.md`; anh Dee, 2026-11-11: "show users what goes into the agent"). Empty
+/// from a computer that sends none (an older one), and never an error: what is not understood is left out and logged,
+/// without its content.
 class SwarmSharedInstructions {
   const SwarmSharedInstructions({
     this.files = const [],
+    this.personal = const [],
     this.skipped = const [],
+    this.personalSkipped = const [],
   });
 
   static const none = SwarmSharedInstructions();
 
-  /// The files to show, in the order the computer sent them. A file with no text has nothing to read and is not here.
+  /// The files of its folder to show, in the order the computer sent them. A file with no text has nothing to read and is
+  /// not here.
   final List<SwarmSharedFile> files;
-  final List<SwarmSkippedFile> skipped;
+
+  /// Its person's own files on its computer, the same way.
+  final List<SwarmSharedFile> personal;
+
+  /// The files there and not shown, with why: of its folder, and of its person's own.
+  final List<SwarmSkippedFile> skipped, personalSkipped;
 
   /// The `shared` and `skipped` of a computer's answer, which it sends beside an error too.
   factory SwarmSharedInstructions.fromAnswer(Map<String, dynamic> answer) {
@@ -76,46 +86,66 @@ class SwarmSharedInstructions {
       return null;
     }
 
-    final files = <SwarmSharedFile>[];
-    for (final entry in listOf(answer['shared'])) {
-      final label = entry is Map ? labelOf(entry) : null;
-      if (entry is! Map || label == null || entry['text'] is! String) {
-        lost++;
-      } else if ((entry['text'] as String).trim().isNotEmpty) {
-        final text = entry['text'] as String,
-            truncated = entry['truncated'] == true;
-        files.add(
-          SwarmSharedFile(
-            name: label,
-            text: text,
-            truncated: truncated,
-            // Only a whole text: two files cut at 64 KiB can share their start and differ after it.
-            sameAs: truncated
-                ? null
-                : files
-                      .where((f) => !f.truncated && f.text == text)
-                      .firstOrNull
-                      ?.name,
-          ),
-        );
+    List<SwarmSharedFile> filesOf(Object? value) {
+      final files = <SwarmSharedFile>[];
+      for (final entry in listOf(value)) {
+        final label = entry is Map ? labelOf(entry) : null;
+        if (entry is! Map || label == null || entry['text'] is! String) {
+          lost++;
+        } else if ((entry['text'] as String).trim().isNotEmpty) {
+          final text = entry['text'] as String,
+              truncated = entry['truncated'] == true;
+          files.add(
+            SwarmSharedFile(
+              name: label,
+              text: text,
+              truncated: truncated,
+              // Only a whole text: two files cut at 64 KiB can share their start and differ after it.
+              sameAs: truncated
+                  ? null
+                  : files
+                        .where((f) => !f.truncated && f.text == text)
+                        .firstOrNull
+                        ?.name,
+            ),
+          );
+        }
       }
+      return files;
     }
-    final skipped = <SwarmSkippedFile>[];
-    for (final entry in listOf(answer['skipped'])) {
-      final label = entry is Map ? labelOf(entry) : null;
-      if (entry is! Map || label == null) {
-        lost++;
-      } else {
-        final why = entry['why'];
-        skipped.add(SwarmSkippedFile(label, why is String ? why : ''));
+
+    final files = filesOf(answer['shared']),
+        personal = filesOf(answer['personal']);
+    List<SwarmSkippedFile> reasonsOf(Object? value) {
+      final skipped = <SwarmSkippedFile>[];
+      for (final entry in listOf(value)) {
+        final label = entry is Map ? labelOf(entry) : null;
+        if (entry is! Map || label == null) {
+          lost++;
+        } else {
+          final why = entry['why'];
+          skipped.add(SwarmSkippedFile(label, why is String ? why : ''));
+        }
       }
+      return skipped;
     }
+
+    final skipped = reasonsOf(answer['skipped']),
+        personalSkipped = reasonsOf(answer['personalSkipped']);
     if (lost > 0) {
       appLog.warn('super-tabs', 'Instructions: $lost entries not understood');
     }
-    return files.isEmpty && skipped.isEmpty
+    return files.isEmpty &&
+            personal.isEmpty &&
+            skipped.isEmpty &&
+            personalSkipped.isEmpty
         ? none
-        : SwarmSharedInstructions(files: files, skipped: skipped);
+        : SwarmSharedInstructions(
+            files: files,
+            personal: personal,
+            skipped: skipped,
+            personalSkipped: personalSkipped,
+          );
   }
 }
 
@@ -172,6 +202,28 @@ class SwarmInstructionsLink {
       file: SwarmInstructionsFile(text as String?, version),
       shared: shared,
     );
+  }
+
+  /// What Harness adds to [agent]'s instructions at every start, the Swarm's basics for its part, as its computer gives them
+  /// (its Swarm service's `basics`), or null when that computer says none: no part, an older computer, or no answer. Never an
+  /// error: the rest of what instructs the agent shows without it.
+  Future<String?> basics(SuperTabAgent agent) async {
+    try {
+      if (gate?.call(agent.machineId) != null) return null;
+      final answer = await _ask(agent.machineId, 'super_tabs', {
+        'action': 'basics',
+        'harnessId': agent.harnessId,
+      });
+      final text = answer['text'];
+      return text is String && text.trim().isNotEmpty ? text : null;
+    } on WsRequestFailure {
+      return null;
+    } on WsRequestTimeout {
+      return null;
+    } catch (error) {
+      appLog.warn('super-tabs', 'Basics not reached: ${error.runtimeType}');
+      return null;
+    }
   }
 
   /// Saves [text] over the file as it was at [version]: `CHANGED` when it is not that now.
