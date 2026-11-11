@@ -20,7 +20,7 @@ import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
 import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
@@ -128,7 +128,7 @@ export interface SuperTabServiceOptions {
   /** What posts an agent's answer to its launch line in its chat (superTabs/firstAnswers.ts), for a spec. */
   firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
   /** What types an agent its next thing as its turn ends (superTabs/nextThing.ts), for a spec. */
-  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop'>
+  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop' | 'inbox'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -436,6 +436,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         wake()
         if (payload.action === 'status') {
           return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
+        }
+        // What waits for this agent, a line each, as its turns' ends type it (`harness super-tab inbox`, nextThing.ts); GitHub's
+        // refusal by its code, as GitHub news and the assigner say it (githubRest.ts).
+        if (payload.action === 'inbox') {
+          try { return { ok: true, value: { waiting: await nextThings.inbox(agent.harnessId) } } } catch (error) {
+            if (error instanceof GitHubStop) return { error: error.code, detail: error.message }
+            throw error
+          }
         }
         // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts) and a builder's claim on a task (`take`,
         // githubClaim.ts): made with this computer's gh under the calling agent's name, on a repository of a project it reads,
