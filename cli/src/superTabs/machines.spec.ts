@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { availableParallelism, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -556,12 +557,17 @@ describe('contributed machine executor', () => {
         writeFileSync(ssh, `#!/bin/sh\nsleep 60 &\necho $! > ${pidFile}\nsleep 60\n`, { mode: 0o755 })
         mkdirSync(dir); run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
         run(dir, 'remote', 'add', 'origin', 'ssh://git@example.invalid/acme/app.git'); run(dir, 'config', 'core.sshCommand', ssh)
-        const began = Date.now()
-        const answer = await createQuietGit(1_000)(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
-        expect(answer).toMatchObject({ ok: false, timedOut: true })
-        expect(Date.now() - began).toBeLessThan(5_000)
+        // Only the deadline's timer is faked, and it is reached once the helper is running. With a real 1 s deadline, a loaded
+        // Mac could take longer than that to start ssh, so the helper this case is about was never there (#4052).
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); onTestFinished(() => { vi.useRealTimers() })
+        const answering = createQuietGit(1_000)(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        while (!/^\d+\n$/.test(existsSync(pidFile) ? readFileSync(pidFile, 'utf8') : '')) await sleep(20)
+        vi.advanceTimersByTime(1_000)
+        // That one advance settles it: nothing waits on the helper still holding git's output.
+        expect(await answering).toMatchObject({ ok: false, timedOut: true })
+        vi.useRealTimers()
         const helper = Number(readFileSync(pidFile, 'utf8'))
-        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow())
+        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow(), { timeout: 10_000 })
       })
 
       it('ends a helper that outlives git and keeps its output open, before the deadline (re-check of #1743)', async () => {
@@ -571,12 +577,12 @@ describe('contributed machine executor', () => {
         writeFileSync(ssh, `#!/bin/sh\nsleep 60 </dev/null >/dev/null &\necho $! > ${pidFile}\nexit 1\n`, { mode: 0o755 })
         mkdirSync(dir); run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
         run(dir, 'remote', 'add', 'origin', 'ssh://git@example.invalid/acme/app.git'); run(dir, 'config', 'core.sshCommand', ssh)
-        const began = Date.now()
         const answer = await createQuietGit(30_000)(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        // Settled by git's exit, not its deadline: asked of the answer rather than of the clock, which a loaded Mac stretches (#4052).
         expect(answer).toMatchObject({ ok: false })
-        expect(Date.now() - began).toBeLessThan(10_000)
+        expect(answer.timedOut).toBeUndefined()
         const helper = Number(readFileSync(pidFile, 'utf8'))
-        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow())
+        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow(), { timeout: 10_000 })
       })
 
       it('says a push is unknown, not refused, when the remote could not be reached', async () => {
