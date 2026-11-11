@@ -824,6 +824,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)), moveGate,
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
   let holdOfRef: ((agentId: string, deliveryId: string) => Promise<string | null>) | null = null
+  let quietTurnRef: ((agentId: string) => void) | null = null
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
@@ -832,6 +833,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deliverers: new Set(TURN_DELIVERERS),
     // Built further down: read when a service asks, never now.
     hold: (agentId, deliveryId) => holdOfRef?.(agentId, deliveryId) ?? Promise.resolve(null),
+    // The recaps, built further down: a quiet delivery's turn ends with no recap and no notification.
+    quietStarted: (agentId) => quietTurnRef?.(agentId),
   })
   // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
   // (core/turns/ends.ts), all said by the event funnel as the turn goes.
@@ -1507,7 +1510,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
     quietOnDevices: (session) => swarm?.quietOnDevices(session) ?? false,
+    turnRunning: (sessionId) => turnStartedAt.has(sessionId),
   })
+  quietTurnRef = recaps.quietTurn
   asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done
   const isSubagentSession = recaps.isSubagentSession
   const mirror = recaps.mirror

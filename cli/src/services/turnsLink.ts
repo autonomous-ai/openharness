@@ -64,7 +64,8 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
     (await query('cancel_delivery', { deliveryId }).catch((): Payload => ({}))).cancelled === true
   const turns: DeliveryTurns = {
     deliver: (agentId, text, deliveryId, options) => {
-      void query('deliver', { agentId, text, deliveryId, ...(options?.answersQuestion ? { answersQuestion: true, writtenAt: options.writtenAt } : {}), ...(options?.personsOwn ? { personsOwn: true } : {}) }).then(
+      // `quiet`: a core older than this process ignores it, and the turn it starts tells as any turn does.
+      void query('deliver', { agentId, text, deliveryId, ...(options?.answersQuestion ? { answersQuestion: true, writtenAt: options.writtenAt } : {}), ...(options?.personsOwn ? { personsOwn: true } : {}), ...(options?.quiet ? { quiet: true } : {}) }).then(
         (answer) => { if (typeof answer.error === 'string') tell({ deliveryId, sessionId: agentId, state: 'rejected', reason: answer.error }) },
         () => tell({ deliveryId, sessionId: agentId, state: 'unknown', reason: 'The core did not confirm this delivery.' }),
       )

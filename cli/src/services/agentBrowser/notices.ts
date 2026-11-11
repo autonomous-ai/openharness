@@ -29,7 +29,7 @@ export interface Delivery {
 
 /** The core's `turns` members the lines use, handed in by agentBrowser.ts. */
 export interface Turns {
-  deliver(agentId: string, text: string, deliveryId: string): void
+  deliver(agentId: string, text: string, deliveryId: string, options?: { quiet?: true }): void
   cancelDelivery(deliveryId: string): boolean
   onDelivery(listener: (event: Delivery) => void): () => void
 }
@@ -119,7 +119,8 @@ export class Notices {
     line.tries += 1
     line.deliveryId = `agent-browser:${line.agentId}:${line.kind}:${randomUUID()}`
     this.byId.set(line.deliveryId, line)
-    this.deps.turns.deliver(line.agentId, TEXT[line.kind], line.deliveryId)
+    // Quiet: nobody asked for the line, so the turn it starts ends with no recap and no notification (core/api.ts `DeliveryOptions`).
+    this.deps.turns.deliver(line.agentId, TEXT[line.kind], line.deliveryId, { quiet: true })
   }
 
   private takeBack(line: Line, why: 'stopped' | 'ended', stopAfter: boolean): void {
