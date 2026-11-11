@@ -36,8 +36,7 @@ const CHECK_PAGES = 3
 /** How many of the branch's last landings are looked at for one whose goal checks have all ended, among how many of its last
  *  commits: a train of twenty brings twenty merge commits and their pull requests' own. */
 const LANDINGS = 5
-/** The longest line read as a row: a milestone, a command and a few bars. The row's pattern takes time by the square of a
- *  line's length, and the file is the repository's text: one line of a megabyte held the daemon for minutes (second review). */
+/** The longest line read as a row: a milestone, a command and a few bars. It bounds a check's command, which goes to CI whole. */
 export const LINE_MAX = 1_000
 
 /** A milestone and the command that checks it. */
@@ -52,8 +51,14 @@ export function goalRows(text: string | null): GoalRow[] {
   const rows = new Map<string, GoalRow>()
   for (const line of (text ?? '').split(/\r?\n/)) {
     if (line.length > LINE_MAX) continue
-    const found = /^\|\s*(.+?)\s*\|\s*`([^`]+)`\s*\|\s*$/.exec(line.trim())
-    const milestone = found?.[1]!.replace(/\s+/g, ' '), check = found?.[2]!.trim()
+    // `| milestone | \`check\` |`, found from the row's end by plain searches: the check is between its last two backticks, with
+    // a bar after them and a bar before. As one pattern this took time by the cube of the line's length (a 1,000-character line
+    // of spaces a fifth of a second, a file of them minutes: review of the Desktop score, 2026-11-11).
+    const row = line.trim(), cell = row.slice(0, -1).trimEnd(), open = cell.lastIndexOf('`', cell.length - 2)
+    const head = cell.slice(0, Math.max(0, open)).trimEnd(), named = head.slice(1, -1).trim()
+    if (row.length < 2 || !row.startsWith('|') || !row.endsWith('|') || !cell.endsWith('`') || open < 0 || head.length < 2 || !head.endsWith('|')) continue
+    // A milestone is one line's words: one with a line's end inside it is none.
+    const milestone = /[\r\u2028\u2029]/.test(named) ? '' : named.replace(/\s+/g, ' '), check = cell.slice(open + 1, -1).trim()
     if (!milestone || !check || milestone.length > MILESTONE_MAX || rows.has(milestone)) continue
     rows.set(milestone, { milestone, check })
     if (rows.size >= GOAL_MAX) break
