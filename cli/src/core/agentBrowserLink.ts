@@ -1,7 +1,7 @@
 /**
  * The agent browser in its own process, as the core sees it (services/agentBrowserProcess.ts; on demand).
  *
- * The core tells the process what happens to agents and goes on: one with Browser is here (`service_event attached`),
+ * The core tells the process what happens to agents and goes on: one whose Browser is on is here (`service_event attached`),
  * one stopped, one was purged. A stop or a purge it missed would leave a browser running, or a login on disk, so those
  * are held until the process hears them. An attach is not: it is said on every look at an agent, and the core says
  * every one again each time the process connects, which a process that restarted needs anyway. An attach also asks
@@ -13,7 +13,9 @@
  * only for the agents it attached and has not since stopped or deleted, so a late word never brings a browser back.
  *
  * The process asks the core what only the core knows: its agents' ids (`agent_ids`), the agent of a pane
- * (`agent_of_pane`), and to hand on one of its own product counters (`count`), none other.
+ * (`agent_of_pane`), and to hand on one of its own product counters (`count`), none other. And it asks the core to
+ * turn an agent's Browser on or off (`set_browser`), its person's Start and Stop: the core sets the row's flag and
+ * tells this port `attached` or `stopped` before it answers.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -109,6 +111,10 @@ export function createAgentBrowserLink(deps: {
     if (query === 'agent_of_pane') {
       if (typeof payload.pane !== 'string') return INVALID
       return { agentId: (await core.agents.ofPane?.(payload.pane)) ?? null }
+    }
+    if (query === 'set_browser') {
+      if (typeof payload.agentId !== 'string' || typeof payload.on !== 'boolean') return INVALID
+      return core.agents.setBrowser ? { ...await core.agents.setBrowser(payload.agentId, payload.on) } : { error: 'UNSUPPORTED' }
     }
     if (query === 'count') {
       if (typeof payload.metric !== 'string' || !METRICS.has(payload.metric)) return INVALID

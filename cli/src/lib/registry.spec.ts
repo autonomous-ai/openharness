@@ -2061,7 +2061,7 @@ describe('registry across a reboot and pane loss', () => {
     void registry; void strictPersistedRow
   })
 
-  // The agent browser (services/agentBrowser.ts) starts only for an agent created with Browser ticked.
+  // The agent browser (services/agentBrowser.ts) starts only for an agent whose Browser is on.
   it('browser:true survives persist, parse and rebind; cleared on separate shell', async () => {
     const { registry, strictPersistedRow } = await loadRegistryModule()
     registry.load()

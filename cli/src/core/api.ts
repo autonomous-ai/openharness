@@ -225,6 +225,10 @@ export interface CoreApi {
     /** The live agent whose terminal is the pane [pane] (`$HARNESS_PANE`), or null: the agent browser's
      *  tools in an agent's pane name it so. Absent where the core is not asked it. */
     ofPane?(pane: string): Promise<string | null>
+    /** Turn a live agent's Browser on or off, its person's Start and Stop (registry `browser`), and tell its browser
+     *  (`AgentBrowserPort.attached`, `stopped`) in the same turn: the flag changes in the order the agent browser asks.
+     *  Only a live agent that is not a guest's is turned on. Absent where the core is not asked it. */
+    setBrowser?(agentId: string, on: boolean): Promise<BrowserSwitch>
   }
   /** A fixed-name product counter (`GatewayPort.usageCounter`): no id, URL, host, reason or content. Absent where the
    *  core offers a service none. */
@@ -929,9 +933,10 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
 }
 
 /** The services that may write turns into agents from a process of their own (core/deliveries.ts): the experiments,
- *  and Agent Messages, which left them for the edge host and still types a message into an idle agent. No other
- *  process may: writing into a pane is no other service's to ask. */
-export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages']
+ *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
+ *  browser, which types its two lines into an agent when its person starts and stops its browser. No other process
+ *  may: writing into a pane is no other service's to ask. */
+export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser']
 
 /** The services in their own processes that are told each live turn's end (core/turns/ends.ts): the Swarm's, which posts an
  *  agent's answer into its person's chat when the turn that answers them ends. No other asks, so none is sent every end. */
@@ -1066,12 +1071,12 @@ export interface AgentCleanupPort {
 export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
 
 /**
- * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent with Browser ticked, and
+ * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
  * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
  * runs in its own process: core/agentBrowserLink.ts).
  */
 export interface AgentBrowserPort {
-  /** An agent is here and running: its browser starts, for one created with Browser. Idempotent, as `ViewersPort.attach`. */
+  /** An agent is here and running: its browser starts, for one whose Browser is on. Idempotent, as `ViewersPort.attach`. */
   attached(session: RegisteredSession): void
   /** The agent stopped: its browser stops, and its profile stays for a resume. */
   stopped(agentId: string): void
@@ -1085,6 +1090,10 @@ export interface AgentBrowserPort {
   onCloseViewers(listener: (agentId: string) => void): void
   stop(): void
 }
+/** What turning an agent's Browser on or off answered (`CoreApi.agents.setBrowser`): whether its flag changed, or why
+ *  it was not turned on. */
+export type BrowserSwitch = { ok: true; changed: boolean } | { error: 'NOT_RUNNING' | 'NOT_ALLOWED' }
+
 /** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream to open. A
  *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
@@ -2032,6 +2041,9 @@ export interface CoreApiDeps {
   summaries?: CoreApi['agents']['summaries']
   /** One `agent_close` (core/agents/close.ts), for `closeStarted`; absent, a service closes nothing. */
   closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
+  /** An agent's Browser turned on or off (core/agents/lifecycle.ts `createAgentBrowserLifecycle`), for `setBrowser`;
+   *  absent, the core offers none. */
+  setBrowser?: (agentId: string, on: boolean) => BrowserSwitch
   /** When an agent's conversation last moved (lib/transcriptActivity.ts), for `lastActivity`. */
   activityAt?: (session: RegisteredSession) => Promise<number | null>
   /** A resume of a stopped agent (core/agents/lifecycle.ts `resumeAgent`), for `keepLeadAlive`. */
@@ -2072,7 +2084,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, swarmAgents,
+  closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -2128,6 +2140,7 @@ export function createCoreApi({
       },
       ids: async () => ({ live: registry.list().map(session => session.agentId), stopped: stoppedAgents.ids() }),
       ofPane: async (pane) => sessionForPaneId(registry.list(), pane)?.agentId ?? null,
+      ...(setBrowser ? { setBrowser: async (agentId: string, on: boolean) => setBrowser(agentId, on) } : {}),
     },
     ...(count ? { count } : {}),
     turns,

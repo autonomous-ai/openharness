@@ -217,7 +217,8 @@ export class BackendSocket {
     /** The harness here whose agent started it, when one in a Harness pane did (registry `parentAgentId`); only with
      *  `startedBy: 'agent'`. The windows open the new harness beside it and say who started it. */
     parentAgentId?: string | null
-    /** Browser ticked: a sandboxed Chrome runs beside it (services/agentBrowser.ts), kept on the row. */
+    /** Its Browser is on from the start, an older Desktop's checkbox: a sandboxed Chrome runs beside it
+     *  (services/agentBrowser.ts), kept on the row (registry.ts `browser`). */
     browser?: boolean
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null

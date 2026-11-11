@@ -109,7 +109,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   externalResume?: ExternalResumeIntent
   /** The guest (an email) whose harness this is: it runs as their own OS user (core/agents/guestCreate.ts). */
   guest?: string | null
-  /** Browser ticked, recorded on the row (registry.ts `browser`). */
+  /** Its Browser is on from the start, recorded on the row (registry.ts `browser`). */
   browser?: boolean
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean

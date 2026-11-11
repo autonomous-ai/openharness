@@ -841,6 +841,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     lastTurn: sessionId => readLastTurn(sessionId),
   })
   const ports = emptyPorts()
+  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts), and
+  // turned on and off by its person through the core (`CoreApi.agents.setBrowser`), so it is made before the core API.
+  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser, registry)
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
   // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
   // answer it sends a device are here (core/wifi.ts). Its doors are the calls it made when it ran here.
@@ -1029,6 +1032,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
     // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
+    // The person's Start and Stop of an agent's browser, which the agent browser asks of the core.
+    setBrowser: agentBrowsers.set,
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
       members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
@@ -1075,8 +1080,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
-  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts).
-  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser)
   // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
   const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId) }
 
@@ -1798,7 +1801,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
   if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm ? { retained: swarm.retainedHarnesses, closed: swarm.recordCleanupClose } : undefined), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
-  // A sandboxed Chrome beside each agent created with Browser (services/agentBrowser.ts): in its own process, on
+  // A sandboxed Chrome beside each agent whose Browser is on (services/agentBrowser.ts): in its own process, on
   // demand (services/agentBrowserProcess.ts), or in this one.
   if (outOfProcess.has('agentBrowser')) ports.agentBrowser = agentBrowserLink.port
   else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
@@ -2671,7 +2674,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
-  // And every agent created with Browser gets its browser back.
+  // And every agent whose Browser is on gets its browser back.
   for (const session of registry.list()) if (session.browser) agentBrowsers.attached(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no

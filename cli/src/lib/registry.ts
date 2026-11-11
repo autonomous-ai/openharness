@@ -191,8 +191,9 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
-   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
-   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
+   * Its Browser is on: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it while it
+   * runs. Set by its person's Start (or an older Desktop's create), cleared only by their Stop (`setBrowser`), and
+   * carried through a stop and a resume. Absent while its Browser is off.
    */
   browser?: true
   /**
@@ -1770,7 +1771,7 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
-    /** Created with Browser ticked — see RegisteredSession.browser. */
+    /** Its Browser is on from the start (an older Desktop's create) — see RegisteredSession.browser. */
     browser?: boolean
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
@@ -2715,6 +2716,19 @@ class Registry {
     session.touchedAt = Date.now()
     this.save()
     return true
+  }
+
+  /** Turn [agentId]'s Browser on or off (RegisteredSession.browser), as its person's Start and Stop do through the core
+   *  (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the live row as saved, or null when no live row has that id. */
+  setBrowser(agentId: string, on: boolean): RegisteredSession | null {
+    const session = this.agents.get(agentId)
+    if (!session) return null
+    if ((session.browser === true) === on) return session
+    if (on) session.browser = true
+    else delete session.browser
+    session.touchedAt = Date.now()
+    this.save()
+    return session
   }
 
   /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */
