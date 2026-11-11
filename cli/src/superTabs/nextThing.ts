@@ -40,6 +40,10 @@ export const NEXT_TIMES = 3
  *  asks at 4 hours and moves at 8 (githubAssign.ts): it cannot see a session, and one that works for hours pushes nothing. */
 export const IDLE_ASK_MS = 20 * 60_000
 export const IDLE_BACK_MS = 60 * 60_000
+/** How long after it starts each of its agents is looked at as though its turn had just ended (Swarm plan, step 1, item 2: "Harness
+ *  types it once after a restart"): a turn that ended while the daemon was down, for an update or a restart, was never heard, and
+ *  its agent slept with its next thing until something else woke it. Time for the core to attach its agents and say which are idle. */
+export const START_LOOK_MS = 30_000
 /** The most agents whose counts are kept; the least recent go first. */
 const MAX_KEPT = 1_000
 /** The most lines `harness super-tab inbox` lists: lampOS's builders had a few things each at most, and each line may cost a few
@@ -72,6 +76,9 @@ interface Kept { key: string; times: number; told: boolean }
 export class NextThing {
   private stopEnds: (() => void) | null = null
   private readonly timers = new Map<string, NodeJS.Timeout>()
+  /** The look at every agent as it starts, and the terminals whose turns ended before it, which their own looks look at. */
+  private startLook: NodeJS.Timeout | null = null
+  private heard: Set<string> | null = null
   /** Each terminal idle with a task of its own in hand, by its id: the next look at it, and what it holds. */
   private readonly idle = new Map<string, { timer: NodeJS.Timeout; agent: WatchedAgent; repo: string; task: Record<string, unknown> }>()
   private readonly looking = new Set<string>()
@@ -108,11 +115,19 @@ export class NextThing {
   start(): void {
     if (this.stopEnds) return
     this.stopEnds = this.deps.onEnd(end => this.ended(end))
+    const heard = this.heard = new Set()
+    this.startLook = setTimeout(() => {
+      this.startLook = this.heard = null
+      void this.lookAll(heard)
+    }, START_LOOK_MS)
+    this.startLook.unref()
   }
 
   stop(): void {
     this.stopEnds?.()
     this.stopEnds = null
+    if (this.startLook) clearTimeout(this.startLook)
+    this.startLook = this.heard = null
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
     for (const watched of this.idle.values()) clearTimeout(watched.timer)
@@ -122,6 +137,7 @@ export class NextThing {
   /** A turn ended: its agent is looked at once the turns close together have settled. One its person stopped is left: they are
    *  at its terminal. */
   private ended(end: TurnEnd): void {
+    this.heard?.add(end.agentId)
     // A turn of its, its person's or its own, is no idle time. One its person stopped starts its idle time over, as the look its
     // other turns get is not made: they are at its terminal.
     const watched = this.idle.get(end.agentId)
@@ -137,6 +153,15 @@ export class NextThing {
     }, NEXT_SETTLE_MS)
     timer.unref()
     this.timers.set(end.agentId, timer)
+  }
+
+  /** Each of its agents once, as it starts, but those a turn's end since has looked at. */
+  private async lookAll(heard: ReadonlySet<string>): Promise<void> {
+    try {
+      for (const agent of await this.deps.watched()) if (!heard.has(agent.harnessId)) await this.look(agent.harnessId)
+    } catch (error) {
+      this.log(`[super-tab] next things as Harness started: ${named(error)}.`)
+    }
   }
 
   private async look(harnessId: string): Promise<void> {

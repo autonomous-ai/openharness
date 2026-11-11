@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing } from './nextThing.js'
+import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS } from './nextThing.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -464,6 +464,48 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(g.told()).toHaveLength(1)
     expect(g.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] could not save the next things: Error: E[A-Z]+/))
     g.next.stop()
+  })
+
+  // Swarm plan, step 1, item 2: "Harness types it once after a restart". A turn that ended while the daemon was down (an update,
+  // a restart) was never heard, and its agent slept with its next thing until something else woke it.
+  it('looks at each of its agents once as it starts: an idle one is typed its next thing, a busy one is left to its turn', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug')] })
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS - 1)
+    expect(f.tell).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    // Once: started again while running, it looks no more.
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.tell).toHaveBeenCalledOnce()
+    f.next.stop()
+    // Busy, or one whose turn just ended and is looked at by that: nothing more.
+    const busy = setup({ working: true })
+    busy.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(busy.tell).not.toHaveBeenCalled()
+    busy.next.stop()
+    const ended = setup()
+    ended.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS - NEXT_SETTLE_MS)
+    await ended.end()
+    expect(ended.tell).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(ended.tell).toHaveBeenCalledOnce()
+    ended.next.stop()
+    // Stopped before it looked: nothing; and a failure to list its agents is said.
+    const stopped = setup()
+    stopped.next.start()
+    stopped.next.stop()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(stopped.tell).not.toHaveBeenCalled()
+    const failing = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
+      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
+    failing.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next things as Harness started: Error.')
+    failing.stop()
   })
 
   it('hears turn ends once however often it is started, and none once stopped', async () => {
