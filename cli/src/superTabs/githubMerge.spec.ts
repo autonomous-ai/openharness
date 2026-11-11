@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, noteOf, recordedAuthors, verdictOf, VerdictRecords, verdicts } from './githubMerge.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
@@ -805,6 +805,27 @@ describe('the rule\'s parts', () => {
       faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false, recorded: false, byCommand: false, retyped: false, at },
       kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false, recorded: false, byCommand: false, retyped: false, at } })
     expect(twoReads).toBe(true)
+  })
+
+  // The day's scoreboard counts verdicts by their time and the merger's notes by their kind (scoreboard.ts).
+  it('says the verdict a comment gives as its own, and which of the merger\'s notes one is, whatever its head', () => {
+    const said = (body: string, association = 'MEMBER') => ({ body, author_association: association })
+    expect(verdictOf(said(`Kai, 14:20: READ-OK ${HEAD}\n\nReads well.`))).toBe('READ-OK')
+    expect(verdictOf(said(`\n\nKai, 14:20: HOLD ${HEAD.slice(0, 7)} src/a.ts:3`))).toBe('HOLD')
+    expect(verdictOf(said(`> READ-OK ${HEAD}`))).toBeNull()
+    expect(verdictOf(said('Looks fine to me.'))).toBeNull()
+    expect(verdictOf(said(`Kai, 14:20: READ-OK ${HEAD}`, 'NONE'))).toBeNull()
+    expect(verdictOf({})).toBeNull()
+    const note = (words: string) => said(`Harness, 14:20, to **Pip**: not merged yet at ${HEAD.slice(0, 7)}: ${words}`)
+    expect(noteOf(note('it is behind main: update the branch and push.'))).toBe('behind')
+    expect(noteOf(note('it conflicts with main: rebase it on main and push.'))).toBe('dirty')
+    expect(noteOf(note('checks failed: unit. Fix them and push.'))).toBe('checks')
+    expect(noteOf(note('something the merger never says'))).toBeNull()
+    expect(noteOf(said('Harness, 14:20: merged.'))).toBeNull()
+    expect(noteOf({})).toBeNull()
+    expect(noteOf(said(`Harness, 14:20, to **Pip**: not merged yet at ${HEAD.slice(0, 7)}: it is behind main`, 'CONTRIBUTOR'))).toBeNull()
+    // Past the first 500 characters, where none of Harness's own notes is, it is someone's talk.
+    expect(noteOf(said(`${'x'.repeat(500)} not merged yet at ${HEAD.slice(0, 7)}: it is behind main`))).toBeNull()
   })
 
   it('knows a pull request\'s author by its builder label, else its branch', () => {
