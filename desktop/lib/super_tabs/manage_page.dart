@@ -13,8 +13,6 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
-import 'leaderboard/models_section.dart';
-import 'leaderboard/reader.dart';
 import 'message_row.dart' show SuperTabMessageRow;
 import 'local_models.dart';
 import 'machines.dart';
@@ -81,7 +79,6 @@ class SuperTabManagePage extends StatelessWidget {
     required this.tab,
     required this.onAddAgent,
     this.app,
-    this.board,
     this.onOpenAgent,
     this.readLocal,
     this.now = DateTime.now,
@@ -90,7 +87,6 @@ class SuperTabManagePage extends StatelessWidget {
   final SuperTabController controller;
   final SuperTabManageTab tab;
   final AppNotifier? app;
-  final SuperTabLeaderboardReader? board;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
 
@@ -121,7 +117,6 @@ class SuperTabManagePage extends StatelessWidget {
         SuperTabManageTab.models => _ManageModels(
           controller: controller,
           app: app,
-          board: board,
           now: now,
         ),
         // The view holds the devices pane in this one's place.
@@ -154,54 +149,34 @@ class _FootAction extends StatelessWidget {
   );
 }
 
-/// What a model's row keeps inside its own edges.
-const _modelRowInset = 12.0;
-
+/// Manage's Models: the person's own models, behind Your models…. Swarm v4
+/// has no shares of models: v3's came from workgroups v4 does not have.
 class _ManageModels extends StatelessWidget {
-  const _ManageModels({
-    required this.controller,
-    required this.now,
-    this.app,
-    this.board,
-  });
+  const _ManageModels({required this.controller, required this.now, this.app});
   final SuperTabController controller;
   final AppNotifier? app;
-  final SuperTabLeaderboardReader? board;
   final DateTime Function() now;
 
   @override
   Widget build(BuildContext context) {
     return LaidOutListView(
-      // A model's row has its own 12 inside: its mark starts under the heading.
       padding: const EdgeInsets.symmetric(
-        horizontal: SuperTabMessageRow.horizontalInset - _modelRowInset,
+        horizontal: SuperTabMessageRow.horizontalInset,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
-        if (board case final board?)
-          LeaderboardModelsSection(
-            board: board,
-            // Whichever project the board asked about: Models is the Swarm's.
-            projectId: board.projectId,
-            collapsed: false,
-            now: now,
-            heading: false,
-          ),
         const SizedBox(height: 8),
-        Padding(
-          padding: const EdgeInsets.only(right: _modelRowInset),
-          child: _FootAction(
-            label: 'Your models…',
-            actionKey: const ValueKey('super-local-models'),
-            onPressed: controller.snapshot == null
-                ? null
-                : () => showSwarmLocalModels(
-                    context,
-                    controller,
-                    app: app,
-                    now: now,
-                  ),
-          ),
+        _FootAction(
+          label: 'Your models…',
+          actionKey: const ValueKey('super-local-models'),
+          onPressed: controller.snapshot == null
+              ? null
+              : () => showSwarmLocalModels(
+                  context,
+                  controller,
+                  app: app,
+                  now: now,
+                ),
         ),
       ],
     );

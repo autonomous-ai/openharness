@@ -329,7 +329,7 @@ void main() {
       ('GET', '/api/super-tabs/tab1/parts'),
       ('GET', '/api/super-tabs/tab1/changes?cursor=c%3D1'),
       ('POST', '/api/super-tabs/tab1/commands'),
-      ('GET', '/api/super-tabs/tab1/leaderboard'),
+      ('GET', '/api/super-tabs/tab1/shipping'),
       ('GET', '/api/super-tabs/tab1/sharing'),
       ('POST', '/api/super-tabs/tab1/sharing'),
       ('GET', '/api/super-tabs/tab1/routing-policy'),
@@ -534,7 +534,7 @@ void main() {
         skip: const {'lib/super_tabs/attachment_upload.dart'},
       );
       // The walk finds what it should, so a broken walk cannot pass.
-      expect(paths.length, greaterThan(30));
+      expect(paths.length, greaterThan(20));
       expect(
         paths,
         containsAll([
