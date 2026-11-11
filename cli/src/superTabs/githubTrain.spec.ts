@@ -28,8 +28,8 @@ function fakeRepo(now: () => number) {
     main: [{ sha: sha('main-0'), files: [] as string[] }],
     pulls: new Map<number, FakePull>(),
     comments: new Map<number, Json[]>(),
-    /** What GitHub itself notes on a pull request: nobody can write these. */
-    events: new Map<number, Json[]>(),
+    /** Each commit's statuses, oldest first: anyone who can push can add one, and GitHub says who made each. */
+    statuses: new Map<string, Json[]>(),
     runs: new Map<string, Json[]>(),
     /** What each pull request's head and each train commit holds: the commit of main it stands on, and the files it changes. */
     commits: new Map<string, { on: string; files: string[] }>(),
@@ -87,11 +87,12 @@ function fakeRepo(now: () => number) {
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
       : /^\/issues\/\d+\/comments$/.test(p) ? (state.comments.get(number) ?? []).map(records.served)
       : /^\/pulls\/\d+\/reviews$/.test(p) ? []
-      : /^\/issues\/\d+\/events$/.test(p) ? state.events.get(number) ?? []
+      // A commit's statuses, the newest first, a page at a time; and the last of each context, as GitHub's combined status gives them.
+      : /^\/commits\/[0-9a-f]+\/statuses$/.test(p) ? [...state.statuses.get(p.split('/')[2]!) ?? []].reverse().slice((page - 1) * per, page * per)
       : /^\/pulls\/\d+\/commits$/.test(p) ? [{ sha: state.pulls.get(number)?.head.sha }]
       : /^\/pulls\/\d+$/.test(p) ? { mergeable_state: state.pulls.get(number)?.mergeable_state }
       : p.endsWith('/check-runs') ? { check_runs: state.runs.get(commit) ?? [] }
-      : p.endsWith('/status') ? { statuses: [] }
+      : p.endsWith('/status') ? { statuses: [...new Map((state.statuses.get(commit) ?? []).map(status => [status.context, status])).values()] }
       : compared ? compare(compared[1]!, compared[2]!)
       : made ? (state.parents.has(made) ? { sha: made, parents: state.parents.get(made)!.map(parent => ({ sha: parent })) } : null)
       : p === '/git/ref/heads/main' ? { ref: 'refs/heads/main', object: { type: 'commit', sha: tip() } }
@@ -110,6 +111,11 @@ function fakeRepo(now: () => number) {
     if (instead) return { ...reply(instead.status ?? 200, instead.body ?? null), ...instead }
     if (method === 'POST' && p === '/git/refs') {
       state.branches.set(String(body.ref).replace('refs/heads/', ''), String(body.sha))
+      return reply(201)
+    }
+    if (method === 'POST' && /^\/statuses\/[0-9a-f]+$/.test(p)) {
+      const at = p.split('/')[2]!
+      state.statuses.set(at, [...state.statuses.get(at) ?? [], { context: body.context, state: body.state, creator: { login: 'octocat' } }])
       return reply(201)
     }
     if (method === 'POST' && p === '/merges') {
@@ -621,41 +627,86 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect([4, 5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open', 'open'])
   })
 
-  // The review of #3909, left open then. Anyone who can push to the repository can make the train's merge commits again by
-  // hand, with the same parents and other content, push them in its place and change the tip in its body: the branch then
-  // reads as built, its checks run on the forgery, and it landed. A branch is rewritten by a forced push, or by deleting it
-  // and making it again, and GitHub notes each on the pull request, where nobody can write.
-  it.each([
-    ['pushed over by force', ['head_ref_force_pushed']],
-    ['deleted and made again', ['head_ref_deleted', 'head_ref_restored', 'reopened']],
-  ])('lands no train whose branch was %s after it was built, though it reads as built', async (_case, events) => {
-    const f = setup()
-    const a = f.add(4), b = f.add(5)
-    await f.settle()
-    const train = f.train(), base = f.state.main[0]!.sha
-    // The same two merges, made by hand: the same parents, and a file nobody read.
-    const one = sha('forged-1'), two = sha('forged-2')
-    f.state.parents.set(one, [base, a.head.sha])
-    f.state.parents.set(two, [one, b.head.sha])
-    f.state.commits.set(two, { on: base, files: ['cli/src/f4.ts', 'cli/src/f5.ts', 'cli/src/unread.ts'] })
-    f.state.branches.set(train.head.ref, two)
-    Object.assign(train, { body: train.body.replace(train.head.sha, two), head: { ...train.head, sha: two } })
-    f.state.events.set(train.number, events.map(event => ({ event })))
-    const forged = f.state.sent.length
-    await f.ends(PASSED)
-    expect(f.writes(forged).filter(w => w.startsWith('PUT'))).toEqual([])
-    expect(f.state.main.at(-1)!.files).not.toContain('cli/src/unread.ts')
-    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch was rewritten after the train built it')
-    expect([a, b].map(pull => pull.state)).toEqual(['open', 'open'])
-  })
-
-  it('lands a train whose pull request has only the events of an ordinary one', async () => {
+  // The review of #3909, left open then, and of #3995. Anyone who can push to the repository can put commits of their own on
+  // the train's branch and change its body to match: the merge commits made again by hand with the same parents and other
+  // content, pushed by force; or one more merge on top, its second parent a ready pull request's head and its content
+  // anything, with that pull request added to the body. The branch then read as built, its checks ran on it, and it landed.
+  // The train marks the tip it built with a commit status, which GitHub signs with who made it: only a tip this login marked lands.
+  const forge = (f: ReturnType<typeof setup>, tip: string, files: string[], body: (body: string) => string) => {
+    const train = f.train()
+    f.state.commits.set(tip, { on: f.state.main[0]!.sha, files })
+    f.state.branches.set(train.head.ref, tip)
+    f.state.runs.set(tip, PASSED)
+    Object.assign(train, { body: body(train.body).replace(train.head.sha, tip), head: { ...train.head, sha: tip } })
+  }
+  it.each<[string, (f: ReturnType<typeof setup>) => void]>([
+    ['the same merges made again by hand, pushed by force', f => {
+      const one = sha('forged-1'), two = sha('forged-2')
+      f.state.parents.set(one, [f.state.main[0]!.sha, f.state.pulls.get(4)!.head.sha])
+      f.state.parents.set(two, [one, f.state.pulls.get(5)!.head.sha])
+      forge(f, two, ['cli/src/f4.ts', 'cli/src/f5.ts', 'cli/src/unread.ts'], body => body)
+    }],
+    ['one more merge pushed on top, for a ready pull request added to its body', f => {
+      const built = f.train().head.sha, top = sha('forged-top'), six = f.state.pulls.get(6)!.head.sha
+      f.state.parents.set(top, [built, six])
+      forge(f, top, ['cli/src/f4.ts', 'cli/src/f5.ts', 'cli/src/f6.ts', 'cli/src/unread.ts'], body => `${body}\n#6 at ${six}, READ-OK by Juno`)
+    }],
+    ['a forgery another login marked as built', f => {
+      const one = sha('forged-1'), two = sha('forged-2')
+      f.state.parents.set(one, [f.state.main[0]!.sha, f.state.pulls.get(4)!.head.sha])
+      f.state.parents.set(two, [one, f.state.pulls.get(5)!.head.sha])
+      forge(f, two, ['cli/src/f4.ts', 'cli/src/f5.ts', 'cli/src/unread.ts'], body => body)
+      f.state.statuses.set(two, [{ context: 'harness/train', state: 'success', creator: { login: 'mallory' } }])
+    }],
+  ])('lands no train whose branch holds %s', async (_case, attack) => {
     const f = setup()
     f.add(4); f.add(5)
     await f.settle()
-    f.state.events.set(f.train().number, [{ event: 'labeled' }, { event: 'subscribed' }, { event: 'review_requested' }])
+    f.add(6)
+    await f.settle()
+    attack(f)
+    const forged = f.state.sent.length
+    await f.settle()
+    expect(f.writes(forged).filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.state.main.flatMap(commit => commit.files)).not.toContain('cli/src/unread.ts')
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its tip is not one the train built')
+    expect([4, 5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open', 'open'])
+  })
+
+  it('marks the tip it built before it opens the train, and finds its mark under a hundred and fifty statuses of others', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const tip = f.train().head.sha
+    expect(f.writes().slice(-2)).toEqual([`POST /statuses/${tip}`, 'POST /pulls'])
+    expect(f.state.sent.at(-2)!.body).toMatchObject({ state: 'success', context: 'harness/train' })
+    // Anyone who can push can add statuses, and the newest come first.
+    f.state.statuses.set(tip, [...f.state.statuses.get(tip)!, ...Array.from({ length: 150 }, (_, at) => ({ context: `noise/${at}`, state: 'success', creator: { login: 'mallory' } }))])
     await f.ends(PASSED)
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  it('closes a train whose mark cannot be found under more statuses than it reads, and builds it again', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const tip = f.train().head.sha
+    f.state.statuses.set(tip, [...f.state.statuses.get(tip)!, ...Array.from({ length: 1_100 }, (_, at) => ({ context: `noise/${at}`, state: 'success', creator: { login: 'mallory' } }))])
+    await f.tick()
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its tip is not one the train built')
+  })
+
+  // Its own mark is no check of the train: counted as one, a train whose CI had not started read as passed.
+  it('does not count its own mark as a check: a train whose CI has not started still waits', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    f.state.runs.set(f.train().head.sha, [])
+    await f.settle()
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.train().state).toBe('open')
   })
 
   it('reads no red or landed train from a closed pull request another login wrote as one', async () => {
