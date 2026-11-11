@@ -316,6 +316,56 @@ void main() {
     );
   });
 
+  // Harness's train (cli/src/superTabs/githubTrain.ts) carries pull requests that were already read, on a branch
+  // `harness-train/<time>`: nobody reads the train itself, and no agent wrote it.
+  group('a train, the pull request that carries read ones together', () {
+    Map<Object?, Object?> train(String checks) => {
+      'number': 5773,
+      'title': 'Train: #5770',
+      'url': 'https://github.com/autonomous-ai/lampOS/pull/5773',
+      'isDraft': false,
+      'headRefName': 'harness-train/1794363575848',
+      'headRefOid': head,
+      'baseRefName': 'main',
+      'body': "Harness's train into main, built to $head.",
+      'mergeable': 'MERGEABLE',
+      'commits': {
+        'nodes': [
+          {
+            'commit': {
+              'statusCheckRollup': {'state': checks},
+            },
+          },
+        ],
+      },
+      'comments': {'nodes': <Object?>[]},
+    };
+    test('is no agent\'s, and is read: it waits for nobody', () {
+      final pull = SwarmPull.read(train('SUCCESS'), defaultBranch: 'main')!;
+      expect(pull.author, isNull);
+      expect(pull.readOk, isTrue);
+      expect(pull.status, SwarmPullStatus.merging);
+    });
+    test('says its checks are running, or failed, as any other', () {
+      expect(
+        SwarmPull.read(train('PENDING'), defaultBranch: 'main')!.status,
+        SwarmPullStatus.checks,
+      );
+      expect(
+        SwarmPull.read(train('FAILURE'), defaultBranch: 'main')!.status,
+        SwarmPullStatus.failing,
+      );
+    });
+    test('a branch that only begins like a train\'s is its builder\'s', () {
+      final pull = SwarmPull.read({
+        ...train('SUCCESS'),
+        'headRefName': 'harness-trains/12',
+      }, defaultBranch: 'main')!;
+      expect(pull.author, 'harness-trains');
+      expect(pull.readOk, isFalse);
+    });
+  });
+
   group('which task a pull request is for', () {
     SwarmPull pull({List<int> closes = const [], String branch = 'pip/14'}) =>
         SwarmPull(
