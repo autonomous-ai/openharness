@@ -42,8 +42,10 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
- *  how many asks one reader gets for one head. */
-const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
+ *  how many asks one reader gets for one head. Thirty minutes (Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is
+ *  asked"; lampOS's first verdict came at 6 minutes at the median and 37 at p90): two hours until 11-11, and v4's sandbox #27
+ *  waited four on two readers who never answered. A reader's turn that ends without its read is typed it too (nextThing.ts). */
+const READ_WAIT_MS = 30 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
 export class GitHubAssign {
@@ -334,7 +336,7 @@ export class GitHubAssign {
         const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
-          // for a head and two hours apart. One stopped when it was asked never heard it: GitHub news reads what is said from
+          // for a head and thirty minutes apart. One stopped when it was asked never heard it: GitHub news reads what is said from
           // when its agent runs again (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped).
           const again = [...asked.keys()].filter(name => !own(name) && (onThisHead.get(name) ?? 0) < READ_ASKS
             && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
