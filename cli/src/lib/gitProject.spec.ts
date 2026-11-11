@@ -173,17 +173,17 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   describe('concurrent starts take turns per repository', () => {
     const log = () => join(root, 'worktree-adds.log')
-    /** git as the daemon runs it, writing `start <repo>` and `end <repo>` around each `worktree add`. With PEER_WAIT set,
-     *  an add waits (at most 5 s) until another add has started, so two that run at once are seen to. */
+    /** git as the daemon runs it, writing `start <repo>` and `end <repo>` around each `worktree add` and `branch -m`. With
+     *  PEER_WAIT set, each waits (at most PEER_WAIT times 50 ms) until another has started, so two that run at once are seen to. */
     beforeEach(async () => {
       const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
       const bin = join(root, 'bin')
       await mkdir(bin)
       await writeFile(join(bin, 'git'), `#!/bin/sh
-case " $* " in *" worktree add "*)
+case " $* " in *" worktree add "*|*" branch -m "*)
   repo=; prev=; for arg in "$@"; do [ "$prev" = -C ] && repo=$arg; prev=$arg; done
   echo "start $repo" >> '${log()}'
-  if [ -n "$PEER_WAIT" ]; then i=0; while [ "$(grep -c '^start' '${log()}')" -lt 2 ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; fi
+  if [ -n "$PEER_WAIT" ]; then i=0; while [ "$(grep -c '^start' '${log()}')" -lt 2 ] && [ $i -lt "$PEER_WAIT" ]; do sleep 0.05; i=$((i+1)); done; fi
   '${realGit}' "$@"; code=$?
   echo "end $repo" >> '${log()}'
   exit $code;;
@@ -207,8 +207,20 @@ exec '${realGit}' "$@"
       expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end', 'start', 'end', 'start', 'end'])
     })
 
+    it('with a branch named after its session, in turn', async () => {
+      const harnesses = join(root, 'harnesses')
+      const made = await prepareGitProject(repo, { root: harnesses, worktree: true, pick: () => 0 })
+      await rm(log())
+      vi.stubEnv('PEER_WAIT', '100')
+      const [named] = await Promise.all([nameBranchAfterSession(made, 'Fix the login page'),
+        prepareGitProject(repo, { root: harnesses, worktree: true, branchName: 'other' })])
+      expect(named).toBe('login')
+      expect(await git('config', '--get', 'branch.other.harness')).toBe('created')
+      expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end'])
+    })
+
     it('in different repositories at once', async () => {
-      vi.stubEnv('PEER_WAIT', '1')
+      vi.stubEnv('PEER_WAIT', '100')
       const other = join(root, 'other')
       await exec('git', ['clone', '--quiet', repo, other])
       const harnesses = join(root, 'harnesses')

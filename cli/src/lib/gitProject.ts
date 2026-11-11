@@ -280,7 +280,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       ? await git(source, ['for-each-ref', '--format=%(upstream)', ref]).then(found => remoteBranch(found) ? found : null, () => null)
       : null
     const fetch = remote ?? remoteBranch(upstream ?? undefined)
-    if (fetch) await git(source, ['fetch', '--quiet', '--no-tags', fetch.remote, fetch.refspec], 10_000).catch(() => '')
+    if (fetch) await fetchOnce(source, fetch.remote, fetch.refspec)
     // Behind or level with its upstream: the upstream is the newer.
     if (upstream && ref && await git(source, ['merge-base', '--is-ancestor', ref, upstream]).then(() => true, () => false)) {
       start = upstream
@@ -325,11 +325,11 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   }
   let common: string
   try { common = await commonDir(source) }
-  catch { throw new GitProjectError('GIT_PROJECT_UNAVAILABLE', 'Choose a Git project and branch with at least one commit. For a new folder, turn Worktree off.') }
+  catch { throw new GitProjectError('WORKTREE_FAILED', 'Could not read the project\'s Git folder. Retry.') }
   // Starts in one repository take turns, from reading its worktrees and branch names until the new worktree is registered
   // and marked: two at once drew the same made-up name, wrote .git/config together, and one git, adding its worktree, read
-  // the other's half-written .git/worktrees/<name> ("failed to read .../commondir", exit 128; 2026-11-11). Different
-  // repositories still start at once. Desktop's prepareGitProject (git_worktree.dart) takes the same turns.
+  // the other's half-written .git/worktrees/<name> ("failed to read .../commondir", exit 128; 2026-11-11). The checkout is
+  // inside the turn because git registers and checks out in one command. Different repositories still start at once.
   const destination = await inTurn(common, async () => {
     const trees = await worktrees(source)
     // Grouped by repository, so the leaf only needs the branch.
@@ -419,7 +419,9 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     }
     // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
     if (!existing) {
-      await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch(() => '')
+      await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch((error: unknown) => {
+        console.error(`[worktree] could not mark ${branch} as Harness's, so it is not renamed after its session: ${gitReason(String((error as { stderr?: string }).stderr ?? error))}`)
+      })
     }
     return destination
   })
@@ -428,6 +430,12 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
 }
 
 const repositoryTurns = new Map<string, Promise<void>>()
+
+/** Runs `body` in the turn of `path`'s repository: a change to its worktrees, branches or config that a start must not
+ *  meet half done (removing a worktree deletes the folder a start's `git worktree add` reads). */
+export async function inRepositoryTurn<T>(path: string, body: () => Promise<T>): Promise<T> {
+  return inTurn(await commonDir(path), body)
+}
 
 /** Runs `body` after every turn already queued for the repository whose git directory is `common`. */
 async function inTurn<T>(common: string, body: () => Promise<T>): Promise<T> {
@@ -442,6 +450,19 @@ async function inTurn<T>(common: string, body: () => Promise<T>): Promise<T> {
     done()
     if (repositoryTurns.get(common) === turn) repositoryTurns.delete(common)
   }
+}
+
+const fetches = new Map<string, Promise<void>>()
+
+/** Fetches `refspec` once for every start asking for it at the same time: two fetches of one ref at once, one failed to
+ *  lock it and its start went on from the last fetch. A fetch that fails, is slow or offline still starts from what is here. */
+async function fetchOnce(source: string, remote: string, refspec: string): Promise<void> {
+  const key = `${await commonDir(source).catch(() => source)}\0${remote}\0${refspec}`
+  const pending = fetches.get(key)
+  if (pending) return pending
+  const fetch = git(source, ['fetch', '--quiet', '--no-tags', remote, refspec], 10_000).then(() => {}, () => {})
+  fetches.set(key, fetch)
+  try { await fetch } finally { fetches.delete(key) }
 }
 
 /** Ten minutes for `git worktree add`. 120 s failed 2 of 4 Swarm starts on a busy Mac Studio (2026-10-27): the
