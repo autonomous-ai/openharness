@@ -132,13 +132,6 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ startedBy: 'agent', gridLaunch: grid }), 'a1', expect.any(Function), undefined)
   })
 
-  it('keeps the browser from the row, so a retargeted browser agent keeps its browser tools', async () => {
-    const { deps, helpers } = setup()
-    const grid = { networkId: 'grid-1', networkName: 'Home grid' }
-    await helpers.relaunchOverrides(session({ browser: true }), { gridLaunch: grid } as never)
-    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ browser: true, gridLaunch: grid }), 'a1', expect.any(Function), undefined)
-  })
-
   it('records the web-search decision a relaunch made, when it made one', () => {
     const { deps, helpers } = setup()
     helpers.refreshGridWebSearch('a1', {} as LaunchOverrides)

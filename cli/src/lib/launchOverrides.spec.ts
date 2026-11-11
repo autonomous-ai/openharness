@@ -427,8 +427,10 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
   })
 
   it('a relaunch of an agent whose browser is on adds no browser argument', async () => {
+    // A relaunch's source is the agent's registry row (core/agents/launch.ts), its `browser` flag among the rest.
+    const row = { startedBy: null, cwd: null, browser: true as const }
     for (const engine of ['claude', 'codex'] as const) {
-      const relaunch = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, engine, { startedBy: null, cwd: null, browser: true }, 'a')
+      const relaunch = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, engine, row, 'a')
       expect(relaunch.ok).toBe(true)
       const argv = relaunch.ok ? relaunch.overrides.extraArgs.join(' ') : ''
       for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)

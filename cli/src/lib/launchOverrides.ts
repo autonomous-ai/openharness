@@ -170,8 +170,6 @@ export interface LaunchSource extends NativeLaunchSource {
   /** The owner's extra launch words (the registry row's `launchArgs`). Checked again at each launch (`checkLaunchWords`):
    *  a row edited by hand, or a flag a later release refuses, applies none. */
   launchArgs?: string[]
-  /** The registry row's `browser`: its browser is on. A relaunch adds nothing for it: the agent drives it with `harness browser`. */
-  browser?: true
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
