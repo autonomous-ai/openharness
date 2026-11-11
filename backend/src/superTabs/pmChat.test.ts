@@ -106,6 +106,11 @@ describe('the PM that joins', () => {
     const pm = joined.result.agentId as string
     expect(f.chat(chatId)).toMatchObject({ agentIds: [pm], audience: { people: [{ id: 'owner' }] } })
     expect(f.state.agents.find(a => a.id === pm)!.chatId).toBe(chatId)
+    // Titled by its own name, which Desktop's notifications show: the title was set before agents are named, so it read
+    // "Product Manager" (review of #4095).
+    const name = f.state.agents.find(a => a.id === pm)!.displayName
+    expect(name).toBeTruthy()
+    expect(f.chat(chatId).title).toBe(name)
     const author = { kind: 'person', id: 'owner', generation: f.person('owner').generation }
     expect(joined.lateDeliveries).toEqual([
       { messageId: first, conversationId: chatId, agentId: pm, lead: true, author },
