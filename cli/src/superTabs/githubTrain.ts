@@ -245,7 +245,8 @@ export class GitHubTrain<T extends TrainPull> {
       // started has not seen its checks hold still) keeps the train's green run, for as long as a train may wait.
       const waits = train.members.every((member, at) => riders[at] || waiting.has(`${member.number}@${member.head}`))
       if (waits && this.deps.now() - train.openedAt < TRAIN_WAIT_MS) return
-      return this.close(train, 'changed', 'a pull request it carries is no longer ready at its head')
+      // One that only waited, until the train's own time ran out, changed nothing.
+      return this.close(train, waits ? 'late' : 'changed', 'a pull request it carries is no longer ready at its head')
     }
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, 'other', 'its branch does not hold what its body names')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged

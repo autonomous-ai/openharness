@@ -595,6 +595,18 @@ describe('the numbers, told as they are due', () => {
     t.board.mockResolvedValue('Trains: 5 landed.')
     await passes(t, 1, landed)
     expect(t.sent.at(-1)![2]).toBe(dayLine(landed, 'Sat 14 Nov', undefined, 'Trains: 5 landed.'))
+    // And never posted for another day: a post the server took on no try of its day is the next day's, with that day's scoreboard.
+    t.clock.now = new Date(2026, 10, 15, 9, 0).getTime()
+    t.failing.set('post', down)
+    await passes(t, 2, landed)
+    expect(t.board).toHaveBeenCalledTimes(4)
+    t.clock.now = new Date(2026, 10, 16, 9, 0).getTime()
+    t.failing.clear()
+    t.board.mockResolvedValue('Trains: 6 landed.')
+    await passes(t, 1, landed)
+    expect(t.board).toHaveBeenCalledTimes(5)
+    expect(t.sent.at(-1)![2]).toBe(dayLine(landed, 'Mon 16 Nov', undefined, 'Trains: 6 landed.'))
+    expect(kept(t).board).toBeUndefined()
     // One that cannot be read is said once in the log, and the day is posted without it.
     const u = setup(new Date(2026, 10, 11, 9, 0).getTime())
     u.board.mockRejectedValue(new Error('GitHub did not answer.'))
@@ -605,6 +617,38 @@ describe('the numbers, told as they are due', () => {
     u.board.mockRejectedValue('no words')
     await passes(u, 1, landed)
     expect(notes(u).at(-1)).toBe('[super-tab] numbers: SCOREBOARD_UNREAD acme/app: no words')
+  })
+
+  // Its review counted 3,000 requests a day with a server refusing the post and a daemon restarting each hour.
+  it('keeps what the scoreboard said with the project\'s record, so a daemon that restarts before the post is taken does not read it again', async () => {
+    const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
+    t.failing.set('post', down)
+    // That it is being read is written before the read: a daemon that stops in the middle of it finds that on its next start.
+    t.board.mockImplementation(async () => { expect(kept(t).board).toEqual({ day: '2026-11-11', words: '' }); return 'Trains: 4 landed.' })
+    await passes(t, 1, landed)
+    expect(t.board).toHaveBeenCalledOnce()
+    expect(kept(t).board).toEqual({ day: '2026-11-11', words: 'Trains: 4 landed.' })
+    // The next daemon, the same day: the post goes with those words, and nothing is read again.
+    t.failing.clear()
+    await passes(t, 1, landed, t.make())
+    expect(t.board).toHaveBeenCalledOnce()
+    expect(t.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, 'Trains: 4 landed.')])
+    expect(kept(t).board).toBeUndefined()
+    // One that stopped in the middle of the read posts the day without it.
+    const u = setup(new Date(2026, 10, 11, 9, 0).getTime())
+    writeFileSync(u.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '', board: { day: '2026-11-11', words: '' } } }))
+    await passes(u, 1, landed)
+    expect(u.board).not.toHaveBeenCalled()
+    expect(u.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, '')])
+    // What is kept of it that is not a day and its words is not kept; the rest of the record is.
+    for (const board of ['x', { day: 1, words: 'w' }, { day: '2026-11-11' }, null]) {
+      const v = setup(new Date(2026, 10, 11, 9, 0).getTime())
+      writeFileSync(v.file, JSON.stringify({ app: { typedAt: 5, told: 0, said: false, activity: 0, day: '', board } }))
+      v.failing.set('post', down)
+      await passes(v, 1, landed)
+      expect(v.board).toHaveBeenCalledOnce()
+      expect(kept(v)).toMatchObject({ typedAt: 5, board: { day: '2026-11-11', words: '' } })
+    }
   })
 
   it('says each failure once among the last two hundred, and a memory it could not write', async () => {

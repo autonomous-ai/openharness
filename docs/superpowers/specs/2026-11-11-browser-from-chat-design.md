@@ -307,7 +307,7 @@ Your browser: a Chrome your person can also see and use. Your person starts and 
 | Code | Means | What the agent reads |
 |---|---|---|
 | 0 | done | the tool's words |
-| 1 | failed | the tool's error (`Element not found; take a new snapshot`), or the browser's state: `Browser is starting`, `Podman is not running`, … |
+| 1 | failed | the tool's error (`Element not found; take a new snapshot`), the browser's state: `Browser is starting`, `Podman is not running`, …, or a pane its environment keeps it from proving (Codex's sandbox refuses `ps` and the tmux socket): `runningPane`'s own reason, as `harness super-tab`'s, so the agent runs it again outside the sandbox |
 | 2 | wrong command or arguments | the usage line |
 | 4 | the browser is off | `Your browser is off. Ask your person to start it: Browser in your chat.`, or `Your person stopped your browser.` when the stop came during the command |
 | 5 | refused; do not retry | see below |

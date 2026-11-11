@@ -99,7 +99,7 @@ const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: '
   // Said until 2026-11-11, when one only behind the base became ready, and never since. Still read (noteOf): the day's
   // scoreboard counts the changes told so before that land after. It can go, with that count, on 2026-12-11.
   behind: 'it is behind ' } as const
-export type NoteKind = keyof typeof NOTES
+type NoteKind = keyof typeof NOTES
 const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
 /** Which of these notes a comment of the team's is, on whatever head, or null: the day's scoreboard counts the pull requests
  *  told they were behind or in conflict (scoreboard.ts). Read where `said` reads one: in its first 500 characters. */

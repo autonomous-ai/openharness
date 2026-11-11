@@ -181,11 +181,12 @@ export class GitHubAssign {
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
     // What this pass read, counted: who has nothing after it, what is open, what landed.
-    await this.deps.numbers.pass(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }),
+    const numbers = numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed })
+    await this.deps.numbers.pass(project, numbers,
       async () => goalOf(this.reads, repo, String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')),
       // The day's scoreboard, read only as the day is posted: the comments and files of what landed (scoreboard.ts).
       async () => boardWords(await boardOf(this.reads, repo, { now: this.now(), closed, team: teamOf(crew, project.pm) },
-        (part, why) => this.once(`[super-tab] Task assignment: SCOREBOARD_UNREAD ${repo}: its ${part}: ${why}`))))
+        (part, why) => this.once(`[super-tab] Task assignment: SCOREBOARD_UNREAD ${repo}: its ${part}: ${why}`)), numbers.more))
   }
 
   /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot

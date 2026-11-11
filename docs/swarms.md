@@ -1,5 +1,7 @@
 # Private Swarms
 
+New to Swarm? Start with [Swarm: start here](swarm-start-here.md): what this page says is not all of today's Swarm.
+
 A Swarm is an invite-only collaborative tab. Regular tabs and multiple Swarms
 share the existing tab bar. Each Swarm contains projects, people, agents and
 contributed machines.
