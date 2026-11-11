@@ -1244,7 +1244,7 @@ void main() {
     );
     expect(
       find.text(
-        'New work is paused in this Swarm. New Project can start once it resumes.',
+        'New work is paused in this Swarm. New project can start once it resumes.',
       ),
       findsOneWidget,
     );
