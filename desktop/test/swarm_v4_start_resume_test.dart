@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
+import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/super_tabs/agent_names.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
@@ -10,12 +11,68 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'super_tab_new_agent_words_test.dart'
     show mountSwarm, tapNewAgent, unmountSwarm;
 
-/// Two journeys of Swarm v4 a person clicks through in Desktop (readiness rows 1 and 10): starting an agent from Your Team's +
+/// Journeys of Swarm v4 a person clicks through in Desktop (readiness rows 1 and 10): starting an agent from Your Team's +
 /// with Claude Code and a request, which goes on while they work and is a row they open into its chat (anh Dee, 2026-11-10:
-/// "when it's done i can go in and use it"); and a stopped agent, opened from Your Team, whose Terminal shows Resume and
-/// brings its session back.
+/// "when it's done i can go in and use it"); a stopped agent, opened from Your Team, whose Terminal shows Resume and
+/// brings its session back; and a running agent whose terminal, closed, is only a view closed, while its session ending
+/// stops it.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
+
+  /// Pip, an agent of this person's on this computer, whose session is [status]: its native row, its Swarm agent and its
+  /// own chat.
+  void pipOnThisComputer(SuperTabLaunchFixture f, {required String status}) {
+    final running = status == 'running';
+    f.connection.nativeSurface = true;
+    f.app.machineStates['m']!
+      ..terminalCapabilityAvailable = true
+      ..localEndpoint = LocalCliEndpoint(
+        computerId: 'fixture',
+        machineId: 'm',
+        wsUri: Uri.parse('ws://fixture.invalid'),
+        protocolVersion: 1,
+        terminalProtocolVersion: 3,
+      );
+    f.connection.native = {
+      'id': 'native-lead',
+      'name': 'Pip',
+      'engine': 'claude',
+      'status': status,
+      'sessionId': 'saved-native',
+      if (running) ...{
+        'createdAt': '2026-11-10T08:00:00.000Z',
+        'closeSupported': true,
+      },
+      'terminal': {'available': running},
+    };
+    f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+    f.connection.server.state['agents'] = [
+      {
+        'id': 'pip',
+        'name': 'Pip',
+        'displayName': 'Pip',
+        'machineId': 'm',
+        'harnessId': 'native-lead',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+        'kind': 'regular',
+        'chatId': 'agent-chat-pip',
+        'myAgent': true,
+      },
+    ];
+    (f.connection.server.state['conversations'] as List).add({
+      'id': 'agent-chat-pip',
+      'title': 'Pip',
+      'leadId': null,
+      'agentIds': ['pip'],
+      'archived': false,
+      'brief': '',
+      'checks': <dynamic>[],
+      'assignment': null,
+      'lastMessageSequence': 0,
+      'kind': 'agent-chat',
+    });
+  }
 
   List<Map> commands(SuperTabLaunchFixture f) => [
     for (final post in f.connection.server.posts)
@@ -122,58 +179,10 @@ void main() {
   testWidgets(
     'a stopped agent from Your Team: its Terminal shows Resume, and Resume brings its session back',
     (tester) async {
+      // Pip's session on this computer is stopped: its conversation is saved, its terminal is not running.
       final f = await mountSwarm(
         tester,
-        before: (f) {
-          f.connection.nativeSurface = true;
-          f.app.machineStates['m']!
-            ..terminalCapabilityAvailable = true
-            ..localEndpoint = LocalCliEndpoint(
-              computerId: 'fixture',
-              machineId: 'm',
-              wsUri: Uri.parse('ws://fixture.invalid'),
-              protocolVersion: 1,
-              terminalProtocolVersion: 3,
-            );
-          // Pip's session on this computer is stopped: its conversation is saved, its terminal is not running.
-          f.connection.native = {
-            'id': 'native-lead',
-            'name': 'Pip',
-            'engine': 'claude',
-            'status': 'stopped',
-            'sessionId': 'saved-native',
-            'terminal': {'available': false},
-          };
-          f.app.machineStates['m']!.agents = [
-            Agent.fromJson(f.connection.native!),
-          ];
-          f.connection.server.state['agents'] = [
-            {
-              'id': 'pip',
-              'name': 'Pip',
-              'displayName': 'Pip',
-              'machineId': 'm',
-              'harnessId': 'native-lead',
-              'contributorId': 'owner',
-              'configuration': {'engine': 'claude'},
-              'kind': 'regular',
-              'chatId': 'agent-chat-pip',
-              'myAgent': true,
-            },
-          ];
-          (f.connection.server.state['conversations'] as List).add({
-            'id': 'agent-chat-pip',
-            'title': 'Pip',
-            'leadId': null,
-            'agentIds': ['pip'],
-            'archived': false,
-            'brief': '',
-            'checks': <dynamic>[],
-            'assignment': null,
-            'lastMessageSequence': 0,
-            'kind': 'agent-chat',
-          });
-        },
+        before: (f) => pipOnThisComputer(f, status: 'stopped'),
       );
       // Its person opens its chat from Your Team, then its terminal from the chat's bar.
       await tester.tap(key('super-agent-pip'));
@@ -211,6 +220,81 @@ void main() {
       );
       expect(f.app.panes.firstOrNull?.session?.streamId, isNotNull);
       expect(find.text('Resume'), findsNothing);
+      await end(tester, f);
+    },
+  );
+
+  testWidgets(
+    'closing an agent\'s terminal closes the view and leaves it running; '
+    'its session ending stops it, and Terminal then offers Resume',
+    (tester) async {
+      final f = await mountSwarm(
+        tester,
+        before: (f) => pipOnThisComputer(f, status: 'running'),
+      );
+      Agent pip() => f.app.machineStates['m']!.agents.single;
+      String? stream() => f.app.panes.firstOrNull?.session?.streamId;
+      bool open() =>
+          tester.widget<AppIconButton>(key('swarm-terminal-button')).selected ==
+          true;
+      // What would stop, end or replace Pip's session.
+      Iterable<String> stops() => f.connection.calls
+          .map((call) => call.$1)
+          .where(
+            (type) => const {
+              'agent_close',
+              'agent_delete',
+              'agent_restart',
+              'agent_resume',
+              'agent_create',
+            }.contains(type),
+          );
+      // Its person opens its chat from Your Team, then its terminal: the session is live.
+      await tester.tap(key('super-agent-pip'));
+      await until(
+        tester,
+        () => find
+            .byKey(const ValueKey('swarm-terminal-button'))
+            .evaluate()
+            .isNotEmpty,
+      );
+      await tester.tap(key('swarm-terminal-button'));
+      await until(tester, () => stream() != null && open());
+      expect(stream(), isNotNull);
+      expect(find.text('Resume'), findsNothing);
+      // Terminal again closes the view: its chat holds the pane, nothing is stopped, and Pip runs on.
+      await tester.tap(key('swarm-terminal-button'));
+      await until(tester, () => !open());
+      expect(open(), isFalse);
+      expect(key('super-message-composer'), findsOneWidget);
+      expect(stops(), isEmpty);
+      expect(pip().isStopped, isFalse);
+      // Its terminal opens again, attached to the same running session: nothing new is started or resumed.
+      await tester.tap(key('swarm-terminal-button'));
+      await until(tester, () => open() && stream() != null);
+      expect(stream(), isNotNull);
+      expect(f.app.panes.single.agentId, 'native-lead');
+      expect(find.text('Resume'), findsNothing);
+      expect(stops(), isEmpty);
+      // The session ends in its terminal (its person quits Claude Code): its computer says so, as its daemon pushes it,
+      // and Terminal offers Resume, which is the person's to press.
+      final ended = {
+        ...f.connection.native!,
+        'status': 'stopped',
+        'terminal': {'available': false},
+      };
+      f.connection.native = ended;
+      await tester.runAsync(
+        () => f.app.handleMachineEventForTest('m', {
+          'type': 'agent_synced',
+          'payload': {'agent': ended},
+        }),
+      );
+      await until(tester, () => find.text('Resume').evaluate().isNotEmpty);
+      expect(pip().isStopped, isTrue);
+      expect(find.text('Resume'), findsOneWidget);
+      expect(stops(), isEmpty);
+      expect(tester.takeException(), isNull);
       await end(tester, f);
     },
   );

@@ -35,6 +35,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
+import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
@@ -136,7 +137,7 @@ export function createAgentForker({
     if (!built.ok) return built
     if (built.overrides.native && prepareNative && !await prepareNative(built.overrides.native, owner,
       { ...built.overrides.env, ...dshEnv }, [...built.overrides.clearEnv, ...harnessEnvToClear(dshEnv)])) {
-      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the fork’s final native configuration.' }
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, 'Waiting to confirm the fork’s final native configuration.') }
     }
     if (!current()) return changed
     const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
