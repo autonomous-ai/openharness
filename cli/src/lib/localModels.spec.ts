@@ -1816,6 +1816,26 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(scan).toHaveBeenCalledTimes(2)
   })
 
+  it('answers a Swarm machine reading from the last scan without starting one, and a person\'s ask still starts one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.now(), scan = vi.fn(async () => apps)
+    const fromApps = (snapshot: Awaited<ReturnType<LocalModels['list']>>) => snapshot.models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)
+    service = appService({ appModels: scan })
+    // No scan yet and none saved: a reading lists no app's models, and starts no scan to find them.
+    expect(fromApps(await service.list('home', false, false))).toEqual([])
+    expect(scan).not.toHaveBeenCalled()
+    vi.setSystemTime(start + 3000)
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(1)
+    // Long past the 30 seconds a person's ask scans again after, a reading answers from that scan as it is.
+    vi.setSystemTime(start + 60_000)
+    expect(fromApps(await service.list('home', false, false))).toEqual([ollama.id, studio.id])
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(start + 63_000)
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(2)
+  })
+
   it('answers from the last scan while a slow one runs, and the list after it has the new one', async () => {
     let scans = 0, release!: () => void
     const models = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,

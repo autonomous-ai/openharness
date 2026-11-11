@@ -715,12 +715,14 @@ export class LocalModels {
    * Models other apps downloaded here, from the last scan: a scan walks their folders and asks every
    * engine its version, which a llama-server busy serving answered in 11s [run], so nothing waits on
    * one but the very first. Past 30s, or [force]d, a new scan starts and the list after it has it.
+   * Without [scan], none starts and none is waited on: the last scan is the answer, or no models.
    */
-  private async apps(force = false): Promise<AppModel[]> {
+  private async apps(force = false, scan = true): Promise<AppModel[]> {
     if (!this.options.appModels) return []
     // A daemon just started answers from the scan it saved last time: a first scan while a llama-server
     // was busy kept the picker without these models, and held a Stop two minutes [run].
     if (!this.appsRead) this.appsRead = await this.savedApps()
+    if (!scan) return this.appsRead?.value ?? []
     if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) { void this.scanApps() }
     return this.appsRead?.value ?? this.scanApps()
   }
@@ -817,18 +819,19 @@ export class LocalModels {
     } catch { /* forgotten either way */ }
   }
 
-  async list(grid: string | null, force = false): Promise<LocalModelsSnapshot> {
+  /** [scan] false reads other apps' models from the last scan and never starts one ([apps]). */
+  async list(grid: string | null, force = false, scan = true): Promise<LocalModelsSnapshot> {
     if (!grid) return { models: [], notice: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
     if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return this.cached.value
     if (this.listPending) {
       if (this.listGrid === grid) return this.listPending
-      await this.listPending; return this.list(grid, force)
+      await this.listPending; return this.list(grid, force, scan)
     }
     this.listGrid = grid
-    this.listPending = this.readList(grid, force)
+    this.listPending = this.readList(grid, force, scan)
     try { return await this.listPending } finally { this.listPending = undefined }
   }
-  private async readList(grid: string, force: boolean): Promise<LocalModelsSnapshot> {
+  private async readList(grid: string, force: boolean, scan: boolean): Promise<LocalModelsSnapshot> {
     await Promise.all([this.loadCatalog(force), this.readReceipt(grid)])
     let owned: Owned[] = [], nodes: Record<string, any>[] = [], inventoryError: string | undefined, asleep = false
     // `grid ls` once: the own grid's records, and every other grid this computer may serve on.
@@ -860,7 +863,7 @@ export class LocalModels {
     // this grid's receipt.
     const elsewhere = this.elsewhere?.grid !== grid ? this.elsewhere?.operation : undefined
     const operation = this.active?.operation ?? elsewhere ?? (this.receipt?.grid === grid ? this.receipt.operation : undefined)
-    const apps = await this.apps(force)
+    const apps = await this.apps(force, scan)
     const allRecords = await this.records()
     const records = allRecords.filter(record => record.grid === grid)
     // An app's engine this daemon started on another grid — a Swarm's (docs/plans/2026-10-23-swarm-local-models.md):
