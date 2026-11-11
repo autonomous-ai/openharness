@@ -50,6 +50,10 @@ export interface SwarmProject {
   leadWaiting?: Array<{ id: string; at: number }>
   /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
   leadClaim?: { id: string; machineId: string; at: number }
+  /** The 1:1 chat its next Product Manager takes, opened for the person who asked for it (lead.start, lead.claim) before that PM
+   *  is there, and `waiting`: the ids of what they sent there since, at most MAX_PM_CHAT_WAITING (pmChat.ts). Cleared when a PM
+   *  takes it; read only by those who read that chat (model.ts visibleState). */
+  pmChat?: { id: string; waiting?: string[] }
   /** Moves when its repository's GitHub access may have changed: someone allowed it, GitHub sent someone back after
    *  installing the app, or a check that asked GitHub again found a different answer (store.ts githubChanged, githubSeen).
    *  Members' apps read the access again when it moves rather than keeping it 5 minutes (task #2316, Dee 2026-11-03). */
