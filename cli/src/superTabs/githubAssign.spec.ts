@@ -291,6 +291,17 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*deehw\*\*: the head is now f6edb44, after your HOLD on 1234567: please read it again/)])
     })
 
+    // Review of #3708: a task taken over makes the reader Harness asked one of its writers. Counted as still reading, it kept
+    // anyone who could read it from being asked for two hours.
+    it('counts no writer it asked before as still reading: a task taken over by the reader asked is read by another', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:atlas' }] })]
+      f.github.state.comments.set(30, [comment('Harness, 07:20, to **Atlas**: please read this pull request, and start your comment with your name, '
+        + 'as in "Atlas, 07:20: READ-OK f6edb44" or "Atlas, 07:20: HOLD f6edb44" with the file, line and fix.', { created_at: '2026-11-09T07:20:00Z' })])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+    })
+
     // Swarm-sandbox #24, 2026-11-10: after a push, Harness asked "deehw" to read again for an unsigned READ-OK that never
     // counted, and took that ask for a reader on its way, so it asked nobody who could read it.
     it('asks no login to read again for its unsigned READ-OK on an older head, and asks a reader who signs', async () => {
