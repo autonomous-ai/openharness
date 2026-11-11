@@ -36,8 +36,8 @@ export const GOAL_READER = String.raw`const rows = new Map()
 for (const line of require('fs').readFileSync('${GOAL_FILE}', 'utf8').split(/\r?\n/)) {
   if (line.length > ${LINE_MAX}) continue
   const row = line.trim(), cell = row.slice(0, -1).trimEnd(), open = cell.lastIndexOf('\x60', cell.length - 2)
-  const head = cell.slice(0, Math.max(0, open)).trimEnd(), named = head.slice(1, -1).trim()
-  if (row.length < 2 || !row.startsWith('|') || !row.endsWith('|') || !cell.endsWith('\x60') || open < 0 || head.length < 2 || !head.endsWith('|')) continue
+  const head = cell.slice(0, open).trimEnd(), named = head.slice(1, -1).trim()
+  if (!row.startsWith('|') || !row.endsWith('|') || !cell.endsWith('\x60') || open < 0 || !head.endsWith('|')) continue
   const milestone = /[\r\u2028\u2029]/.test(named) ? '' : named.replace(/\s+/g, ' '), check = cell.slice(open + 1, -1).trim()
   if (!milestone || !check || milestone.length > ${MILESTONE_MAX} || rows.has(milestone)) continue
   rows.set(milestone, { milestone, check })

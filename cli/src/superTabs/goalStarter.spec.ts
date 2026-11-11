@@ -135,7 +135,9 @@ describe('the workflow that checks a goal', () => {
       '| Sync | `a` |\r\n| Sync | `b` |\n| Start | `c | d` |\n| No check | npm test |\n| Empty | ` ` |\n| ' + 'x'.repeat(101) + ' | `a` |\n| ' + 'y'.repeat(100) + ' | `b` |\nnot a row\n| Only one |\n',
       Array.from({ length: 105 }, (_, n) => `| Milestone ${n} | \`check "${n}" && echo '$HOME' \` |`).join('\n'), '', '| “Quotes” & <tags> ☃ | `echo "${{ secrets.X }}"` |\n',
       '﻿| With a mark before it | `a` |\n|\tTabs\tand spaces\t|\t`b`\t|\n| rows=[] | `c` |\n| A | `x`y` |\n',
-      `| Just fits | \`${'b'.repeat(1_000 - 18)}\` |\n| One too long | \`${'b'.repeat(1_000 - 20)}\` |\n| a${' '.repeat(50_000)}| x\n`]
+      `| Just fits | \`${'b'.repeat(1_000 - 18)}\` |\n| One too long | \`${'b'.repeat(1_000 - 20)}\` |\n| a${' '.repeat(50_000)}| x\n`,
+      // A milestone of space alone is no row, and the slowest line there was is read at once: in the workflow as in goal.ts.
+      `|  | \`x\` |\n| Kept | \`y\` |\n|${' '.repeat(998)}a\n`]
     for (const file of files) {
       const root = folder()
       mkdirSync(join(root, 'agents'))

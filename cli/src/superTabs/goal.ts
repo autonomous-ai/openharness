@@ -55,8 +55,8 @@ export function goalRows(text: string | null): GoalRow[] {
     // a bar after them and a bar before. As one pattern this took time by the cube of the line's length (a 1,000-character line
     // of spaces a fifth of a second, a file of them minutes: review of the Desktop score, 2026-11-11).
     const row = line.trim(), cell = row.slice(0, -1).trimEnd(), open = cell.lastIndexOf('`', cell.length - 2)
-    const head = cell.slice(0, Math.max(0, open)).trimEnd(), named = head.slice(1, -1).trim()
-    if (row.length < 2 || !row.startsWith('|') || !row.endsWith('|') || !cell.endsWith('`') || open < 0 || head.length < 2 || !head.endsWith('|')) continue
+    const head = cell.slice(0, open).trimEnd(), named = head.slice(1, -1).trim()
+    if (!row.startsWith('|') || !row.endsWith('|') || !cell.endsWith('`') || open < 0 || !head.endsWith('|')) continue
     // A milestone is one line's words: one with a line's end inside it is none.
     const milestone = /[\r\u2028\u2029]/.test(named) ? '' : named.replace(/\s+/g, ' '), check = cell.slice(open + 1, -1).trim()
     if (!milestone || !check || milestone.length > MILESTONE_MAX || rows.has(milestone)) continue
