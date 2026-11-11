@@ -42,6 +42,13 @@ export const IDLE_ASK_MS = 20 * 60_000
 export const IDLE_BACK_MS = 60 * 60_000
 /** The most agents whose counts are kept; the least recent go first. */
 const MAX_KEPT = 1_000
+/** The most lines `harness super-tab inbox` lists: lampOS's builders had a few things each at most, and each line may cost a few
+ *  reads of GitHub, which the command waits on. */
+export const INBOX_MAX = 10
+
+/** A thing that waits for an agent, in the order Harness types them: what it is typed, by a key that changes when the thing does,
+ *  and what Harness did, for its person; or a task it holds with no pull request yet, which it goes on with. */
+type Waiting = { key: string; typed: string; did: string } | { held: Record<string, unknown>; repo: string }
 
 /** The task an agent's open labelled tasks and pull requests ([items]) show it holding with no pull request of its yet, the oldest
  *  such: one it took that no pull request of its closes, past as many as its pull requests that name no task may be for. With two
@@ -51,6 +58,12 @@ function heldTask(items: Record<string, unknown>[]): Record<string, unknown> | n
   const open = items.filter(it => !it.pull_request && labelNames(it).includes('status:taken') && !closed.has(Number(it.number)))
     .sort((a, b) => Number(a.number) - Number(b.number))
   return open.length > named.filter(tasks => !tasks.length).length ? open[0]! : null
+}
+
+/** A task by its key and its title, as an agent and its person are told of it: `acme/app#14 (Add the export)`. */
+function titled(repo: string, task: Record<string, unknown>): string {
+  const title = String(task.title ?? '').trim()
+  return title ? `${repo}#${task.number} (${title})` : `${repo}#${task.number}`
 }
 
 /** What was typed to an agent: the task, how many times, and whether its person was told. */
@@ -141,7 +154,30 @@ export class NextThing {
     }
   }
 
+  /** Everything that waits for the agent in terminal [harnessId], a line each, in the order its turns' ends type them, read as GitHub
+   *  has it now (`harness super-tab inbox`; Swarm plan, step 1, item 2: "One command lists what waits for an agent"): at most
+   *  [INBOX_MAX]. None for a terminal that is not one of this computer's person's agents in a project. Nothing is typed or counted. */
+  async inbox(harnessId: string): Promise<string[]> {
+    const agent = (await this.deps.watched()).find(watched => watched.harnessId === harnessId)
+    const lines: string[] = []
+    if (!agent) return lines
+    for await (const thing of this.waiting(agent)) {
+      lines.push('held' in thing ? `You hold ${titled(thing.repo, thing.held)}: go on with it: gh issue view ${thing.held.number} --repo ${thing.repo}` : thing.typed)
+      if (lines.length >= INBOX_MAX) break
+    }
+    return lines
+  }
+
+  /** Its next thing: the first that waits, typed; or the task it holds, watched while it sits idle with it. */
   private async next(agent: WatchedAgent): Promise<void> {
+    for await (const thing of this.waiting(agent)) {
+      if ('held' in thing) return this.watch(agent, thing.repo, thing.held, Date.now(), false)
+      return this.give(agent, thing.key, thing.typed, thing.did)
+    }
+  }
+
+  /** What waits for [agent], in lampOS's order, read a thing at a time, so its next thing reads no further than itself. */
+  private async *waiting(agent: WatchedAgent): AsyncGenerator<Waiting> {
     const name = agent.names[0]!
     for (const repo of agent.repos) {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
@@ -149,8 +185,7 @@ export class NextThing {
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
       for (const pull of pulls) {
         const work = await this.ownWork(repo, Number(pull.number))
-        if (work) return this.give(agent, `${repo}#${pull.number} ${work.kind} ${work.head}`, work.typed,
-          `told ${name} that its ${repo}#${pull.number} ${work.what}`)
+        if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told ${name} that its ${repo}#${pull.number} ${work.what}` }
       }
       // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
       // minutes for a first read): typed even while it holds a task of its own, as a read is short.
@@ -160,19 +195,22 @@ export class NextThing {
       for (const ask of asks) {
         const short = await this.owedRead(agent, repo, ask)
         if (short) {
-          return this.give(agent, `${repo}#${ask.number} read ${short}`, `Read ${repo}#${ask.number} at ${short}, as Harness asked you: `
+          yield { key: `${repo}#${ask.number} read ${short}`, typed: `Read ${repo}#${ask.number} at ${short}, as Harness asked you: `
             + `harness super-tab read ok ${repo}#${ask.number} ${short} 'what you found' (or read hold, with the file, line and fix)`,
-          `asked ${name} to read ${repo}#${ask.number} at ${short}`)
+          did: `asked ${name} to read ${repo}#${ask.number} at ${short}` }
         }
       }
-      // A task it took with no pull request of its yet is its own work to go on with: watched while it sits idle with it.
+      // A task it took with no pull request of its yet is its own work to go on with, before another: one task at a time.
       const held = heldTask(items)
-      if (held) return this.watch(agent, repo, held, Date.now(), false)
+      if (held) {
+        yield { held, repo }
+        continue
+      }
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
       if (!next) continue
       const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
-      return this.give(agent, key, `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`,
-        `gave ${name} ${title ? `${key} (${title})` : key} as its next task`)
+      yield { key, typed: `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`,
+        did: `gave ${name} ${titled(repo, next)} as its next task` }
     }
   }
 
@@ -225,7 +263,7 @@ export class NextThing {
   }
 
   private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, asked: boolean): Promise<void> {
-    const key = `${repo}#${number}`, what = title ? `${key} (${title})` : key, name = agent.names[0]!
+    const key = `${repo}#${number}`, what = titled(repo, { number, title }), name = agent.names[0]!
     try {
       // Working, or nobody can say: its turn's end looks again.
       if (await this.deps.working(agent.harnessId) !== false) return
