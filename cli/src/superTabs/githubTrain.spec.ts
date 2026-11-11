@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubMerge } from './githubMerge.js'
+import { GitHubMerge, VerdictRecords } from './githubMerge.js'
+import { commandRecords } from './commandRecords.fake.js'
 import { landingMessage, nextTrain, splitRed, trainBody, trainOfBody } from './githubTrain.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubReply, GitHubSend } from './githubRest.js'
@@ -22,6 +23,7 @@ interface FakePull { number: number; state: 'open' | 'closed'; draft: boolean; t
  * github.com. Commits are made-up SHAs; a merge of a pull request moves main.
  */
 function fakeRepo(now: () => number) {
+  const records = commandRecords()
   const state = {
     main: [{ sha: sha('main-0'), files: [] as string[] }],
     pulls: new Map<number, FakePull>(),
@@ -79,7 +81,7 @@ function fakeRepo(now: () => number) {
     const body = p === '' ? { default_branch: 'main', ...state.settings }
       // A page of the list, the most recently updated first, as GitHub pages it.
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
-      : /^\/issues\/\d+\/comments$/.test(p) ? state.comments.get(number) ?? []
+      : /^\/issues\/\d+\/comments$/.test(p) ? (state.comments.get(number) ?? []).map(records.served)
       : /^\/pulls\/\d+\/reviews$/.test(p) ? []
       : /^\/pulls\/\d+\/commits$/.test(p) ? [{ sha: state.pulls.get(number)?.head.sha }]
       : /^\/pulls\/\d+$/.test(p) ? { mergeable_state: state.pulls.get(number)?.mergeable_state }
@@ -150,7 +152,7 @@ function fakeRepo(now: () => number) {
     if (method === 'DELETE' && p.startsWith('/git/refs/heads/')) return reply(state.branches.delete(p.slice('/git/refs/heads/'.length)) ? 204 : 422, null)
     return reply(404)
   }
-  return { state, get, send, tip, mark }
+  return { state, get, send, tip, mark, authors: records.authors }
 }
 
 function setup() {
@@ -160,7 +162,7 @@ function setup() {
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
   const start = () => new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log })
+    crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log) })
   const f = {
     state, log, clock, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */
