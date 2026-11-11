@@ -161,7 +161,7 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
   it('reads a part: label\'s value as an area, however it is spelled: the area an agent works on, and the one it finished tasks in', () => {
     const team: Crew = { ...crew(), builders: [{ ...crew().builders[0]!, worksOn: worksOnOf('Works on: backend, Mobile app') }, crew().builders[1]!] }
     const closed = [issue(10, ['builder:juno', 'part:Backend']), issue(11, ['builder:juno', 'part:BACKEND']), issue(12, ['builder:juno', 'part:backend engine'])]
-    const read = readProblem({ now: NOW, crew: team, closed, withReaders: new Set(),
+    const read = readProblem({ now: NOW, crew: team, closed,
       issues: [issue(1, ['size:s', 'part:Backend']), issue(2, ['size:s', 'part:Mobile App']), issue(3, ['size:s', 'part:Backend Engine']), issue(4, ['size:s'])] })
     expect(read.problem.tasks.map(t => t.part)).toEqual(['backend', 'mobile-app', 'backend-engine', undefined])
     // Juno's two finished backend tasks are one area's, whatever their labels' case. Words that differ stay two areas.
