@@ -79,6 +79,8 @@ export class NextThing {
   /** The look at every agent as it starts, and the terminals whose turns ended before it, which their own looks look at. */
   private startLook: NodeJS.Timeout | null = null
   private heard: Set<string> | null = null
+  /** The terminals whose context was compacted, by the turn that said so, until a look finds them idle and types them what waits. */
+  private readonly compacted = new Map<string, string>()
   /** Each terminal idle with a task of its own in hand, by its id: the next look at it, and what it holds. */
   private readonly idle = new Map<string, { timer: NodeJS.Timeout; agent: WatchedAgent; repo: string; task: Record<string, unknown> }>()
   private readonly looking = new Set<string>()
@@ -138,6 +140,7 @@ export class NextThing {
    *  at its terminal. */
   private ended(end: TurnEnd): void {
     this.heard?.add(end.agentId)
+    if (end.compacted) this.compacted.set(end.agentId, `${end.sessionId}:${end.turnId}`)
     // A turn of its, its person's or its own, is no idle time. One its person stopped starts its idle time over, as the look its
     // other turns get is not made: they are at its terminal.
     const watched = this.idle.get(end.agentId)
@@ -170,8 +173,13 @@ export class NextThing {
     let agent: WatchedAgent | undefined
     try {
       agent = (await this.deps.watched()).find(watched => watched.harnessId === harnessId)
+      if (!agent) this.compacted.delete(harnessId)
       // Something set it working since its turn ended, or nobody can say: that comes first.
-      if (agent && await this.deps.working(harnessId) === false) await this.next(agent)
+      else if (await this.deps.working(harnessId) === false) {
+        const compacted = this.compacted.get(harnessId)
+        this.compacted.delete(harnessId)
+        await (compacted ? this.typeAll(agent, compacted) : this.next(agent))
+      }
     } catch (error) {
       this.log(`[super-tab] next thing of agent ${agent?.agentId ?? harnessId}: ${error instanceof GitHubStop ? error.code : named(error)}.`)
     } finally {
@@ -184,8 +192,21 @@ export class NextThing {
    *  [INBOX_MAX]. None for a terminal that is not one of this computer's person's agents in a project. Nothing is typed or counted. */
   async inbox(harnessId: string): Promise<string[]> {
     const agent = (await this.deps.watched()).find(watched => watched.harnessId === harnessId)
+    return agent ? this.listed(agent) : []
+  }
+
+  /** Types [agent] all that waits for it, once its context was compacted in [turn]: what it was told before is a summary now (Swarm
+   *  plan, step 1, item 2: "Harness types it once after a compaction"). Nothing when nothing waits; its next end types its next thing. */
+  private async typeAll(agent: WatchedAgent, turn: string): Promise<void> {
+    const lines = await this.listed(agent)
+    if (!lines.length) return
+    await this.deps.tell(agent, this.operation(agent, 'compacted', turn), 'Your context was compacted. What waits for you, as Harness reads '
+      + `it now (harness super-tab inbox lists it again):\n${lines.map(line => `- ${line}`).join('\n')}`)
+  }
+
+  /** What waits for [agent], a line each, at most [INBOX_MAX]. */
+  private async listed(agent: WatchedAgent): Promise<string[]> {
     const lines: string[] = []
-    if (!agent) return lines
     for await (const thing of this.waiting(agent)) {
       lines.push('held' in thing ? `You hold ${titled(thing.repo, thing.held)}: go on with it: gh issue view ${thing.held.number} --repo ${thing.repo}` : thing.typed)
       if (lines.length >= INBOX_MAX) break
