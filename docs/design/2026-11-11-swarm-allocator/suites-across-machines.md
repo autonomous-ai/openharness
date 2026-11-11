@@ -22,8 +22,8 @@ on one computer, in turn. A Swarm has many people's computers.
 6. **Only in a private repository, and never for a train that carries a fork's pull request.** A computer runs a
    shard only on the word of the project's coordinator, which the Swarm's server vouches for.
 
-Built today: lines 1 and 4, by hand. A person or an agent runs a shard and says its result with one command.
-Nothing built today runs code on anyone's computer.
+Built so far: lines 1 and 4, by hand. The file is read; a person or an agent runs a shard and says its result with
+one command. Nothing built so far runs code on anyone's computer.
 
 ## What is measured, modelled and assumed
 
@@ -46,7 +46,8 @@ Measured, in this repository:
 Modelled:
 
 - Wall time over two computers is the slower half plus the time to take the ask (20 s) and check the commit out.
-  One computer runs the halves in turn.
+  One computer runs the halves in turn. From CI's file times, today's Desktop suite with 8 workers is about 14
+  minutes on one computer and 7 on each of two. A Mac is not CI's runner: the proof measures it.
 - Writes to GitHub a day ([below](#writes-to-github)).
 
 Assumed, and checked by the proof:
@@ -164,7 +165,8 @@ Each is set with that computer's person's own `gh` login, so GitHub says whose i
 
 The command, as built, refuses with nothing said: a repository that is no project of the agent's; one GitHub does
 not call private; a commit GitHub does not know there; a shard the file does not list at that commit. The same
-result again is one status. One login says one shard's result on one commit five times at most.
+result again is one status. One login says one shard's result on one commit five times at most. Its description
+is "passed, said by Pip": the agent that ran the command, so a result said by hand is told from one Harness ran.
 
 **A forged "passed".** GitHub lets anyone who can push set any status on any commit. A member, or a member's agent,
 can say a shard passed that never ran. A private team accepts that:
@@ -180,7 +182,7 @@ Neither is built.
 ## The train
 
 It reads a suite's status as it reads every status (`githubMerge.ts` `checksOf`): pending waits, a failure closes
-the train as red, a success passes. So nothing new decides what may land, and two lines are told apart:
+the train as red, a success passes. Two lines are new, one built and one that waits:
 
 - **Built: a suite's result is never the repository's CI having started.** The train does not land a tip that has
   no check of its own while its riders had theirs: Actions can take minutes to make a run. Any status on the tip
@@ -311,8 +313,8 @@ The proof is on macOS first: the suite it splits needs a Mac.
 
 ## What is left out
 
-- **An agent as the runner.** It costs tokens and its turn, the engines end a command after ten minutes, and the
-  result would be its word. A program can run a command and read its exit code.
+- **An agent as the runner.** It costs tokens and its turn, an engine ends a long command by itself (Claude Code at
+  ten minutes), and the result would be its word. A program can run a command and read its exit code.
 - **A deadline in the file.** Every shard has 30 minutes. One that needs more is two shards.
 - **Durations.** The project's own command splits its suite. Harness packs shards by count.
 - **A shell.** One way to run on three systems.
@@ -320,7 +322,7 @@ The proof is on macOS first: the suite it splits needs a Mac.
   project needs more than it.
 - **A check that the hand command's caller stands on the commit it names.** The command takes its word, as a
   READ-OK takes a reader's.
-- **A new table, a new server route, a new process.**
+- **A new table, a new server route, a new process.** None is needed.
 - **A switch for a person to turn this on.** A computer whose person's agent builds a private project already runs
   its tests. Pause stops it. This is a decision for anh Dee, below.
 - **Output on GitHub.** Test output can hold a secret. The author runs the row's command to see it.
