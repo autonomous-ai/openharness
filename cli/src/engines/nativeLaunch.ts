@@ -65,7 +65,7 @@ const noNative: NativeLaunch = {
 }
 
 let probes = 0
-/** What a probe's child said, once it exited by itself. A deadline, a signal, an output limit or a
+/** What a probe's child said, once it exited by itself. A kill at its deadline, a signal, an output limit or a
  *  child that never started is no answer at all: null. */
 interface ProbeOutput { code: number; stdout: string; stderr: string }
 /** Slots follow actual subprocess settlement, including deadline and output-limit kills. */
@@ -73,7 +73,7 @@ async function read(executable: string, args: readonly string[], environment: Re
   if (probes >= 8) return null
   probes++
   return new Promise(done => {
-    let settled = false, expired = false, answered = false
+    let settled = false, answered = false
     let cancelDeadline = () => {}
     let drain: ReturnType<typeof setTimeout> | undefined
     const answer = (output: ProbeOutput | null) => { if (!answered) { answered = true; done(output) } }
@@ -89,13 +89,13 @@ async function read(executable: string, args: readonly string[], environment: Re
       }, (error, stdout, stderr) => {
         settled = true; probes--; cancelDeadline(); clearTimeout(drain)
         // A numeric code is the child's own exit status. A spawn failure, a signal or the output
-        // limit leaves a string or null there, and says nothing about the executable itself.
+        // limit leaves a string or null there, and says nothing about the executable itself. A child that
+        // exited by itself as its deadline passed answered all the same: only a live one is killed below.
         const code = !error ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
-        answer(expired || code === null ? null : { code, stdout: stdout ?? '', stderr: stderr ?? '' })
+        answer(code === null ? null : { code, stdout: stdout ?? '', stderr: stderr ?? '' })
       })
     } catch { probes--; answer(null); return }
     if (!settled) cancelDeadline = patientDeadline(5_000, () => {
-      expired = true
       // An exited wrapper may leave a descendant holding its pipes. Signal
       // only our still-live child, then close our pipe ends after a short drain.
       try { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') } catch { /* The reply still holds. */ }

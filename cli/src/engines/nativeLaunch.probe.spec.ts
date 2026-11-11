@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch } from './nativeLaunch.js'
 
-const fixture = vi.hoisted(() => ({ calls: 0, stall: false, pipes: false, pipeCount: 0, root: '', children: [] as import('node:child_process').ChildProcess[],
+const fixture = vi.hoisted(() => ({ calls: 0, stall: false, expireAtExit: false, expire: null as (() => void) | null, pipes: false, pipeCount: 0, root: '', children: [] as import('node:child_process').ChildProcess[],
   help: 'stdout' as 'stdout' | 'stderr' | 'broken' }))
 vi.mock('./kit/launchExecutable.js', () => ({
   captureLaunchExecutable: async () => ({ state: 'ready',
@@ -13,6 +13,15 @@ vi.mock('./kit/launchExecutable.js', () => ({
   }),
   LAUNCH_LOCATION_VARIABLES: ['HOME', 'PATH'],
 }))
+// The probe's deadline, expired by a test the moment its child exits, before the loop has read its answer.
+vi.mock('../lib/patientExec.js', async original => {
+  const actual = await original<typeof import('../lib/patientExec.js')>()
+  return { ...actual, patientDeadline: (ms: number, expire: () => void) => {
+    if (!fixture.expireAtExit) return actual.patientDeadline(ms, expire)
+    fixture.expire = expire
+    return () => {}
+  } }
+})
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
   return { ...actual, execFile: (file: string, args: string[], options: object, done: (...values: any[]) => void) => {
@@ -40,12 +49,13 @@ vi.mock('node:child_process', async original => {
     fixture.children.push(child)
     // Same check-phase stall as e2e/stall.e2e.ts. Node's native timeout loses
     // unread output here even though the child already exited successfully.
+    if (fixture.expireAtExit) child.once('exit', () => fixture.expire?.())
     if (fixture.stall) setImmediate(() => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_400) })
     return child
   } }
 })
 beforeEach(() => {
-  fixture.calls = 0; fixture.stall = false; fixture.pipes = false; fixture.pipeCount = 0; fixture.children = []; fixture.help = 'stdout'
+  fixture.calls = 0; fixture.stall = false; fixture.expireAtExit = false; fixture.expire = null; fixture.pipes = false; fixture.pipeCount = 0; fixture.children = []; fixture.help = 'stdout'
   fixture.root = mkdtempSync(join(tmpdir(), 'native-probe-'))
 })
 afterEach(async () => {
@@ -65,6 +75,15 @@ it('keeps a complete permission answer across a core stall without refusing or r
   expect(await prepared.launch.permission({ permissionMode: 'auto' })).toBe('supported')
   expect(fixture.calls).toBe(1)
   expect(fixture.children[0]?.killed).toBe(false)
+}, 15_000)
+
+// A hold that ends as the probe's deadline passes: the child exited by itself meanwhile, and its exit and help are an
+// answer still, as patientExec.ts reads one (an agent_resume held for good, e2e/stall.e2e.ts).
+it('keeps the help of an engine that exited by itself as its deadline passed', async () => {
+  fixture.expireAtExit = true
+  const prepared = await inspectNativeLaunch('claude', { permissionMode: 'auto' })
+  expect(prepared).toMatchObject({ ok: true })
+  expect(fixture.calls).toBe(1)
 }, 15_000)
 
 it('holds inherited output pipes within a bound and recovers probe capacity after closing only its own streams', async () => {
