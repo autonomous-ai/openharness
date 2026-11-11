@@ -81,6 +81,7 @@ import 'issue_panel.dart';
 import 'task_board.dart';
 import 'thread_panel.dart';
 import 'manage_page.dart';
+import 'sharing.dart';
 import 'project_sidebar.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -1720,6 +1721,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onRenameSwarm: widget.onRenameSwarm,
     page: _pageShown,
     onManage: _openManage,
+    onInvite: () => showSuperTabSharing(context, c),
     onManageMachines: () {
       // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
       _manageTab = SuperTabManageTab.machines;

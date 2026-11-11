@@ -573,6 +573,16 @@ class _Gallery extends StatelessWidget {
                     children: [
                       // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
                       SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
+                      // Its owner's alone: invites someone to the Swarm.
+                      SuperTabQuietRow(
+                        leading: Icon(
+                          AppIcons.userPlus,
+                          size: AppIcons.inlineSize,
+                          color: grid.SidebarInk.inkMuted,
+                        ),
+                        name: 'Invite people',
+                        onTap: () {},
+                      ),
                       SuperTabQuietHeading(
                         'Your Team',
                         collapsed: false,

@@ -35,6 +35,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewSwarm,
     this.onRenameSwarm,
     this.onManage,
+    this.onInvite,
     this.onManageMachines,
     this.manageSelected = false,
     this.devicesSelected = false,
@@ -103,6 +104,11 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Opens Manage (Machines, Models, Devices, Swarm), the row at the foot.
   final VoidCallback? onManage;
+
+  /// Opens the Swarm's people, to invite someone: a row under the Swarm's name for its owner, the one person who may invite
+  /// (backend sharing.ts). People join a Swarm by an invitation, and Manage people was the only way there (anh Dee,
+  /// 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible").
+  final VoidCallback? onInvite;
 
   /// Opens Manage on its Machines, where a computer in Your Machines is managed.
   final VoidCallback? onManageMachines;
@@ -315,6 +321,13 @@ class ProjectSidebar extends StatelessWidget {
         channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
+      if (onInvite case final invite? when controller.isOwner)
+        _iconRow(
+          key: 'project-sidebar-invite',
+          icon: AppIcons.userPlus,
+          name: 'Invite people',
+          onTap: invite,
+        ),
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
       if (projects) ...[
