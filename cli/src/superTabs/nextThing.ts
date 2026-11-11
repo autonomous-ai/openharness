@@ -252,14 +252,13 @@ export class NextThing {
 
   /** What waits for [agent], in lampOS's order, read a thing at a time, so its next thing reads no further than itself. */
   private async *waiting(agent: WatchedAgent): AsyncGenerator<Waiting> {
-    const name = agent.names[0]!
     for (const repo of agent.repos) {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
       for (const pull of pulls) {
         const work = await this.ownWork(agent, repo, Number(pull.number))
-        if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told ${name} that its ${repo}#${pull.number} ${work.what}` }
+        if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told me that my ${repo}#${pull.number} ${work.what}` }
       }
       // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
       // minutes for a first read): typed even while it holds a task of its own, as a read is short.
@@ -271,7 +270,7 @@ export class NextThing {
         if (short) {
           yield { key: `${repo}#${ask.number} read ${short}`, typed: `Read ${repo}#${ask.number} at ${short}, as Harness asked you: `
             + `harness super-tab read ok ${repo}#${ask.number} ${short} 'what you found' (or read hold, with the file, line and fix)`,
-          did: `asked ${name} to read ${repo}#${ask.number} at ${short}` }
+          did: `asked me to read ${repo}#${ask.number} at ${short}` }
         }
       }
       // A task it took with no pull request of its yet is its own work to go on with, before another: one task at a time.
@@ -284,7 +283,7 @@ export class NextThing {
       if (!next) continue
       const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
       yield { key, typed: `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`,
-        did: `gave ${name} ${titled(repo, next)} as its next task` }
+        did: `gave me ${titled(repo, next)} as my next task` }
     }
   }
 
@@ -357,7 +356,9 @@ export class NextThing {
       const said = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`, hhmm(Date.now())) })
       // Given back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
       if (said.status >= 300) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key}'s line not written: GitHub answered ${said.status}.`)
-      await this.deps.say(agent, this.operation(agent, key, `back ${since}`), `${name} held ${what} with nothing done on it for an hour, so Harness `
+      // Posted as the agent, in its chat with its person, so said as it says it: "Pip held …" under Pip's own name read as no
+      // person writes (anh Dee, 2026-11-11: "we want agents to talk like human").
+      await this.deps.say(agent, this.operation(agent, key, `back ${since}`), `I held ${what} with nothing done on it for an hour, so Harness `
         + 'gave it back for the builder who can start it next.')
     } catch (error) {
       this.log(`[super-tab] next thing of agent ${agent.agentId}: ${error instanceof GitHubStop ? error.code : named(error)}.`)
@@ -412,9 +413,10 @@ export class NextThing {
       if (ended === undefined) return true
       const wait = ended + TELL_SETTLE_MS - Date.now()
       if (wait > 0) { this.lookIn(agent.harnessId, wait); return true }
-      const name = agent.names[0]!
-      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} as its turn ended, and nothing changed by its next. `
-        + `Harness says it no more: tell ${name} what to do.`)
+      // As the agent says it, in its chat with its person (as the line above): what was typed to it is in its session, so an
+      // answer reaches it with what it refers to.
+      await this.deps.say(agent, this.operation(agent, key, 'told'), `When my turn ended, Harness ${did}, and nothing changed by my next turn. `
+        + 'Tell me what to do.')
       kept.told = true
       kept.done = [...done, key].slice(-DONE_KEPT)
       this.save(memory)

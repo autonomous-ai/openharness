@@ -224,8 +224,10 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.say).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
-    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`Harness told Pip that its acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)} `
-      + 'as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
+    // Posted as Pip, in its chat with its person: said as Pip says it (anh Dee, 2026-11-11: "we want agents to talk like
+    // human"); "Harness told Pip … tell Pip what to do" under Pip's own name read as no person writes.
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`When my turn ended, Harness told me that my acme/app#30 has a HOLD from Juno `
+      + `at ${HEAD.slice(0, 7)}, and nothing changed by my next turn. Tell me what to do.`])
     const pushed = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2'
     f.state.pulls[30] = { head: { sha: pushed } }
     f.state.comments[30] = [said(`Juno, 05:30: HOLD ${pushed.slice(0, 7)}: still the old token.`, '2026-11-11T05:30:00Z')]
@@ -261,6 +263,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.say).toHaveBeenCalledTimes(1)
+    expect(f.say.mock.calls[0]![2]).toBe(`When my turn ended, Harness asked me to read acme/app#24 at ${HEAD.slice(0, 7)}, and nothing changed by `
+      + 'my next turn. Tell me what to do.')
     const typed = f.told().length
     await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
     expect(f.told().length).toBeGreaterThan(typed)
@@ -419,7 +423,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.written.slice(0, 3)).toEqual(['DELETE /repos/acme/app/issues/14/labels/status%3Ataken', 'DELETE /repos/acme/app/issues/14/labels/builder%3Apip',
       'DELETE /repos/acme/app/issues/14/labels/status%3Ataken'])
     expect(f.written[3]).toMatch(/^POST \/repos\/acme\/app\/issues\/14\/comments \{"body":"Harness, \d\d:\d\d: Pip held it with nothing done for an hour, so this task goes to the builder who can start it next\."\}$/)
-    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['Pip held acme/app#14 (Add the export) with nothing done on it for an hour, so Harness '
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['I held acme/app#14 (Add the export) with nothing done on it for an hour, so Harness '
       + 'gave it back for the builder who can start it next.'])
     // Nothing more: the watch ends with it.
     await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
@@ -531,7 +535,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(new Set(f.tell.mock.calls.map(([, id]) => id)).size).toBe(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([
-      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
+      'When my turn ended, Harness gave me acme/app#12 (Fix the login bug) as my next task, and nothing changed by my next turn. Tell me what to do.'])
     expect(f.say.mock.calls[0]![0]).toBe(PIP)
     f.state.items = [item(15, 'Write the docs')]
     await f.end()
@@ -593,8 +597,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.told()[0]).toBe(`Next: acme/app#12. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
-    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task as its turn ended, and nothing changed by its next. '
-      + 'Harness says it no more: tell Pip what to do.')
+    expect(f.say.mock.calls[0]![2]).toBe('When my turn ended, Harness gave me acme/app#12 as my next task, and nothing changed by my next turn. '
+      + 'Tell me what to do.')
     f.next.stop()
   })
 
