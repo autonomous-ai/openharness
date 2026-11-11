@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { parseSuperTabArgs } from './command.js'
 import { GitHubAssign } from './githubAssign.js'
-import { VerdictRecords } from './githubMerge.js'
+import { VerdictRecords, type LedProject } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
+import type { Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -83,16 +84,41 @@ const crew = (): Crew => ({
 function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
+  /** What each pass counted (pmNumbers.ts). */
+  const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
-    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock }
+  return { github, assigner, make, log, labelled, said, clock, numbers }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
+  // What a pass read is counted for the project's PM and its people (pmNumbers.ts; anh Dee, 2026-11-11: "Numbers when work runs short").
+  it('counts each pass: the builders with nothing after its plan, the tasks nobody holds, and what landed', async () => {
+    const merged = new Date(Date.parse('2026-11-09T07:31:00Z') - 3_600_000).toISOString()
+    const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:m'])],
+      { closed: [{ number: 9, pull_request: { merged_at: merged }, labels: [{ name: 'builder:pip' }], updated_at: merged }, issue(8, ['size:s'], { closed_at: merged, updated_at: merged })] })
+    await f.assigner.tick()
+    // Juno was given #2 this pass, so nobody is free and no task is open: one in hand before, one given.
+    expect(f.labelled()).toEqual([[2, 'builder:juno']])
+    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false }]])
+  })
+  it('counts a builder with nothing when no task is open, when none can be given, and when the team has no builder', async () => {
+    const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])])
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 2, free: ['Juno'], open: 0, held: 1 })
+    // A task GitHub would not label for its builder was not given: its builder still has nothing, and the task is open.
+    const g = setup([issue(2, ['size:m'])])
+    g.github.state.labelAnswer = 403
+    await g.assigner.tick()
+    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: ['Juno', 'Pip'], open: 1, held: 0 })
+    const h = setup([issue(2, ['size:m'])], { crew: { builders: [], machines: [] } })
+    await h.assigner.tick()
+    expect(h.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 0, free: [], open: 1, held: 0 })
+  })
   it('gives each builder what it starts next, two deep, labelled, with one line of why', async () => {
     const f = setup([issue(1, ['size:s', 'p0']), issue(2, ['size:m', 'p1']), issue(3, ['size:m']), issue(4, ['size:m']), issue(5, ['size:m'])])
     await f.assigner.tick()
