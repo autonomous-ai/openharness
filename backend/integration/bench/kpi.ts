@@ -33,17 +33,17 @@ export function loadKpis(run: { ms: number; operations: number; cpuMicros: numbe
 }
 
 /**
- * Writes and polls one at a time: a worker's post in its own group, then an up-to-date Desktop window's poll. The status
- * calls' own operations are measured and taken off.
+ * Writes and polls one at a time: an agent's post in its project's channel, then an up-to-date Desktop window's poll. The
+ * status calls' own operations are measured and taken off.
  */
 export async function isolatedKpis(db: PrismaClient, driver: SwarmDriver, swarm: Swarm, reader: Reader, n = 40): Promise<Kpis['isolated']> {
   const before = await serverOperations(db)
   const ownCall = await serverOperations(db) - before
-  const worker = swarm.workers[0]!, host: AuthUser = swarm.people[worker.machine]!
+  const agent = swarm.agents[0]!, host: AuthUser = swarm.people[agent.machine]!
   let ops = await serverOperations(db), cpu = cpuMicros()
   for (let i = 0; i < n; i++) {
     const reply = await driver.execute(swarm.tabId, host, `bench-kpi-write-${i}`,
-      { type: 'message.send', conversationId: worker.group, text: `KPI write ${i}`, replyTo: null, recipientIds: [] }, worker.id)
+      { type: 'message.send', conversationId: agent.channel, text: `KPI write ${i}`, replyTo: null, recipientIds: [] }, agent.id)
     if (reply.code) throw new Error(`KPI write failed: ${reply.code}`)
   }
   const cpuMsPerWrite = (cpuMicros() - cpu) / 1000 / n, mongoOpsPerWrite = (await serverOperations(db) - ops - ownCall) / n
