@@ -15,6 +15,10 @@ describe('harness help agents', () => {
   it('lists every exit code', () => {
     for (const code of Object.values(EXIT)) expect(agentsHelp()).toMatch(new RegExp(`\\b${code} `))
   })
+  it('names harness browser --help in one line', () => {
+    const lines = agentsHelp().split('\n').filter((line) => line.includes('harness browser'))
+    expect(lines).toEqual(['        harness browser --help   your browser, when your person has started it'])
+  })
   it('uses placeholders, never a real name', () => {
     expect(agentsHelp()).not.toMatch(/--(machine|name) (?![<\[])/)
   })
