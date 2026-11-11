@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Crew, Read } from './assign/crew.js'
+import { readProblem, type Crew, type Read } from './assign/crew.js'
 import type { Score } from './goal.js'
 import type { LedProject } from './githubMerge.js'
 import { dayLine, messageOf, numbersOf, numbersSender, placeOf, plainName, PmNumbers, shortLine, toldLine, type How, type Numbers } from './pmNumbers.js'
@@ -20,33 +20,38 @@ const crew = (): Crew => ({
   builders: ['Pip', 'Kai', 'Ada', 'Bo'].map(name => ({ id: name.toLowerCase(), name, label: `builder:${name.toLowerCase()}`, machineId: 'mac', engine: 'claude' })),
   machines: [], away: [{ name: 'Cy', label: 'builder:cy', why: 'down', since: ago(HOUR) }],
 })
-/** What the assigner read: each builder's open tasks, and the sized tasks nobody holds. */
-const read = (open: Record<string, number>, free: string[]): Read => ({ open: new Map(Object.entries(open)), free: new Set(free) } as unknown as Read)
+/** What the assigner read: each builder's open tasks and how many of them it builds (the others wait for their read or their
+ *  merge), and the sized tasks nobody holds. */
+const read = (lists: Record<string, [open: number, building: number]>, free: string[]): Read => ({ open: new Map(Object.entries(lists).map(([id, [open]]) => [id, open])),
+  building: new Map(Object.entries(lists).map(([id, [, building]]) => [id, building])), free: new Set(free) } as unknown as Read)
 const task = (number: number, labels: string[], more: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...more })
 const free = (...names: string[]) => names.map(name => ({ id: name.toLowerCase(), name }))
 const numbers = (over: Partial<Numbers> = {}): Numbers => ({ builders: 4, free: free('Ada', 'Kai'), open: 0, unsized: 0, held: 3, landed: 12, landedBy: [['Pip', 7], ['Kai', 5]],
   closed: 9, more: false, activity: NOW - HOUR, ...over })
-const counts = (over: Partial<Parameters<typeof numbersOf>[0]> = {}) => numbersOf({ now: NOW, crew: crew(), pm: 'Juno', issues: [], read: read({}, []), withReaders: new Set(),
-  short: [], picks: [], closed: [], ...over })
+/** A pass's counts; unless a case says what was read, every builder of its crew holds nothing. */
+const counts = (over: Partial<Parameters<typeof numbersOf>[0]> = {}) => numbersOf({ now: NOW, crew: crew(), pm: 'Juno', issues: [],
+  read: read(Object.fromEntries((over.crew ?? crew()).builders.map(builder => [builder.id, [0, 0]])), []), short: [], picks: [], closed: [], ...over })
 
 describe('a project\'s counts after an assigner\'s pass', () => {
-  it('counts as free a builder Harness would give a task to and has none for: no task, or one whose pull request waits to be read or landed', () => {
-    const counted = counts({ read: read({ pip: 2, kai: 1, ada: 0, bo: 0 }, ['#7', '#8', '#9']),
+  it('counts as free a builder Harness would give a task to and has none for: nothing to build, whatever waits to be read or landed', () => {
+    // Pip builds one of its two tasks. Kai's one task has its pull request with its readers: Kai has nothing to work on. Bo's
+    // subscription has no room, and Ada was given #7 this pass: neither is free.
+    const counted = counts({ read: read({ pip: [2, 1], kai: [1, 0], ada: [0, 0], bo: [0, 0] }, ['#7', '#8', '#9']),
       issues: [task(1, ['builder:pip', 'status:taken']), task(2, ['Builder:Pip']), task(3, ['builder:kai', 'status:taken']), task(7, ['size:s']), task(8, ['size:m']), task(9, ['size:m']),
         // A pull request carries its builder's label too, and is no task; issues nobody holds with no size Harness reads are counted apart.
         { ...task(30, ['builder:kai']), pull_request: {} }, task(40, []), task(41, ['bug']), task(42, ['status:taken']), task(43, ['size:xl']), task(44, ['Size:M'])],
-      // Kai's one task has its pull request with its readers: Kai has nothing to work on. Bo's subscription has no room, and
-      // Ada was given #7 this pass: neither is free.
-      withReaders: new Set([3]), short: [{ name: 'Bo', label: 'builder:bo', why: 'quota' }], picks: [{ task: '#7', builder: 'ada', start: 0 }] })
+      short: [{ name: 'Bo', label: 'builder:bo', why: 'quota' }], picks: [{ task: '#7', builder: 'ada', start: 0 }] })
     expect(counted).toMatchObject({ builders: 4, free: [{ id: 'kai', name: 'Kai' }], open: 2, unsized: 3, held: 4 })
-    // With two tasks, both in review, a builder's list is full: it is given nothing whatever is open, and is not counted as
-    // waiting for a task its PM could open.
-    const full = counts({ issues: [task(1, ['builder:pip', 'status:taken']), task(2, ['builder:pip', 'status:taken']), task(3, ['builder:kai', 'status:taken'])], withReaders: new Set([1, 2, 3]) })
-    expect(full.free.map(free => free.name)).toEqual(['Ada', 'Bo', 'Kai'])
+    // With two tasks or three, all in review, a builder has nothing to build and is counted (the allocator's design, package
+    // 2: two filled its list). With four it is given nothing whatever is open, and is not counted as waiting for a task its
+    // PM could open; nor is one with a task to build, whatever else it holds.
+    const lists = counts({ read: read({ pip: [2, 0], kai: [3, 0], ada: [4, 0], bo: [3, 1] }, []) })
+    expect(lists.free.map(free => free.name)).toEqual(['Kai', 'Pip'])
     // A task its builder took that waits on pieces cut off it is others' to build: its builder has nothing, and is given the
-    // next. One only given, with a sub-issue under it, is in its list as any other.
+    // next. One only given, with a sub-issue under it, is in its list as any other. Counted as the assigner reads them.
     const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
-    const cut = counts({ issues: [task(1, ['builder:pip', 'status:taken'], waiting), task(2, ['builder:kai'], waiting), task(3, ['builder:ada', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 } })] })
+    const issues = [task(1, ['builder:pip', 'status:taken'], waiting), task(2, ['builder:kai'], waiting), task(3, ['builder:ada', 'status:taken'], { sub_issues_summary: { total: 2, completed: 2 } })]
+    const cut = counts({ issues, read: readProblem({ now: NOW, issues, closed: [], crew: crew(), withReaders: new Set() }) })
     expect(cut.free.map(free => free.name)).toEqual(['Bo', 'Pip'])
   })
 

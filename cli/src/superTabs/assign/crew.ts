@@ -30,8 +30,9 @@ export const CORES = 8
 export const MEMORY_SHARE = 0.75
 /** Disk its person keeps free whatever the Swarm does. */
 export const DISK_KEPT = 10 * GiB
-/** How deep each builder's list is kept (PM_BASICS: "keep every builder's list two deep"): what it works on and what is next. */
-export const DEEP = 2
+/** The most tasks one builder holds open at once, as lampOS set it (four, with sub-agents): past it, work sits on a busy
+ *  builder while others have none. A claim is refused past it (githubClaim.ts), and Harness gives a builder nothing at it. */
+export const CLAIM_LIMIT = 4
 /** A builder's time in an area its person says it works on: half, so it gets those tasks first, and another builder takes
  *  one only when it is well behind (anh Dee, 2026-11-09: "do you assign agents to their area of expertise?"). */
 export const FOCUS = 0.5
@@ -62,8 +63,11 @@ export const QUIET_ASK_MS = 4 * 60 * 60_000, QUIET_BACK_MS = 8 * 60 * 60_000
 /** The problem, and what the picks and their reasons need to know of it. */
 export interface Read {
   problem: Problem
-  /** Each builder's tasks open now: in progress and queued, by builder id. */
+  /** Each builder's open tasks, by builder id: what it builds, and what waits for its read or its merge. */
   open: Map<string, number>
+  /** Of those, the ones it builds: still its own work to do. Given or taken with no pull request yet, with a draft, or with
+   *  one a reader's HOLD stands on; not one whose pull request waits for its readers or its merge. */
+  building: Map<string, number>
   /** The tasks no builder holds, which this may give. */
   free: Set<string>
   /** Each builder's finished tasks by part, from the closed issues its label was on. */
@@ -119,6 +123,36 @@ export function dependsOn(body: unknown): number[] {
   return [...found]
 }
 
+/** A task its builder took that waits on pieces cut off it (githubSplit.ts): others build those, so it holds no place in its
+ *  builder's list and none of its time. Counted, a builder with two such was given nothing more, and a team's one builder
+ *  could never be given the pieces (second review of the split). */
+const waitsOnPieces = (issue: Json, labels: string[]): boolean => labels.includes('status:taken') && openPieces(issue) > 0
+
+/**
+ * The open tasks each builder holds, by builder id: the issues its label is on, but one that waits on its pieces. The readers'
+ * choice (readerFor) and a problem's lists (readProblem) count by it: readers are asked before the problem is read, as the
+ * problem needs to know which tasks are in review.
+ */
+export function heldTasks(issues: Json[], builders: CrewBuilder[]): Map<string, number[]> {
+  const byLabel = new Map(builders.map(b => [b.label, b]))
+  const held = new Map<string, number[]>(builders.map(b => [b.id, []]))
+  for (const issue of issues) {
+    if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
+    const labels = labelsOf(issue), holder = labels.map(label => byLabel.get(label)).find(Boolean)
+    if (holder && !waitsOnPieces(issue, labels)) held.get(holder.id)!.push(Number(issue.number))
+  }
+  return held
+}
+
+/**
+ * Whether Harness gives a builder a task now: it builds none, and holds fewer than [CLAIM_LIMIT] open (the allocator's design,
+ * package 2). Two deep, a second task was given ahead of the one in hand, which in the design's model cost up to a fifth of a
+ * heavy day; and a change waiting for its read filled its builder's list, so a builder with two in review was given nothing.
+ * The plan's picks, its gate, the tasks that go back for a builder with nothing, and the PM's numbers all ask it here.
+ */
+export const hasRoom = (read: { open: Map<string, number>; building: Map<string, number> }, builder: string): boolean =>
+  read.building.get(builder) === 0 && read.open.get(builder)! < CLAIM_LIMIT
+
 /** Whether a machine has what a `needs:` label asks: a tool it reports, its system, or a GPU. */
 export function machineHas(observation: Json | undefined, need: string): boolean {
   const tools = object(observation?.tools), resources = object(observation?.resources)
@@ -146,13 +180,21 @@ function everyOf(name: string): number | null {
 /**
  * The problem as GitHub and the Swarm say it at [now]: the open issues the PM sized and nobody holds are free tasks; those
  * a builder holds are queued on it (pinned, so the plan sees its list), and the one it has taken keeps it busy for half
- * its size; an issue another label holds is not this team's to plan.
+ * its size; an issue another label holds is not this team's to plan. A task whose pull request waits for its readers or its
+ * merge ([withReaders], githubAssign.ts askReaders) is open and not building: its builder has done its part, so it takes
+ * none of its time in the plan.
  */
-export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew; minutes?: Partial<Record<'s' | 'm' | 'l', number>> }): Read {
-  const { now, crew } = input
+export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew; withReaders: ReadonlySet<number>
+  minutes?: Partial<Record<'s' | 'm' | 'l', number>> }): Read {
+  const { now, crew, withReaders } = input
   const byLabel = new Map(crew.builders.map(b => [b.label, b]))
   const machines = new Map(crew.machines.map(m => [m.machineId, m]))
-  const open = new Map<string, number>(crew.builders.map(b => [b.id, 0]))
+  const held = heldTasks(input.issues, crew.builders)
+  const open = new Map([...held].map(([id, tasks]) => [id, tasks.length]))
+  const building = new Map([...held].map(([id, tasks]) => [id, tasks.filter(task => !withReaders.has(task)).length]))
+  // A builder that holds [CLAIM_LIMIT] is given nothing until one of its changes lands, and nobody knows when: no free task is
+  // planned on it. Planned as free, the task it would be quickest at was kept for it while a builder with room had nothing.
+  const full = crew.builders.filter(b => open.get(b.id)! >= CLAIM_LIMIT).map(b => b.id)
   const busy = new Map<string, number>()
   const free = new Set<string>()
   const done = new Map<string, Map<string, number>>()
@@ -190,11 +232,9 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     // The time this project's finished tasks of the size took, once there are enough of them (learnedMinutes).
     const shape = { ...SIZES[size ?? 'm'], ...input.minutes?.[size ?? 'm'] ? { minutes: input.minutes[size ?? 'm']! } : {} }
     const id = `#${issue.number}`
-    // Taken and waiting on pieces cut off it: others build those, so it holds no place in its builder's list and none of its
-    // time. Counted, a builder with two such was given nothing more, and a team's one builder could never be given the pieces
-    // (second review of the split).
-    if (holder && labels.includes('status:taken') && openPieces(issue)) continue
-    if (holder) open.set(holder.id, (open.get(holder.id) ?? 0) + 1)
+    // Waiting on its pieces, or in review: its builder has no work on it now. Busy with a change that only waited for its
+    // read, a builder free to start was given its next task "in 45 min".
+    if (holder && (waitsOnPieces(issue, labels) || withReaders.has(Number(issue.number)))) continue
     if (holder && labels.includes('status:taken')) {
       busy.set(holder.id, (busy.get(holder.id) ?? 0) + Math.ceil(shape.minutes / 2))
       continue
@@ -207,7 +247,8 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
       floor: 0, kind: 'build', part: valueOf(labels, 'part:'), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
-      independentOf: [], notBuilders: unable, ...unable.length ? { notWhy: `its builder's machine lacks one of: ${needs.join(', ')}` } : {}, files: [],
+      independentOf: [], notBuilders: holder ? unable : [...new Set([...unable, ...full])],
+      ...unable.length ? { notWhy: `its builder's machine lacks one of: ${needs.join(', ')}` } : {}, files: [],
       ...(holder ? { pinned: holder.id, queuedOn: holder.id } : {}),
     })
     if (!holder) free.add(id)
@@ -242,7 +283,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     })
     return { id, reserve: RESERVE, windows }
   })
-  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, free, done,
+  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, building, free, done,
     builders: new Map(crew.builders.map(b => [b.id, b])) }
 }
 
@@ -407,16 +448,15 @@ export function learnedMinutes(took: Array<{ size: string; minutes: number }>): 
 /** One task to give: its builder, and the minute the plan starts it. */
 export interface Pick { task: string; builder: string; start: number }
 
-/** What each builder starts next among the free tasks, in the plan's order, while its list is under [deep]. */
-export function nextPicks(plan: Plan, read: Read, deep = DEEP): Pick[] {
+/** What each builder with room starts next among the free tasks ([hasRoom]): the first the plan has for it, and no more, as
+ *  with that one it has a task to build. */
+export function nextPicks(plan: Plan, read: Read): Pick[] {
   const picks: Pick[] = []
   const placements = [...plan.placements].sort((a, b) => a.start - b.start || a.task.localeCompare(b.task))
-  const count = new Map(read.open)
+  const given = new Set<string>()
   for (const placement of placements) {
-    if (!read.free.has(placement.task)) continue
-    const has = count.get(placement.builder) ?? 0
-    if (has >= deep) continue
-    count.set(placement.builder, has + 1)
+    if (!read.free.has(placement.task) || given.has(placement.builder) || !hasRoom(read, placement.builder)) continue
+    given.add(placement.builder)
     picks.push({ task: placement.task, builder: placement.builder, start: placement.start })
   }
   return picks
@@ -436,15 +476,14 @@ export function reasonOf(pick: Pick, read: Read): string {
 /**
  * Who reads a pull request next (Swarm v4: "a review is never read by its build's model family", design 2026-11-09): a
  * builder of the team that is not its author and not asked already, of another model family than its author's when one
- * is free to, then the one holding the fewest tasks. Null when nobody can.
+ * is free to, then the one holding the fewest open tasks ([held]: heldTasks). Null when nobody can.
  */
-export function readerFor(read: Read, author: string | null, skip: ReadonlySet<string>): CrewBuilder | null {
-  const builders = [...read.builders.values()]
+export function readerFor(builders: CrewBuilder[], held: Map<string, number[]>, author: string | null, skip: ReadonlySet<string>): CrewBuilder | null {
   const own = builders.find(b => author !== null && b.label === labelOf(author))
   const family = (b: CrewBuilder) => b.engine === 'codex' ? 'openai' : 'anthropic'
   const candidates = builders.filter(b => b !== own && !skip.has(b.id) && !skip.has(readerKey(b.name)))
   candidates.sort((a, b) => Number(own && family(a) === family(own)) - Number(own && family(b) === family(own))
-    || (read.open.get(a.id) ?? 0) - (read.open.get(b.id) ?? 0) || a.name.localeCompare(b.name))
+    || held.get(a.id)!.length - held.get(b.id)!.length || a.name.localeCompare(b.name))
   return candidates[0] ?? null
 }
 
