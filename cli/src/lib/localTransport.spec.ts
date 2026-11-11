@@ -198,3 +198,29 @@ describe('daemonPipeNow: the daemon\'s pipe for a client that opens at once', ()
     expect(daemonPipeNow(prepared(1).data, 4242)).toBeNull()
   })
 })
+
+// Decided 2026-11-11: a listener that could not look up in time who is calling answers a retryable 503, not a refusal.
+describe('a request whose caller the daemon could not look up in time', () => {
+  const unanswered = () => new Response(JSON.stringify({ error: 'PEER_LOOKUP_UNANSWERED', message: 'Retry in a moment.' }), { status: 503, headers: { 'retry-after': '1' } })
+  const replies = (...answers: Array<() => Response>) => {
+    const sent: Array<string | undefined> = []
+    const base = (async (_input: unknown, init?: RequestInit) => { sent.push(init?.body as string | undefined); return answers.shift()!() }) as typeof fetch
+    return { base, sent }
+  }
+
+  it('is asked again, backed off, with the same body, and gets the answer', async () => {
+    const { base, sent } = replies(unanswered, unanswered, () => new Response('{"ok":true}'))
+    const reply = await daemonFetch('/nowhere', 4242, base, 'linux')('http://127.0.0.1:9/api/machines', { method: 'POST', body: '{"a":1}' })
+    expect(await reply.json()).toEqual({ ok: true })
+    expect(sent).toEqual(['{"a":1}', '{"a":1}', '{"a":1}'])
+  })
+
+  it('gives the 503 to its caller after three tries, and never retries any other 503', async () => {
+    const late = replies(unanswered, unanswered, unanswered, unanswered)
+    expect((await daemonFetch('/nowhere', 4242, late.base, 'linux')('http://127.0.0.1:9/api/machines')).status).toBe(503)
+    expect(late.sent).toHaveLength(3)
+    const other = replies(() => new Response('{"error":"UNAVAILABLE"}', { status: 503 }), unanswered)
+    expect((await daemonFetch('/nowhere', 4242, other.base, 'linux')('http://127.0.0.1:9/api/machines')).status).toBe(503)
+    expect(other.sent).toHaveLength(1)
+  })
+})

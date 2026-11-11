@@ -13,6 +13,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
 import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
+import { exemptClock } from './channelExemptions.test-support.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { attachmentsFromEnv, AVATAR_PURPOSE, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
 import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
@@ -4081,7 +4082,9 @@ describe('a closed tab\'s Personal project', () => {
     const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (sent) return
       sent = true
-      await run(tab, { type: 'message.send', conversationId: chat, text: 'Written as the tab closed', replyTo: null, recipientIds: [] }, person)
+      // A person's post in a Personal project's channel, on a clock inside the channel exemptions (commands.ts CHANNEL_EXEMPTIONS_END).
+      await new SuperTabStore(db, exemptClock()).execute(person, tab, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: chat, text: 'Written as the tab closed', replyTo: null, recipientIds: [] } })
     }))
     const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
     expect(sent).toBe(true)

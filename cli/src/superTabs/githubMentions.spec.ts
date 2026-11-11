@@ -14,7 +14,7 @@ let files = 0
 
 const START = Date.parse('2026-11-09T12:00:00Z')
 const at = (seconds: number) => new Date(START + seconds * 1000).toISOString()
-const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }
+const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }
 
 /** A repository on GitHub as its REST API answers, with ETags: an unchanged answer to the same request is a 304. */
 function fakeGitHub() {
@@ -620,6 +620,34 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
   })
 })
 
+// Swarm plan, step 1, item 1: a read Harness asked of an agent is typed to it as its turn ends until it reads (nextThing.ts), from
+// the asks GitHub news keeps as it hands on what GitHub says.
+describe('the reads each agent owes (owed)', () => {
+  const ask = (id: number, seconds: number, number: number, name: string, sha: string) => comment(id, seconds,
+    `Harness, 12:0${id % 10}, to **${name}**: please read this pull request, then run \`harness super-tab read ok acme/app#${number} ${sha} 'what you found'\`. `
+    + 'For a HOLD, read hold in place of read ok, with the file, line and fix.',
+    { issue_url: `https://api.github.com/repos/acme/app/issues/${number}`, html_url: `https://github.com/acme/app/pull/${number}#issuecomment-${id}` })
+
+  it('keeps Harness\'s asks to read for the agent each names, the newest last, one per pull request, ten at most', async () => {
+    const f = setup()
+    f.github.comments.push(ask(1, 10, 24, 'Pip', 'f6edb44'), ask(2, 11, 25, 'Juno', 'aaaaaaa'), comment(3, 12, 'Pip, please read #26 when you can.'))
+    await f.mentions.tick()
+    expect(f.mentions.owed('pip', 'acme/app')).toEqual([{ number: 24, sha: 'f6edb44' }])
+    // Asked again on a new head: the new head replaces it, last.
+    f.clock.now += 20_000
+    f.github.comments.push(ask(4, 20, 30, 'pip', '1111111'), ask(5, 21, 24, 'Pip', '2222222'))
+    await f.mentions.tick()
+    expect(f.mentions.owed('pip', 'acme/app')).toEqual([{ number: 30, sha: '1111111' }, { number: 24, sha: '2222222' }])
+    f.clock.now += 20_000
+    for (let i = 0; i < 12; i++) f.github.comments.push(ask(100 + i, 30 + i, 40 + i, 'Pip', 'abcdef0'))
+    await f.mentions.tick()
+    const owed = f.mentions.owed('pip', 'acme/app')
+    expect(owed).toHaveLength(10)
+    expect(owed.at(-1)).toEqual({ number: 51, sha: 'abcdef0' })
+    expect(f.mentions.owed('pip', 'acme/other')).toEqual([])
+  })
+})
+
 describe('whom it reads for (watchedAgents)', () => {
   const row = (agent: Json, extra: Json = {}) => ({ tabId: 'tab', agent: { id: 'pip', harnessId: 'h-pip', name: 'Pip', regular: true, contributorId: 'dee',
     machineOwnerId: 'dee', ...agent }, ...extra })
@@ -630,7 +658,7 @@ describe('whom it reads for (watchedAgents)', () => {
     const watched = await watchedAgents({ me: 'dee', live: id => id !== 'h-gone', read,
       roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }), row({ id: 'old', regular: false }), row({ id: 'gone', harnessId: 'h-gone' }),
         row({ id: 'stopping' }, { stopRequested: true }), row({ id: 'theirs', machineOwnerId: 'ken' })] })
-    expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
+    expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
   })
 
   // The assigner and Desktop name an agent by the name people see; a stored name can be its engine's ("Claude Code").

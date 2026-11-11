@@ -540,6 +540,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,
   Instructions, Terminal and Browser are one at a time: each closes the others.
+- **A stuck terminal** (`SwarmTerminalButton`, `super_tabs/terminal_button.dart`).
+  While an agent's terminal waits on its person, its chat bar's Terminal carries
+  a red `1` (`SuperTabCountBadge`) over its top right corner, as a notification
+  does, and its tooltip reads `Terminal · waiting on you`. Waiting is a question
+  on its screen, as its computer's daemon tells this Desktop, or a prompt its
+  computer has seen it sit on for 3 minutes (`SuperTabAgent.atPrompt`, the
+  backend's `alerting`). The badge is drawn only; the button is what is pressed.
 - **Browser in New agent** (`BrowserPill`, `browser/browser_pill.dart`). Swarm
   New agent alone, and never on the web build or on Windows, has a `Browser`
   pill after
@@ -694,7 +701,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   a failing check or a conflict, or still a draft: its builder) and Merging
   (read, its checks running or green: Harness merges it). A card holds its chip
   (`#5770 Merging`), its title on up to three lines, and its agent's face with
-  its branch and last activity. They are the newest 50 the board reads for its
+  its branch and last activity. Harness's train (`Train: #5770`, on a
+  `harness-train/` branch) carries pull requests already read: it is under
+  Merging with no face, and its chip says Checks, Merging or Failing. They are the newest 50 the board reads for its
   chips, those that are no task's included: of lampOS's last 197 builder pull
   requests, one was linked to an issue. A card opens the pull request's own
   chat in the list's place, the task's panel reading its pull request:
@@ -705,6 +714,20 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   centred line (`Merged · 16:02`). The same read brings them: the newest 30
   comments (the rest a tap away), 30 reviews and each review's first 20 line
   comments. Read only, as a task is: agents write on GitHub.
+- **Machines** (`SuperTabMachines`, `super_tabs/machines.dart`): Manage ›
+  Machines in Swarm v4 (the lead for anh Dee, 2026-11-11), on the Swarm's
+  ground. The Machines tab names it, so it has no title of its own: one
+  metadata line of the counts a person acts on (`2 online · 1 offline`; a
+  count at 0 is left out), then the search field and the blue `Add machine`.
+  The reader's own computers sit under `Yours`, then `Online`, `Asleep`,
+  `Status unknown` and `Offline`, each a 12 `textSecondary` heading in
+  sentence case; an empty group has none. A row is the connection dot, the
+  name in 15 semibold primary, its owner (`This machine` for this one) and,
+  when it is not online, when it was last seen, in metadata grey, and at the
+  right what its disk has free in 12 faint (`200 GB free`; nothing without a
+  reading). No badge, no blue row, no filter chips, no note on the order and no
+  disk bar. A click opens its readings and agents beneath it; a machine with no
+  agents says nothing of them.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   one thing: `Project settings…`, whose rows are Rename project, Project
   details, Switch PM… and Delete Project. It has no Notifications: a channel
@@ -712,7 +735,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted.
+  archived, so no other way to them is wanted. Switch PM… opens a dialog of the
+  machine, its engines and the model: each engine is one row, `Claude Code`
+  with `Current · 40% left` under it, for its machine's default account,
+  the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -862,8 +888,8 @@ Top to bottom:
 | Start row | `SwarmStart`, `SwarmStarts` (`super_tabs/swarm_starts.dart`, the app's `swarmStarts`); `ProjectSidebar._startRow` | New project and New agent never hold their person while a project or an agent starts (anh Dee, 2026-11-10: "as soon as i hit new project or new agent, just get me back to my main screen ... NEVER block users for minutes"). Once the form's own checks pass and the start is under way, the form closes, back to what its person was doing, and the start goes on: the project made, its folder cloned, its agent started and joined. Meanwhile its row is first in Projects or Your Team: a project's `#` (its lock if private) or a grey face, its name (the repository's, or the agent's once it has one) and `starting`; it opens nothing. A new project's own row is not drawn while its start's is. Done, it is the project's or the agent's own row, and nothing opens by itself: its person goes in when they choose. Failed, its detail is `failed` in red (`colorScheme.error`), and a click, like that section's +, opens its form again with why, its Try again and Discard. Closing the form while it still checks sends nothing. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
-| Agent state | `SwarmAgentStates` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, in this order: `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `starting` (a message to it waits while its engine starts: its frame's `waitingFor: engine`, which the daemon sends again when it changes and a reconnect reads whole; its 1:1 chat's bar adds `· starting` too, and neither says a failure), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`; in a Personal Swarm, whose projects name no repository, the board of the repo its own pane works in), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
+| Agent state | `SwarmAgentStates.rowOf` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, the first of (Swarm plan, step 1, item 1, 2026-11-11: "What Harness knows is a state anyone can see"): `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `starting` (a message to it waits while its engine starts: its frame's `waitingFor: engine`, which the daemon sends again when it changes and a reconnect reads whole; its 1:1 chat's bar adds `· starting` too, and neither says a failure), `needs you` to its person and `waiting on its person` to anyone else (a question on its screen, or its terminal waits on their input), `limited until 15:40` (its machine saw a usage limit on its screen, `SuperTabAgent.limitedUntil`, until the reset), `waiting on a build` (at a task whose pull request's checks run, the board's Checks, while no turn of its runs), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`; in a Personal Swarm, whose projects name no repository, the board of the repo its own pane works in), `working` (a turn runs), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. What its computer's daemon says (a turn, a question) is known where this Desktop reads that computer, the person's own; the rows redraw as the app changes only once what one of them says has moved. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen, and its open pull requests with it while one of its tasks is taken. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, its field `Search agents` (`No matching agents`; an empty list says nothing), of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Team fold | `ProjectSidebar.teamShown` (`super_tabs/project_sidebar.dart`) | Your Team shows at most 8 rows, so Projects stays in sight with forty agents (tester Q1, 2026-11-10: 880x560). The 8 are the rows with something new, then those on a task, then the rest, each in its place in the list; the open agent's row always shows. Under them, a quiet row with `chevronDown`, `N more`, opens every row; then `chevronUp`, `Show fewer`, folds them again. The reader's choice is kept (`agentsAllShown`). |
 | Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it until its person clicks it: the click makes it an agent as Attach does (its own 1:1 chat opens, its terminal shows beside the chat) and the row is then the agent's. The row says `joining` while that goes on and waits, one join at a time; a refusal is said in a line at the foot and the next click finishes the join; a row of a computer that is off does nothing. |
 | Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). The Swarm's own first project (Personal) is not listed while it names no repository, except while its chat is open or has something unread; nothing of it is deleted. |
@@ -934,7 +960,8 @@ and its own button closes it again. A dropdown never disables the titlebar or
 dims its controls. It opens fresh: no row is lit when a pointer opened it, the
 first is focused only when a key did. The Settings page is a page: the tab
 row stays live over it and a click there leaves Settings, then acts. Only a
-real modal dialog holds the titlebar.
+real modal dialog holds the titlebar. The bell's empty inbox is its heading
+and × (Swarm elements, rule 7).
 
 **Task dialogs** — one heading, optional short explanation, fields, and fixed
 trailing actions. Rename, confirmation, linking and sharing use the same type,
@@ -948,10 +975,15 @@ editors keep their own input and scrolling behavior.
 the app opens by itself: once a launch, as the workspace opens on a computer
 whose old Harness Team account is still there. One line, "An old Harness Team
 account is still on this computer. Remove it.", and one action, Remove, which
-opens the system's administrator prompt. Nothing else closes it until the
-removal has run; then the footer shows "Removed." or the CLI's own reason in
-the danger color, with Close and Retry. Cancelled or failed, the next launch
-asks again. `test/old_team_account_test.dart` clicks through it.
+opens the system's administrator prompt. Nothing else closes it until Remove
+is pressed. While the system's prompt waits, the footer says where it is
+("Enter your password in the system's window. It may be behind Harness.") and
+Close or Escape lets the person go, the removal going on to the prompt's
+answer (anh Dee, 2026-11-11: it sat at "Waiting for the administrator prompt…"
+with macOS's window out of sight, and nothing closed it). Once it has run, the
+footer shows "Removed." or the CLI's own reason in the danger color, with
+Close and Retry. Cancelled or failed, the next launch asks again.
+`test/old_team_account_test.dart` clicks through it.
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,

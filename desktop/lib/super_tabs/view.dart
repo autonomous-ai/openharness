@@ -34,7 +34,6 @@ import '../shortcuts/app_keymap.dart' show KeymapRegion;
 import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
-import 'leaderboard/reader.dart';
 import 'leaderboard/leaderboard_page.dart';
 import 'leaderboard/shipping.dart';
 import 'jump_to_latest.dart';
@@ -54,6 +53,8 @@ import 'attachment_image.dart';
 import 'channel_talk.dart';
 import 'places.dart';
 import 'agent_state.dart';
+import 'terminal_button.dart';
+import '../state/harness_activity.dart';
 import 'back_to_chat.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -353,11 +354,6 @@ class _SuperTabViewState extends State<SuperTabView>
   );
   SuperTabController get c => widget.controller;
 
-  /// The open project's week board, read for Manage's Models. Made when
-  /// Manage is first shown: a view torn down before then reads none.
-  SuperTabProjectBoard? _projectBoard;
-  SuperTabProjectBoard get _board => _projectBoard ??= SuperTabProjectBoard(c);
-
   /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is.
   SwarmAgentStates? _states;
 
@@ -366,6 +362,7 @@ class _SuperTabViewState extends State<SuperTabView>
       : SwarmAgentStates(
           controller: c,
           github: _github,
+          app: widget.app,
           localRepository: (agent) =>
               PersonalProjects.of(widget.app!).agentRepository(c, agent),
           // A test never waits for the next read of a board.
@@ -514,8 +511,6 @@ class _SuperTabViewState extends State<SuperTabView>
       _states = _agentStates();
     }
     if (oldWidget.controller != c) {
-      _projectBoard?.dispose();
-      _projectBoard = null;
       _shippingBoard?.dispose();
       _shippingBoard = null;
       oldWidget.controller.threadPaneHidden();
@@ -1140,7 +1135,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
-    _projectBoard?.dispose();
     _states?.dispose();
     _shippingBoard?.dispose();
     c.removeListener(_changed);
@@ -2956,21 +2950,23 @@ class _SuperTabViewState extends State<SuperTabView>
             }),
           ),
           const SizedBox(width: 4),
-          AppIconButton(
-            key: const ValueKey('swarm-terminal-button'),
-            icon: AppIcons.terminal,
-            size: AppIcons.inlineSize,
-            tooltip: 'Terminal',
-            selected: terminalOpen,
-            onPressed: terminalOpen
-                ? widget.onCloseTerminal
-                : () {
-                    setState(
-                      () =>
-                          _instructionsOpen = _infoOpen = _browserOpen = false,
-                    );
-                    _openTerminals(group)?.call();
-                  },
+          // Redrawn as its computer's daemon tells of a question, through the agents' states, which move only when a row's
+          // word does: the app itself notifies on every word an agent writes.
+          ListenableBuilder(
+            listenable: _states ?? c,
+            builder: (context, _) => SwarmTerminalButton(
+              stuck: _terminalStuck(agent),
+              selected: terminalOpen,
+              onPressed: terminalOpen
+                  ? widget.onCloseTerminal
+                  : () {
+                      setState(
+                        () => _instructionsOpen = _infoOpen = _browserOpen =
+                            false,
+                      );
+                      _openTerminals(group)?.call();
+                    },
+            ),
           ),
           if (_browserAgent(agent) != null) ...[
             const SizedBox(width: 4),
@@ -2989,6 +2985,14 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
     );
   }
+
+  /// Whether [agent]'s terminal waits on its person: a question on its screen, as its computer's daemon tells this Desktop, or a
+  /// prompt its computer has seen it sit on for 3 minutes ([SuperTabAgent.atPrompt]).
+  bool _terminalStuck(SuperTabAgent agent) =>
+      agent.atPrompt ||
+      (widget.app != null &&
+          harnessActivity(widget.app!, agent.machineId, agent.harnessId) ==
+              HarnessActivity.needsInput);
 
   Widget _header(SuperTabConversation? group, bool narrow) {
     final chatAgent = _chatAgent(group);
@@ -5088,7 +5092,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               ? SuperTabManagePage(
                                   controller: c,
                                   app: widget.app,
-                                  board: _board,
                                   tab: _manageTab,
                                   onAddAgent: widget.onAddAgent,
                                   onOpenAgent: (agent) {

@@ -285,9 +285,14 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
     _focus.requestFocus();
   }
 
-  // Escape closes only once the removal has run: the account is to go.
+  // Escape closes once Remove was pressed: the account is to go, but the
+  // person is never held while the system's prompt waits, which can open out
+  // of sight (anh Dee, 2026-11-11: "it's stuck at 'waiting for the admin
+  // prompt..'"). Closed while it waits, the removal goes on to the prompt's
+  // answer, which the log keeps; one that did not happen asks again at the next
+  // launch.
   void _close() {
-    if (_step == _Step.removed || _step == _Step.failed) Navigator.pop(context);
+    if (_step != _Step.ask) Navigator.pop(context);
   }
 
   @override
@@ -298,7 +303,7 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
     final footer = switch (_step) {
       _Step.ask => null,
       _Step.removing => DesktopPromptMessage(
-        'Waiting for the administrator prompt…',
+        "Enter your password in the system's window. It may be behind Harness.",
         color: DesktopChrome.muted,
       ),
       _Step.removed => DesktopPromptMessage(
@@ -314,11 +319,10 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
         color: danger,
       ),
     };
-    final done = _step == _Step.removed || _step == _Step.failed;
-    // Nothing closes it before the removal has run: not Escape, not a click
-    // on the veil outside it.
+    // Nothing closes it before Remove is pressed: not Escape, not a click on
+    // the veil outside it.
     return PopScope(
-      canPop: done,
+      canPop: _step != _Step.ask,
       child: TerminalPromptKeys(
         focusNode: _focus,
         cancel: _close,
@@ -340,7 +344,7 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
               ? null
               : Semantics(liveRegion: true, child: footer),
           actions: [
-            if (_step == _Step.removed || _step == _Step.failed)
+            if (_step != _Step.ask)
               TextButton(
                 key: const Key('old-team-account-close'),
                 onPressed: _close,

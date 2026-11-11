@@ -528,6 +528,25 @@ it('sends answer as the answer to a message, placed by the server', () => {
 })
 
 
+// Swarm plan, step 1, item 2: "One command, harness inbox, lists what waits for an agent" (nextThing.ts inbox).
+it('lists what waits for the agent in its pane, a line each, and says when nothing does', async () => {
+  expect(parseSuperTabArgs(['inbox'], where).payload).toEqual({ action: 'inbox', tabId: '', agentId: '' })
+  expect(() => parseSuperTabArgs(['inbox', 'extra'], where)).toThrow('harness super-tab')
+  const answers = [{ ok: true, value: { waiting: ['Your acme/app#30 is behind main: …', 'Next: acme/app#12 …'] } }, { ok: true, value: { waiting: [] } },
+    { error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' }]
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : answers.shift()!)
+  const print = vi.fn()
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print }
+  expect(await superTabCommand(['inbox'], deps)).toBe(0)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', { action: 'inbox', tabId: '', agentId: '', harnessId: 'native' }, 30_000)
+  expect(print).toHaveBeenLastCalledWith('Your acme/app#30 is behind main: …\nNext: acme/app#12 …')
+  expect(await superTabCommand(['inbox'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith('Nothing waits for you.')
+  expect(await superTabCommand(['inbox'], deps)).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' })
+})
+
 // A builder's claim is made by command (githubClaim.ts).
 it('takes a task by its repository and number, and nothing else', () => {
   expect(parseSuperTabArgs(['take', 'acme/app#34'], where).payload).toMatchObject({ action: 'take', tabId: '', repository: 'acme/app', number: 34 })
