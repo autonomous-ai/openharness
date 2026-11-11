@@ -98,10 +98,10 @@ class _ToolbarPillState extends State<ToolbarPill> {
                 : null,
             borderRadius: BorderRadius.circular(AppControl.radius),
           ),
-          // No `Center` around it: the height is already tight, so a row inside
-          // centres itself — and inside a `Flexible` a Center would stretch the
-          // pill across the free space instead of hugging its label.
-          child: widget.child,
+          // Centred in the tight height, as a bare label is not by itself; the
+          // width factor keeps the pill hugging its label inside a `Flexible`,
+          // where a plain Center would stretch it across the free space.
+          child: Align(widthFactor: 1, child: widget.child),
         ),
       ),
     );

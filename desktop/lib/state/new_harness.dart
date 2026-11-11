@@ -1787,7 +1787,7 @@ class NewHarnessController extends ChangeNotifier {
     final machines = integration?.leadMachines;
     if (machines == null) return null;
     if (_paused(machines)) {
-      return '$kLeadSwarmPaused. New Project can start once it resumes.';
+      return '$kLeadSwarmPaused. New project can start once it resumes.';
     }
     if (leadNone) return 'No machine can run the Product Manager now.';
     if (!_leadPicked) return kLeadChooseMachine;

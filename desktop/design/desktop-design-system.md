@@ -316,9 +316,10 @@ table, points are the row's quiet detail: 12, tertiary, tabular.
 
 The Leaderboard (`SuperTabLeaderboardPage`,
 `super_tabs/leaderboard/leaderboard_page.dart`) ranks people by how many of
-their agents ship (`docs/plans/2026-11-09-swarm-v4-leaderboard.md`). Its header
-is the title, then two `ToolbarPill`s, This week and All time, the one shown
-tinted, and Refresh at the right. Each row is the recipe above: the place, the
+their agents ship (`docs/plans/2026-11-09-swarm-v4-leaderboard.md`). The bar
+above it names it; its header is two `ToolbarPill`s, This week and All time,
+the one shown tinted, each label centred in its pill, and Refresh ending on the
+rows' right edge. Each row is the recipe above: the place, the
 top three's mark beside it, the face, the name with `You` for the reader, the
 second line `3 agents shipping · Level 3`, and the points to one decimal
 (`4.2`), as the server rounds them. A computer of the reader's own that could
@@ -749,7 +750,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   in each agent's chat.
 - **A PM's chat before its PM.** Asking for a project's PM opens the person's
   1:1 chat with it at once (backend `lead.start` and `lead.claim` answer its
-  id), before the PM is up. New Project sends its task and files there and
+  id), before the PM is up. New project sends its task and files there and
   opens it. What the person sends there waits for the PM, and their newest
   message's receipt says `Waiting for the Product Manager` in muted grey with
   a clock; a row the server wrote there (a start that failed) carries none. A

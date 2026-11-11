@@ -1602,6 +1602,9 @@ class ConversationServer {
   /// [request] keep it.
   static final _reader = Object();
 
+  /// The account asking, inside [request]: the one whose [controller] made the call, or null.
+  String? get reader => Zone.current[_reader] as String?;
+
   SuperTabController controller({
     String tabId = 'tab',
     Map<String, dynamic>? initial,
