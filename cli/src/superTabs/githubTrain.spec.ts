@@ -170,13 +170,14 @@ function fakeRepo(now: () => number) {
   return { state, get, send, tip, mark, authors: records.authors }
 }
 
-function setup() {
+/** [project]: the repository's name as its project keeps it, which GitHub may know by another since (a rename). */
+function setup(project = 'acme/app') {
   const clock = { now: Date.parse('2026-11-10T07:00:00Z') }
   const repo = fakeRepo(() => clock.now), { state } = repo
   const log = vi.fn()
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
-  const start = () => new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+  const start = () => new GitHubMerge({ projects: async () => [{ repo: project, pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
     crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log) })
   const f = {
     state, log, clock, merger: start(), mark: repo.mark,
@@ -246,6 +247,20 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     await f.ends(PASSED)
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
     expect(f.said(4)).toEqual([expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d: landed in #900 as \\w{7}\\. READ-OK on ${pull.head.sha.slice(0, 7)} by Juno, checks green\\.$`))])
+    expect(pull.state).toBe('closed')
+  })
+
+  // Code review of #4056: autonomous-harness, renamed openharness, keeps its old name in its project, and GitHub answers for it under
+  // the new one: compared with the old name, every pull request read as a fork and no train as one.
+  it('lands a pull request of a repository renamed since its project was made, as it does by the name GitHub has now', async () => {
+    const f = setup('acme/old')
+    f.state.settings = { full_name: 'Acme/App' }
+    const pull = f.add(4)
+    f.moveMain(['cli/src/other.ts'])
+    await f.settle()
+    expect(f.carried()).toEqual([[4]])
+    await f.ends(PASSED)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
     expect(pull.state).toBe('closed')
   })
 

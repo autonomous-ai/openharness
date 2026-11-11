@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubReads, githubRest, retryIn, waitWords, type GitHubGet } from './githubRest.js'
+import { currentNames, GitHubReads, githubRest, NAME_KEPT_MS, NAME_UNSAID_MS, retryIn, waitWords, type GitHubGet } from './githubRest.js'
 
 describe('GitHub\'s REST API as this computer\'s gh login (githubRest.ts)', () => {
   it('reads the token from gh once, asks with the ETag, and reads the token again after GitHub refuses it', async () => {
@@ -97,6 +97,49 @@ describe('a file of a repository (GitHubReads.file)', () => {
     now += 5 * 60_000
     await reads.file('acme/app', 'agents/First builder.md')
     expect(asked.length).toBe(before + 1)
+  })
+})
+
+// autonomous-harness, renamed openharness (2026-11-11): GitHub answers a repository's old name with what it is called now.
+describe('what GitHub names a repository now (currentNames)', () => {
+  it('reads it from GitHub, keeps it an hour, and gives the name asked when GitHub does not say, said once and asked again in ten minutes', async () => {
+    let clock = 0
+    const answers: Array<Awaited<ReturnType<GitHubGet>> | Error> = [{ status: 200, etag: null, body: { full_name: 'Acme/App' }, resetAt: null },
+      { status: 200, etag: null, body: { full_name: 'acme/app2' }, resetAt: null }, { status: 404, etag: null, body: null, resetAt: null },
+      new Error('gh is not signed in.'), { status: 200, etag: null, body: {}, resetAt: null }]
+    const get = vi.fn<GitHubGet>(async () => { const next = answers.shift()!; if (next instanceof Error) throw next; return next })
+    const log = vi.fn()
+    const current = currentNames(get, () => clock, log)
+    expect(await current('acme/old')).toBe('acme/app')
+    expect(get).toHaveBeenCalledExactlyOnceWith('/repos/acme/old', null)
+    expect(await current('acme/old')).toBe('acme/app')
+    clock += NAME_KEPT_MS
+    expect(await current('acme/old')).toBe('acme/app2')
+    // Not said: the name asked, logged once, and not asked again for ten minutes.
+    expect(await current('b/one')).toBe('b/one')
+    expect(await current('b/one')).toBe('b/one')
+    expect(get).toHaveBeenCalledTimes(3)
+    clock += NAME_UNSAID_MS
+    expect(await current('b/one')).toBe('b/one')
+    clock += NAME_UNSAID_MS
+    expect(await current('b/one')).toBe('b/one')
+    expect(get).toHaveBeenCalledTimes(5)
+    expect(log.mock.calls).toEqual([['[super-tab] GitHub did not say what b/one is called now: it answered 404']])
+    // A name being asked is asked once, whoever else wants it meanwhile; and only the two hundred asked last are kept.
+    const many = vi.fn<GitHubGet>(async path => ({ status: 200, etag: null, body: { full_name: path.slice('/repos/'.length) }, resetAt: null }))
+    const shared = currentNames(many, () => clock, log)
+    expect(await Promise.all([shared('d/one'), shared('d/one')])).toEqual(['d/one', 'd/one'])
+    expect(many).toHaveBeenCalledTimes(1)
+    for (let n = 0; n < 200; n++) await shared(`e/${n}`)
+    await shared('d/one')
+    expect(many).toHaveBeenCalledTimes(202)
+    // By this computer's clock and log when given neither.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const fresh = currentNames(async () => { throw 'no words' })
+      expect(await fresh('c/old')).toBe('c/old')
+      expect(warn).toHaveBeenCalledWith('[super-tab] GitHub did not say what c/old is called now: no words')
+    } finally { warn.mockRestore() }
   })
 })
 
