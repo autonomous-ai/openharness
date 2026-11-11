@@ -107,6 +107,12 @@ quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<
 The PM's line "Give a task to the builder who owns its part, is free and has what it needs; keep every builder's list two
 deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
 
+**A builder cuts pieces off its own task by code (anh Dee, 2026-11-11: "Split what you hold"):** `harness super-tab split`
+(`cli/src/superTabs/githubSplit.ts`) opens a sized sub-issue of a task its builder took, and the assigner gives it out as any
+task. The command is named where it is needed, in the answer to `take`, not in every agent's basics. `PM_BASICS` gained one
+clause, "a builder may cut a piece off a task it holds, a sized sub-issue that Harness gives out as any task: leave it open":
+judgment the PM keeps, as code cannot tell a piece the PM would rather not have from one it closes by mistake.
+
 **The PM announces each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
 `PM_BASICS`, "@Pip #12 is yours", once per hand-off, the rest of the task's record staying on its issue. It is a prompt line only
 until code does it: the PM does not see who a task went to until it reads the issue, and Harness knows at the moment it

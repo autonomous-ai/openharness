@@ -4,7 +4,9 @@
  * again as it starts, so an agent installed since a service was connected gets it too.
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
- * `custom` {name, url, headers}, `callback` {flow, url}. The app opens a returned `authorize_url` in the
+ * `custom` {name, url, headers}, `callback` {flow, url}; and for Gmail, Calendar and Drive through this computer's
+ * Claude Code or Codex instead of Harness, `elsewhere`, `connect_via` / `disconnect_via` {connector, via}, which answer
+ * the page to open in that engine's account (lib/connectors/elsewhere.ts). The app opens a returned `authorize_url` in the
  * browser and follows the flow. A phone signing in for this computer opens it in its own browser and,
  * for a service this computer signs in to itself, sends back the redirect to 127.0.0.1 it caught as
  * `callback`: the code alone is useless without the PKCE verifier kept here. Never a token in a reply.
@@ -22,6 +24,8 @@ import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connect
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
+import { connectVia, disconnectVia, elsewhere, type ElsewhereDeps } from '../lib/connectors/elsewhere.js'
+import { keepAlive, KEEP_ALIVE_S } from '../lib/connectors/renew.js'
 import { ConnectorError, Store, validateCode } from '../lib/connectors/store.js'
 import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
 
@@ -29,6 +33,14 @@ import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/co
 export { CONNECTORS_REQUESTS } from '../core/api.js'
 
 const GATEWAY_CACHE_MS = 60_000
+/** How long a Refresh waits for the account's connections to be exchanged before it lists what is here. */
+const SYNC_WAIT_MS = 15_000
+/** How often the bridge looks for connections to keep alive (renew.ts `keepAlive`), and how soon after it starts. */
+const KEEP_ALIVE_EVERY_MS = 3_600_000
+const KEEP_ALIVE_FIRST_MS = 120_000
+/** Up to this much more wait, drawn once per start: the account's computers do not renew one token at the same moment
+ *  (a service that rotates refresh tokens honours only the first), and the first one's renewal resets the others' wait. */
+const KEEP_ALIVE_SPREAD_S = 12 * 3600
 
 export interface ConnectorsDeps {
   vault: Store
@@ -133,6 +145,10 @@ function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: num
 
 export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
   holderIsMine?: (port: number) => Promise<boolean | null>
+  /** How Claude Code and Codex are found and asked (a spec's fakes). */
+  elsewhere?: ElsewhereDeps
+  /** Seconds a connection goes unrenewed before it is kept alive (renew.ts `keepAlive`); by default a day and up to 12 hours more. */
+  keepAliveAfter?: number
   /** The platform it runs on, and on Windows where its pipe is (a test's socket named as a pipe). */
   platform?: NodeJS.Platform
   pipePath?: () => string
@@ -178,18 +194,29 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
   else if (local) listenPipe(vault, overrides.pipePath, deps.retryMs)
   // Stamped now, not at a client's first call: the day counts from this start.
   if (local) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
-  try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
+  /** Every agent installed here given its entries; a config that cannot be written now is written at the next change. */
+  const syncAgents = (): void => { try { sync(vault, env) } catch { /* Left as it is. */ } }
+  syncAgents()
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and
   // written whenever this computer's change (here, by `harness connections`, by a renewal in the bridge).
-  if (deps.vaultPort) {
-    const shared = new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn })
+  const shared = deps.vaultPort ? new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn }) : null
+  if (shared) {
     shared.start()
     core.account.onNotice((notice) => {
       if (notice.type === 'connectors_changed') shared.changed(notice.revision)
       else if (notice.type === 'device_keys_changed') shared.changed(null)
     })
   }
+
+  const keepAliveAfter = overrides.keepAliveAfter ?? KEEP_ALIVE_S + Math.floor(Math.random() * KEEP_ALIVE_SPREAD_S)
+  const keepRound = (): void => {
+    void keepAlive(vault, keepAliveAfter).then((failed) => {
+      for (const [code, why] of Object.entries(failed)) console.warn(`[connections] could not keep ${code} signed in: ${why}`)
+    }, (error: unknown) => console.warn(`[connections] keeping connections signed in failed: ${String(error)}`))
+  }
+  setTimeout(keepRound, KEEP_ALIVE_FIRST_MS).unref()
+  setInterval(keepRound, KEEP_ALIVE_EVERY_MS).unref()
 
   let offered: Record<string, GatewayRow> = {}
   let offeredAt = 0
@@ -202,7 +229,17 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
     switch (payload.action) {
       // `shared`: a connection made here reaches the account's other computers. The phone signs in
       // through one that says so before one that keeps it to itself (an older CLI says nothing).
-      case 'list': return { ...cards(vault, await gatewayOffers()), shared: deps.vaultPort !== null }
+      // `sync`: the Refresh button. The account's connections are exchanged first (a computer added since the last
+      // write is sealed for), waited on for a while. Then every agent installed here gets its entries again: one
+      // installed since the last connection change (Claude Code or Codex set up after signing in) has none.
+      // Only when the person asks: nothing watches for an agent being installed.
+      case 'list': {
+        if (payload.sync === true) {
+          if (shared) await Promise.race([shared.run(), new Promise((done) => setTimeout(done, SYNC_WAIT_MS).unref())])
+          syncAgents()
+        }
+        return { ...cards(vault, await gatewayOffers()), shared: shared !== null }
+      }
       case 'connect': {
         const code = validateCode(payload.connector)
         return { ...(await flows.start(code, signInFor(vault, code, services(await gatewayOffers())))) }
@@ -220,6 +257,10 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
       }
       case 'custom': return payload.kind === 'api' ? addApiKey(vault, payload, env) : addCustom(vault, flows, payload, env)
       case 'callback': return { ...flows.deliver(String(payload.flow ?? ''), String(payload.url ?? '')) }
+      // Gmail, Calendar and Drive through this computer's Claude Code or Codex instead (lib/connectors/elsewhere.ts).
+      case 'elsewhere': return { ...(await elsewhere(overrides.elsewhere)) }
+      case 'connect_via': return await connectVia(payload.connector, payload.via, overrides.elsewhere)
+      case 'disconnect_via': return await disconnectVia(payload.connector, payload.via, overrides.elsewhere)
       default: return { error: 'CONNECTORS_FAILED', detail: 'Unknown action.' }
     }
   }

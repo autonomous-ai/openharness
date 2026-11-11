@@ -456,6 +456,9 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(await link.ops.connectorVault.open({})).toEqual({ plaintext: 'x', complete: false })
     answer = {}
     expect(await link.ops.connectorVault.open({})).toBeNull()
+    // Sealed by or for no machine of the account: said as such, so the connectors service writes over it.
+    answer = { stranded: true }
+    expect(await link.ops.connectorVault.open({})).toEqual({ stranded: true })
   })
 
   it('asks the gateway to hold what sharing trusts, and says it could not while the gateway is not running', async () => {

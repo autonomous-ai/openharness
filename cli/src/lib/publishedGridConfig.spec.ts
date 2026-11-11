@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { removeLink } from './removePath.js'
 
 const fault = vi.hoisted(() => ({ fail: false, current: true, onSync: undefined as (() => void) | undefined }))
 vi.mock('node:fs', async real => {
@@ -57,7 +58,7 @@ it('invalidates borrowed-directory aliases in the retained dispatch proof', asyn
   mkdirSync(a); mkdirSync(b); symlinkSync(a, alias)
   const result = await publish('fixture-agent', files, [{ name: 'sessions', target: join(alias, 'sessions') }])
   expect(result.proof.current()).toBe(true)
-  rmSync(alias); symlinkSync(b, alias)
+  removeLink(alias); symlinkSync(b, alias)
   expect(result.proof.current()).toBe(false)
   expect(result.proof.files.some(file => file.facts.some(fact => fact.path === alias && fact.alias))).toBe(true)
 })
@@ -73,7 +74,7 @@ it('holds when ownership changes during disk confirmation and safely resumes the
 it('does not let a changed native alias during publication redirect borrowed sessions', async () => {
   const a = join(root, 'a'), b = join(root, 'b'), alias = join(root, 'home')
   mkdirSync(a); mkdirSync(b); symlinkSync(a, alias)
-  fault.onSync = () => { fault.onSync = undefined; rmSync(alias); symlinkSync(b, alias) }
+  fault.onSync = () => { fault.onSync = undefined; removeLink(alias); symlinkSync(b, alias) }
   await expect(publish('fixture-agent', files, [{ name: 'sessions', target: join(alias, 'sessions') }])).rejects.toThrow()
   expect(() => lstatSync(join(b, 'sessions'))).toThrow()
 })
@@ -115,7 +116,7 @@ it('retains the original native alias when a joining publisher captures its link
   let linkReads = 0
   vi.spyOn(NativePaths.prototype, 'resolveSync').mockImplementation(function (this: InstanceType<typeof NativePaths>, path, missingOkay) {
     if (path.startsWith(join(root, 'grid-launch-config')) && path.endsWith('/sessions') && ++linkReads === 2) {
-      rmSync(alias); symlinkSync(b, alias)
+      removeLink(alias); symlinkSync(b, alias)
     }
     return original.call(this, path, missingOkay)
   })

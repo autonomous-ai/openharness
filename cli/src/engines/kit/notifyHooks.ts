@@ -7,6 +7,7 @@ import { engineName } from '../../lib/agentNames.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { insideWindowsRoots } from '../../lib/secureState.js'
 import { STABLE_NOTIFY } from '../../lib/windows/installLayout.js'
+import { HookScriptMissing } from './hookHeld.js'
 import { HookPreparationHeld } from './nativeHookFiles.js'
 import { cursorDataDir } from '../cursor/contract.js'
 import { nativeHookLocations } from './nativeLocations.js'
@@ -32,6 +33,28 @@ export function hookScriptCandidates(dir: string, script: string | undefined, pl
 }
 export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
 
+/**
+ * The engines whose hook install was refused because notify.mjs was not there. Only they are told it is missing: an engine
+ * whose hooks do not run it, that installs none here (no Windows runner), or whose hooks are off was never refused for it,
+ * and blaming the file would hide the reason that does clear by waiting (#3954 review).
+ */
+const refusedForScript = new Set<string>()
+
+/** The notify.mjs every hook line names, when it is not there; null when it is. With [engine], null too unless that
+ *  engine's install was refused for it. */
+export function missingHookScript(engine?: string): string | null {
+  if (engine !== undefined && !refusedForScript.has(engine)) return null
+  return existsSync(HOOK_SCRIPT) ? null : HOOK_SCRIPT
+}
+
+/** Refuses [engine]'s install when its hook lines would name a notify.mjs that is not there ([HookScriptMissing]). */
+export function requireHookScript(engine: NotifyEngine): void {
+  const missing = missingHookScript()
+  if (!missing) return
+  refusedForScript.add(engine)
+  throw new HookScriptMissing(missing)
+}
+
 /** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
 export function hooksNotOnWindows(engine: string): true {
   console.log(`[hooks] ${engine} hooks are not installed on Windows yet`)
@@ -41,10 +64,10 @@ export function hooksNotOnWindows(engine: string): true {
 /**
  * The log line for an install that did not happen, when [error] says why: on Windows one sentence, no stack. A refused
  * hook line (quoteHookCommand) or a held file is the person's to read, and a stack trace there buried the reason (B4.10
- * VM log). Null for any other error or platform: the caller logs as before, so mac and Linux logs do not change.
+ * VM log), and on every platform a missing notify.mjs. Null for any other error or platform: the caller logs as before.
  */
 export function hooksNotInstalled(engine: NotifyEngine, error: unknown, platform: NodeJS.Platform): string | null {
-  if (platform !== 'win32' || !(error instanceof HookPreparationHeld)) return null
+  if (!(error instanceof HookPreparationHeld) || (platform !== 'win32' && !(error instanceof HookScriptMissing))) return null
   return `[hooks] ${engineName(engine)} hooks are not installed: ${error.reason}`
 }
 
@@ -139,6 +162,7 @@ function withoutTrailingSeparators(arg: string): string {
   return arg.slice(0, end)
 }
 
+/** The engines whose hook lines run notify.mjs; the others (OpenCode, Pi, Amp, …) report through a plugin of their own. */
 type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot'
 
 /** notify.mjs's argument list for [engine]: the managed Node, the script, and Harness's own flags. No user input. */

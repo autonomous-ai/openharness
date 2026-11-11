@@ -114,7 +114,8 @@ describe('Super Tab attachment downloads', () => {
     const name = 'twelve-mb-streamed.bin', size = 12 * 1024 * 1024
     const pending = attachedFiles({ attachments: [file({ name, size })] }, { base, fetch: streamed(size / (64 * 1024), hold) })
     // On disk before the last byte came: the bytes are written as they arrive, never collected in memory first.
-    await vi.waitFor(() => { expect(dropped(name).map(f => statSync(join(PASTE_DROPS_DIR, f)).size)).toEqual([size]) })
+    // 12 MB to disk in 192 chunks: past waitFor's default second on a loaded Mac.
+    await vi.waitFor(() => { expect(dropped(name).map(f => statSync(join(PASTE_DROPS_DIR, f)).size)).toEqual([size]) }, { timeout: 20_000 })
     release()
     const listed = await pending
     expect(listed.complete).toBe(true)

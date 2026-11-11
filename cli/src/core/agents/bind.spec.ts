@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { loadEngine } from '../../engines/inProcess.js'
+import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
@@ -13,6 +14,10 @@ import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
+import { createInput } from '../input.js'
+import type { TerminalActionResult } from '../../lib/terminalTypes.js'
+import { readInlineScreen } from '../../testing/inlineScreen.js'
+import { inlineSubmission } from '../../testing/inlineSubmission.js'
 
 vi.mock('../../engines/identities.js', () => ({ transcriptOf: vi.fn(), processSessionOf: vi.fn() }))
 vi.mock('../../engines/cursor/contract.js', async (real) => ({ ...await real<object>(), cursorDataDir: () => '/cursor' }))
@@ -71,6 +76,8 @@ function setup(over: Partial<BindDeps> = {}) {
       has: vi.fn(() => false),
       bySession: vi.fn((sessionId: string) => bySession.get(sessionId)),
       setOpenclawStateDir: vi.fn(() => true),
+      afterTransaction: vi.fn(async (run: () => unknown) => run()),
+      takeFirstTask: vi.fn(),
     } as unknown as BindDeps['registry'],
     mirror: { inheritSummary: vi.fn() },
     forgetSession: vi.fn(),
@@ -79,7 +86,8 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false) },
+    submitAgent: vi.fn(),
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
@@ -1078,10 +1086,25 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     shown = screen('screen-no-gateway-reconnected').replace(/session plain/g, 'session abort')
     await run.binding.bindObservedAgent(tui())
     expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([session, reading]) => [session, reading])).toEqual([
-      ['agent:main:abort', { ready: false, gatewayLost: false }],
-      ['agent:main:abort', { ready: true, gatewayLost: false }],
-      ['agent:main:abort', { ready: false, gatewayLost: true }],
-      ['agent:main:abort', { ready: true, gatewayLost: true }],
+      ['agent:main:abort', { ready: false, gatewayLost: false, running: true }],
+      ['agent:main:abort', { ready: true, gatewayLost: false, running: false }],
+      ['agent:main:abort', { ready: false, gatewayLost: true, running: false }],
+      ['agent:main:abort', { ready: true, gatewayLost: true, running: false }],
+    ])
+  })
+
+  // A run with no session in the store for 30 s is a store the Gateway does not write (engines/openclaw/live.ts).
+  it('tells the stream when the pane reads a run in progress', async () => {
+    let shown = screen('screen-abort-running')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:abort' }))
+    await run.binding.bindObservedAgent(tui())
+    // `connecting` is the TUI still reaching its Gateway: no run yet.
+    shown = shown.replace('running •', 'connecting •')
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([, reading]) => reading)).toEqual([
+      { ready: false, gatewayLost: false, running: true },
+      { ready: false, gatewayLost: false, running: false },
     ])
   })
 
@@ -1097,12 +1120,89 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     vi.mocked(run.deps.openclawPaneDue).mockReturnValue(true)
     await run.binding.bindObservedAgent(tui())
     expect(run.deps.capturePane).toHaveBeenCalledOnce()
-    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false }, shown)
+    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false, running: false }, shown)
     // A pane not bound yet is read on every pass: its footer is how it is bound.
     vi.mocked(run.deps.openclawPaneDue).mockReturnValue(false)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
     await run.binding.bindObservedAgent(tui())
     expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
+  })
+
+  // Found end to end (2026-11-11): a store the Gateway does not write never changes and opens no turn, so the pass before
+  // a message was typed left the pane quiet for 30 s, the run it started was first read that late, and the store hold
+  // came about 70 s into the run.
+  it('a pane awaiting a typed message\'s confirmation is read on every pass: the store hold comes 30 s into its run', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const folder = mkdtempSync(join(tmpdir(), 'openclaw-bind-'))
+    // The TUI's store as the lamp's was: no file, as the Gateway writes another folder's.
+    const onSessionMissing = vi.fn()
+    const stream = new OpenclawLive({
+      db: join(folder, 'openclaw-agent.sqlite'), key: 'agent:main:plain', pollMs: 1_000, onEvents: vi.fn(), onFatal: vi.fn(), onSessionMissing,
+    })
+    let shown = screen('screen-plain')
+    const row = pane({ sessionId: 'agent:main:plain' })
+    const rows = (id: string) => id === 'a1' || id === 'agent:main:plain' ? row : undefined
+    const done: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
+    const typed: string[] = []
+    const inputs = createInput({
+      readScreen: readInlineScreen,
+      submission: inlineSubmission,
+      resolve: rows,
+      byAgent: rows,
+      terminal: {
+        captureTerminal: vi.fn(async () => shown),
+        validateTerminal: vi.fn(async () => true),
+        submitTerminalAction: vi.fn(async (_id: string, text: string) => { typed.push(text); return done }),
+        keyTerminalAction: vi.fn(async () => done),
+        pinTerminalControl: vi.fn(() => () => {}),
+      },
+      deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
+      device: () => undefined,
+      clients: { send: vi.fn(), sendCommander: vi.fn() },
+      agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
+      commandcode: () => undefined,
+      emit: vi.fn(),
+    })
+    const run = setup({
+      capturePane: vi.fn(async () => shown),
+      input: inputs.input,
+      submitAgent: inputs.submitAgent,
+      openclawPaneRead: vi.fn((_sessionId: string, reading: Parameters<OpenclawLive['paneRead']>[0]) => { stream.paneRead(reading); return true }),
+      openclawPaneDue: vi.fn(() => stream.paneDue()),
+    })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    try {
+      await stream.start()
+      const start = Date.now()
+      /** A bind pass `seconds` after the first. */
+      const pass = async (seconds: number) => {
+        await vi.advanceTimersByTimeAsync(start + seconds * 1_000 - Date.now())
+        await run.binding.bindObservedAgent(tui())
+      }
+      await pass(0)
+      // Idle, with nothing typed: not read again within half a minute.
+      await pass(5)
+      expect(run.deps.capturePane).toHaveBeenCalledOnce()
+      inputs.submitAgent('a1', 'Run sleep 120')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(typed).toEqual(['Run sleep 120'])
+      shown = screen('screen-abort-running').replace(/abort/g, 'plain')
+      // The message awaits its user row, which this store never shows: the pass reads the pane, and the run on it.
+      await pass(10)
+      expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
+      expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:plain', { ready: false, gatewayLost: false, running: true }, shown)
+      for (let seconds = 15; seconds < 40; seconds += 5) await pass(seconds)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+      await pass(40)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    } finally {
+      stream.stop()
+      inputs.input.forget('a1')
+      rmSync(folder, { recursive: true, force: true })
+      vi.useRealTimers()
+    }
   })
 
   it('finds the state folder from the TUI\'s open database (fake /proc and lsof)', async () => {
@@ -1135,5 +1235,250 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(await openclawSessionDb('agent:work:x', { pid: 9003 }, held)).toBe('/moved/work/openclaw-agent.sqlite')
     expect(await openclawSessionDb('not-a-key', { pid: 9003 }, held)).toBeNull()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  // OpenClaw takes its first task typed, not in argv: the bind pass that reads the pane hands it to the session input.
+  describe('its first task', () => {
+    const TASK = 'Fix the parser'
+    const ready = screen('screen-plain')
+    const running = screen('screen-abort-running').replace(/abort/g, 'plain')
+    /** The pane bound to `agent:main:plain` with its first task on the row, its stream attached. */
+    const handing = (shown: () => string, over: Partial<BindDeps> = {}) => {
+      const run = setup({ capturePane: vi.fn(async () => shown()), openclawPaneRead: vi.fn(() => true), ...over })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', firstTask: TASK }))
+      return run
+    }
+
+    it('a first task is handed over on the first pass that reads the pane ready', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalled())
+      // The person's own message to the agent, where its confirmation arrives (core/turns/funnel.ts): no delivery id.
+      expect(vi.mocked(run.deps.submitAgent).mock.calls).toEqual([['a1', TASK]])
+      expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
+      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1')
+      expect(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(run.deps.submitAgent).mock.invocationCallOrder[0])
+      expect(console.log).toHaveBeenCalledWith('[agent] a1 first task handed over')
+      // The task is the person's words: never in a log line.
+      const said = [...vi.mocked(console.log).mock.calls, ...error.mock.calls].flat().map(String)
+      expect(said.filter((line) => line.includes(TASK))).toEqual([])
+    })
+
+    it('not while the pane reads no Gateway or a run, before a stream is attached, or unbound', async () => {
+      const noGateway = screen('screen-no-gateway').replace(/session no-gateway/g, 'session plain')
+      for (const [name, shown, over] of [
+        ['no Gateway', noGateway, {}],
+        ['a run', running, {}],
+        ['no stream', ready, { openclawPaneRead: vi.fn(() => false) }],
+      ] as const) {
+        const run = handing(() => shown, over)
+        await run.binding.bindObservedAgent(tui())
+        expect(run.deps.capturePane, name).toHaveBeenCalled()
+        // The pane shows the bound key: nothing else kept the task back.
+        expect(run.deps.registry.register, name).not.toHaveBeenCalled()
+        expect(run.deps.registry.takeFirstTask, name).not.toHaveBeenCalled()
+      }
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ firstTask: TASK }))
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.register).toHaveBeenCalled()
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('ready, busy, ready hands it over once', async () => {
+      let shown = ready
+      const run = handing(() => shown)
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValueOnce(TASK).mockReturnValue(null)
+      await run.binding.bindObservedAgent(tui())
+      shown = running
+      await run.binding.bindObservedAgent(tui())
+      shown = ready
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledTimes(2))
+      expect(run.deps.submitAgent).toHaveBeenCalledOnce()
+    })
+
+    it('a row whose task was handed over before a restart types nothing', async () => {
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawPaneRead).toHaveBeenCalled()
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.submitAgent).not.toHaveBeenCalled()
+    })
+
+    it.each([new Error('disk full'), 'disk full'])('a registry that cannot save keeps the task and types nothing', async (failure) => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => { throw failure })
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task kept · disk full'))
+      expect(run.deps.submitAgent).not.toHaveBeenCalled()
+    })
+
+    // Taken off the row already, it is not put back (at most once), but its failure is named rather than left to the
+    // daemon's last-resort unhandled-rejection line.
+    it('a submit that throws is said', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready, { submitAgent: vi.fn(() => { throw new Error('pane gone') }) })
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task not typed · pane gone'))
+    })
+
+    // The reconcile pass holds registry saves back until it commits (core/main.ts): a removal not yet saved is undone
+    // by a daemon that stops, and the next one would type the task again.
+    it('the removal waits for the reconcile pass to commit', async () => {
+      let commit = () => {}
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise((resolve) => { commit = () => resolve(action()) })) as never)
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.submitAgent).not.toHaveBeenCalled()
+      commit()
+      await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalledWith('a1', TASK))
+    })
+
+    it('a pane that moved to another key binds first', async () => {
+      // `/new` before the task was typed: the pane shows a session the agent is not bound to yet.
+      const run = handing(() => ready.replace(/session plain/g, 'session other'))
+      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:other', firstTask: TASK }), ...meta({ isNew: true }) } as never)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:other', source: 'openclaw-new' })
+      // The next pass reads the row bound to the key the pane shows, and hands the task to that session.
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:other', firstTask: TASK }))
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalledWith('a1', TASK))
+    })
+
+    // Found end to end: handed over under the session key, the task was typed and taken, but its turn is confirmed under
+    // the agent (core/turns/funnel.ts), so Enter was pressed again at 10 s and 20 s and it was failed at 30 s.
+    it('a first task handed over is confirmed when the turn starts for its agent', async () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const row = pane({ sessionId: 'agent:main:plain' })
+      const rows = (id: string) => id === 'a1' || id === 'agent:main:plain' ? row : undefined
+      const done: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
+      const typed: string[] = [], keys: string[] = []
+      const clients = { send: vi.fn(), sendCommander: vi.fn() }
+      const inputs = createInput({
+        readScreen: readInlineScreen,
+        submission: inlineSubmission,
+        resolve: rows,
+        byAgent: rows,
+        terminal: {
+          captureTerminal: vi.fn(async () => ready),
+          validateTerminal: vi.fn(async () => true),
+          submitTerminalAction: vi.fn(async (_id: string, text: string) => { typed.push(text); return done }),
+          keyTerminalAction: vi.fn(async (_id: string, key: string) => { keys.push(key); return done }),
+          pinTerminalControl: vi.fn(() => () => {}),
+        },
+        deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
+        device: () => undefined,
+        clients,
+        agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
+        commandcode: () => undefined,
+        emit: vi.fn(),
+      })
+      const run = handing(() => ready, { input: inputs.input, submitAgent: inputs.submitAgent })
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(typed).toEqual([TASK])
+      // OpenClaw's store shows the turn: the funnel confirms it under the agent its session is bound to.
+      inputs.input.onTurnStarted('a1', TASK)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(keys).toEqual([])
+      expect(clients.send).not.toHaveBeenCalled()
+      inputs.input.forget('a1')
+      vi.useRealTimers()
+    })
+  })
+
+  // A restart resumes the same key, so the pass never binds it again: the TUI process, not the key, says when the
+  // folder its agent's store is read from may have changed.
+  describe('its state folder', () => {
+    /** A pane bound to `agent:main:plain`, showing it ready, whose TUI holds `folder`. */
+    const bound = (folder: string | null, row: Partial<RegisteredSession> = {}) => {
+      const run = setup({ capturePane: vi.fn(async () => screen('screen-plain')), openclawPaneRead: vi.fn(() => true), openclawStateDir: vi.fn(async () => folder) })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', ...row }))
+      return run
+    }
+
+    it('a relaunched TUI that holds another state folder: the row takes it and the session is read again', async () => {
+      const run = bound('/new', { firstTask: 'Fix the parser', openclawStateDir: '/h/.openclaw' })
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
+      expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/new')
+      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true }]])
+      expect(console.log).toHaveBeenCalledWith('[discovery] a1 openclaw · state folder changed')
+      // The task waits for the session read from the new folder: the next pass binds it again, then hands it over.
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
+    // A row with no folder saved (its TUI's open files could not be read at bind) had its stream find the store from
+    // those same open files at attach (lib/openclawStore.ts). Let go and bound again after a daemon restart, it dropped
+    // a message awaiting confirmation and started a run in progress over, to read the store it already read.
+    it('the first read of a TUI whose row kept no folder records it, and the session stays', async () => {
+      const run = bound('/h/.openclaw')
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/h/.openclaw')
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+      // Relaunched since, its stream's store is the one the TUI before it named: the new folder is read again.
+      vi.mocked(run.deps.openclawStateDir).mockResolvedValue('/new')
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7715, startMarker: '2026-11-10T09:00:00Z', executable: 'openclaw' } }))
+      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true }]])
+    })
+
+    it('the folder is read once per TUI process', async () => {
+      const run = bound('/h/.openclaw')
+      vi.mocked(run.deps.registry.setOpenclawStateDir).mockReturnValue(false)
+      await run.binding.bindObservedAgent(tui())
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawStateDir).toHaveBeenCalledOnce()
+      const relaunched = tui({ processIdentity: { pid: 7714, startMarker: '2026-11-10T09:00:00Z', executable: 'openclaw' } })
+      await run.binding.bindObservedAgent(relaunched)
+      expect(run.deps.openclawStateDir).toHaveBeenCalledTimes(2)
+      // What it remembers is bounded: the 256th agent starts it over, at the cost of one more read for each.
+      for (let i = 0; i < 256; i++) {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain' }))
+        await run.binding.bindObservedAgent(tui())
+      }
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      await run.binding.bindObservedAgent(relaunched)
+      expect(run.deps.openclawStateDir).toHaveBeenCalledTimes(2 + 256 + 1)
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+    })
+
+    it('the same folder, or open files that cannot be read, change nothing', async () => {
+      const same = bound('/h/.openclaw')
+      vi.mocked(same.deps.registry.setOpenclawStateDir).mockReturnValue(false)
+      await same.binding.bindObservedAgent(tui())
+      expect(same.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/h/.openclaw')
+      expect(same.deps.forgetSession).not.toHaveBeenCalled()
+      const unreadable = bound(null)
+      await unreadable.binding.bindObservedAgent(tui())
+      expect(unreadable.deps.openclawStateDir).toHaveBeenCalledWith(7714)
+      expect(unreadable.deps.registry.setOpenclawStateDir).not.toHaveBeenCalled()
+      expect(unreadable.deps.forgetSession).not.toHaveBeenCalled()
+      // A stop or restart that took the agent while its open files were read owns it: the read changes nothing.
+      const stopped = bound(null)
+      vi.mocked(stopped.deps.openclawStateDir).mockImplementation(async () => {
+        stopped.binding.whileChanging((agentId) => agentId === 'a1')
+        return '/new'
+      })
+      await stopped.binding.bindObservedAgent(tui())
+      expect(stopped.deps.registry.setOpenclawStateDir).not.toHaveBeenCalled()
+      expect(stopped.deps.forgetSession).not.toHaveBeenCalled()
+    })
   })
 })

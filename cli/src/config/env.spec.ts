@@ -12,7 +12,7 @@ const module = fileURLToPath(new URL('./env.ts', import.meta.url))
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
-const READ = ['NODE_ENV', 'PORT', 'WEB_URL', 'HARNESS_STORE_REF', 'HARNESS_STORE_CATALOG_URL', 'HOOK_INSTALL_ENGINES', 'TERMINAL_BACKENDS', 'RECAP_WITHOUT_DEVICE', 'DISABLE_HOOK_INSTALL', 'TERMINAL_RECONCILE_INTERVAL_MS', 'ADAPTER_DATA_DIR']
+const READ = ['NODE_ENV', 'PORT', 'WEB_URL', 'HARNESS_STORE_REF', 'HARNESS_STORE_CATALOG_URL', 'HOOK_INSTALL_ENGINES', 'TERMINAL_BACKENDS', 'RECAP_WITHOUT_DEVICE', 'DISABLE_HOOK_INSTALL', 'TERMINAL_RECONCILE_INTERVAL_MS', 'ADAPTER_DATA_DIR', 'OPENCLAW_STATE_DIR']
 
 function load(variables: Record<string, string>) {
   const home = mkdtempSync(join(tmpdir(), 'harness-env-'))
@@ -30,7 +30,7 @@ describe('the environment, as env.ts reads it', () => {
     expect(plain.env).toEqual({
       NODE_ENV: 'development', PORT: 18473, WEB_URL: 'https://harness.autonomous.ai', HARNESS_STORE_REF: null, HARNESS_STORE_CATALOG_URL: null,
       HOOK_INSTALL_ENGINES: null, TERMINAL_BACKENDS: null, RECAP_WITHOUT_DEVICE: true, DISABLE_HOOK_INSTALL: false,
-      TERMINAL_RECONCILE_INTERVAL_MS: null, ADAPTER_DATA_DIR: join(plain.home, 'data'),
+      TERMINAL_RECONCILE_INTERVAL_MS: null, ADAPTER_DATA_DIR: join(plain.home, 'data'), OPENCLAW_STATE_DIR: join(plain.home, '.openclaw'),
     })
     const set = load({
       NODE_ENV: 'test', PORT: '9123', BACKEND_WS_URL: 'ws://localhost:8090', HARNESS_STORE_REF: 'feature/x', HARNESS_STORE_CATALOG_URL: ' http://127.0.0.1:9/c ',
@@ -42,6 +42,12 @@ describe('the environment, as env.ts reads it', () => {
       HOOK_INSTALL_ENGINES: ['claude', 'codex'], TERMINAL_BACKENDS: ['tmux'], RECAP_WITHOUT_DEVICE: false, DISABLE_HOOK_INSTALL: true,
       TERMINAL_RECONCILE_INTERVAL_MS: 6000,
     })
+  })
+
+  it('the OpenClaw state folder is the one OpenClaw would use', () => {
+    expect(load({ OPENCLAW_HOME: '/h' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/h/.openclaw' })
+    expect(load({ OPENCLAW_STATE_DIR: ' ~/x ', OPENCLAW_HOME: '/h' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/h/x' })
+    expect(load({ OPENCLAW_STATE_DIR: '/s' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/s' })
   })
 
   it('ignores a store setting it cannot use, which under zod stopped every `harness` command as it loaded', () => {

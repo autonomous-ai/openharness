@@ -7,6 +7,7 @@ import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createPaneOperations } from '../agents/paneOperations.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 
 vi.mock('../../engines/hooks.js', async (real) => {
   const actual = await real<typeof import('../../engines/hooks.js')>()
@@ -15,6 +16,7 @@ vi.mock('../../engines/hooks.js', async (real) => {
     codex: { ...actual.engineHooks.codex, install: vi.fn(() => true), installIn: vi.fn(() => true) },
   } }
 })
+vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../lib/engineHomes.js', () => ({
   confirmHomes: vi.fn(() => ({ claude: null, codex: null })),
   recoverEngineHomes: vi.fn(() => ({ claude: [], codex: [] })),
@@ -529,6 +531,22 @@ describe('installing every engine\'s hooks', () => {
     expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · native hook preparation is unavailable')
     expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
     installed.close()
+  })
+
+  // Review of #3954: an installer stopped by a missing notify.mjs says so in its own line, and the startup refresh added a
+  // generic second one for each of those engines. An engine whose hooks do not run it still gets the generic line.
+  it('says a failure once: nothing more for an engine whose installer named a missing notify.mjs', async () => {
+    vi.mocked(missingHookScript).mockImplementation(engine => engine === 'opencode' ? null : '/opt/harness/hook/notify.mjs')
+    try {
+      vi.mocked(engineHooks.codex.install).mockReturnValueOnce(false as never)
+      vi.mocked(hooks.installCursorHooks).mockReturnValueOnce(false as never)
+      vi.mocked(hooks.installHermesHooks).mockResolvedValueOnce(false)
+      vi.mocked(hooks.installOpencodePlugin).mockResolvedValueOnce(false)
+      const installed = installEngineHooks(4242, { environment: {} })
+      await installed.settled
+      expect(vi.mocked(console.warn).mock.calls).toEqual([['[hooks] opencode install skipped · native hook preparation is unavailable']])
+      installed.close()
+    } finally { vi.mocked(missingHookScript).mockReset().mockReturnValue(null) }
   })
 
   it('retries failed hook preparation before considering a home adopted', async () => {

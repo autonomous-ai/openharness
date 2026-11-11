@@ -6,6 +6,7 @@ import { join } from 'path'
 import { EnvIssue, flag, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url, type EnvField, type EnvOf } from './envFields.js'
 import { parseTerminalBackends } from './terminalConfig.js'
 import { adoptComputerId } from '../lib/computerIdentity.js'
+import { openclawDefaultStateDir } from '../engines/openclaw/contract.js'
 
 // Packaged files (cli.js/notify.mjs) live in ~/.harness/cli; mutable state in ~/.harness/cli/data.
 // `~/.harness` is the PRODUCT data root and does not move — see the naming discipline in CLAUDE.md.
@@ -161,7 +162,10 @@ const fields = {
   COPILOT_HOME: text(join(homedir(), '.copilot')),
   // OpenClaw state root, OpenClaw's own variable: agents' sessions live in
   // <OPENCLAW_STATE_DIR>/agents/<agentId>/agent/openclaw-agent.sqlite. Used when the TUI's open files cannot be read.
-  OPENCLAW_STATE_DIR: text(join(homedir(), '.openclaw')),
+  // Resolved as OpenClaw resolves it (OPENCLAW_HOME moves the default), so a Gateway started beside Harness and
+  // Harness look in the same folder.
+  OPENCLAW_STATE_DIR: (raw: string | undefined): string =>
+    openclawDefaultStateDir({ OPENCLAW_STATE_DIR: raw, OPENCLAW_HOME: process.env.OPENCLAW_HOME }, homedir()),
   // Legacy Cursor fallback. cursor/home.ts resolves its distinct config (chats/hooks) and data
   // (projects/transcripts) roots using CURSOR_CONFIG_DIR, XDG_CONFIG_HOME and CURSOR_DATA_DIR.
   CURSOR_HOME: text(join(homedir(), '.cursor')),

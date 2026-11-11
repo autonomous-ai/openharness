@@ -201,7 +201,7 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
           item.isEnabled = enabled
         }
         if group.count > 5, let first = group.first {
-          // That Swarm's Notifications page, which lists them all.
+          // That Swarm, brought forward, where Your Team shows every agent that asks.
           let swarmName = first["tabName"] as? String ?? "Swarm"
           let all = add("View all \(group.count) in \(swarmName)…", "openSwarmNotice", enabled: enabled)
           all.representedObject = ["swarmTabId": first["swarmTabId"] ?? "", "kind": "all", "id": ""]

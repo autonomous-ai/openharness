@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, syml
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { InstructionsError, readInstructions, readSharedInstructions, writeInstructions } from './agentInstructions.js'
+import { InstructionsError, readInstructions, readInstructionsAtLaunch, readSharedInstructions, writeInstructions } from './agentInstructions.js'
 
 /** The protocol's limit for a file and for a text, written out: the apps are built against this number. */
 const LIMIT = 65_536
@@ -91,6 +91,41 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
   const file = (name = 'Faye') => join(cwd, 'agents', `${name}.md`)
   const put = async (text: string | Buffer, name = 'Faye') => { await mkdir(join(cwd, 'agents'), { recursive: true }); await writeFile(file(name), text) }
   const code = (promise: Promise<unknown>) => promise.then(() => 'resolved', (error) => error instanceof InstructionsError ? error.code : error)
+
+  // A Swarm agent's own file goes into the instructions its engine starts with (superTabs/inCore/launch.ts), which a launch waits
+  // on: read at once, bounded, never through a link (anh Dee, 2026-11-11: Alba never read the rules its person wrote there).
+  describe('reading it as its agent starts', () => {
+    it('gives the text of a plain UTF-8 file, and nothing when there is no folder or no file', async () => {
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBeNull()
+      await mkdir(join(cwd, 'agents'))
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBeNull()
+      await put('Be brief.\n')
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBe('Be brief.\n')
+      expect(readInstructionsAtLaunch(join(cwd, 'gone'), 'Faye', 100)).toBeNull()
+    })
+
+    it('says a file over the limit is too large, and reads nothing of a bad name, a file not UTF-8 or a directory', async () => {
+      await put('x'.repeat(101))
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBe('TOO_LARGE')
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 101)).toBe('x'.repeat(101))
+      expect(readInstructionsAtLaunch(cwd, '../Faye', 100)).toBeNull()
+      expect(readInstructionsAtLaunch(cwd, '', 100)).toBeNull()
+      await put(Buffer.from([0xff, 0xfe, 0x41]))
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBeNull()
+      await mkdir(join(cwd, 'agents', 'Ken.md'))
+      expect(readInstructionsAtLaunch(cwd, 'Ken', 100)).toBeNull()
+    })
+
+    it.runIf(posix)('follows no link: not the file\'s, nor the agents folder\'s', async () => {
+      await writeFile(join(outside, 'Faye.md'), 'Someone else\'s words.')
+      await mkdir(join(cwd, 'agents'))
+      await symlink(join(outside, 'Faye.md'), file())
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBeNull()
+      await rm(join(cwd, 'agents'), { recursive: true })
+      await symlink(outside, join(cwd, 'agents'))
+      expect(readInstructionsAtLaunch(cwd, 'Faye', 100)).toBeNull()
+    })
+  })
 
   describe('reading it', () => {
     it('gives its text, and the SHA-256 of its bytes as the version', async () => {

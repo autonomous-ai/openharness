@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../theme/app_theme.dart';
+import '../../widgets/agent_drag.dart' show PaneCarry, PaneDragHandle;
 import '../finder_controller.dart';
 import '../finder_files.dart';
 import '../finder_git.dart';
@@ -32,7 +33,11 @@ class FinderPanePanel extends StatefulWidget {
     this.onGuardClose,
     this.compactHeader = false,
     this.onFixedWidth,
+    this.paneDrag,
   });
+
+  /// The header carries the tile to another, as a terminal's does; null when it is alone in its tab.
+  final PaneDragHandle? paneDrag;
 
   final String root;
   final FinderFiles files;
@@ -127,12 +132,21 @@ class _FinderPanePanelState extends State<FinderPanePanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ListenableBuilder(
-            listenable: _controller.git,
-            builder: (context, _) => FinderHeader(
-              controller: _controller,
-              compact: widget.compactHeader,
-              onCollapse: () => _setCollapsed(true),
+          PaneCarry(
+            handle: widget.paneDrag,
+            label: widget.root
+                .split(RegExp(r'[\\/]'))
+                .lastWhere(
+                  (part) => part.isNotEmpty,
+                  orElse: () => widget.root,
+                ),
+            child: ListenableBuilder(
+              listenable: _controller.git,
+              builder: (context, _) => FinderHeader(
+                controller: _controller,
+                compact: widget.compactHeader,
+                onCollapse: () => _setCollapsed(true),
+              ),
             ),
           ),
           Divider(height: 1, color: AppColors.border),
