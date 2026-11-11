@@ -4,6 +4,7 @@ import { RUNTIME_RECORDS, RUNTIME_REQUEST_BYTES, RUNTIME_WAIT_MS } from '../../e
 import type { RuntimeContext, RuntimeControl, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../../engines/facets/runtime.js'
 import { blankRuntimeState, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../../engines/kit/runtime.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
+import { launchFlagsOf } from '../../lib/launchFlags.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
@@ -33,11 +34,14 @@ export interface RuntimeStage {
 
 const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway,
   s.active, s.tmuxPane, s.primaryRuntimeKey, s.runtimes]) : ''
-// With the model and effort it was launched with: an engine whose flags override its settings reads its configured effort from
-// them (claude/runtimeProfile.ts).
-const snapshot = (s: RegisteredSession): RuntimeSession => ({ agentId: s.agentId, sessionId: s.sessionId, engine: s.engine,
-  model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome,
-  ...(s.launchModel ? { launchModel: { model: s.launchModel.model, effort: s.launchModel.effort } } : {}) })
+// With the model and effort its process was launched with: an engine whose flags outrank its settings reads its configured
+// effort from them (claude/runtimeProfile.ts).
+const snapshot = (s: RegisteredSession): RuntimeSession => {
+  const launched = launchFlagsOf(s)
+  return { agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, model: typeof s.model === 'string' ? s.model : null,
+    cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome,
+    ...(launched ? { launchModel: { model: launched.model, effort: launched.effort } } : {}) }
+}
 const controlCopy = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && { ...control, target: { ...control.target } }
 const unavailable = (): never => { throw new EngineReadError('ENGINE_STALE_REPLY') }
 

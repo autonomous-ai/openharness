@@ -89,11 +89,13 @@ async function claudeAvailableModels(session: RuntimeSession): Promise<string[]>
 }
 
 async function claudeConfiguredEffort(session: RuntimeSession): Promise<string> {
-  // A session launched with --effort runs at it, whatever its settings say. Read as the settings' effortLevel until its first
-  // reply recorded its own, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its project as
-  // running at high (the backend's start line, leadStart.ts otherThanAsked), and Desktop showed high.
-  const launched = session.launchModel?.effort
-  if (launched && CLAUDE_EFFORTS.has(launched)) return launched
+  // A session launched with --effort starts at it: the flag outranks the settings' effortLevel, though Claude Code may still
+  // cap it (maxEffortLevel, its organization's) or step it down on a model without it. Read as the settings' effortLevel
+  // until its first reply recorded its own, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its
+  // project as running at high (the backend's start line, leadStart.ts otherThanAsked), and Desktop showed high. Only an
+  // effort its launch model takes: haiku has none, and a launch flag is never auto (review of #4090).
+  const launch = session.launchModel, launched = launch?.effort
+  if (launched && (launch.model ? claudeEfforts(launch.model, session.cliVersion) : [...BASIC_EFFORTS]).includes(launched)) return launched
   let configured: string | null = null
   for (const file of claudeSettingsFiles(session)) {
     const config = await readJson(file)

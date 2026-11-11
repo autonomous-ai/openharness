@@ -134,7 +134,6 @@ describe('runtime worker contract', () => {
     for (const bad of [undefined, [], {}, { ...ctx, session: { ...ctx.session, engine: 'codex' } },
       { ...ctx, session: { ...ctx.session, cwd: 'relative' } }, { ...ctx, state: { ...ctx.state, observedAt: Infinity } },
       { ...ctx, session: { ...ctx.session, launchModel: 'xhigh' } }, { ...ctx, session: { ...ctx.session, launchModel: { model: 1, effort: null } } },
-      { ...ctx, session: { ...ctx.session, launchModel: { model: null, effort: 'xhigh', more: true } } },
       { ...ctx, session: { ...ctx.session, launchModel: { model: 'opus', effort: 7 } } },
       { ...ctx, control: { target: target(ctx), before: null, modelConfirmed: true } },
       { ...ctx, control: { target: { ...target(ctx), sessionId: 'other' }, before: null, modelConfirmed: false, effortConfirmed: false } }]) {
@@ -151,6 +150,8 @@ describe('runtime worker contract', () => {
     expect(copied.session).not.toHaveProperty('processIdentity')
     expect(copied.session.launchModel).toEqual(launchModel)
     expect(copied.session.launchModel).not.toBe(launchModel)
+    // A key a later core adds is left behind, not refused: an older engine would refuse every read of a launched session.
+    expect(runtimeContext({ ...ctx, session: { ...ctx.session, launchModel: { ...launchModel, more: true } } }, 'claude')!.session.launchModel).toEqual(launchModel)
     expect(copied.state).not.toBe(ctx.state)
   })
 
@@ -161,9 +162,15 @@ describe('runtime worker contract', () => {
     const ctx = context(); ctx.session.launchModel = { model: 'opus', effort: 'xhigh' }
     const read = async () => (await requests[RUNTIME_READ]({ version: 1, context: ctx, operation: { kind: 'config' } }, who) as Record<string, any>).answer.state.effort
     expect(await read()).toBe('xhigh')
-    // An effort Claude has no word for is not one it runs at: its settings say, and with none, its own default.
-    ctx.session.launchModel = { model: 'opus', effort: 'warp' }
-    expect(await read()).toBe('auto')
+    // An effort Claude has no word for, or one its model does not take, is not one it runs at: its settings say, and with
+    // none, its own default (review of #4090).
+    for (const launchModel of [{ model: 'opus', effort: 'warp' }, { model: 'haiku', effort: 'high' }, { model: null, effort: 'auto' }, { model: null, effort: 'ultracode' },
+      { model: 'claude-sonnet-4-6', effort: 'xhigh' }]) {
+      ctx.session.launchModel = launchModel
+      expect(await read(), JSON.stringify(launchModel)).toBe('auto')
+    }
+    ctx.session.launchModel = { model: null, effort: 'max' }
+    expect(await read()).toBe('max')
   })
 
   it('bounds concurrent work and drops results after a connection closes', async () => {

@@ -164,6 +164,10 @@ describe('core runtime profile authority', () => {
     await t.sessions.read(t.s, { kind: 'config' })
     expect(t.read.mock.calls[1]![1].session.launchModel).toEqual({ model: 'opus', effort: 'xhigh' })
     expect(t.read.mock.calls[1]![1].session.launchModel).not.toBe(t.s.launchModel)
+    // On a grid its relaunch passes none of them (launchOverrides.ts), though the row keeps them for the move home.
+    t.s.gridLaunch = { model: 'qwen' } as never
+    await t.sessions.read(t.s, { kind: 'config' })
+    expect(t.read.mock.calls[2]![1].session).not.toHaveProperty('launchModel')
   })
 
   it('accepts a copy holding an older non-null version', async () => {

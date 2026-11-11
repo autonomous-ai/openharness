@@ -65,7 +65,7 @@ export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeCon
     || (s.codexHome != null && !path(s.codexHome))) return null
   const launched = s.launchModel
   const launchModel = launched === undefined ? undefined
-    : record(launched) && fields(launched, ['model', 'effort']) && nullable(launched.model) && nullable(launched.effort)
+    : record(launched) && nullable(launched.model) && nullable(launched.effort)
       ? { model: launched.model, effort: launched.effort } : null
   if (launchModel === null) return null
   const session: RuntimeSession = { agentId: s.agentId, sessionId: s.sessionId, engine, model: s.model, cliVersion: s.cliVersion,
