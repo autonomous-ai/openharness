@@ -12,6 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
+import { exemptClock, pastExemptionsClock } from './channelExemptions.test-support.js'
 
 // A Personal Swarm's project chat with no Lead (task #2633): the person's messages wait for the Lead their Desktop starts, and
 // are delivered to it, by delivery as any other, once it joins. A fresh loopback replica set, created here.
@@ -36,8 +37,10 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-async function personal(operation = PERSONAL_SWARM_OPERATION) {
-  const store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+/** [operation]'s Swarm, its clock inside the channel exemptions' window unless [clock] says otherwise (commands.ts
+ *  CHANNEL_EXEMPTIONS_END), so each case passes on every day. */
+async function personal(operation = PERSONAL_SWARM_OPERATION, clock = exemptClock()) {
+  const store = new SuperTabStore(db, clock, { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   const tab = (await store.create(owner, operation, operation === PERSONAL_SWARM_OPERATION ? 'Personal' : 'Team', 'private')).id
   const execute = (command: Command) => store.execute(owner, tab, { operationId: randomUUID(), command })
   const games = (await execute({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
@@ -66,6 +69,16 @@ describe('a Personal Swarm project chat with no Lead', () => {
 
 // New project's opening request in any Swarm (agentsOnly.test.ts): its creator's request is kept in the new project's channel
 // before lead.start, and the PM that joins reads it there; the channel is agents only after it.
+// A Desktop before #3965 is exempt only until CHANNEL_EXEMPTIONS_END; the Desktop of #3965 sends both to the PM's own chat.
+describe('from the end of the channel exemptions', () => {
+  it('refuses a Personal Swarm project chat\'s first message, and New project\'s opening request', async () => {
+    const mine = await personal(PERSONAL_SWARM_OPERATION, pastExemptionsClock())
+    await expect(mine.send('make the landing page dark')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
+    const team = await personal(randomUUID(), pastExemptionsClock())
+    await expect(team.send('make the landing page dark')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
+  })
+})
+
 describe('New project\'s opening request in a Team Swarm', () => {
   it('is kept for the PM that joins, which reads it; the next post is refused', async () => {
     const f = await personal(randomUUID())
