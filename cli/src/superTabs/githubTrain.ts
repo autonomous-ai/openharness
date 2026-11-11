@@ -181,7 +181,13 @@ export class GitHubTrain<T extends TrainPull> {
     if (train) { await this.attend(train, ready, waiting); return [] }
     // Nothing to carry: nothing more is read (the merger passes every 30 seconds).
     if (!ready.length) return []
-    const red = (await this.closed()).filter(closed => closed.red && !closed.mergedAs)
+    // A closed train is red by its title, which anyone can write: only one this login built whose checks did fail is, and
+    // only one that carried a pull request ready now is read.
+    const red: Train[] = []
+    for (const closed of await this.closed()) {
+      if (!closed.red || closed.mergedAs || !closed.members.some(member => ready.some(pull => pull.number === member.number && pull.head === member.head))) continue
+      if (await this.genuine(closed) && (await this.host.checks(closed.number, closed.head)).state === 'failed') red.push(closed)
+    }
     const { riders, alone } = nextTrain(ready, red)
     for (const { pull, train: carried } of alone) await this.host.failedAlone(pull, carried)
     if (!riders.length) return []
@@ -266,18 +272,32 @@ export class GitHubTrain<T extends TrainPull> {
     return statuses.some(status => status.context === TRAIN_MARK && String(object(status.creator).login ?? '').toLowerCase() === login)
   }
 
-  /** Whether [train]'s branch is what its body names and nothing else: from its head down, one merge commit for each member,
-   *  the member's head its second parent, and under the first the commit of the base it stands on ([from]). A commit is
-   *  read once: it never changes. */
-  private async holds(train: Train, from: string): Promise<boolean> {
+  /** The commit [train]'s members stand on: from its head down, one merge commit for each member its body names, the member's
+   *  head its second parent. Null when its branch is not that. A commit is read once: it never changes. */
+  private async under(train: Train): Promise<string | null> {
     let at = train.head
     for (const member of train.members.toReversed()) {
       const commit = await this.deps.reads.one(this.repo, `/repos/${this.repo}/git/commits/${at}`)
       const parents = Array.isArray(commit.parents) ? commit.parents.map(parent => String(object(parent).sha ?? '')) : []
-      if (parents.length !== 2 || parents[1] !== member.head) return false
+      if (parents.length !== 2 || parents[1] !== member.head) return null
       at = parents[0]!
     }
-    return SHA.test(from) && at === from
+    return at
+  }
+
+  /** Whether [train]'s branch is what its body names and nothing else: its members (under), on the commit of the base it
+   *  stands on ([from]). */
+  private async holds(train: Train, from: string): Promise<boolean> {
+    return SHA.test(from) && await this.under(train) === from
+  }
+
+  /** Whether closed [train] is one this login built that carried what its body names: its head the tip its body names, and
+   *  marked; its members under it; and they on a commit of the base. Its title and body are anyone's to write after it closed
+   *  as before, and are believed for nothing else. */
+  private async genuine(train: Train): Promise<boolean> {
+    if (train.head !== train.tip || !await this.marked(train.head)) return false
+    const on = await this.under(train)
+    return on !== null && (await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${on}`)).ahead_by === 0
   }
 
   /** Builds the next train of [riders] on the base's tip with the merges API (no checkout, so no branch's code runs here), and
@@ -341,6 +361,8 @@ export class GitHubTrain<T extends TrainPull> {
     const open = train.members.filter(member => this.pulls.some(pull => Number(pull.number) === member.number && object(pull.head).sha === member.head))
     if (!open.length) return []
     if (kept === undefined) {
+      // Found merged, not landed by this pass: its body may have been written since.
+      if (!await this.genuine(train)) return []
       const landing = await this.deps.reads.one(this.repo, `/repos/${this.repo}/git/commits/${sha}`)
       kept = Array.isArray(landing.parents) && landing.parents.length === 2 && object(landing.parents[1]).sha === train.tip
     }
