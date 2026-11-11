@@ -254,11 +254,13 @@ describe('createPodman', () => {
       [['secret', 'create', 's1', '-'], first],
       [['--connection', 'harness', 'secret', 'create', 's2', '-'], second],
     ])
-    // Through the relay the data is on stdin alone: never in an argument or the environment.
-    for (const [file, args, opts] of vi.mocked(execFile).mock.calls as unknown as Array<[string, string[], { env: Record<string, string> }]>) {
+    // Through the relay the data is on stdin alone: never in an argument or the environment of either run.
+    const runs = vi.mocked(execFile).mock.calls as unknown as Array<[string, string[], { env?: NodeJS.ProcessEnv }]>
+    expect(runs).toHaveLength(2)
+    for (const [file, args, opts] of runs) {
       for (const secret of [first, second]) {
         expect([file, ...args].join(' ')).not.toContain(secret)
-        expect(JSON.stringify(opts.env)).not.toContain(secret)
+        expect(JSON.stringify(opts.env ?? process.env)).not.toContain(secret)
       }
     }
   })
