@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, syml
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { InstructionsError, readInstructions, readInstructionsAtLaunch, readPersonalInstructions, readSharedInstructions, writeInstructions } from './agentInstructions.js'
+import { InstructionsError, personalFiles, readInstructions, readInstructionsAtLaunch, readPersonalInstructions, readSharedInstructions, writeInstructions } from './agentInstructions.js'
 
 /** The protocol's limit for a file and for a text, written out: the apps are built against this number. */
 const LIMIT = 65_536
@@ -1099,6 +1099,24 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       expect(await read({ engine: 'codex' })).toEqual({ shared: [shown('AGENTS.override.md', '~/.codex/AGENTS.override.md', 'codex', 'Override.\n')], skipped: [] })
       await own('.codex/AGENTS.override.md', '  \n')
       expect(await read({ engine: 'codex' })).toEqual({ shared: [], skipped: [] })
+    })
+
+    // Code review of #4047: a folder Codex's override is not a file is passed over, as Codex does, to the AGENTS.md it reads.
+    it('passes over a Codex override that is not a file to the AGENTS.md Codex reads, and says why', async () => {
+      await own('.codex/AGENTS.md', 'Plain.\n')
+      await mkdir(join(outside, '.codex', 'AGENTS.override.md'))
+      expect(await read({ engine: 'codex' })).toEqual({ shared: [shown('AGENTS.md', '~/.codex/AGENTS.md', 'codex', 'Plain.\n')],
+        skipped: [{ name: 'AGENTS.override.md', path: '~/.codex/AGENTS.override.md', loadedBy: ['codex'], why: 'not_a_file' }] })
+    })
+
+    // Code review of #4047: the home folder is above most projects, and Claude Code's walk up them meets its .claude/CLAUDE.md.
+    it('is not shown again as a folder\'s above a project in the home folder', async () => {
+      await own('.claude/CLAUDE.md', 'Mine.\n')
+      const project = join(outside, 'code', 'proj')
+      await mkdir(project, { recursive: true })
+      expect((await readSharedInstructions(project)).shared.map(one => one.path)).toEqual(['../../.claude/CLAUDE.md'])
+      expect(await readSharedInstructions(project, personalFiles({ engine: 'claude' } as never, outside))).toEqual({ shared: [], skipped: [] })
+      expect(personalFiles({ engine: 'codex' } as never, outside)).toEqual([])
     })
 
     it('reads the folder the session keeps its own in: its profile, or where its transcript is, else the default', async () => {

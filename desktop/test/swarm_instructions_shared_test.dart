@@ -708,6 +708,28 @@ void main() {
     const basics =
         'You are a Swarm agent on a team shipping one project.\n- Your tasks are GitHub issues.';
 
+    // Code review of #4047: the pane waited for Harness's part before it showed the agent's own file.
+    testWidgets(
+      'shows the agent\'s own file and its folder\'s while Harness\'s part is on its way, and Harness\'s once it comes',
+      (tester) async {
+        final slow = Completer<void>();
+        final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
+          ..shared = [file('AGENTS.md', 'Ship small.')]
+          ..basics = basics
+          ..holdBasics = (() => slow.future);
+        await show(tester, computer, open: false);
+        expect(find.text('Be brief.'), findsOneWidget);
+        expect(key('swarm-shared-heading'), findsOneWidget);
+        expect(key('swarm-harness-heading'), findsNothing);
+        slow.complete();
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<Text>(key('swarm-harness-name-0')).data,
+          'Swarm basics',
+        );
+      },
+    );
+
     testWidgets(
       'Harness\'s Swarm basics and its person\'s own CLAUDE.md, read only, each a click from its text, then its engine\'s own',
       (tester) async {

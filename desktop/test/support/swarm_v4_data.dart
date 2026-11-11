@@ -566,6 +566,9 @@ class SwarmV4Computer {
   /// Called as a read arrives, and the read is not answered until what it returns completes: a computer slow to answer.
   Future<void> Function()? hold;
 
+  /// The same for its Swarm service's `basics`: a computer slow to say Harness's part.
+  Future<void> Function()? holdBasics;
+
   static String versionOf(String? text) =>
       text == null ? '' : 'v${text.hashCode}';
 
@@ -576,6 +579,7 @@ class SwarmV4Computer {
   ) async {
     if (type == 'super_tabs') {
       asked.add(payload);
+      await holdBasics?.call();
       if (refuse case final code?) {
         throw WsRequestFailure(responseType: 'super_tabs_result', code: code);
       }

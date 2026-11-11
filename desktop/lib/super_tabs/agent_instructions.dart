@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -118,21 +119,24 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     final agent = widget.agent, turn = ++_reading;
     // What shows stays while the read is out (the retry turns); the answer replaces it.
     setState(() => _asking = true);
-    // Asked beside the read, not after it, and never an error: the rest shows without it.
-    final basics = link.basics(agent);
+    // Asked beside the read and shown when it comes, never an error: the rest does not wait for it, as a computer slow to answer
+    // it held the agent's own file back (code review of #4047).
+    unawaited(
+      link.basics(agent).then((harness) {
+        if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
+        setState(() => _harness = harness);
+      }),
+    );
     try {
       final read = await link.read(agent);
-      final harness = await basics;
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() {
         _file = read.file;
         _shared = read.shared;
-        _harness = harness;
         _readError = null;
         _asking = false;
       });
     } on SwarmInstructionsError catch (error) {
-      final harness = await basics;
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() {
         _readError = _words(error.code, saving: false);
@@ -144,7 +148,6 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             others.personalSkipped.isNotEmpty) {
           _shared = others;
         }
-        _harness = harness ?? _harness;
         _asking = false;
       });
     }

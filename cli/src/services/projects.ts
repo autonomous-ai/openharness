@@ -5,7 +5,7 @@
  * Moved out of the socket's switch as they were (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { Asker, CoreApi, ServiceRequest, ServiceRequests } from '../core/api.js'
-import { InstructionsError, readInstructions, readPersonalInstructions, readSharedInstructions, writeInstructions } from '../lib/agentInstructions.js'
+import { InstructionsError, personalFiles, readInstructions, readPersonalInstructions, readSharedInstructions, writeInstructions } from '../lib/agentInstructions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { listDir } from '../lib/fsBrowse.js'
@@ -37,7 +37,7 @@ export function startProjects(core: CoreApi): ServiceRequests {
    *  (`skipped`, `personalSkipped`), each with where it is and which engines load it. What went wrong with one, where it is the file's or the disk's, is logged by where
    *  it is and a code and never what: the answer says only why. Each key is there only when it has something. */
   const projectFiles = async (agent: RegisteredSession & { cwd: string }): Promise<Record<string, unknown>> => {
-    const [project, own] = await Promise.all([readSharedInstructions(agent.cwd), readPersonalInstructions(agent)])
+    const [project, own] = await Promise.all([readSharedInstructions(agent.cwd, personalFiles(agent)), readPersonalInstructions(agent)])
     for (const one of [...project.skipped, ...own.skipped]) if ('error' in one) console.error(`[projects] agent_instructions_read left out ${one.path} · ${codeOf(one.error)}`)
     const reasons = (skipped: typeof project.skipped) => skipped.map(({ name, path, loadedBy, why }) => ({ name, path, loadedBy, why }))
     return {

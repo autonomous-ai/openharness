@@ -271,7 +271,10 @@ function unshown(error: unknown): Read {
  *  above its root. Each is read to the limit, with `truncated` saying it was cut, at a whole character, and no more than
  *  SHARED_MAX_BYTES of them in all. No file is an error of the whole: one that is there and is not shown comes back in `skipped`,
  *  with why. */
-export async function readSharedInstructions(cwd: string): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
+export async function readSharedInstructions(cwd: string, own: readonly string[] = []): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
+  // The person's own files ([own], personalFiles) are shown with theirs, not again as a folder's: the home folder is above most
+  // projects, and its .claude/CLAUDE.md is the person's own (code review of #4047). Known by their real paths, as these folders are.
+  const mine = new Set(await Promise.all(own.map(file => realpath(file).catch(() => file))))
   // The engines look up from the folder they run in as the system gives it to them, its real path: so this does too. A folder that
   // is not there has nothing to show; one the disk cannot resolve (a loop) is looked in by its own name only, so that each file it
   // would hold is told as unreadable.
@@ -287,6 +290,8 @@ export async function readSharedInstructions(cwd: string): Promise<{ shared: Sha
     for (const rel of SHARED_FILES) {
       const loadedBy: Engine[] = [...(CLAUDE_LOADS.includes(rel) ? ['claude' as const] : []), ...(CODEX_LOADS.includes(rel) && codexDirs.includes(dir) ? ['codex' as const] : [])]
       if (!loadedBy.length) continue
+      const path = join(dir, rel)
+      if (mine.size && mine.has(await realpath(path).catch(() => path))) continue
       const read = await readFile(root ?? base, dir, rel, spent < SHARED_MAX_BYTES)
       if (read && 'text' in read) spent += Buffer.byteLength(read.text)
       if (read) found.push({ dir, rel, name: basename(rel), path: relative(base, join(dir, rel)).split(sep).join('/'), loadedBy, read })
@@ -350,19 +355,33 @@ export async function readPersonalInstructions(session: Pick<RegisteredSession, 
   home: string = homedir()): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
   const engine = session.engine
   if (engine !== 'claude' && engine !== 'codex') return { shared: [], skipped: [] }
-  const folder = engineFolder(session) ?? join(home, engine === 'claude' ? '.claude' : '.codex')
+  const skipped: SkippedInstructions[] = []
   for (const name of engine === 'claude' ? ['CLAUDE.md'] : CODEX_LOADS) {
-    const file = join(folder, name)
+    const file = join(ownFolder(session, home), name)
     const read = await readOwn(file)
     if (!read) continue
     const fromHome = relative(home, file)
     const path = fromHome.startsWith('..') || isAbsolute(fromHome) ? file.split(sep).join('/') : `~/${fromHome.split(sep).join('/')}`
     const located: Located = { name, path, loadedBy: [engine] }
-    if (!('text' in read)) return { shared: [], skipped: [{ ...located, ...read }] }
-    return { shared: read.text.trim() ? [{ ...located, ...read }] : [], skipped: [] }
+    if (!('text' in read)) {
+      skipped.push({ ...located, ...read })
+      // Codex passes over one that is not a file to the next, as in a project's folders (readSharedInstructions; code review of #4047).
+      if (read.why === 'not_a_file') continue
+      return { shared: [], skipped }
+    }
+    return { shared: read.text.trim() ? [{ ...located, ...read }] : [], skipped }
   }
-  return { shared: [], skipped: [] }
+  return { shared: [], skipped }
 }
+
+/** The folder a session's engine keeps the person's own in: [engineFolder], else its default in [home]. */
+const ownFolder = (session: Pick<RegisteredSession, 'engine' | 'claudeHome' | 'codexHome' | 'transcriptPath'>, home: string): string =>
+  engineFolder(session) ?? join(home, session.engine === 'claude' ? '.claude' : '.codex')
+
+/** Where the person's own file is that a project's folders may also hold: Claude Code's CLAUDE.md, which its walk up the folders
+ *  meets in the home folder's .claude. Codex walks no folder above a project's root, so none of its own is met there. */
+export const personalFiles = (session: Pick<RegisteredSession, 'engine' | 'claudeHome' | 'codexHome' | 'transcriptPath'>, home: string = homedir()): string[] =>
+  session.engine === 'claude' ? [join(ownFolder(session, home), 'CLAUDE.md')] : []
 
 /** The folder a session's engine keeps the person's own in: the profile it was started with, or the one its transcript is in
  *  (`<folder>/projects/…` for Claude Code, `<folder>/sessions/…` for Codex), where a person who moved it (CLAUDE_CONFIG_DIR,
