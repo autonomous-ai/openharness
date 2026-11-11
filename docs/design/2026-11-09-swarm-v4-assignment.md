@@ -87,7 +87,8 @@ Code is everything that can be counted or checked; the PM's guide keeps only jud
 Every minute, in the PM's person's Harness, for each project its PM leads from there (`githubMerge.ts ledProjects`):
 
 - **Tasks** are the repository's open issues the PM sized (`size:s`, `size:m`, `size:l`) that no builder holds. One a
-  builder holds is queued on it, and one it took (`status:taken`) keeps it busy for half its size. An issue another team's
+  builder holds is queued on it, and one it took (`status:taken`) keeps it busy for half its size, until its pull request
+  waits for its readers or its merge: then it takes none of its builder's time. An issue another team's
   label holds is left alone, as is any `builder:` label a person set. `part:` gives the task's part, `p0`-`p2` its weight
   (8, 4, 2; 1 for none), "after #N" in its text what must end first, and each `needs:` label a tool, system or GPU its
   builder's machine must report, else that builder never gets it.
@@ -99,8 +100,11 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   ten minutes); a machine whose daemon reports none is planned as 8 cores. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
 - **Sizes** until estimates are learned: s 30 minutes, 1 core, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 2, 4 GB, 2 GB, 10%;
   l 240, 4, 8 GB, 4 GB, 25%; a weekly window spends a fifth of that.
-- **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. Each builder
-  gets the free tasks it starts next until it holds two: `builder:<name>` on the issue and one comment, "Harness, 15:40: for
+- **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. A builder
+  with no task to build and fewer than four open gets the free task it starts next, one at a time (until it held two, before
+  11 November: [the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 2). A task is one its builder builds
+  while given or taken with no pull request yet, with a draft, or with one a reader's HOLD stands on; one whose pull request
+  waits for its readers or its merge is not. It is given as `builder:<name>` on the issue and one comment, "Harness, 15:40: for
   **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is
@@ -115,7 +119,9 @@ must be more proactive and ask the user what area they want the agent to focus o
 
 - **Where it is said:** the `Works on:` line at the top of the agent's instructions file in each project's repository,
   `agents/<Name>.md`, which its person reads and changes beside its chat. Areas are the project's `part:` labels' words
-  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list.
+  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list. A label is its area however it is
+  spelled: `part:Backend` is the backend an agent works on, and `part:Mobile App` is mobile-app (`assign/crew.ts areaOf`).
+  Words that differ ("backend engine" and "backend") are two areas.
 - **Who says it:** with its first task in a repository, if its file has no such line, Harness tells the agent (only it
   reads it) to ask its person, in their chat, which area to focus on, naming the repository's areas so far. Its person
   answers in plain words; the agent writes the line in a pull request of its own. Once per agent and repository
@@ -123,7 +129,7 @@ must be more proactive and ask the user what area they want the agent to focus o
 - **What it does:** in the plan an agent takes half the time in its areas and half as long again in others once it named
   some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
   one only when it is well behind, and it takes other work when its own area has none.
-- **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
+- **Labels:** an area an agent works on that has no `part:` label yet, however spelled, gets one, made by the assigner, so its PM labels
   tasks with the same words. So do the flow's own labels (status:taken, size:s/m/l, p0 to p2) and each builder's, in a
   repository that lacks them: gh refuses to add a label a repository does not have, so in a fresh one a builder could not
   take its first task, nor the PM size one (`githubAssign.ts labelRepo`). Labels are read only when the team needs one

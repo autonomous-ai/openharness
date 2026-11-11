@@ -153,6 +153,12 @@ export class GitHubReads {
     return this.read(repo, path, false, false, true)
   }
 
+  /** Up to [maxPages] pages of a list as it is now, asked outright and not kept (fresh): the comments and files of closed pull
+   *  requests, read once a day (scoreboard.ts), which kept under their ETags would push out the ones every pass asks with. */
+  async freshPages(repo: string, path: string, maxPages: number): Promise<Json[]> {
+    return this.pages(repo, path, maxPages, false, true)
+  }
+
   /** A file of [repo]'s default branch as text, its last answer again on a 304. Null when it is not there: a missing file
    *  is an answer here, never a repository this login cannot read, and it is not asked again for [MISSING_MS]. */
   async file(repo: string, path: string): Promise<string | null> {
@@ -174,10 +180,10 @@ export class GitHubReads {
     for (const url of [...this.missing.keys()]) if (url.startsWith(`/repos/${repo}/`)) this.missing.delete(url)
   }
 
-  private async pages(repo: string, path: string, maxPages: number, keep: boolean): Promise<Json[]> {
+  private async pages(repo: string, path: string, maxPages: number, keep: boolean, once = false): Promise<Json[]> {
     const rows: Json[] = []
     for (let page = 1; page <= maxPages; page++) {
-      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep)
+      const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, false, once)
       if (body === null) return rows
       if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
@@ -203,6 +209,10 @@ export class GitHubReads {
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
+    // A 200 with no body is an answer cut off on its way (a list of a hundred files with their patches is 600 KB against the
+    // 10 s deadline). Read as empty, it counted as nothing with nothing said; kept under its ETag, a list of two issues read
+    // as none for three passes, until the list next changed (reviews of scoreboard.ts).
+    if (reply.body === null) throw new GitHubStop('GH_FAILED', 'GitHub\'s answer did not arrive whole.', false, this.now())
     if (reply.etag && !once) {
       this.kept.delete(url)
       this.kept.set(url, { etag: reply.etag, body: keep ? reply.body : null })

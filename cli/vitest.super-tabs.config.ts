@@ -14,12 +14,18 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/nextThing.ts',
   // A project's numbers, told to its PM when work runs short and posted once a day (anh Dee, 11-11).
   'src/superTabs/pmNumbers.ts',
+  // The day's scoreboard, which every change to the allocator is judged by (the allocator's design, package 1, 11-11).
+  'src/superTabs/scoreboard.ts',
   // A piece cut off a task by its builder (anh Dee, 11-11).
   'src/superTabs/githubSplit.ts',
   // A project's goal, scored from main's checks, and the file and workflow it starts from (anh Dee, 11-11).
   'src/superTabs/goal.ts', 'src/superTabs/goalStarter.ts',
+  // An agent's post without its own name and time at its start (anh Dee, 11-11).
+  'src/superTabs/signature.ts',
   // The leaderboard's daemon half: what its person's agents shipped, read with their own gh and reported as counts.
   'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
+  // Every write to GitHub in its person's name, said once and held under GitHub's limits (anh Dee, 11-11: "never spam github").
+  'src/superTabs/githubWrites.ts',
 ]
 export default defineConfig({
   test: {

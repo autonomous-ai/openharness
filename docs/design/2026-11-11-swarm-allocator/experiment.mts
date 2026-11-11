@@ -1,6 +1,7 @@
 // The first experiment of the allocator's redesign (README.md beside this file). One claim: does the planned search
-// (today's solver, run each minute, lists two deep) finish work sooner than a rule that decides only when a builder is
-// free? A model, not a measurement: its numbers are only as good as the assumptions in `world` below.
+// (the product's solver, run each minute, lists two deep as the allocator kept them until BUILD.md's package 2) finish work
+// sooner than a rule that decides only when a builder is free? A model, not a measurement: its numbers are only as good as
+// the assumptions in `world` below.
 //
 // Run from cli/:  npx tsx ../docs/design/2026-11-11-swarm-allocator/experiment.mts
 //   SEEDS=1,2,3            the days' seeds
@@ -35,7 +36,8 @@
 // room less its tasks in hand, so there the price does move when a task starts or ends. window-price.mts beside this
 // file runs the critique's case for the price alone.
 //
-// Policies: fifo (first come, any free builder); solver (today's allocator); solver1 (the same with a list one deep: a
+// Policies: fifo (first come, any free builder); solver (the allocator before package 2: a list two deep, its picks kept
+// in this script as `twoDeep`); solver1 (the allocator since package 2, by the product's own `nextPicks`: a list one deep, a
 // task is given only to a builder with nothing); dispatch (the most weight for its minutes, and
 // nothing else); priced0 (the same, but a task another kind of builder does faster is left for one unless waiting costs more
 // than the extra work: "the rule" of the README); priced4 (a builder-minute also costs 4, in a task's weight); queue (it
@@ -43,7 +45,7 @@
 // area's speed), learned (the labels' real mean and the real speed), oracle (the minutes a task will really take).
 import { solve } from '../../../cli/src/superTabs/assign/search.ts'
 import { nextPicks, RESERVE, SIZES } from '../../../cli/src/superTabs/assign/crew.ts'
-import type { Choice, Problem, Task as PlanTask } from '../../../cli/src/superTabs/assign/model.ts'
+import type { Choice, Plan, Problem, Task as PlanTask } from '../../../cli/src/superTabs/assign/model.ts'
 
 type Size = 's' | 'm' | 'l'
 interface Task { id: string; arrive: number; label: Size; truth: Size; w: number; part: string; deps: string[]; noise: number
@@ -85,6 +87,17 @@ function world(seed: number, sigma: number, mislabel: number, n: number, hours =
       noise: Math.exp(sigma * normal(r) - sigma * sigma / 2) })
   }
   return { builders, tasks, subs }
+}
+
+/** The allocator's picks before package 2, kept to compare with: what each builder starts next among the [free] tasks, in
+ *  the plan's order, while it [held] fewer than two. */
+function twoDeep(plan: Plan, free: Set<string>, held: Map<string, number>) {
+  const count = new Map(held)
+  return [...plan.placements].sort((a, b) => a.start - b.start || a.task.localeCompare(b.task)).filter(p => {
+    if (!free.has(p.task) || count.get(p.builder)! >= 2) return false
+    count.set(p.builder, count.get(p.builder)! + 1)
+    return true
+  })
 }
 
 /** What a labelled size means in minutes once the labels' errors are learned: the mean true size of tasks so labelled. */
@@ -129,7 +142,8 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
     for (const s of subs) if (s.reset <= now) { lapsed.push(s.left); s.left = 100; s.reset += EVERY; s.reply = -Infinity }
     for (const b of builders) if (b.current && b.current.end! <= now) b.current = null
     const open = tasks.filter(t => eligible(t, now))
-    // solver1 is today's solver with one task ahead of each builder instead of two (found by the design's first review).
+    // solver1 holds one task ahead of each builder instead of two (found by the design's first review; the product's rule
+    // since package 2). The model has no reads, so all a builder holds is what it builds.
     const deep = policy === 'solver1' ? 1 : 2
     if (policy === 'solver' || policy === 'solver1') {
       // As today (githubAssign.ts openWaiting): a task given ten minutes ago and not started goes back, once a task and builder,
@@ -156,9 +170,10 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
         const places = new Map(solved.plan.placements.map(p => [p.task, p.builder]))
         for (const t of open) { const was = planned.get(t.id), is = places.get(t.id); if (was && is) { compared++; if (was !== is) moved++ } }
         planned = places
-        const read = { problem, open: new Map(builders.map(b => [b.id, (b.current ? 1 : 0) + b.queue.length])), free: new Set(open.map(t => t.id)), done: new Map(),
+        const held = new Map(builders.map(b => [b.id, (b.current ? 1 : 0) + b.queue.length]))
+        const read = { problem, open: held, building: held, free: new Set(open.map(t => t.id)), done: new Map(),
           builders: new Map(builders.map(b => [b.id, { id: b.id, name: b.id, label: b.id, machineId: b.machine, engine: 'claude' }])) }
-        for (const p of nextPicks(solved.plan, read as never, deep)) { const t = byId.get(p.task)!, b = builders.find(x => x.id === p.builder)!; t.builder = b.id; t.given = now; b.queue.push(t) }
+        for (const p of deep === 1 ? nextPicks(solved.plan, read as never) : twoDeep(solved.plan, read.free, held)) { const t = byId.get(p.task)!, b = builders.find(x => x.id === p.builder)!; t.builder = b.id; t.given = now; b.queue.push(t) }
       }
       for (const b of builders) {
         if (b.current || !b.queue.length) continue
