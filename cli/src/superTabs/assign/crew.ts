@@ -337,8 +337,15 @@ export function tasksOf(pull: Json): number[] {
   return [...new Set([...closes, ...branch ? [Number(branch)] : []])]
 }
 
+/** How many pieces cut off a task are still open (githubSplit.ts), as GitHub counts its sub-issues. A task with some waits
+ *  on them: its builder is not idle on it, and it is not quiet, however long they take. */
+export const openPieces = (issue: Json): number => {
+  const summary = object(issue.sub_issues_summary), total = Number(summary.total), completed = Number(summary.completed)
+  return Number.isSafeInteger(total) && Number.isSafeInteger(completed) ? Math.max(0, total - completed) : 0
+}
+
 /** The tasks builders of the team took, each with its last touch: a comment or label on the issue, or a change to a pull
- *  request for it (tasksOf). */
+ *  request for it (tasksOf). Not one that waits on its pieces (openPieces). */
 export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[]): Taken[] {
   const byLabel = new Map(builders.map(b => [b.label, b]))
   const touched = new Map<number, number>()
@@ -352,7 +359,7 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
     if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
     const labels = labelsOf(issue)
     const builder = labels.map(label => byLabel.get(label)).find(Boolean)
-    if (!builder || !labels.includes('status:taken')) continue
+    if (!builder || !labels.includes('status:taken') || openPieces(issue)) continue
     const own = Date.parse(String(issue.updated_at ?? ''))
     const number = Number(issue.number)
     out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0) })

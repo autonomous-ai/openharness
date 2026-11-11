@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, learnedMinutes, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -247,6 +247,20 @@ describe('the tasks builders took, and when each was last touched (takenTasks)',
       { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
       { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
     ])
+  })
+})
+
+describe('a task that waits on pieces cut off it (openPieces)', () => {
+  it('counts the sub-issues GitHub says are not done, and none where it says nothing readable', () => {
+    expect(openPieces({ sub_issues_summary: { total: 5, completed: 2, percent_completed: 40 } })).toBe(3)
+    expect(openPieces({ sub_issues_summary: { total: 5, completed: 5 } })).toBe(0)
+    for (const summary of [undefined, null, {}, { total: 'many', completed: 0 }, { total: 2 }, { total: 1, completed: 3 }, 'three']) expect(openPieces({ sub_issues_summary: summary })).toBe(0)
+  })
+  it('is not a task its builder took and left quiet, until its pieces are done', () => {
+    const at = new Date(NOW - 9 * 3_600_000).toISOString()
+    const waits = issue(1, ['builder:pip', 'status:taken'], { updated_at: at, sub_issues_summary: { total: 2, completed: 1 } })
+    expect(takenTasks([waits], [], crew().builders)).toEqual([])
+    expect(takenTasks([{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }], [], crew().builders)).toEqual([{ number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(at) }])
   })
 })
 

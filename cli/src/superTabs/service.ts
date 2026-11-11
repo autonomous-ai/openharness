@@ -22,7 +22,7 @@ import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.
 import { ShippingReporter } from './shipping.js'
 import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
-import { splitAsked, splitTask } from './githubSplit.js'
+import { CUTS_PER_HOUR, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
@@ -165,8 +165,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   const github = (options.github ?? githubRest)()
-  // The verdicts and claims being made by command now, by agent and what was asked: as many as there are commands running.
+  // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.
   const commands = new Map<string, Promise<unknown>>()
+  // When each agent here cut a piece in the last hour (githubSplit.ts CUTS_PER_HOUR): as many agents as cut one.
+  const cuts = new Map<string, number[]>()
   // This computer's GitHub login, asked once: a verdict or a claim made by command looks for its own earlier comment by it
   // (githubVerdict.ts, githubClaim.ts).
   let githubLogin: Promise<string> | null = null
@@ -466,10 +468,20 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
           // joins the one still running, or both would find no comment yet and each post its own.
-          const same = JSON.stringify([agentId, verdict ?? claim ?? piece])
+          // A cut is the same cut whatever its words or size: sent again with other words, it joins the one that runs.
+          const same = JSON.stringify([agentId, verdict ?? claim ?? sameCut(piece!)])
+          const recent = (cuts.get(agentId) ?? []).filter(at => Date.now() - at < 60 * 60_000)
+          if (piece && !commands.has(same) && recent.length >= CUTS_PER_HOUR) {
+            return { error: 'CUT_LIMIT', detail: `You cut ${recent.length} pieces in the last hour, and ${CUTS_PER_HOUR} is the most. Build what is cut, or ask your PM to cut the rest.` }
+          }
           const deps = { get: github.get, send: github.send, login: loginOf, record }
           const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict)
-            : claim ? takeTask(deps, { name, repositories }, claim) : splitTask(deps, { name, repositories }, piece!))
+            : claim ? takeTask(deps, { name, repositories }, claim)
+            : splitTask(deps, { name, repositories }, piece!).then(done => {
+              if (done.cut) cuts.set(agentId, [...recent, Date.now()])
+              else if (!recent.length) cuts.delete(agentId)
+              return done
+            }))
             .finally(() => commands.delete(same))
           commands.set(same, made)
           return { ok: true, value: await made }

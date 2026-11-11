@@ -44,7 +44,7 @@ export const splitHint = (at: string): string => `Too big for one pull request? 
   + 'cuts a piece off it, and Harness gives that piece to the builder who can ship it soonest.'
 
 /** An issue's labels as GitHub compares them: whatever their case. */
-const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
+export const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
 /**
  * Takes [asked] for [builder]: marks it `status:taken`, says so in a comment under the builder's name, and records the
  * comment as the builder's. Refused, with nothing changed: a repository that is no project of the builder's, an issue that is

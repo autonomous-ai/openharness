@@ -8,6 +8,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
 import type { SaidOnCard } from './cards.js'
 import { superTabService, type SuperTabServiceOptions } from './service.js'
+import { CUTS_PER_HOUR } from './githubSplit.js'
 import { GitHubStop } from './githubRest.js'
 import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -1012,19 +1013,36 @@ describe('a verdict by command', () => {
   // A builder cuts a piece off a task it holds (githubSplit.ts, anh Dee 2026-11-11: "Split what you hold").
   it('cuts a piece off a task as the calling agent, under its name, and records the cut as that agent\'s', async () => {
     const t = verdictSetup()
-    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
-      body: path === '/user' ? { login: 'reader-login' } : /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'builder:juno' }, { name: 'part:sync' }] } : [] }))
+    const task = { number: 34, state: 'open', labels: [{ name: 'builder:juno' }, { name: 'status:taken' }, { name: 'part:sync' }] }
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null, body: path === '/user' ? { login: 'reader-login' } : /\/issues\/34$/.test(path) ? task : [] }))
+    let opened = 56
     t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
-      return { status: 201, etag: null, resetAt: null, body: path.endsWith('/issues') ? { id: 5700, number: 57, html_url: 'https://github.com/acme/app/issues/57', labels: [{ name: 'size:s' }] }
-        : { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'size:s' }] }
+        : { status: 201, etag: null, resetAt: null, body: path.endsWith('/issues') ? { id: ++opened * 100, number: opened, html_url: `https://github.com/acme/app/issues/${opened}`, labels: [] }
+          : { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
     const split = (over: Record<string, unknown> = {}) => t.service.requests.super_tabs({ action: 'split', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34,
       size: 's', title: 'Sync the theme', text: 'Only the theme.', ...over }, owner)
     expect(await split()).toEqual({ ok: true, value: { url: 'https://github.com/acme/app/issues/57', number: 57, cut: true, sized: true } })
-    expect(t.sent).toEqual([{ path: '/repos/acme/app/issues', body: { title: 'Sync the theme', body: 'Only the theme.\n\nPart of #34.', labels: ['size:s', 'part:sync'] } },
-      { path: '/repos/acme/app/issues/34/sub_issues', body: { sub_issue_id: 5700 } },
+    expect(t.sent).toEqual([{ path: '/repos/acme/app/issues', body: { title: 'Sync the theme', body: 'Only the theme.\n\nPart of #34.', labels: ['part:sync'] } },
+      { path: '/repos/acme/app/issues/34/sub_issues', body: { sub_issue_id: 5700 } }, { path: '/repos/acme/app/issues/57/labels', body: { labels: ['size:s'] } },
       { path: '/repos/acme/app/issues/34/comments', body: { body: expect.stringMatching(/^Juno, \d\d:\d\d: split off #57: Sync the theme$/) } }])
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
     expect(await split({ size: 'xl' })).toEqual({ error: 'INVALID_REQUEST' })
+    // The same cut sent again while the first runs, in other words, another size and the repository's other case, joins it.
+    const before = t.sent.length
+    const twice = await Promise.all([split({ title: 'Sync the font' }), split({ title: 'Sync the font', text: 'Said another way.', size: 'l', repository: 'Acme/App' })])
+    expect(twice.map(answer => (answer as { value: { number: number } }).value.number)).toEqual([58, 58])
+    expect(t.sent.slice(before).filter(sent => sent.path === '/repos/acme/app/issues')).toHaveLength(1)
+    // An agent cuts no more than thirty pieces in an hour here: the next is refused, with nothing asked of GitHub.
+    for (let n = 3; n <= CUTS_PER_HOUR; n++) expect(await split({ title: `Piece ${n}` })).toMatchObject({ ok: true })
+    const asked = t.github.get.mock.calls.length
+    expect(await split({ title: 'One too many' })).toEqual({ error: 'CUT_LIMIT',
+      detail: 'You cut 30 pieces in the last hour, and 30 is the most. Build what is cut, or ask your PM to cut the rest.' })
+    expect(t.github.get.mock.calls).toHaveLength(asked)
+    // A claim is not counted with them.
+    expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)).not.toHaveProperty('error', 'CUT_LIMIT')
+    vi.useFakeTimers({ now: Date.now() + 61 * 60_000, toFake: ['Date'] })
+    try { expect(await split({ title: 'An hour on' })).toMatchObject({ ok: true }) } finally { vi.useRealTimers() }
     t.service.port.stop()
     // With its person's own GitHub login only, as a claim.
     const u = verdictSetup({ contributorId: 'mate' })
