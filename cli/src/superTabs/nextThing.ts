@@ -23,16 +23,23 @@ import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
 import { readerKey } from './assign/crew.js'
-import { labelNames } from './githubAssign.js'
+import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
-import { GitHubReads, GitHubStop, type GitHubGet } from './githubRest.js'
+import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
 export const NEXT_SETTLE_MS = 3_000
 /** How many times the same next thing is typed with no change before it goes to the agent's person instead. */
 export const NEXT_TIMES = 3
+/** How long an agent may sit idle holding a task it took, with no pull request yet, before it is asked once; and before its person
+ *  is told and the task goes back for another builder (Swarm plan, step 1, item 1: "An agent with work that is idle 20 minutes is
+ *  asked once; at an hour its person is told and its work is free to take"). The assigner's own watch, by GitHub's quiet alone,
+ *  asks at 4 hours and moves at 8 (githubAssign.ts): it cannot see a session, and one that works for hours pushes nothing. */
+export const IDLE_ASK_MS = 20 * 60_000
+export const IDLE_BACK_MS = 60 * 60_000
 /** The most agents whose counts are kept; the least recent go first. */
 const MAX_KEPT = 1_000
 
@@ -42,6 +49,8 @@ interface Kept { key: string; times: number; told: boolean }
 export class NextThing {
   private stopEnds: (() => void) | null = null
   private readonly timers = new Map<string, NodeJS.Timeout>()
+  /** Each terminal idle with a task of its own in hand, by its id: the next look at it, and what it holds. */
+  private readonly idle = new Map<string, { timer: NodeJS.Timeout; agent: WatchedAgent; repo: string; task: Record<string, unknown> }>()
   private readonly looking = new Set<string>()
   private readonly reads: GitHubReads
   private memory: Record<string, Kept> | null = null
@@ -60,6 +69,8 @@ export class NextThing {
     /** Whether a terminal's turn runs; null when it cannot be said. */
     working: (harnessId: string) => Promise<boolean | null>
     get: GitHubGet
+    /** Writes to GitHub with this person's gh: a task given back. */
+    send: GitHubSend
     /** Types [text] into [agent], as Harness (an agent-only message in its chat, typed as GitHub news is). */
     tell: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
     /** Says [text] to [agent]'s person, in its chat. */
@@ -81,12 +92,21 @@ export class NextThing {
     this.stopEnds = null
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
+    for (const watched of this.idle.values()) clearTimeout(watched.timer)
+    this.idle.clear()
   }
 
   /** A turn ended: its agent is looked at once the turns close together have settled. One its person stopped is left: they are
    *  at its terminal. */
   private ended(end: TurnEnd): void {
-    if (end.aborted) return
+    // A turn of its, its person's or its own, is no idle time. One its person stopped starts its idle time over, as the look its
+    // other turns get is not made: they are at its terminal.
+    const watched = this.idle.get(end.agentId)
+    this.unwatch(end.agentId)
+    if (end.aborted) {
+      if (watched) this.watch(watched.agent, watched.repo, watched.task, Date.now(), false)
+      return
+    }
     clearTimeout(this.timers.get(end.agentId))
     const timer = setTimeout(() => {
       this.timers.delete(end.agentId)
@@ -135,8 +155,9 @@ export class NextThing {
           `asked ${name} to read ${repo}#${ask.number} at ${short}`)
         }
       }
-      // A task it took with no pull request of its yet is its own work to go on with.
-      if (tasks.filter(task => labelNames(task).includes('status:taken')).length > pulls.length) return
+      // A task it took with no pull request of its yet is its own work to go on with: watched while it sits idle with it.
+      const taken = tasks.filter(task => labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))
+      if (taken.length > pulls.length) return this.watch(agent, repo, taken[0]!, Date.now(), false)
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
       if (!next) continue
       const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
@@ -174,6 +195,48 @@ export class NextThing {
         typed: `Your ${repo}#${number} conflicts with ${base}: merge ${base} into it, fix the conflicts and push: git fetch origin ${base} && git merge origin/${base}` }
     }
     return null
+  }
+
+  /** Looks again at [agent], idle since [since] with [task] of its own in hand: at [IDLE_ASK_MS] it is asked once, and at
+   *  [IDLE_BACK_MS] (once [asked]) its person is told and the task goes back for another builder. Any turn of its ends this. */
+  private watch(agent: WatchedAgent, repo: string, task: Record<string, unknown>, since: number, asked: boolean): void {
+    this.unwatch(agent.harnessId)
+    const timer = setTimeout(() => {
+      this.idle.delete(agent.harnessId)
+      void this.idleWith(agent, repo, Number(task.number), String(task.title ?? '').trim(), since, asked)
+    }, asked ? IDLE_BACK_MS - IDLE_ASK_MS : IDLE_ASK_MS)
+    timer.unref()
+    this.idle.set(agent.harnessId, { timer, agent, repo, task })
+  }
+
+  private unwatch(harnessId: string): void {
+    clearTimeout(this.idle.get(harnessId)?.timer)
+    this.idle.delete(harnessId)
+  }
+
+  private async idleWith(agent: WatchedAgent, repo: string, number: number, title: string, since: number, asked: boolean): Promise<void> {
+    const key = `${repo}#${number}`, what = title ? `${key} (${title})` : key, name = agent.names[0]!
+    try {
+      // Working, or nobody can say: its turn's end looks again.
+      if (await this.deps.working(agent.harnessId) !== false) return
+      // Still its own, taken, with no pull request of its yet.
+      const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
+      const tasks = items.filter(it => !it.pull_request), held = tasks.filter(it => labelNames(it).includes('status:taken'))
+      if (!held.some(it => Number(it.number) === number) || held.length <= items.length - tasks.length) return
+      if (!asked) {
+        await this.deps.tell(agent, this.operation(agent, key, `idle ${since}`), `You hold ${what} and have done nothing on it for 20 minutes: `
+          + `go on with it, or say on it what holds it: gh issue view ${number} --repo ${repo}`)
+        return this.watch(agent, repo, { number, title }, since, true)
+      }
+      const given = await giveBack(this.deps.send, repo, number, agent.label, true)
+      if ('refused' in given) return this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} not given back: GitHub answered ${given.refused}.`)
+      if (given.takenKept !== null) this.log(`[super-tab] next thing of agent ${agent.agentId}: ${key} kept status:taken: GitHub answered ${given.takenKept}.`)
+      await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: backLine(`${name} held it with nothing done for an hour`, hhmm(Date.now())) })
+      await this.deps.say(agent, this.operation(agent, key, `back ${since}`), `${name} held ${what} with nothing done on it for an hour, so Harness `
+        + 'gave it back for the builder who can start it next.')
+    } catch (error) {
+      this.log(`[super-tab] next thing of agent ${agent.agentId}: ${error instanceof GitHubStop ? error.code : named(error)}.`)
+    }
   }
 
   /** The head [ask] still waits on [agent]'s read of, short, or null when it does not: the pull request is gone, its head moved on
