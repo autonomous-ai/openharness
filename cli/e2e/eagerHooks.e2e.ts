@@ -34,7 +34,7 @@ it('refuses a native hook destination outside the test, including the OpenCode s
 })
 
 it('becomes ready and serves control while startup hook preparation is still waiting', async () => {
-  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle })
   onTestFailed(() => console.log(d.log()))
   const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'startup-probe'), release = join(d.root, 'release-probe')
   d.env.OPENCODE_PATH = binary
@@ -68,7 +68,7 @@ const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)}))
 }, 30_000)
 
 it('keeps Stop and agent listing responsive while a native launch version probe waits', async () => {
-  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle })
   onTestFailed(() => console.log(d.log()))
   const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'version-entered'), release = join(d.root, 'version-release')
   d.env.OPENCODE_PATH = binary
@@ -115,7 +115,7 @@ const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)}))
 }, 90_000)
 
 it('retains and cancels native-held requests across a core crash, then recovers one launch with its saved prompt', async () => {
-  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle })
   onTestFailed(() => console.log(d.log()))
   const executable = join(d.root, 'late-codex')
   d.env.CODEX_PATH = executable
@@ -165,7 +165,7 @@ it('retains and cancels native-held requests across a core crash, then recovers 
 }, 120_000)
 
 it.each(['create', 'fork'] as const)('keeps a post-rc held %s with its original request through repair and core restart', async operation => {
-  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { HARNESS_CONNECTIONS_PORT: '0', SHELL: '/bin/bash' } })
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { SHELL: '/bin/bash' } })
   onTestFailed(() => console.log(d.log()))
   const executable = join(d.root, 'bin', 'codex'), calls = join(d.root, 'dispatches')
   const originalWrapper = readFileSync(executable, 'utf8'), line = originalWrapper.indexOf('\n') + 1
@@ -225,7 +225,7 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     else files[chunks[0]!] = "console.error('[fixture] legacy hooks stalled'); await new Promise(() => {});\n"
     const script = join(scratch, mode, 'cli.js'); mkdirSync(dirname(script), { recursive: true })
     writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
-    const d = daemon = await IsolatedDaemon.create({ scriptPath: script, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+    const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
     const root = join(d.root, 'native')
     const homes: Record<string, string> = {

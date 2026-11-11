@@ -29,9 +29,11 @@ export function folderName(name: string): string {
 }
 
 /** The folder of the test file running in this worker ([path], or the one vitest says is running). */
-function fileFolder(path = expect.getState().testPath): string | null {
-  if (!ROOT || !path) return null
-  return join(ROOT, folderName(basename(path).replace(/\.e2e\.ts$/, '')))
+function fileFolder(path?: string): string | null {
+  // Asked of vitest only when artifacts are kept: a daemon started outside a test run (e2e/harness/abandonedWorker.ts) has no state to ask.
+  if (!ROOT) return null
+  path ??= expect.getState().testPath
+  return path ? join(ROOT, folderName(basename(path).replace(/\.e2e\.ts$/, ''))) : null
 }
 
 let current: string | null = null
