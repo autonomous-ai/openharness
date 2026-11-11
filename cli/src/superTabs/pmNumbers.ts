@@ -25,9 +25,10 @@
  * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
  * five minutes at rest, a healthy team's person told every few hours, one builder nobody could help silencing the rest, and
  * one task nobody free could take silencing every builder. So
- * what a builder has waited is counted in memory, from this process's own passes, and five things are kept on disk, written as
+ * what a builder has waited is counted in memory, from this process's own passes, and six things are kept on disk, written as
  * they change: when the PM was last told, how many times since the project last moved (a landing, a task closed, a sized task
- * opened), when that was, whether its person was told, and the day last posted. A message's id is its project, its kind and the tell before it (or
+ * opened), when that was, whether its person was told, the day last posted, and what a day's scoreboard said until that day's post is taken.
+ * A message's id is its project, its kind and the tell before it (or
  * its day): the server takes each once, and answers one sent again in other words as taken (OPERATION_REUSED).
  */
 import { createHash } from 'node:crypto'
@@ -216,7 +217,7 @@ export const numbersSender = (read: (project: LedProject) => Promise<Json>, post
 /** What is kept of a project on disk: when its PM was last told, how many times since the project last moved, when that
  *  was, whether its person was told, the day its numbers were last posted, and, while a day's post is not yet taken, what
  *  that day's scoreboard said. */
-interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string; board?: { day: string; words: string } }
+interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string; board?: { day: string; words?: string } }
 
 const dayOf = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -299,11 +300,18 @@ export class PmNumbers {
    *  (scoreboard.ts), and a post the server does not take is tried again from 30 seconds apart, so it goes again with the same
    *  words. That it is being read is written with the project's record before the read: a daemon that restarts meanwhile (a
    *  release restarts every PM's) posts the day without it and does not read again (its review counted 3,000 requests a day
-   *  with a server refusing the post and a restart each hour). One that cannot be read is said once, and left out. */
+   *  with a server refusing the post and a restart each hour). One that cannot be read is said once, and left out; so is
+   *  one whose read a daemon stopped in the middle of, which its record shows by having no words yet. */
   private async board(project: LedProject, kept: Kept, day: string, read: () => Promise<string>): Promise<string> {
-    if (kept.board?.day === day) return kept.board.words
+    if (kept.board?.day === day) {
+      if (kept.board.words === undefined) {
+        this.once(`[super-tab] numbers: SCOREBOARD_UNREAD ${project.repo}: the daemon stopped as it was read`)
+        kept.board.words = ''
+      }
+      return kept.board.words
+    }
     const memory = this.memory!
-    kept.board = { day, words: '' }
+    kept.board = { day }
     delete memory[project.projectId]
     memory[project.projectId] = kept
     this.save(memory)
@@ -362,7 +370,8 @@ export class PmNumbers {
           && typeof row.day === 'string') {
           const board = object(row.board)
           kept[id] = { typedAt: row.typedAt as number, told: row.told as number, said: row.said, activity: row.activity as number, day: row.day,
-            ...typeof board.day === 'string' && typeof board.words === 'string' ? { board: { day: board.day, words: board.words } } : {} }
+            ...typeof board.day === 'string' && (board.words === undefined || typeof board.words === 'string')
+              ? { board: { day: board.day, ...typeof board.words === 'string' ? { words: board.words } : {} } } : {} }
         }
       }
     } catch { /* none kept yet, or unreadable: counted from now */ }

@@ -229,6 +229,15 @@ describe('a part GitHub does not give', () => {
     expect(both.mock.calls).toEqual([['waits', 'no answer'], ['files', 'no answer']])
   })
 
+  it('asks nothing more once GitHub says to stop for every repository: the files are not tried after the waits', async () => {
+    const hub = github(talk, files), unread = vi.fn()
+    const limited = new GitHubReads(async path => { hub.asked.push(path); return { status: 403, etag: null, body: null, resetAt: NOW + HOUR } }, () => NOW)
+    expect(await boardOf(limited, 'acme/app', { now: NOW, closed: twenty, team: TEAM }, unread)).toMatchObject({ waits: null, hot: null })
+    expect(unread.mock.calls).toEqual([['waits', 'GitHub is limiting this computer\'s requests.'], ['files', 'GitHub is limiting this computer\'s requests.']])
+    expect(hub.asked).toHaveLength(6)
+    expect(hub.asked.some(path => path.includes('/files'))).toBe(false)
+  })
+
   it('is not taken for an empty one when its answer did not arrive whole', async () => {
     // A 200 whose body was cut off on its way: read as an empty list, two changes counted as never read and touching nothing.
     const hub = github(talk, files), unread = vi.fn()
