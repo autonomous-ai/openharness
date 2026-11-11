@@ -3,7 +3,8 @@
 // the terminal's encrypted stream and draws every state. The page draws no copy.
 //
 // Host to page: harnessBrowserReceive({t:'config', mac} | {t:'open'} |
-// {t:'data', b64} | {t:'closed', reason} | {t:'paste', text}).
+// {t:'data', b64} | {t:'closed', reason} | {t:'paste', text} |
+// {t:'window', width, height}).
 // Page to host: {t:'ready'} | {t:'data', b64} | {t:'consumed', bytes} |
 // {t:'copy', text} | {t:'state', connected}.
 
@@ -33,6 +34,9 @@ export function startViewer(RFB, win) {
   let rfb = null;
   let channel = null;
   let connected = false;
+  // Chrome's window on the screen, at 0,0, in screen pixels. Until the host
+  // sends one, the page scales the whole screen.
+  let chromeWindow = null;
 
   // Bytes noVNC has read out of its receive queue, which the host acks. Fed
   // faster than it draws, noVNC holds the rest and disconnects at 40 MiB, so
@@ -81,12 +85,42 @@ export function startViewer(RFB, win) {
     return ch;
   }
 
+  // noVNC 1.7.0 clips or scales, never both, and sets its Display back to
+  // its own clip and scale after every resize of the page or of the screen,
+  // each ending in _updateScale. After it, the page clips the Display to the
+  // window and scales that rectangle to fit, unless it already fits at 1:1.
+  // build.mjs pins the version.
+  function fitWindow(current) {
+    if (!chromeWindow) return;
+    const display = current._display;
+    display.viewportChangeSize(chromeWindow.width, chromeWindow.height);
+    const page = screen.getBoundingClientRect();
+    if (Math.abs(page.width - chromeWindow.width) < 1 && Math.abs(page.height - chromeWindow.height) < 1) {
+      display.scale = 1;
+    } else {
+      display.autoscale(page.width, page.height);
+    }
+  }
+
+  function showWindow(current) {
+    current.dragViewport = false;
+    current.clipViewport = true;
+    current.scaleViewport = false;
+    fitWindow(current);
+  }
+
   function open() {
     received = 0;
     reported = 0;
     channel = openChannel();
     const current = new RFB(screen, channel);
+    const updateScale = current._updateScale.bind(current);
+    current._updateScale = () => {
+      updateScale();
+      fitWindow(current);
+    };
     current.scaleViewport = true;
+    if (chromeWindow) showWindow(current);
     current.qualityLevel = 6;
     current.compressionLevel = 2;
     current.addEventListener('connect', () => {
@@ -145,6 +179,10 @@ export function startViewer(RFB, win) {
         break;
       case 'paste':
         paste(message.text);
+        break;
+      case 'window':
+        chromeWindow = { width: message.width, height: message.height };
+        if (rfb) showWindow(rfb);
         break;
     }
   };
