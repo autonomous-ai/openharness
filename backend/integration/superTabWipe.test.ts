@@ -292,4 +292,26 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
     for (const f of old) expect(await leftOf(f.tab)).toEqual([])
     expect(await pass(w)).toMatchObject({ left: 0, failed: 0 })
   })
+
+  // PSW-B review (2026-11-11): the Personal request answered its wiped Swarm until the purge, a week, and every read of it was
+  // refused. It makes its person a live one now, the same one from every computer, and a Team Swarm's request is as before.
+  it('gives a person whose Personal Swarm was wiped a live one, once, by the same request', async () => {
+    const w = world(), who = invitee
+    const wiped = (await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    await db.superTab.update({ where: { id: wiped }, data: { createdAt: new Date(WIPE_CUTOFF - DAY) } })
+    const team = randomUUID(), teamTab = (await w.store.create(who, team, 'Team')).id
+    await db.superTab.update({ where: { id: teamTab }, data: { createdAt: new Date(WIPE_CUTOFF - DAY) } })
+    await pass(w)
+    const again = await Promise.all([w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal'), w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')]
+      .map(made => made.catch(() => w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal'))))
+    expect(again[0]!.id).not.toBe(wiped)
+    expect(again[1]!.id).toBe(again[0]!.id)
+    expect((await w.store.read(who, again[0]!.id)).state.id).toBe(again[0]!.id)
+    expect((await w.store.list(who)).tabs.filter(t => t.personal).map(t => t.id)).toEqual([again[0]!.id])
+    expect((await w.reads.list(who)).tabs.filter(t => t.personal).map(t => t.id)).toEqual([again[0]!.id])
+    expect((await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')).id).toBe(again[0]!.id)
+    // A Team Swarm's request answers its own, deleted or not, as before.
+    expect((await w.store.create(who, team, 'Team')).id).toBe(teamTab)
+  })
+
 })
