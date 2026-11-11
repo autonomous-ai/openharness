@@ -117,7 +117,7 @@ import { prepareTerminalBackends, TerminalBackendCoordinator } from '../lib/term
 import { canRestart, heldIn, noBackendCode, type TerminalBackend } from '../lib/terminalBackend.js'
 import { handoffAgentId } from '../lib/terminalHandoff.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
-import { ownedPanesOf, terminalRouteKey, terminalRuntimeLabel } from '../lib/terminalRuntime.js'
+import { ownedPanesOf, primaryRuntime, terminalRouteKey, terminalRuntimeLabel } from '../lib/terminalRuntime.js'
 import { probeTerminalAgents } from '../lib/terminalAgentDiscovery.js'
 import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from '../lib/terminalAgentReconciler.js'
 import { Watcher } from '../watcher/watcher.js'
@@ -824,6 +824,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)), moveGate,
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
   let holdOfRef: ((agentId: string, deliveryId: string) => Promise<string | null>) | null = null
+  let quietTurnRef: ((agentId: string) => void) | null = null
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
@@ -832,6 +833,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deliverers: new Set(TURN_DELIVERERS),
     // Built further down: read when a service asks, never now.
     hold: (agentId, deliveryId) => holdOfRef?.(agentId, deliveryId) ?? Promise.resolve(null),
+    // The recaps, built further down: a quiet delivery's turn ends with no recap and no notification.
+    quietStarted: (agentId) => quietTurnRef?.(agentId),
   })
   // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
   // (core/turns/ends.ts), all said by the event funnel as the turn goes.
@@ -841,6 +844,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     lastTurn: sessionId => readLastTurn(sessionId),
   })
   const ports = emptyPorts()
+  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts),
+  // attached again on any look at its running agent that finds it left out (`observed`, from discovery), turned on
+  // and off by its person through the core (`CoreApi.agents.setBrowser`), and moved with its pane to the agent that
+  // takes it (`taken`, from discovery; `CoreApi.agents.moveBrowser`), so it is made before the core API.
+  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser, registry, stoppedAgents)
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
   // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
   // answer it sends a device are here (core/wifi.ts). Its doors are the calls it made when it ran here.
@@ -1029,6 +1037,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
     // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
+    // The person's Start and Stop of an agent's browser, which the agent browser asks of the core; and its flag, moved
+    // with its pane once the agent browser moved its entry.
+    setBrowser: agentBrowsers.set,
+    moveBrowser: agentBrowsers.move,
+    // The process a pane runs, as `terminal_info` reads it: `harness browser`'s parents are held to it (`agents.ofPane`).
+    panePid: (session) => {
+      const runtime = primaryRuntime(session)
+      return terminals.backendFor(runtime)?.paneInfo(runtime).then(info => info?.pid ?? null) ?? Promise.resolve(null)
+    },
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
       members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
@@ -1075,8 +1092,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
-  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts).
-  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser)
   // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
   const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId) }
 
@@ -1498,7 +1513,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
     quietOnDevices: (session) => swarm?.quietOnDevices(session) ?? false,
+    turnRunning: (sessionId) => turnStartedAt.has(sessionId),
   })
+  quietTurnRef = recaps.quietTurn
   asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done
   const isSubagentSession = recaps.isSubagentSession
   const mirror = recaps.mirror
@@ -1798,7 +1815,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
   if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm ? { retained: swarm.retainedHarnesses, closed: swarm.recordCleanupClose } : undefined), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
-  // A sandboxed Chrome beside each agent created with Browser (services/agentBrowser.ts): in its own process, on
+  // A sandboxed Chrome beside each agent whose Browser is on (services/agentBrowser.ts): in its own process, on
   // demand (services/agentBrowserProcess.ts), or in this one.
   if (outOfProcess.has('agentBrowser')) ports.agentBrowser = agentBrowserLink.port
   else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
@@ -1990,6 +2007,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const discovery = createDiscoveryHandlers({
     registry,
     attachDsh,
+    attachBrowser: agentBrowsers.observed,
+    moveBrowser: agentBrowsers.taken,
     forgetSession,
     announceSession,
     bindObservedAgent,
@@ -2679,7 +2698,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
-  // And every agent created with Browser gets its browser back.
+  // And every agent whose Browser is on gets its browser back.
   for (const session of registry.list()) if (session.browser) agentBrowsers.attached(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no

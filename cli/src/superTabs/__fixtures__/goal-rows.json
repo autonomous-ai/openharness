@@ -102,14 +102,9 @@
       ]
     },
     {
-      "name": "a first cell of spaces is a milestone of one space",
+      "name": "a first cell of spaces alone names no milestone",
       "text": "|  | `a` |",
-      "rows": [
-        {
-          "milestone": " ",
-          "check": "a"
-        }
-      ]
+      "rows": []
     },
     {
       "name": "a no-break space and a tab are spaces; a next-line mark (U+0085) is not",

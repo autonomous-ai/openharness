@@ -27,6 +27,7 @@ export function agentsHelp(): string {
     `        ${synopsis(CLOSE_USAGE)}`,
     `        ${synopsis(TELL_USAGE)}   more work for one you started, while the person allows it`,
     `        ${sendLine()}`,
+    '        harness browser --help   your browser, when your person has started it',
     '',
     'A whole job:',
     '  harness new <agent> --name <name> <project> -- <task>',

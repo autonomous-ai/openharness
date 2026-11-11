@@ -121,7 +121,8 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   const lifecycle = (event: TurnLifecycle, seen: RecapWatchers): void => {
     watchers = seen
     switch (event.kind) {
-      case 'events': mirror.ingest(event.events, know(event.session), { replay: event.replay }); return
+      // `quiet`: a quiet delivery started the turn this batch ends (core/turns/recaps.ts): no recap, no notification.
+      case 'events': mirror.ingest(event.events, know(event.session), { replay: event.replay, quiet: event.quiet }); return
       case 'beat': {
         const sessionId = know(event.session)
         working.set(sessionId, event.working)

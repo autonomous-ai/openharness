@@ -98,7 +98,6 @@ HarnessLaunchIntegration swarmNewAgent(
     // A Swarm agent runs Claude Code or Codex, on its person's own computer and account.
     engines: const ['claude', 'codex'],
     ownMachinesOnly: true,
-    offersBrowser: true,
     swarmRole: 'dev',
     prepare: (machine, text, base) async {
       final snapshot = await app.superTabs.readSnapshot(tabId);

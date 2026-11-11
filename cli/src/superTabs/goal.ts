@@ -10,7 +10,8 @@
  * checks it, in backticks. The repository's own CI runs each command on its main branch as a check named `goal: <milestone>`
  * (the workflow `harness super-tab goal` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
  * default branch, and the checks from the newest of that branch's last landings on which every milestone's check has ended: a
- * milestone passes when its check concluded success there, fails when it concluded in failure, and waits otherwise. The
+ * milestone passes when its check concluded success there, fails when it concluded any other way that is a verdict (a failure, or cancelled as one that ran past its limit is), and waits
+ * otherwise. The
  * branch's tip has no run yet in the minutes after each landing, and never when it was pushed with `[skip ci]`: scored alone,
  * a goal read "0 of 60 pass, 60 wait" most of the time (its first review). A landing is a commit on the branch's first-parent
  * line: a train that lands as a merge commit brings its members' commits with it, which were never pushed to the branch and
@@ -35,12 +36,11 @@ const CHECK_PAGES = 3
 /** How many of the branch's last landings are looked at for one whose goal checks have all ended, among how many of its last
  *  commits: a train of twenty brings twenty merge commits and their pull requests' own. */
 const LANDINGS = 5
-/** The longest line read as a row: a milestone, a command and a few bars. The row's pattern takes time by the square of a
- *  line's length, and the file is the repository's text: one line of a megabyte held the daemon for minutes (second review). */
+/** The longest line read as a row: a milestone, a command and a few bars. It bounds a check's command, which goes to CI whole. */
 export const LINE_MAX = 1_000
 
 /** A milestone and the command that checks it. */
-export interface GoalRow { milestone: string; check: string }
+interface GoalRow { milestone: string; check: string }
 /** How many milestones the goal has, and of them how many pass, fail and wait for their check. */
 export interface Score { total: number; passed: number; failed: number; waiting: number }
 
@@ -51,8 +51,14 @@ export function goalRows(text: string | null): GoalRow[] {
   const rows = new Map<string, GoalRow>()
   for (const line of (text ?? '').split(/\r?\n/)) {
     if (line.length > LINE_MAX) continue
-    const found = /^\|\s*(.+?)\s*\|\s*`([^`]+)`\s*\|\s*$/.exec(line.trim())
-    const milestone = found?.[1]!.replace(/\s+/g, ' '), check = found?.[2]!.trim()
+    // `| milestone | \`check\` |`, found from the row's end by plain searches: the check is between its last two backticks, with
+    // a bar after them and a bar before. As one pattern this took time by the cube of the line's length (a 1,000-character line
+    // of spaces a fifth of a second, a file of them minutes: review of the Desktop score, 2026-11-11).
+    const row = line.trim(), cell = row.slice(0, -1).trimEnd(), open = cell.lastIndexOf('`', cell.length - 2)
+    const head = cell.slice(0, open).trimEnd(), named = head.slice(1, -1).trim()
+    if (!row.startsWith('|') || !row.endsWith('|') || !cell.endsWith('`') || open < 0 || !head.endsWith('|')) continue
+    // A milestone is one line's words: one with a line's end inside it is none.
+    const milestone = /[\r\u2028\u2029]/.test(named) ? '' : named.replace(/\s+/g, ' '), check = cell.slice(open + 1, -1).trim()
     if (!milestone || !check || milestone.length > MILESTONE_MAX || rows.has(milestone)) continue
     rows.set(milestone, { milestone, check })
     if (rows.size >= GOAL_MAX) break
@@ -70,8 +76,9 @@ export function scoreOf(rows: readonly GoalRow[], runs: readonly Json[]): Score 
   const score: Score = { total: rows.length, passed: 0, failed: 0, waiting: 0 }
   for (const { milestone } of rows) {
     const run = newest.get(`${GOAL_CHECK}${milestone}`)
-    // Skipped, neutral or cancelled (a newer push took its place) says nothing of the milestone: it waits, as one not run.
-    if (run?.status !== 'completed' || ['skipped', 'neutral', 'cancelled'].includes(String(run.conclusion))) score.waiting++
+    // Skipped or neutral says nothing of the milestone: it waits, as one not run. Cancelled fails: GitHub ends a check that ran
+    // past its limit as `cancelled` (seen on a real run, 2026-11-11), and counted as waiting, a hang was never told the PM.
+    if (run?.status !== 'completed' || ['skipped', 'neutral'].includes(String(run.conclusion))) score.waiting++
     else if (run.conclusion === 'success') score.passed++
     else score.failed++
   }

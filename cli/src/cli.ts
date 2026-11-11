@@ -2763,7 +2763,7 @@ import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
 import { computerUseCommand } from './agentClient/computerUse.js'
-import { browserMcpCommand } from './agentClient/browserMcp.js'
+import { browserCommand } from './agentClient/browser.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2833,9 +2833,9 @@ switch (cmd) {
     process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
-  case 'browser-mcp':
-    // A Browser agent's MCP server (lib/browserMcpArgs.ts): an engine starts it, never a person.
-    browserMcpCommand().then(code => { process.exitCode = code }).catch(onError)
+  case 'browser':
+    // An agent drives the browser its person started for it (agentClient/browser.ts).
+    browserCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'mcp': {
     const pane = sendPane(process.env)

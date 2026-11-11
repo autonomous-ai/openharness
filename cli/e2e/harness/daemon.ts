@@ -439,6 +439,15 @@ export class IsolatedDaemon {
     try { process.kill(-pgid, 'SIGKILL') } catch { /* empty */ }
   }
 
+  /** A crash of every one of its processes at once, the core and the services with the master: no shutdown path runs in any. */
+  async crash(): Promise<void> {
+    const child = this.child
+    if (!child) return
+    const exited = new Promise<void>((done) => child.once('exit', () => done()))
+    try { process.kill(-child.pid!, 'SIGKILL') } catch { /* gone */ }
+    await exited
+  }
+
   /** The way a crash ends it: no shutdown path runs. */
   async kill(): Promise<void> {
     const child = this.child

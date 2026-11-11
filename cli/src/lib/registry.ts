@@ -192,10 +192,18 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
-   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
-   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
+   * Its Browser is on: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it while it
+   * runs. Set by its person's Start (or an older Desktop's create), cleared only by their Stop (`setBrowser`), and
+   * carried through a stop and a resume. Absent while its Browser is off.
    */
   browser?: true
+  /**
+   * On the shell an exit left (`releaseEngine(id, true)`): the agent whose engine ended in this pane. The pane's next
+   * agent takes that agent's browser (decision 19). A search of saved agents by pane is no proof of this: pane ids
+   * restart with every tmux server. Gone once an engine is adopted here, and once that agent runs again under its own
+   * id. Never in a saved record.
+   */
+  previousAgentId?: string
   /**
    * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
    * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
@@ -1456,6 +1464,7 @@ class Registry {
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
           ...(raw.browser === true ? { browser: true as const } : {}),
+          ...(engine === 'terminal' && parentAgentIdOf(raw.previousAgentId) ? { previousAgentId: raw.previousAgentId as string } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
@@ -1631,7 +1640,7 @@ class Registry {
        * state keys on the sessionId, and the caller needs both to finish the
        * removal it was never told to do.
        */
-      evicted: { agentId: string; sessionId: string } | null
+      evicted: { agentId: string; sessionId: string; browser?: true } | null
     } | null {
 
     if (this.writeBlocked) return null
@@ -1690,7 +1699,7 @@ class Registry {
     }
 
     const agentId = input.agentId || randomUUID()
-    let evicted: { agentId: string; sessionId: string } | null = null
+    let evicted: { agentId: string; sessionId: string; browser?: true } | null = null
 
     for (const runtime of runtimes) {
       const otherId = this.runtimeIndex.get(terminalRouteKey(runtime))
@@ -1706,7 +1715,7 @@ class Registry {
       // Only when it has nothing left. An agent that still owns another pane is
       // alive and simply narrower; it must not be announced as deleted.
       if (!other.runtimes.length) {
-        evicted ??= { agentId: other.agentId, sessionId: other.sessionId }
+        evicted ??= { agentId: other.agentId, sessionId: other.sessionId, ...(other.browser ? { browser: true as const } : {}) }
       }
 
     }
@@ -1790,7 +1799,7 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
-    /** Created with Browser ticked — see RegisteredSession.browser. */
+    /** Its Browser is on from the start (an older Desktop's create) — see RegisteredSession.browser. */
     browser?: boolean
     /** The first task to type once the engine is ready — see RegisteredSession.firstTask. */
     firstTask?: string
@@ -1888,8 +1897,21 @@ class Registry {
     }
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
+    this.forgetPreviousAgent(entry.agentId)
     this.save()
     return entry
+  }
+
+  /**
+   * [agentId] runs again under its own id, and its browser came back with it (decision 14): no shell's next agent may
+   * take it. One pass over the live rows, at a resume only. Not saved here: the caller's save carries it.
+   */
+  private forgetPreviousAgent(agentId: string): void {
+    for (const row of this.agents.values()) {
+      if (row.previousAgentId !== agentId) continue
+      delete row.previousAgentId
+      row.touchedAt = Date.now()
+    }
   }
 
   /** Every name an agent on this machine answers to: default names, project names, renames. */
@@ -2345,6 +2367,7 @@ class Registry {
     this.traceLaunch(entry.agentId, saved.launch, entry.launch, `reinstateArchived from ${terminal.agentId}`)
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
+    this.forgetPreviousAgent(entry.agentId)
     try { this.save() } catch {
       this.drop(entry)
       this.terminalAvailableAgents.delete(entry.agentId)
@@ -2361,6 +2384,8 @@ class Registry {
     this.drop(entry)
     entry.engine = engine
     entry.terminalHost = true
+    // The row is an agent now: the pane's browser, if it was to move, has been read before this (decision 19).
+    delete entry.previousAgentId
     this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, `adoptEngine ${engine}`)
     entry.launch = { state: 'ready' }
     entry.active = true
@@ -2401,8 +2426,12 @@ class Registry {
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
-    // Its browser is the archived agent's, with that agent's logins: never the shell's.
-    if (separateShell) delete entry.browser
+    // Its browser is the archived agent's, with that agent's logins: never the shell's. Its flag stays with that agent
+    // until a new agent takes this pane, which the shell names for it (decision 19). A release in place names nobody.
+    if (separateShell) {
+      delete entry.browser
+      entry.previousAgentId = original.agentId
+    }
     // And its first task: the shell under a new identity would carry a copy beside the archived agent's. A row that stays
     // has had its launch end before the task was typed, and an engine the person starts in its shell is theirs: one they
     // typed the task into themselves would get it twice.
@@ -2773,6 +2802,19 @@ class Registry {
     session.touchedAt = Date.now()
     this.save()
     return true
+  }
+
+  /** Turn [agentId]'s Browser on or off (RegisteredSession.browser), as its person's Start and Stop do through the core
+   *  (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the live row as saved, or null when no live row has that id. */
+  setBrowser(agentId: string, on: boolean): RegisteredSession | null {
+    const session = this.agents.get(agentId)
+    if (!session) return null
+    if ((session.browser === true) === on) return session
+    if (on) session.browser = true
+    else delete session.browser
+    session.touchedAt = Date.now()
+    this.save()
+    return session
   }
 
   /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */

@@ -67,7 +67,7 @@ function setup() {
     return { status: 404, etag: null, body: null, resetAt: null }
   }
   const record = vi.fn(async (_repository: string, _commentId: string) => {})
-  const pip = { name: 'Pip', repositories: new Set(['acme/app']) }
+  const pip = { name: 'Pip', repositories: new Map([['acme/app', { project: 'acme/app', github: 'acme/app' }]]) }
   const take = (number = 34, agent = pip, repository = 'acme/app') => takeTask({ get, send, record, login: async () => 'pips-person', now: () => NOW }, agent, { repository, number })
   const labelsOf = (number: number) => names(repo.issues.get(number)!)
   return { repo, sent, record, take, pip, labelsOf }
@@ -151,8 +151,20 @@ describe('a task\'s claim, made by command', () => {
     expect((await refusal(t.take(42, { ...t.pip, name: 'Pip Two' })))?.code).toBe('TASK_NOT_YOURS')
     // An issue moved to another repository: GitHub answers for it where it is now, which may be no project of the agent's.
     t.repo.issues.set(43, { number: 43, state: 'open', labels: [{ name: 'builder:pip' }], repository_url: 'https://api.github.com/repos/other/place' })
-    expect(await refusal(t.take(43))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#43 was moved to another repository.' })
+    expect(await refusal(t.take(43))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#43 is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).' })
     expect(t.sent).toEqual([])
+  })
+
+  // autonomous-harness, renamed openharness on GitHub (2026-11-11): its project kept the old name, which cannot change, and every
+  // take was refused, by the new name as no project's repository and by the old as moved, since GitHub answers it as the new one.
+  it('takes a task of a repository renamed since its project was made, by either name, and records it under the project\'s', async () => {
+    const t = setup(), renamed = { project: 'acme/old', github: 'acme/app' }
+    const pip = { ...t.pip, repositories: new Map([['acme/old', renamed], ['acme/app', renamed]]) }
+    expect(await t.take(34, pip, 'acme/old')).toMatchObject({ taken: true })
+    expect(t.record).toHaveBeenLastCalledWith('acme/old', expect.any(String))
+    expect(t.sent.every(({ path }) => path.startsWith('/repos/acme/app/'))).toBe(true)
+    expect(await refusal(t.take(34, pip, 'acme/app'))).toBeNull()
+    expect(t.record).toHaveBeenLastCalledWith('acme/old', expect.any(String))
   })
 
   // The second review of #3907: a login with no right to label is the likeliest refusal, and it was not pinned.

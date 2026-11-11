@@ -222,6 +222,28 @@ describe('an agent\'s instructions file', () => {
       expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: null, version: '', shared: [both[1]] })
     })
 
+    // What its engine reads for every session of its person on this computer, before any project's (anh Dee, 2026-11-11: "show users
+    // what goes into the agent"), beside the project's and under its own key. In a home folder of the test's own: never the real one.
+    it('carry its person\'s own file on this computer, which its engine reads for every session, as `personal`', async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'harness-projects-instructions-')), home = await mkdtemp(join(tmpdir(), 'harness-projects-home-'))
+      folders.push(cwd, home)
+      vi.stubEnv('HOME', home)
+      vi.stubEnv('USERPROFILE', home)
+      try {
+        const requests = startProjects(fakeCore({ agents: { resolve: vi.fn(() => ({ ...row('a1', cwd), engine: 'claude' }) as RegisteredSession) } }))
+        const read = () => requests.agent_instructions_read!({ agentId: 'a1', name: 'Faye' }, LOCAL_OWNER as never)
+        expect(await read()).toEqual({ text: null, version: '' })
+        await mkdir(join(home, '.claude'))
+        await writeFile(join(home, '.claude', 'CLAUDE.md'), 'Mine.\n')
+        await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+        expect(await read()).toEqual({ text: null, version: '', shared: [both[1]],
+          personal: [{ name: 'CLAUDE.md', path: '~/.claude/CLAUDE.md', loadedBy: ['claude'], text: 'Mine.\n', truncated: false }] })
+        await writeFile(join(home, '.claude', 'CLAUDE.md'), Buffer.from([0x66, 0xff]))
+        expect(await read()).toEqual({ text: null, version: '', shared: [both[1]],
+          personalSkipped: [{ name: 'CLAUDE.md', path: '~/.claude/CLAUDE.md', loadedBy: ['claude'], why: 'not_text' }] })
+      } finally { vi.unstubAllEnvs() }
+    })
+
     it('are never written: a save answers as before and leaves both as they were', async () => {
       const { ask, cwd } = await project()
       await writeFile(join(cwd, 'AGENTS.md'), 'Agent rules\n')

@@ -70,6 +70,10 @@ class BrowserBridge {
   /// Sets the remote clipboard to [text] and pastes it there.
   void paste(String text) => _view.post({'t': 'paste', 'text': text});
 
+  /// Tells the page the size of Chrome's window, as the machine set it: the page shows that rectangle at 1:1.
+  void window(int width, int height) =>
+      _view.post({'t': 'window', 'width': width, 'height': height});
+
   Future<void> close() async {
     _closing = true;
     // Told at once, before the page lets go: the machine's exec ends with it.

@@ -15,14 +15,17 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
 const unmeasured = (..._args: unknown[]): void => {}
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
   'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SWARM_SKILL_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
-const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED'])
+// The Browser's Start refusals (core/agents/lifecycle.ts) answer no launch, so they take a fixed kind, not the launch
+// code list, where each would have joined all twelve launch families: a guest's agent (`NOT_ALLOWED`) is `auth`, and an
+// agent that does not run here (`NOT_RUNNING`) is `invalid`.
+const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED', 'NOT_ALLOWED'])
 const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAVAILABLE', 'API_UNAVAILABLE',
   'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE', 'SWARM_ROLE_UNAVAILABLE'])
 // A history page read for no session, or one this computer's index does not hold (services/search.ts): until
 // 2026-10-28 both were `other`, 2,225 that day, a Desktop list re-reading a conversation that had left the index.
 const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
   'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_LAUNCH_ARGS', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY',
-  'BAD_SESSION', 'NOT_INDEXED'])
+  'BAD_SESSION', 'NOT_INDEXED', 'NOT_RUNNING'])
 /** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
  * `other`: that day's 11 failed installs, all on Windows, said nothing of why. For the Store's requests only, so a
  * create's or a resume's totals keep their meaning. Its busy and not-installed refusals are named with the others'. */

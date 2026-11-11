@@ -39,6 +39,8 @@ export interface RecapDeps {
   orchestratorRoleOf: OrchestratorService['roleOf']
   /** Whether an agent's finished turns are silent on the devices, as someone outside the core says (RecapSession). */
   quietOnDevices: (session: RegisteredSession) => boolean
+  /** Whether the funnel has a turn open in the session (its `turnStartedAt`). */
+  turnRunning: (sessionId: string) => boolean
 }
 
 /** The calls the core makes about a turn's recap. */
@@ -66,7 +68,7 @@ export interface TurnRecaps {
 
 export function createRecaps({
   port, turnActivity, clients, deviceIsWatching, cableWatchingLocal, remoteApp, bySession, resolve, stopped, live, sessionTurnOpen,
-  orchestratorRoleOf, quietOnDevices,
+  orchestratorRoleOf, quietOnDevices, turnRunning,
 }: RecapDeps) {
   /**
    * A turn that belongs to a SUB-AGENT: an Orchestrator specialist, or its Director while specialists
@@ -106,19 +108,41 @@ export function createRecaps({
   }
   const tell = (event: TurnLifecycle): void => { port()?.lifecycle(event, watchers()) }
   const read = (sessionId: string): SessionRecaps | null => port()?.recaps(sessionId) ?? null
+  /**
+   * The sessions whose open turn a quiet delivery started (`quietTurn`), until that turn's end is told. The mark is said with
+   * the batch that ends the turn, not with its start: the input says the delivery `started` inside the funnel, before the
+   * recaps hear that batch, for an exact echo, and a moment later, once the engine's own record is read, for a prompt the
+   * engine wrapped. Said at the end, it is right in both orders. Only a session with a turn open is kept, and its end, a
+   * cancel, a forget or a purge takes it off.
+   */
+  const quiet = new Set<string>()
 
   const mirror: TurnRecaps = {
     ingest: (events, sessionId, options) => {
       const ends = events.some((event) => event.type === 'turn_ended')
-      tell({ kind: 'events', session: session(sessionId, ends ? isSubagentSession(sessionId) : undefined), events, replay: !!options?.replay })
+      const replay = !!options?.replay
+      const about = session(sessionId, ends ? isSubagentSession(sessionId) : undefined)
+      // A replayed end is history, not this turn's: it leaves the mark for the live end. Two literals, so a batch that is not
+      // a quiet end is built as it always was, with nothing added to it on this path (every event batch passes here).
+      if (ends && !replay && quiet.delete(sessionId)) tell({ kind: 'events', session: about, events, replay, quiet: true })
+      else tell({ kind: 'events', session: about, events, replay })
     },
     heartbeat: (sessionId) => {
       tell({ kind: 'beat', session: session(sessionId), working: turnActivity.snapshot(sessionId)?.state === 'working' })
       return read(sessionId)?.busy ?? false
     },
-    cancel: (sessionId) => { tell({ kind: 'cancelled', session: session(sessionId, isSubagentSession(sessionId)) }) },
-    forget: (sessionId) => { tell({ kind: 'forgotten', session: session(sessionId, isSubagentSession(sessionId)) }) },
-    deleteHistory: (sessionId) => { tell({ kind: 'purged', sessionId }) },
+    cancel: (sessionId) => {
+      quiet.delete(sessionId)
+      tell({ kind: 'cancelled', session: session(sessionId, isSubagentSession(sessionId)) })
+    },
+    forget: (sessionId) => {
+      quiet.delete(sessionId)
+      tell({ kind: 'forgotten', session: session(sessionId, isSubagentSession(sessionId)) })
+    },
+    deleteHistory: (sessionId) => {
+      quiet.delete(sessionId)
+      tell({ kind: 'purged', sessionId })
+    },
     inheritSummary: (from, to) => { tell({ kind: 'rebound', from, to }) },
     noteEngineStopped: (sessionId) => { tell({ kind: 'stopped', sessionId }) },
     replayAll: () => {
@@ -134,6 +158,16 @@ export function createRecaps({
   }
   /** A question put to the person, or answered: a turn waiting on one is not announced as done. */
   const question = (kind: 'asked' | 'answered', sessionId: string, requestId: string): void => { tell({ kind, sessionId, requestId }) }
+  /** The turn open in [agentId] was started by a quiet delivery (core/deliveries.ts `quietStarted`): its end makes no recap and
+   *  no notification. With no turn open there, its end was already told and cannot be taken back: the mark is dropped. */
+  const quietTurn = (agentId: string): void => {
+    const sessionId = resolve(agentId)?.sessionId
+    if (!sessionId || !turnRunning(sessionId)) {
+      console.log('[recap] quiet · no open turn')
+      return
+    }
+    quiet.add(sessionId)
+  }
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.
@@ -159,7 +193,7 @@ export function createRecaps({
     const asks = recentAsksOf(projectId, n)
     return { agentId: projectId, events, asks }
   }
-  return { mirror, isSubagentSession, question, recent, recentAsks: recentAsksOf, agentRecent }
+  return { mirror, isSubagentSession, question, recent, recentAsks: recentAsksOf, agentRecent, quietTurn }
 }
 
 export type Recaps = ReturnType<typeof createRecaps>

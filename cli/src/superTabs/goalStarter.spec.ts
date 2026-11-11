@@ -46,9 +46,17 @@ describe('a project\'s goal file and its workflow, written into a checkout', () 
     // Nor a folder of the checkout that is a link to elsewhere: nothing is written outside it.
     const through = folder(), elsewhere = folder()
     symlinkSync(elsewhere, join(through, 'agents'))
-    expect(await startGoal(through, git(through, 'origin/main'))).toEqual({ ok: false, said: 'agents is a link to outside this checkout: nothing was written there.' })
+    expect(await startGoal(through, git(through, 'origin/main'))).toEqual({ ok: false, said: 'agents is a link: nothing was written.' })
     expect(existsSync(join(elsewhere, 'GOAL.md'))).toBe(false)
     expect(existsSync(join(through, '.github'))).toBe(false)
+    // The second file's folder is looked at before the first file is written, and a link to nowhere is said, not thrown.
+    for (const target of [folder(), join(folder(), 'nowhere')]) {
+      const second = folder()
+      symlinkSync(target, join(second, '.github'))
+      expect(await startGoal(second, git(second, 'origin/main'))).toEqual({ ok: false, said: '.github is a link: nothing was written.' })
+      expect(existsSync(join(second, 'agents'))).toBe(false)
+      expect(existsSync(join(target, 'workflows'))).toBe(false)
+    }
     // What it cannot write for another reason is the command's failure.
     const blocked = folder()
     writeFileSync(join(blocked, 'agents'), 'a file where the folder goes')
@@ -127,7 +135,9 @@ describe('the workflow that checks a goal', () => {
       '| Sync | `a` |\r\n| Sync | `b` |\n| Start | `c | d` |\n| No check | npm test |\n| Empty | ` ` |\n| ' + 'x'.repeat(101) + ' | `a` |\n| ' + 'y'.repeat(100) + ' | `b` |\nnot a row\n| Only one |\n',
       Array.from({ length: 105 }, (_, n) => `| Milestone ${n} | \`check "${n}" && echo '$HOME' \` |`).join('\n'), '', '| “Quotes” & <tags> ☃ | `echo "${{ secrets.X }}"` |\n',
       '﻿| With a mark before it | `a` |\n|\tTabs\tand spaces\t|\t`b`\t|\n| rows=[] | `c` |\n| A | `x`y` |\n',
-      `| Just fits | \`${'b'.repeat(1_000 - 18)}\` |\n| One too long | \`${'b'.repeat(1_000 - 20)}\` |\n| a${' '.repeat(50_000)}| x\n`]
+      `| Just fits | \`${'b'.repeat(1_000 - 18)}\` |\n| One too long | \`${'b'.repeat(1_000 - 20)}\` |\n| a${' '.repeat(50_000)}| x\n`,
+      // A milestone of space alone is no row, and the slowest line there was is read at once: in the workflow as in goal.ts.
+      `|  | \`x\` |\n| Kept | \`y\` |\n|${' '.repeat(998)}a\n`]
     for (const file of files) {
       const root = folder()
       mkdirSync(join(root, 'agents'))
