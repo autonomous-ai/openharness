@@ -1,4 +1,5 @@
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
+import { archiveEmptyChats, paneChatId } from './paneChats.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
@@ -23,6 +24,7 @@ import { commentAuthors, recordComment, sameRepository, type CommentKind } from 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
+import { forgetRemovedPanes } from './removedPanes.js'
 import { applyCommand, authorizeCommandAccess, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import { agentOpenDeliveries, OPEN_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
@@ -591,6 +593,12 @@ export class SuperTabStore {
       if (delivery) groupIds.push(delivery.conversationId)
     }
     if (command.type === 'agent.remove') agentIds.push(command.agentId)
+    // A session's own chat, which an archive by hand may have put to sleep: joining it again opens it again (paneChats.ts).
+    const joining = command.type === 'agent.new' && command.local && command.harnessId ? state.people.find(p => p.id === personId) : undefined
+    if (joining && command.type === 'agent.new') {
+      const kept = state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)?.chatId
+      groupIds.push(...kept ? [kept] : [], paneChatId(joining, command.machineId, command.harnessId!))
+    }
     // These only ask about the agent. A coordinator's project chat, always loaded, answers them, and every group it was ever in is
     // what a read by agent gave: 1,668 on prod, growing with every task (Ken's profile, 2026-11-02, up to 1.66 s a read). Filtering
     // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
@@ -2661,6 +2669,8 @@ export class SuperTabStore {
         const reservation = state.harnessReservations?.find(r => r.machineId === machineId && r.harnessId === proof.harnessId && r.generation === proof.generation)
         if (!reservation) continue
         state.harnessReservations = state.harnessReservations?.filter(r => r !== reservation)
+        // Its session ended: a record that its person took it out goes with it (removedPanes.ts).
+        forgetRemovedPanes(state, machineId, id => id === proof.harnessId)
         state.releasedHarnesses ??= []
         if (!state.releasedHarnesses.some(r => r.machineId === machineId && r.harnessId === proof.harnessId)) state.releasedHarnesses.push({ machineId, harnessId: proof.harnessId })
         const id = stableId('swarm-session', state.environment, user.sub, stableId(machineId, proof.harnessId))
@@ -3219,6 +3229,9 @@ export class SuperTabStore {
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
+      // The chats a join left empty, with no agent and no message (paneChats.ts).
+      const archived = archiveEmptyChats(state, now)
+      if (archived) logger.info('[super-tab] archived empty agent chats', { tabId, archived })
       await this.save(tx, loaded, state, clock.next())
       return 0
     })

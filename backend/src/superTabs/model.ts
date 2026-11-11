@@ -4,6 +4,7 @@ import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { personView } from './profile.js'
+import { removedPanesFor } from './removedPanes.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
@@ -30,6 +31,9 @@ export interface Person {
   nameFollowsAccount?: true
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
+  /** The sessions they took out of this Swarm that keep running (removedPanes.ts), so their apps do not offer them to join.
+   *  Only they read it. */
+  removedPanes?: import('./removedPanes.js').RemovedPane[]
 }
 export interface AgentConfiguration {
   engine: string
@@ -547,8 +551,10 @@ export const AGENT_ONLY = { kind: 'agent-only' }
 export const NOTICE_READERS = {
   // Only its agent: a skill update (cli host.ts).
   'agent-only': 'agent',
-  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
-  github: 'people',
+  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): its agent's alone. The person read
+  // it in their chat until anh Dee saw that chat a feed of cards (2026-11-11: "so terrible. it should be like a human
+  // conversation"); the agent's work shows on the Tasks board and in the channel.
+  github: 'recipients',
   // A worker's lost task, to its Lead (liveness.ts).
   'work-lost': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
@@ -857,7 +863,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
-  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) }))
+  visible.people = visible.people.map(p => ({ ...removedPanesFor(personView(p), actor.kind === 'person' ? actor.userId : null, now), username: names.get(p.id) }))
   visible.agents = visible.agents.map(personView)
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {
