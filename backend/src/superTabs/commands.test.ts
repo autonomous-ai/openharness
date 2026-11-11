@@ -10,6 +10,7 @@ import { agentOnly, agentRole, createSuperTab, visibleState, type Actor, type Ag
 import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
+import { MAX_REMOVED_PANES, REMOVED_PANE_KEEP_MS } from './removedPanes.js'
 import { weekStart } from './leaderboard/week.js'
 import { lentIn, weekSpan } from './leaderboard/rolling.js'
 import { storedAssignment, storedStatus, storedTask } from './storedWork.test-support.js'
@@ -2404,25 +2405,64 @@ describe('Lead protection', () => {
     expect(f.state.closingSessions).toEqual([closing(lead, 'docs-lead')])
   })
 
-  it('asks the host to close the session of every agent a person removes, and shows it to nobody else', () => {
-    const f = fixture(), worker = f.add('worker')
+  // anh Dee 2026-11-11: taking an agent out of a Swarm is closing a view of it, which never stops it unasked.
+  it('leaves the session of an agent a person takes out running, and records it for that person alone', () => {
+    const f = fixture()
+    f.invite()
+    const worker = f.add('worker'), theirs = f.add('theirs', 'peer')
     f.run({ type: 'agent.remove', agentId: worker })
-    expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
-    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
+    expect(f.state.closingSessions).toBeUndefined()
+    expect(f.state.agents.map(a => a.id)).toEqual([theirs])
+    expect(f.state.removedPanes).toEqual([{ machineId: 'host', harnessId: 'worker', contributorId: 'owner', removedAt: 1000 }])
+    expect(visibleState(f.state, owner, 1000)).toMatchObject({ removedPanes: [{ machineId: 'host', harnessId: 'worker' }] })
+    expect(visibleState(f.state, peer, 1000)).not.toHaveProperty('removedPanes')
 
     const g = fixture(), other = g.add('other')
     g.run({ type: 'machine.remove', machineId: 'host' })
-    expect(g.state.closingSessions).toEqual([closing(other, 'other')])
+    expect(g.state.agents.some(a => a.id === other)).toBe(false)
+    expect(g.state.closingSessions).toBeUndefined()
+    expect(g.state.removedPanes).toEqual([expect.objectContaining({ harnessId: 'other' })])
 
+    // Whoever leaves takes their agents out with them, still running, and no record they could no longer read.
     const h = fixture()
     h.invite()
-    const theirs = h.add('theirs', 'peer')
+    h.add('theirs', 'peer')
     h.run({ type: 'member.remove', userId: 'peer' }, peer)
-    expect(h.state.closingSessions).toEqual([closing(theirs, 'theirs')])
+    expect(h.state.agents).toEqual([])
+    expect(h.state.closingSessions).toBeUndefined()
+    expect(h.state.removedPanes).toBeUndefined()
+  })
+
+  it('closes the session only on a confirmed delete or a Stop its person asked for', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
+    expect(f.state.removedPanes).toBeUndefined()
+    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
+
+    const g = fixture(), other = g.add('other')
+    g.run({ type: 'swarm.delete', name: 'Pilot' })
+    expect(g.state.closingSessions).toEqual([closing(other, 'other')])
+  })
+
+  it('forgets a taken-out session once it is added again, keeps at most the newest records, and lets old ones lapse', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    f.add('worker')
+    expect(f.state.removedPanes).toBeUndefined()
+    const g = fixture()
+    g.state.removedPanes = Array.from({ length: MAX_REMOVED_PANES }, (_, i) => ({ machineId: 'host', harnessId: `old-${i}`, contributorId: 'owner', removedAt: 1000 }))
+    g.run({ type: 'agent.remove', agentId: g.add('worker') })
+    expect(g.state.removedPanes).toHaveLength(MAX_REMOVED_PANES)
+    expect(g.state.removedPanes!.at(-1)).toMatchObject({ harnessId: 'worker' })
+    expect(g.state.removedPanes!.some(r => r.harnessId === 'old-0')).toBe(false)
+    expect(visibleState(g.state, owner, 1000 + REMOVED_PANE_KEEP_MS)).not.toHaveProperty('removedPanes')
   })
 
   it('drops a close request and the slot held for its session once the machine owner says it closed', () => {
     const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
     f.run({ type: 'agent.remove', agentId: worker })
     expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'host', harnessId: 'worker' })])
     const closed = { type: 'agent.sessionClosed', agentId: worker, harnessId: 'worker' } as Command
@@ -2440,6 +2480,7 @@ describe('Lead protection', () => {
 
   it('forgets a close request when the same session is added back before its host closed it', () => {
     const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
     f.run({ type: 'agent.remove', agentId: worker })
     f.add('worker')
     expect(f.state.closingSessions).toBeUndefined()
