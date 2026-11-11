@@ -258,7 +258,6 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-machine-a')));
       await tester.pumpAndSettle();
       expect(c.isMachineExpanded('a'), isTrue);
-      expect(find.text('No agents yet'), findsOneWidget);
       await c.flush();
       final reopened = server.controller(initial: server.saved!);
       expect(reopened.isMachineExpanded('a'), isTrue);
@@ -266,7 +265,7 @@ void main() {
       reopened.dispose();
       await tester.tap(find.byKey(const ValueKey('super-machine-a')));
       await tester.pumpAndSettle();
-      expect(find.text('No agents yet'), findsNothing);
+      expect(c.isMachineExpanded('a'), isFalse);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
@@ -371,18 +370,22 @@ void main() {
       (w) => w is SuperTabAvatar && w.identity.startsWith('agent:'),
     );
 
-    testWidgets('none: no count line, and the machine says it has none', (
-      tester,
-    ) async {
-      final c = await mount(tester, 0);
-      expect(line, findsNothing);
-      expect(find.text('No agents yet'), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('super-machine-readings-m')),
-        findsOneWidget,
-      );
-      await unmount(tester, c);
-    });
+    testWidgets(
+      'none: no count line, and no words for none: its readings alone',
+      (tester) async {
+        final c = await mount(tester, 0);
+        expect(line, findsNothing);
+        // An empty list shows nothing (design system, Swarm rule 7).
+        expect(find.text('No agents yet'), findsNothing);
+        // Nothing in their place either.
+        expect(find.text('Refreshing…'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-machine-readings-m')),
+          findsOneWidget,
+        );
+        await unmount(tester, c);
+      },
+    );
 
     testWidgets(
       'an offline machine keeps its total and says nothing is running, in the muted ink',
@@ -966,7 +969,15 @@ void main() {
       'machineId': 'studio',
       'name': 'Studio',
       'contributorId': contributorId,
-      'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+      'observation': {
+        'receivedAt': DateTime.now().millisecondsSinceEpoch,
+        // Readings, so an expanded machine has something under its row to right-click.
+        'resources': {
+          'cpuPercent': 5,
+          'diskTotalBytes': 1000000000000,
+          'diskFreeBytes': 200000000000,
+        },
+      },
     };
     Map<String, dynamic> agent(String id, String contributorId) => {
       'id': id,
@@ -1356,7 +1367,9 @@ void main() {
         await mount(tester, c);
         await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
         await tester.pumpAndSettle();
-        final below = find.text('No agents yet');
+        final below = find.byKey(
+          const ValueKey('super-machine-readings-studio'),
+        );
         expect(below, findsOneWidget);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         addTearDown(mouse.removePointer);

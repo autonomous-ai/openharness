@@ -441,6 +441,23 @@ describe('recoverable undispatched creation intents', () => {
   })
 })
 
+// The core scans for pending intents every minute, for its whole life. Each scan made the folder if it was missing
+// and fsynced its parent even when it was there: an idle core's second largest cost (#3880, profiled 2026-11-10).
+// A scan only reads.
+describe('a scan for pending intents', () => {
+  it('writes nothing to the disk, with no folder yet or with one', async () => {
+    const { directory, receipts } = fixture()
+    const scan = async () => { const found = []; for await (const item of receipts.pendingIntents()) if (item) found.push(item); return found }
+    vi.mocked(fs.fsyncSync).mockClear()
+
+    expect(await scan()).toEqual([])
+    expect(fs.existsSync(directory), 'no folder made by a scan').toBe(false)
+    mkdirSync(directory, { mode: 0o700 })
+    expect(await scan()).toEqual([])
+    expect(fs.fsyncSync).not.toHaveBeenCalled()
+  })
+})
+
 describe('who created a launch', () => {
   const guest = 'kim@acme.io'
   const created = { state: 'created' as const, agentId: 'fixture-agent' }

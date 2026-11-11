@@ -17,7 +17,9 @@ import { patientExec, type ExecDone, type PatientExecOptions } from './patientEx
 import { ptyHostBinary } from './ptyHost/launch.js'
 import { runPowershellAsync } from './windows/powershell.js'
 
-export type PeerAccount = (socket: Socket) => Promise<boolean>
+/** Yes, no, or `unanswered`: the lookup did not finish in time, which is not a no. The listener answers a retryable 503. */
+export type PeerAccount = (socket: Socket) => Promise<boolean | 'unanswered'>
+
 
 export const LSOF_MS = 3_000
 
@@ -327,25 +329,27 @@ function release(): void {
   else windowsLookups--
 }
 
-const answers = new WeakMap<Socket, Promise<boolean>>()
+const answers = new WeakMap<Socket, Promise<boolean | 'unanswered'>>()
 
 /**
  * Whether the caller on [socket] runs as this OS account: asked of `/proc/net/tcp`, `lsof`, or on Windows of Windows itself
  * ([run], audit W1: Windows answered yes without asking, and the Team account, holding the port at boot, opened the daemon
  * with the credential it heard).
  */
-export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = process.platform, run: WindowsPeerRun = runWindowsPeer): Promise<boolean> {
+export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = process.platform, run: WindowsPeerRun = runWindowsPeer): Promise<boolean | 'unanswered'> {
   let answer = answers.get(socket)
   if (!answer) {
     const asked: Promise<WindowsAnswer | 'unanswered'> = platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)
     answer = asked.then((result) => {
       const why = result === 'busy' ? 'busy, too many lookups are running; asked again on its next request'
-        : result === 'unanswered' ? 'lsof did not answer in time; asked again on its next request'
+        : result === 'unanswered' ? 'lsof did not answer in time; told to retry'
         : result === 'timeout' ? 'Windows did not say who the caller is in time'
         : typeof result === 'object' ? `the caller is not this account (${result.no})` : 'the caller is not this account'
-      if (result !== true) console.warn(`[peer] refused a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
+      if (result !== true) console.warn(`[peer] ${result === 'unanswered' ? 'could not check' : 'refused'} a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
+      // lsof killed at its limit gave no answer, which is not a no: not kept, and the caller is told to ask again (a 503).
+      // Windows' null status is kept a no: PowerShell gives it to a script that never started as well as to one cut off.
       if (result === 'busy' || result === 'unanswered') answers.delete(socket)
-      return result === true
+      return result === 'unanswered' ? 'unanswered' : result === true
     })
     answers.set(socket, answer)
   }
