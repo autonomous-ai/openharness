@@ -20,7 +20,7 @@
  *   the key, on every pass for NO_SESSION_MS, is on a store the Gateway does not write: the TUI's state folder is not
  *   the Gateway's, and the store will never get the session (`onSessionMissing`). A fresh key reads idle before its
  *   first message, and a Gateway that is only slow writes the node well within that time. Said once, and cleared once
- *   the key is found (`onSessionFound`).
+ *   the key is found (`onSessionFound`). Not counted while the store cannot be read (`onFatal`), which says so itself.
  */
 import type { LiveEvent } from '../../lib/normalize.js'
 import { OpenclawNormalizer } from './normalizer.js'
@@ -94,6 +94,8 @@ export class OpenclawLive {
   /** When the passes that read a run with no node for the key began, and whether `onSessionMissing` was said. */
   private runWithoutKey: number | null = null
   private sessionMissing = false
+  /** The store cannot be read here or in this version (`onFatal`) and is not read again yet: no word on the key. */
+  private unreadable = false
 
   constructor(private readonly deps: OpenclawLiveDeps) {
     this.reader = new OpenclawReader({
@@ -114,8 +116,8 @@ export class OpenclawLive {
         this.emit(this.normalizer.push(events))
       },
       onStatus: (status) => this.status(status),
-      onFatal: (reason) => deps.onFatal(reason),
-      onRecovered: () => deps.onRecovered?.(),
+      onFatal: (reason) => { this.unreadable = true; deps.onFatal(reason) },
+      onRecovered: () => { this.unreadable = false; deps.onRecovered?.() },
       onAgentHeader: (record) => deps.onHeader?.(record),
       busy: () => this.normalizer.turnOpen,
     })
@@ -159,7 +161,8 @@ export class OpenclawLive {
       if (this.sessionMissing) { this.sessionMissing = false; this.deps.onSessionFound?.() }
       return
     }
-    if (!running) { this.runWithoutKey = null; return }
+    // A store that cannot be read says nothing of the key: what it says instead is its own state (`onFatal`).
+    if (!running || this.unreadable) { this.runWithoutKey = null; return }
     this.runWithoutKey ??= Date.now()
     if (this.sessionMissing || Date.now() - this.runWithoutKey < NO_SESSION_MS - PASS_JITTER_MS) return
     this.sessionMissing = true
