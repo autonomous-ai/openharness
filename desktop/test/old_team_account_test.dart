@@ -49,6 +49,8 @@ void main() {
 
   const line =
       'An old Harness Team account is still on this computer. Remove it.';
+  const waiting =
+      "Enter your password in the system's window. It may be behind Harness.";
   const cancelled = TeamAccountRemoval.failed(
     'CANCELLED',
     'Nothing was removed: the administrator prompt was cancelled.',
@@ -85,16 +87,10 @@ void main() {
 
       await tester.tap(find.text('Remove'));
       await tester.pump();
-      expect(
-        find.text('Waiting for the administrator prompt…'),
-        findsOneWidget,
-      );
+      // It says where the system's prompt is: anh Dee, 2026-11-11, "it's stuck at 'waiting for the admin prompt..'", while
+      // macOS's own window waited behind Harness.
+      expect(find.text(waiting), findsOneWidget);
       expect(find.text('Remove'), findsNothing);
-      await tapOutside(tester);
-      expect(
-        find.text('Waiting for the administrator prompt…'),
-        findsOneWidget,
-      );
       done.complete(const TeamAccountRemoval.removed());
       await tester.pumpAndSettle();
       expect(find.text('Removed.'), findsOneWidget);
@@ -104,6 +100,40 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(line), findsNothing);
       expect(find.text('workspace'), findsOneWidget);
+    },
+  );
+
+  // Never trapped (anh Dee, 2026-11-10: "NEVER block users"): while the system's prompt waits, maybe out of sight, Close and
+  // Escape let the person go, and the removal goes on to the prompt's answer.
+  testWidgets(
+    'while it waits for the system\'s prompt, Close or Escape lets the person go, and the removal goes on',
+    (tester) async {
+      for (final leave in ['close', 'escape']) {
+        OldTeamAccountAsk.askedThisLaunch = false;
+        final done = Completer<TeamAccountRemoval>();
+        await openWorkspace(
+          tester,
+          here: () async => true,
+          remove: () => done.future,
+        );
+        await tester.tap(find.text('Remove'));
+        await tester.pump();
+        expect(find.text(waiting), findsOneWidget);
+        if (leave == 'close') {
+          await tester.tap(find.byKey(const Key('old-team-account-close')));
+        } else {
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        }
+        await tester.pumpAndSettle();
+        expect(find.text(line), findsNothing, reason: leave);
+        expect(find.text('workspace'), findsOneWidget);
+        // The prompt is answered later: nothing breaks, and nothing shows again this launch.
+        done.complete(const TeamAccountRemoval.removed());
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('Removed.'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      }
     },
   );
 

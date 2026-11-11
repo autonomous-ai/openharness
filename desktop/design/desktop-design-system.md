@@ -953,10 +953,15 @@ editors keep their own input and scrolling behavior.
 the app opens by itself: once a launch, as the workspace opens on a computer
 whose old Harness Team account is still there. One line, "An old Harness Team
 account is still on this computer. Remove it.", and one action, Remove, which
-opens the system's administrator prompt. Nothing else closes it until the
-removal has run; then the footer shows "Removed." or the CLI's own reason in
-the danger color, with Close and Retry. Cancelled or failed, the next launch
-asks again. `test/old_team_account_test.dart` clicks through it.
+opens the system's administrator prompt. Nothing else closes it until Remove
+is pressed. While the system's prompt waits, the footer says where it is
+("Enter your password in the system's window. It may be behind Harness.") and
+Close or Escape lets the person go, the removal going on to the prompt's
+answer (anh Dee, 2026-11-11: it sat at "Waiting for the administrator prompt…"
+with macOS's window out of sight, and nothing closed it). Once it has run, the
+footer shows "Removed." or the CLI's own reason in the danger color, with
+Close and Retry. Cancelled or failed, the next launch asks again.
+`test/old_team_account_test.dart` clicks through it.
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
