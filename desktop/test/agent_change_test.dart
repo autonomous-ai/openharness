@@ -8,6 +8,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/home_dir.dart';
 import 'package:harness/e2ee/envelope.dart';
+import 'package:harness/core/first_task.dart';
 import 'package:harness/state/agent_handoff_file.dart';
 import 'package:harness/state/agent_switch_handoff.dart';
 import 'package:harness/ws/ws_conn.dart'
@@ -1008,12 +1009,24 @@ void main() {
       connection.handoff = handoffOk;
       final target = allEngines
           .map((e) => e.id)
-          .firstWhere((id) => !supportsAgentHandoff(id) && id != 'codex');
+          .firstWhere((id) => !takesFirstTask(id) && id != 'codex');
       await app.changeAgent('m', 'a0', target);
       expect(connection.handoffCalls, isEmpty);
       expect(connection.recentReads, 0);
       expect(notices, isEmpty);
     });
+
+    // Every engine that takes a first task takes the handoff as one: omp as an argument, OpenClaw typed into its
+    // session (the CLI's FIRST_PROMPT_ARGS, kFirstTaskEngines).
+    for (final target in ['omp', 'openclaw']) {
+      test('a switch to $target keeps the handoff', () async {
+        final (connection, app) = await open();
+        connection.handoff = handoffOk;
+        expect(await app.changeAgent('m', 'a0', target), isNull);
+        expect(connection.handoffCalls.single['targetEngine'], target);
+        expect(connection.creations.single['prompt'], isNotNull);
+      });
+    }
 
     test('the request is sealed on the wire', () {
       expect(encryptedDownTypes, contains('agent_handoff_prepare'));

@@ -8,6 +8,7 @@ import '../measurement/speed_marks.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
+import '../core/first_task.dart';
 import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
@@ -18246,7 +18247,8 @@ class AppNotifier extends ChangeNotifier {
       return 'This harness has no project folder to open with another agent.';
     }
     if (source.dsh != 'autonomous/pair' &&
-        supportsAgentHandoff(change.engine) &&
+        // The handoff is the new agent's first task: an engine that takes one takes it (core/first_task.dart).
+        takesFirstTask(change.engine) &&
         !change.contextLoaded) {
       final error = await _loadSwitchHandoff(machineId, change, source, folder);
       if (error != null) return error;

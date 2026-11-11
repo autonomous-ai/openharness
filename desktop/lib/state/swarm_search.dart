@@ -21,7 +21,7 @@ import '../core/relative_time.dart';
 
 import 'account_devices.dart' show AccountDevice;
 import 'app_state.dart';
-import 'agent_switch_handoff.dart';
+import '../core/first_task.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
@@ -2020,7 +2020,7 @@ class SwarmSearchController extends ChangeNotifier {
               ? 'Current agent'
               : engine.id == 'opencode'
               ? 'Muse Spark 1.3 · continue with recent context'
-              : supportsAgentHandoff(engine.id)
+              : takesFirstTask(engine.id)
               ? 'Continue this project with recent context'
               : 'New conversation in the same project',
           swarmId: null,
