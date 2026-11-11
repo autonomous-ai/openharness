@@ -394,6 +394,21 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toHaveLength(1)
   })
 
+  // The allocator's design, package 5: the label's side was compared as written, so a task labelled `part:Backend` was no task
+  // of the area of an agent that "Works on: backend", and Harness made a second label beside the repository's own.
+  it('gives a task to the builder that works on its area however the label spells it, and makes no second label for that area', async () => {
+    const f = setup([issue(1, ['size:s', 'part:Backend']), issue(2, ['size:s', 'part:Mobile App'])])
+    f.github.state.files.set('agents/Pip.md', 'Works on: mobile app')
+    f.github.state.files.set('agents/Juno.md', 'Works on: backend')
+    f.github.state.labels.push({ name: 'part:Mobile App' }, { name: 'part:Backend' })
+    await f.assigner.tick()
+    expect(f.labelled().sort()).toEqual([[1, 'builder:juno'], [2, 'builder:pip']])
+    const why = new Map(f.said() as Array<[number, string]>)
+    expect(why.get(1)).toMatch(/for \*\*Juno\*\*: it can start now, and it works on backend\.$/)
+    expect(why.get(2)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile-app\.$/)
+    expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toEqual([])
+  })
+
   describe('readers', () => {
     const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
     const pull = (extra: Json = {}): Json => ({ number: 30, draft: false, base: { ref: 'main' }, head: { sha: HEAD, ref: 'pip/14' },
@@ -1182,6 +1197,20 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
         '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/1/labels/status%3Ataken'])
       expect(f.said().some(([, body]) => String(body).includes('Juno has had no activity on it since it was asked'))).toBe(true)
+    })
+
+    // Code review of #4084: a line held back (githubWrites.ts) or refused was dropped without a word; the task moves all the same.
+    it('takes a task back and gives it on all the same when GitHub refuses their lines, and says each line was not written', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      await f.assigner.tick()
+      f.github.state.commentAnswer = 429
+      f.clock.now += 5 * HOUR
+      await f.assigner.tick()
+      await f.assigner.tick()
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] took acme\/app#1 back: /))
+      expect(f.log).toHaveBeenCalledWith('[super-tab] Task assignment: LINE_REFUSED acme/app#1: GitHub answered 429')
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] gave acme\/app#1 to /))
     })
 
     it('after a restart, asks no second time, and gives the task to another 4 hours after its ask', async () => {

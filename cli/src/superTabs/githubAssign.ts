@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { areaOf, ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -244,7 +244,9 @@ export class GitHubAssign {
       if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
       if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
+      const said = await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
+      // Taken back all the same: the labels say so. Its line held or refused is said here (githubWrites.ts holds a line said too often).
+      if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${repo}#${back.number}: GitHub answered ${said.status}`)
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
     }
   }
@@ -261,7 +263,9 @@ export class GitHubAssign {
       ...[...new Set(crew.builders.flatMap(b => b.worksOn ?? []))].map(area => ({ name: `part:${area}`, color: 'c5def5', description: 'An area of the project' }))]
     const missing = wanted.filter(label => !this.labels.has(`${repo}:${label.name}`))
     if (!missing.length) return
-    const have = new Set((await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, 3)).map(label => String(label.name ?? '').toLowerCase()))
+    // An area's label is the repository's however it spells it (`part:Mobile App` is mobile-app): no second one is made beside it.
+    const have = new Set((await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, 3)).map(label => String(label.name ?? '').toLowerCase())
+      .map(name => name.startsWith('part:') ? `part:${areaOf(name)}` : name))
     for (const label of missing) {
       this.labels.add(`${repo}:${label.name}`)
       if (have.has(label.name.toLowerCase())) continue
@@ -606,8 +610,10 @@ export class GitHubAssign {
       return false
     }
     this.given.set(`${project.repo}#${number}`, label)
-    await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
+    const said = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
       { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.` })
+    // Given all the same: its label is on, and its builder's turn's end types it (nextThing.ts). Its line held or refused is said here.
+    if (said.status >= 300) this.once(`[super-tab] Task assignment: LINE_REFUSED ${project.repo}#${number}: GitHub answered ${said.status}`)
     this.log(`[super-tab] gave ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
     return true
   }

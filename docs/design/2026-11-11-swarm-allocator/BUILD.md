@@ -192,6 +192,9 @@ built, a tip the train itself marked.
 
 ### 5. An area is its label, however it is spelled
 
+**Built** (#4093): `partOf` in `cli/src/superTabs/assign/crew.ts`. *Also: `githubAssign.ts` makes no `part:` label for
+an area the repository already has one for in its own spelling.*
+
 **Why.** `part:Backend` and an agent's "Works on: backend" do not match; the label's side is compared as written.
 
 **Change.** A `part:` label's value is read through `areaOf` wherever an area is read (`assign/crew.ts`: a task's

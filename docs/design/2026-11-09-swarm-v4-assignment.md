@@ -106,7 +106,9 @@ must be more proactive and ask the user what area they want the agent to focus o
 
 - **Where it is said:** the `Works on:` line at the top of the agent's instructions file in each project's repository,
   `agents/<Name>.md`, which its person reads and changes beside its chat. Areas are the project's `part:` labels' words
-  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list.
+  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list. A label is its area however it is
+  spelled: `part:Backend` is the backend an agent works on, and `part:Mobile App` is mobile-app (`assign/crew.ts areaOf`).
+  Words that differ ("backend engine" and "backend") are two areas.
 - **Who says it:** with its first task in a repository, if its file has no such line, Harness tells the agent (only it
   reads it) to ask its person, in their chat, which area to focus on, naming the repository's areas so far. Its person
   answers in plain words; the agent writes the line in a pull request of its own. Once per agent and repository
@@ -114,7 +116,7 @@ must be more proactive and ask the user what area they want the agent to focus o
 - **What it does:** in the plan an agent takes half the time in its areas and half as long again in others once it named
   some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
   one only when it is well behind, and it takes other work when its own area has none.
-- **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
+- **Labels:** an area an agent works on that has no `part:` label yet, however spelled, gets one, made by the assigner, so its PM labels
   tasks with the same words. So do the flow's own labels (status:taken, size:s/m/l, p0 to p2) and each builder's, in a
   repository that lacks them: gh refuses to add a label a repository does not have, so in a fresh one a builder could not
   take its first task, nor the PM size one (`githubAssign.ts labelRepo`). Labels are read only when the team needs one
