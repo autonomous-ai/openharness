@@ -26,9 +26,12 @@ type Counters = { reactionSeq?: number; lastMessageSequence: number; lastMainSeq
 
 /** Only the author changes a message: a person, on their own plain post. An agent never does, for anyone.
  *  A message the actor cannot see reads as unavailable, so a refusal tells nothing about it. */
-function changeable(actor: Actor, messageId: string, target: MessageChangeTarget | undefined, operation: 'edit' | 'delete'): MessageChangeTarget {
+function changeable(actor: Actor, messageId: string, target: MessageChangeTarget | undefined, operation: 'edit' | 'delete',
+  retiredNotice = false): MessageChangeTarget {
   if (target?.messageId !== messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
-  if (actor.kind !== 'person' || target.author.kind !== 'person' || target.author.id !== actor.userId || !target.plain) {
+  if (retiredNotice) {
+    if (target.plain) fail('FORBIDDEN', 'Only its author can change this message.', 403)
+  } else if (actor.kind !== 'person' || target.author.kind !== 'person' || target.author.id !== actor.userId || !target.plain) {
     fail('FORBIDDEN', 'Only its author can change this message.', 403)
   }
   if (target.deleted) fail('MESSAGE_DELETED', 'This message was deleted.', 409)
@@ -46,10 +49,11 @@ export function editMessage(group: { reactionSeq?: number }, actor: Actor, messa
   return true
 }
 
-/** `message.delete`: the row goes, or stays as DELETED_TEXT while replies hang under it. The store removes the rest. */
+/** `message.delete`: the row goes, or stays as DELETED_TEXT while replies hang under it. The store removes the rest.
+ *  [retiredNotice]: the store's removal of a notice of a kind nothing writes any more, which no person authored. */
 export function deleteMessage(group: Counters, actor: Actor, messageId: string,
-  target: MessageChangeTarget | undefined): { kept: boolean } {
-  const found = changeable(actor, messageId, target, 'delete')
+  target: MessageChangeTarget | undefined, retiredNotice = false): { kept: boolean } {
+  const found = changeable(actor, messageId, target, 'delete', retiredNotice)
   group.reactionSeq = (group.reactionSeq ?? 0) + 1
   if (found.hasReplies) return { kept: true }
   // Each counter that pointed at the row steps back to the newest row left of its kind (parts/commit.ts numberMessages).

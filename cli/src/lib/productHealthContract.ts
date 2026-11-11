@@ -49,6 +49,10 @@ export type ResumeReason = typeof RESUME_REASONS[number]
  *  17 failed resumes were `preparation_failed` and nothing said why. Counted beside `resume_reason_preparation_failed`. */
 export const RESUME_PREPARATION_KINDS = ['invalid_json', 'foreign_session', 'not_owned_file', 'changed_during', 'other'] as const
 export type ResumePreparationKind = typeof RESUME_PREPARATION_KINDS[number]
+/** The daemon's Node, counted once a collector day (cli/src/gateway/productUsage.ts): its major, and while it is below
+ *  24, why it stays there (cli/src/lib/nodeMigration.ts). How far the move to Node 24 has gone, and what holds it up. */
+export const NODE_MAJORS = ['22', '24', 'other'] as const
+export const NODE_HELD_REASONS = ['no_manifest_entry', 'manifest_unreachable', 'download_failed', 'does_not_run', 'unmanaged', 'rolled_back', 'cannot_switch'] as const
 export const PRODUCT_HEALTH_METRICS = [
   ...CLI_REPORT_FAILURES.map(reason => `health_cli_report_failure_${reason}` as const),
   ...CLI_REPORT_FAILURES.map(reason => `health_desktop_report_failure_${reason}` as const),
@@ -58,6 +62,8 @@ export const PRODUCT_HEALTH_METRICS = [
   ...(['cli', 'desktop', 'tui'] as const).flatMap(surface => HEALTH_MEASURES.map(m => `health_${surface}_${m}` as const)),
   // The phone reports only its coverage (the threshold its breakdowns need) and late deliveries.
   'health_phone_collector_days', 'health_phone_report_late',
+  ...NODE_MAJORS.map(major => `health_cli_node_${major}` as const),
+  ...NODE_HELD_REASONS.map(reason => `health_cli_node_held_${reason}` as const),
   ...HEALTH_SOURCES.flatMap(source => HEALTH_ACTIONS.flatMap(action => [
     ...HEALTH_RESULTS.map(result => `request_${source}_${action}_${result}` as const),
     ...HEALTH_FAILURES.map(failure => `request_${source}_${action}_error_${failure}` as const),

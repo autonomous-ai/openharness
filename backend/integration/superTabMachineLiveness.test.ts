@@ -5,6 +5,8 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { MACHINE_FRESH_MS, type MachineObservation } from '../src/superTabs/machines.js'
 import { localReportMemory, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { clock as stamps } from '../src/superTabs/parts/index.js'
@@ -52,7 +54,8 @@ async function swarm(memory: 'fast' | 'full' = 'fast') {
   const store = new SuperTabStore(db, () => clock.now, null, { reports })
   const reads = new SwarmReads(store)
   const tab = (await store.create(owner, randomUUID(), 'Liveness', 'public')).id
-  const execute = (command: Command, user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, user = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, user)
+    : store.execute(user, tab, { operationId: randomUUID(), command })
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
@@ -182,7 +185,8 @@ describe('a post to an agent whose session is down', () => {
   it('tells its sender the agent is offline, queues the post for it, and stops saying so once it is back', async () => {
     const store = new SuperTabStore(db, () => clock.now, null, { reports: never })
     const tab = (await store.create(owner, randomUUID(), 'Offline', 'public')).id
-    const execute = (command: Command, user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
+    const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+      ? storeCreate(db, tab, command, user) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
@@ -191,12 +195,13 @@ describe('a post to an agent whose session is down', () => {
       memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS',
       gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: running, stoppedHarnessIds: [] })
     const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-    // A task of its own, where the agent is a member a person can name.
+    // A task of its own, where the agent is a member another agent names: only agents post in a task's chat (agentsOnly.test.ts).
     const task = String((await execute({ type: 'conversation.create', title: 'Fix login', brief: 'Fix it', checks: [] })).result.conversationId)
-    const ada = String((await execute({ type: 'agent.add', conversationId: task, machineId: 'mac', harnessId: 'h-ada', name: 'Ada', configuration: config,
-      lead: false }, host)).result.agentId)
+    const add = async (name: string) => String((await execute({ type: 'agent.add', conversationId: task, machineId: 'mac', harnessId: `h-${name.toLowerCase()}`,
+      name, configuration: config, lead: false }, host)).result.agentId)
+    const ada = await add('Ada'), bo = await add('Bo')
     const adaName = async () => { const found = (await store.read(owner, tab)).state.agents.find(a => a.id === ada)!; return found.displayName ?? found.name }
-    const post = (text: string, recipientIds = [ada]) => execute({ type: 'message.send', conversationId: task, text, replyTo: null, recipientIds })
+    const post = (text: string, recipientIds = [ada]) => execute({ type: 'message.send', conversationId: task, text, replyTo: null, recipientIds }, host, bo)
     const queued = () => db.superTabDelivery.count({ where: { tabId: tab, agentId: ada, status: 'queued' } })
     const told = async () => `${await adaName()} is offline; it will read this when it is back.`
     await beat(['h-ada'])

@@ -91,6 +91,8 @@ it('starts either engine once, posts to its captured group and delivers shared i
         value.claimId = body.claimId
         return { data: { message: value.message } }
       }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value.status = body.uncertain ? 'uncertain' : 'delivered'
       value.receipt = body.receipt
       return { data: {} }
@@ -322,7 +324,7 @@ it.each(['reported', 'legacy'] as const)('Change agent keeps its member and deli
     if (path.includes('/deliveries')) {
       if (method === 'GET') return { data: path.endsWith('/deliveries') ? rebinds && delivery.status !== 'delivered' ? [delivery] : [] : delivery }
       if (body.type === 'claim') delivery.claimId = body.claimId
-      else delivery.status = body.uncertain ? 'uncertain' : 'delivered'
+      else if (body.type !== 'hold') delivery.status = body.uncertain ? 'uncertain' : 'delivered'
       return { data: { message: { id: 'replacement-message', conversationId: 'feature', author: { name: 'Fixture human' }, text: `verify-switched-${mode}` } } }
     }
     throw new Error(`Unexpected request ${method} ${path}`)

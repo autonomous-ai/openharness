@@ -147,6 +147,17 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect(source).toContain('installedHooks?.close()')
   })
 
+  it('points the installed copy\'s launcher and service at the Node the core runs on, and settles the Node record', () => {
+    // Not current-node, which can name a Node no probation judged (lib/nodeReferences.ts); and a core on Node 24 has
+    // nothing left holding it back (lib/nodeMigration.ts `settleNodeMigration`).
+    const source = code(SOURCE)
+    const from = source.indexOf('if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {')
+    expect(from, 'core/main.ts still follows the Node for the installed copy only').toBeGreaterThan(-1)
+    const block = source.slice(from, source.indexOf('\n  }', from))
+    expect(block).toMatch(/refreshNodeReferences\(\(line\) =>/)
+    expect(block).toContain('settleNodeMigration(env.ADAPTER_CLI_DIR)')
+  })
+
   it('keeps the prologue itself incapable of throwing', () => {
     // Stronger than listing today's hazards: this is what catches the NEXT line somebody adds on top.
     const source = code(SOURCE)

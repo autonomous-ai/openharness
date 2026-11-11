@@ -533,7 +533,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Limited until 14:00`, `Offline`), `Task` (`#5759` and its title: the issues
   of its projects' boards that are taken and labelled for it, read with the
   board's own reader, shown at once from what it read last and read again on
-  opening and each minute while Info is open) and `Folder` in `AppType.mono`.
+  opening and each minute while Info is open), `Folder` in `AppType.mono`, and
+  `Workspace` in `AppType.mono` below it for an engine whose tools work
+  somewhere other than the pane's folder (OpenClaw).
   A row the app has no value for is not drawn; a board that cannot be read
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,
@@ -902,9 +904,9 @@ Deliberate differences from Desktop, and only these:
 - The terminal keeps its own font, size and palette, as on Desktop.
 - Bottom sheets, which Desktop does not have, round their top corners at the
   card radius (12).
-- Swarm Home starts a new message from a round, 56-point, accent-filled +
-  floating at its bottom right (New message, as Slack Mobile does), not from
-  a button in its top bar.
+- An agent row's status line says a named state (`Agent.namedState`) in the
+  attention tone in place of what the agent is doing, below only Waiting for
+  you, where Desktop puts it in a pane note.
 
 The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
 with the same rules as Desktop's Swarm code and an allowlist of its own.
@@ -955,7 +957,8 @@ existing controller and does not add a preview.
 **Cmd-P** — a prominent search field, separate compact scope pills, recognizable
 agent marks and clean results. Harnesses is the default scope. Preserve typed
 words when changing scope. Keep result selection stable through live updates.
-Details remain in the existing optional preview. No second search index or
+Details remain in the existing optional preview; its folder line is followed by
+`Workspace · <path>` for an engine whose tools work elsewhere (OpenClaw). No second search index or
 management implementation. Toolbar controls are secondary to the query. Keep
 the editor and footer stationary while results update; do not resize the panel
 on every keystroke or make short lists stretch their individual rows. On wide
@@ -1082,6 +1085,15 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
+**Pane notes** (`PaneNote`) — one 30-point line under the header, in flow so it
+covers none of the terminal, on a 10% warning tint with a 14-point warning-ink
+mark and one body line that truncates with its full text on hover. Two say why
+an agent cannot work: its model not answering (`PaneModelNote`, with Pick
+another where the pane has a picker) and a named state the daemon says only the
+person can fix (`Agent.namedState`, triangle mark, the daemon's sentence as it
+is, such as `OpenClaw Gateway is not running. Start it with openclaw gateway.`).
+A note is gone the moment the daemon stops sending it.
+
 **Focused workspace footer** — `Harnesses N`, `Machines N`, `Models N`, then subscription
 icons with remaining percentages at the left; focused machine, project, branch and PR at the right.
 Harnesses counts connected owned sessions, including idle and starting sessions, and opens Harness
@@ -1108,6 +1120,9 @@ in the footer. Recent-harness context uses its monochrome presentation.
 at page scale. Related settings use grouping and whitespace. Existing artwork,
 terminal previews, native toolbar/footer components and domain-specific visuals
 retain their meaning. Read-only loading/error views use the same hierarchy.
+Settings ▸ About adds one body-size secondary line under the app identity, `Node v24.22.2` or
+`Node v22.23.2 · stays on 22: <reason>`, from the daemon's status; it is absent when the daemon
+sends no Node.
 
 **macOS notification menu** — one Notifications section with up to five unread
 session rows and a route to the full inbox. Use a 13-point semibold session title,

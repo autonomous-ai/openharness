@@ -20,8 +20,8 @@ export interface PatchRule<T> {
   /** The part kinds whose changes this entry holds: a refresh reads only those. */
   kinds: readonly PartKind[]
   /** Its refresh reads its own kinds alone (cache.ts deltaFor): never widened to the kinds of the Swarm's other stale entries,
-   *  nor they to its, so a small entry read at every stamp never makes each pod read the Swarm's group, machine and progress
-   *  feeds (task #2875). */
+   *  nor they to its, so a small entry read at every stamp never makes each pod read the Swarm's group and machine feeds
+   *  (task #2875). */
   alone?: true
   /** The held value with the delta applied, or 'reload' when the delta cannot be applied and the entry loads again. */
   apply(held: T, delta: SwarmDelta): T | 'reload'
@@ -62,9 +62,9 @@ const awake = (part: Part) => !part.deleted && !part.dormant
 const asleep = (part: Part) => !part.deleted && !!part.dormant
 const finished = (part: Part) => !!part.data && startFinished(part.data as AgentStart)
 
-/** The `parts` entry (parts/load.ts loadReadBase): head, members, agents, awake groups, unfinished starts and progress. */
+/** The `parts` entry (parts/load.ts loadReadBase): head, members, agents, awake groups and unfinished starts. */
 export const baseRule: PatchRule<SwarmParts> = {
-  kinds: ['head', 'member', 'agent', 'group', 'start', 'progress'],
+  kinds: ['head', 'member', 'agent', 'group', 'start'],
   apply(held, delta) {
     // A new visibility epoch changes what every reader may see from then on: load the base again rather than patch it.
     if (delta.head && delta.head.visibilityEpoch !== held.visibilityEpoch) return 'reload'
@@ -77,7 +77,6 @@ export const baseRule: PatchRule<SwarmParts> = {
       agents: applyByKey(held.agents, parts, 'agent', live),
       groups: applyByKey(held.groups, parts, 'group', awake),
       starts: applyByKey(held.starts, parts, 'start', p => live(p) && !finished(p)),
-      progress: applyByKey(held.progress, parts, 'progress', live),
       ...(headPart && delta.head ? delta.head : {}),
     }
     const same = (Object.keys(next) as Array<keyof SwarmParts>).every(key => next[key] === held[key])
@@ -86,7 +85,7 @@ export const baseRule: PatchRule<SwarmParts> = {
 }
 
 /** The `access` entry (parts/load.ts loadAccess): the head, members and agents a read check needs, patched from those kinds
- *  alone (task #2875), never from the group, machine and progress feeds a one-group read once made every pod read. */
+ *  alone (task #2875), never from the group and machine feeds a one-group read once made every pod read. */
 export const accessRule: PatchRule<SwarmParts> = {
   kinds: ['head', 'member', 'agent'],
   alone: true,
@@ -142,7 +141,7 @@ function feedRuleOf(kinds: readonly PartKind[]): PatchRule<{ from: number; parts
 }
 
 /** The feed's kinds that a machine's reading never changes, held at the main stamp (#2783): under the `all` scope with the
- *  machines, every reading made the next refresh read all seven part collections, though only a machine part moved. */
+ *  machines, every reading made the next refresh read every part collection, though only a machine part moved. */
 export const FEED_MAIN_KINDS: readonly PartKind[] = PART_KINDS.filter(kind => kind !== 'machine')
 /** The `feed` entry: changed parts of every kind but machines. */
 export const feedRule = feedRuleOf(FEED_MAIN_KINDS)

@@ -1,23 +1,12 @@
-import { createHash } from 'node:crypto'
-import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import type { SwarmRule } from './rules.js'
+import { activeWork, agent, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
-export type SkillMode = 'default' | 'orchestration'
-/** What new clients read: a built-in mode, or the project's own custom role set. */
-export type SkillSet = SkillMode | 'custom'
-export const SKILL_SET_NAMES: Record<SkillSet, string> = { default: 'Default', orchestration: 'Harness orchestration', custom: 'Custom' }
-export type RoleKind = 'lead' | 'builder' | 'reviewer'
-/** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (SuperTabRoleText), so a
- *  roster or tab read never carries up to 20 x 64 KB of skill text; `version` names the text. */
-export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string; defaults?: RoleDefaults }
-/** What an agent of a role starts on when its start names no model: an engine, and on it a model and effort. */
+/** What a Product Manager starts on when its start names no model: an engine, and on it a model and effort. */
 export interface RoleDefaults { engine: 'claude' | 'codex'; model?: string; effort?: string }
 /** The coordinator's first start runs Claude Opus 5.5 at xhigh when its person names no model (Scholes's roadmap, piece 1,
- *  10-30): the project's instructions cannot choose a model before any agent reads them. No other start takes a default now;
- *  routing lives in the instructions (project instructions, phase 4). */
-export const BUILT_IN_ROLE_DEFAULTS: Partial<Record<RoleKind, RoleDefaults>> = { lead: { engine: 'claude', model: 'opus', effort: 'xhigh' } }
+ *  10-30): the project's instructions cannot choose a model before any agent reads them. No other start takes a default. */
+export const BUILT_IN_ROLE_DEFAULTS: { lead: RoleDefaults } = { lead: { engine: 'claude', model: 'opus', effort: 'xhigh' } }
 
 /** [request] with its role's [defaults] filled in when it names no model, on the defaults' engine alone; a named effort is kept. A
  *  grid model chooses its own. */
@@ -26,7 +15,6 @@ export function withRoleDefaults<T extends { engine: string; model?: string; eff
   const effort = request.effort ?? defaults.effort
   return { ...request, model: defaults.model, ...(effort ? { effort } : {}) }
 }
-export const roleVersion = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 export interface SwarmProject {
   id: string
   name: string
@@ -39,6 +27,8 @@ export interface SwarmProject {
    *  owns nothing, as a member's listing works. Absent on projects from before 2026-11-05 until settleOwners fills it; until
    *  then the owner matches by id, as before. */
   ownerGeneration?: string
+  /** A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11. */
+  skillMode?: 'default'
   leadConversationId: string
   /** Public means every member of this swarm, never anonymous internet access. */
   visibility: ProjectVisibility
@@ -52,15 +42,7 @@ export interface SwarmProject {
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
-  /** Report watermark per conversation (projectUpdates.ts); kept in its own part (store by parts). */
-  progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
-  /** Absent on projects from before skill modes, which keep the texts their agents already run. */
-  skillMode?: SkillMode
-  /** Absent before custom sets. While it is 'custom', skillMode stays 'default' so older clients run the Default text. */
-  skillSet?: SkillSet
-  /** The project's custom set, kept when the project switches away from it. */
-  roles?: ProjectRole[]
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
@@ -107,21 +89,6 @@ export type GitHubSeen = typeof GITHUB_SEEN[number]
 export interface ProjectStatus { text: string; at: string; by: string }
 export const PROJECT_STATUS_MAX = 2_000
 
-export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
-/** Custom only while the stored mode is still Default: a release from before custom sets switches a project by skillMode
- *  alone during a rolling deploy, and that switch must hold here too. */
-export const skillSetOf = (project: SwarmProject): SkillSet =>
-  project.skillSet === 'custom' && project.roles && skillModeOf(project) === 'default' ? 'custom' : skillModeOf(project)
-
-/** The Lead is whoever leads the project; every other agent is the kind it was started as. */
-export const agentKind = (state: SuperTabState, target: Agent): RoleKind => ledProject(state, target.id) ? 'lead' : agentRole(target)
-
-/** The custom role an agent runs: its own role id while that role is of its kind, else the set's first role of its kind
- *  (agents from before custom sets read as the copied Engineer and Reviewer), else none: its role is gone. */
-export function agentSetRole(state: SuperTabState, project: SwarmProject, target: Agent): ProjectRole | null {
-  const kind = agentKind(state, target), roles = project.roles ?? []
-  return roles.find(r => r.id === target.roleId && r.kind === kind) ?? roles.find(r => r.kind === kind) ?? null
-}
 
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {
@@ -186,7 +153,7 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
  *  membership they were listed with, who reads it already (one who can manage it first, else a viewer); else, for a public
  *  project, to the Swarm's owner, who reads it too; else it is nobody's ('' owner): nobody reads it, and the Swarm's owner
  *  sees only that it exists and may delete it (deletableProject). A project from before ownerGeneration whose owner is still
- *  here gets their membership now, which is how the migration fills it. Each project that changed hands, in order. */
+ *  here gets their membership now. Each project that changed hands, in order. */
 export function settleOwners(state: SuperTabState): Array<{ projectId: string; from: string; to: string }> {
   const changed: Array<{ projectId: string; from: string; to: string }> = []
   const people = new Map(state.people.map(p => [p.id, p]))
@@ -437,16 +404,10 @@ export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent,
   return !watchClosed(state, target, elsewhere, sets) || ownSession(actor, target)
 }
 
-/** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
- *  titles and names aside. */
-const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice', 'others-work-notice'])
 /** Whose words a row carries, for the mark of another account's (audit M3): its author's (a post, a status row, a brief, a
- *  route's reason); a lost task's notice, its worker's last result; none, a notice in the server's own words. A review's
- *  failed findings name no reviewer: they count as unknown, which is marked. */
-export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agentId: string } {
+ *  route's reason); a lost task's notice, its worker's last result. */
+export function wordsOf(source: unknown): 'author' | 'unknown' | { agentId: string } {
   const row = source as { kind?: unknown; agentId?: unknown } | null | undefined
-  if (SERVER_WORDS.has(row?.kind)) return 'none'
-  if (row?.kind === 'review-failed') return 'unknown'
   if (row?.kind === 'work-lost') return typeof row.agentId === 'string' ? { agentId: row.agentId } : 'unknown'
   return 'author'
 }
@@ -620,8 +581,6 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   // that settled that work (S13a), so a refusal to "resolve" it kept lampOS's project for good (anh Dee, 2026-11-10).
   state.retiredConversationNumber = nextConversationNumber(state) - 1
   state.projects = state.projects!.filter(p => p.id !== project.id)
-  state.rules = state.rules?.filter(r => r.projectId !== project.id)
-  if (!state.rules?.length) delete state.rules
   state.conversations = state.conversations.filter(c => !groupIds.has(c.id))
   state.starts = state.starts?.filter(s => !groupIds.has(s.request.conversationId))
   // A pending invitation is to the Swarm, not to this project: it lands somewhere that is left instead.
@@ -631,21 +590,6 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
     delete state.project
     state.machines = state.machines?.filter(m => m.scope === 'swarm')
   }
-}
-
-/** Rules were the Swarm's until 2026-10-23, when one project's rules refused every other project's Lead. A rule from then
- * belongs to the project whose chat it was asked in, else to the project of a remaining Lead chat (inviteLanding). */
-export function placeRules(state: SuperTabState): void {
-  for (const rule of state.rules ?? []) {
-    if (rule.projectId) continue
-    const asked = rule.askedIn && state.conversations.find(c => c.id === rule.askedIn!.conversationId)
-    const landing = state.conversations.find(c => c.id === inviteLanding(state))
-    rule.projectId = asked ? groupProject(state, asked).id : landing ? groupProject(state, landing).id : 'lead'
-  }
-}
-
-export function projectRules(state: SuperTabState, projectId: string): SwarmRule[] {
-  return (state.rules ?? []).filter(r => r.projectId === projectId)
 }
 
 /** Where an invited person lands: the asked-for group while it exists, else a remaining project's Lead

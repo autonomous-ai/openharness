@@ -9,80 +9,16 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
-import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
 import 'swarm_style.dart';
-import 'team_glance.dart';
 
 /// The rows of Swarm Home: a project with how many people read it, how many
 /// agents are running and when it last moved, its tile a dot and its name a
 /// channel's, as C1 draws them (2026-10-30); the projects quiet for a day
 /// folded in one row.
-
-/// A team in a line of coloured dots, as B1 draws it: "● 4 working ● 1
-/// waiting", each dot in its state's colour ([swarmStateColor]), who is down
-/// in red words too, and heard as words alone. With nobody counted, the
-/// team's line in words ("No agents yet", "All idle").
-class SwarmTeamDots extends StatelessWidget {
-  const SwarmTeamDots(this.glance, {super.key, this.lead});
-
-  final SwarmTeamGlance glance;
-
-  /// Words before the dots: the Swarm, where Home shows several.
-  final String? lead;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final quiet = AppType.caption(
-      color: AppPalette.textSecondary,
-      height: 1.35,
-    );
-    final parts = glance.parts;
-    // Heard in words: "1 working · 1 waiting", never the dots.
-    final heard = [?lead, glance.line].join(' · ');
-    return Semantics(
-      label: heard,
-      excludeSemantics: true,
-      child: Text.rich(
-        TextSpan(
-          children: [
-            if (lead case final lead?) TextSpan(text: '$lead · '),
-            if (parts.isEmpty) TextSpan(text: glance.line),
-            for (final (i, part) in parts.indexed) ...[
-              if (i > 0) const TextSpan(text: '  '),
-              TextSpan(
-                text: '● ',
-                style: TextStyle(color: swarmStateColor(part.state)),
-              ),
-              TextSpan(
-                text: part.text,
-                style: part.state == SwarmAgentState.down
-                    ? TextStyle(color: AppColors.danger)
-                    : null,
-              ),
-            ],
-          ],
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: quiet,
-      ),
-    );
-  }
-}
-
-/// What a need asks, as its Home row's title: a decision's question, a tag's
-/// words, the question work waits on (or the work itself).
-String swarmNeedAsk(SwarmNeed need) => switch (need) {
-  SwarmDecisionNeed(:final decision) => decision.question,
-  SwarmMentionNeed(:final mention) =>
-    mention.text.isNotEmpty ? mention.text : mention.conversationTitle,
-  SwarmWorkNeed(:final work) => work.question ?? work.conversation.label,
-};
 
 /// An invitation to a Swarm on Home (Tony's mobile list, task 24), one line: the
 /// Swarm's name, Not now and Join. The account's, so it shows whichever Swarm

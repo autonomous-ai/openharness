@@ -55,8 +55,7 @@ export function plainHost(kind: PartKind, data: unknown): 'all' | string | null 
  * The hosts a write concerns (task #3119), by the rule the host read wakes by and the push tells (plainHost, commit.ts
  * hostsToTell), as the host stamps that keep a machine's reading-only reports off the Swarm's load record them: an agent's or
  * a start's machine, the machines a group's marker names, and every host (ALL_HOSTS) for the head, a member, a machine's
- * settings, and any part whose host its data does not name. A machine's own reading, a touch and project progress concern
- * none: a report neither decides from nor loads progress (parts/load.ts loadObserved).
+ * settings, and any part whose host its data does not name. A machine's own reading and a touch concern none.
  */
 export function writeHosts(write: PartWrite): string[] {
   if (write.op === 'touch') return []
@@ -68,14 +67,13 @@ export function writeHosts(write: PartWrite): string[] {
     }
     case 'group': return write.host?.hostMachineIds ? [...write.host.hostMachineIds] : [ALL_HOSTS]
     case 'machine': return write.host ? [ALL_HOSTS] : []
-    case 'progress': return []
   }
 }
 
 /** The part model behind each kind. They share their columns (schema.prisma, Swarm state by parts). */
 export function delegate(tx: Transaction, kind: PartKind) {
   const models = { head: tx.swarmHead, member: tx.swarmMember, agent: tx.swarmAgent, group: tx.swarmGroup,
-    machine: tx.swarmMachine, start: tx.swarmStart, progress: tx.swarmProgress }
+    machine: tx.swarmMachine, start: tx.swarmStart }
   return models[kind] as unknown as {
     findUnique(args: { where: { id: string } }): Promise<{ version: number; deleted: boolean } | null>
     findMany(args: unknown): Promise<PartRow[]>
@@ -101,6 +99,15 @@ function hostDigest(group: GroupData): string {
     !!group.audience, work ? [work.id, work.agentId, work.status, work.execution, work.result?.slice(0, 500) ?? null] : null])).digest('base64url').slice(0, 22)
 }
 
+/** A part's data as stored. A group leaves out `reportSeq`, the report progress that went in S19b, which every group written
+ *  before it still holds as 0: each loses it at its next write, and no group is written for it alone (read/views.ts groupView
+ *  hides it until then). Goes on or after 2026-12-12, with that strip. */
+function storedData(kind: PartKind, data: unknown): Prisma.InputJsonValue {
+  const stored = json(data)
+  if (kind === 'group' && stored && typeof stored === 'object') delete (stored as Record<string, unknown>).reportSeq
+  return stored
+}
+
 /** The columns each kind keeps out of its data for queries (schema.prisma). */
 export function extracted(kind: PartKind, data: unknown, stamp: number): Record<string, unknown> {
   switch (kind) {
@@ -108,10 +115,8 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
       const group = data as GroupData
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
         agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
-        messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
-        lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
-        // A finished task, never a step. Nothing reads it since the archive pass went (Swarm v4); its index goes with the schema (S19).
-        workFinished: !group.reviewOf && ['done', 'cancelled'].includes(group.assignment?.status ?? '') }
+        messageSeq: group.messageSeq ?? 0,
+        lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group) }
     }
     case 'agent': {
       const agent = data as Agent
@@ -164,18 +169,18 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
     if (prior) {
       if (write.kind === 'start') fields = await keepFinishedAt(tx, id, fields)
       const updated = await model.updateMany({ where: { id, version: prior.version, deleted: true }, data: { version: prior.version + 1,
-        changedAt: new Date(stamp), deleted: false, purgeAt: null, data: json(write.data), ...fields } })
+        changedAt: new Date(stamp), deleted: false, purgeAt: null, data: storedData(write.kind, write.data), ...fields } })
       if (!updated.count) throw new PartConflict(write.kind, write.key)
       return prior.version + 1
     }
     const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await agentFloor(tx, tabId) + 1 : 0)
     await model.create({ data: { id, tabId, key: write.key, version, changedAt: new Date(stamp), deleted: false, ordinal: write.ordinal,
-      data: json(write.data), ...fields } })
+      data: storedData(write.kind, write.data), ...fields } })
     return version
   }
   const data = write.op === 'touch' ? {}
-    : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data), ...write.host }
-    : { ...reading ? { readAt: new Date(stamp), ...write.content ? { contentAt: new Date(stamp) } : {} } : { changedAt: new Date(stamp) }, data: json(write.data), ...(write.kind === 'start'
+    : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: storedData(write.kind, write.data), ...write.host }
+    : { ...reading ? { readAt: new Date(stamp), ...write.content ? { contentAt: new Date(stamp) } : {} } : { changedAt: new Date(stamp) }, data: storedData(write.kind, write.data), ...(write.kind === 'start'
       ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head, ...write.host }
   const updated = await model.updateMany({ where: { id, version: write.seen, deleted: false }, data: { version: write.seen + 1, ...data } })
   if (!updated.count) throw new PartConflict(write.kind, write.key)

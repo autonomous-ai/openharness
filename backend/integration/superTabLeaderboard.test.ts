@@ -11,11 +11,10 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
 
@@ -85,9 +84,7 @@ async function scene(before?: (state: SuperTabState) => void) {
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   before?.(state)
-  await writeLegacySwarm(db, { state, revision: 50 })
-  const report = await migrateSwarm(db, tabId, { now: () => NOW - 60_000 })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 50 }, NOW - 60_000)
   return { tabId, lead, secret, fresh, old, chat, waiting }
 }
 const get = async (url: string, as: AuthUser = owner) => {

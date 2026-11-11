@@ -281,9 +281,7 @@ void main() {
         features: features,
         readMarks: MemoryKeyValueStore(),
       )..foreground = false;
-      host.session!.home
-        ..pin(tab, 'p-oh', true)
-        ..seen(now.subtract(const Duration(hours: 1)));
+      host.session!.home.pin(tab, 'p-oh', true);
       final boundary = GlobalKey();
       await tester.pumpWidget(
         RepaintBoundary(

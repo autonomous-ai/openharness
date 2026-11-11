@@ -19,6 +19,7 @@ import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
+import { OPENCLAW_KEY } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
@@ -81,8 +82,8 @@ export interface LaunchRequestDeps {
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
   guestCreate?: () => GuestCreate | null
-  /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
-  swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
+  /** Which Swarm roles a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: Pick<SwarmLaunch, 'role'>
   /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeListed); absent, any is. */
   claudeHomeListed?: (claudeHome: string) => boolean
 }
@@ -446,21 +447,18 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       prompt = trimmed || null
     }
     const swarmRole = payload.swarmRole
-    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined)) {
+    if (!swarmLaunch && swarmRole !== undefined && swarmRole !== null) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
     // Project instructions, phase 4 (decision 1): a coordinator or an agent. An older Harness sends lead, dev or review
-    // (a Reviewer, which keeps its swarm-review file); the next release may send the kinds, so this one takes both.
+    // (a Reviewer, which keeps its Reviewer kind); the next release may send the kinds, so this one takes both.
     const swarm = swarmRole === undefined || swarmRole === null ? null : roleFromWire(swarmRole)
     if (swarmRole !== undefined && swarmRole !== null &&
       (!swarm || !swarmLaunch?.role(swarm.role) || (engine !== 'claude' && engine !== 'codex'))) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
     }
-    // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
-    const swarmSkillMode = payload.swarmSkillMode
-    if (swarmSkillMode !== undefined && !swarmLaunch?.mode(swarmSkillMode)) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
-    }
+    // `swarmSkillMode` is read as nothing: the skill modes are gone (PM, 2026-11-11), and Desktop's Personal Swarm still
+    // sends one. Delete this note on or after 2026-12-11, once no Desktop of the last 30 days sends it.
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -489,14 +487,15 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     let resumeSessionId: string | null = null
     if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
       // Engines' ids: uuids, `ses_…` (OpenCode, Kilo), `20260927_101500_ab12cd` (Hermes), slugs
-      // (Devin), Pi's custom ids with dots. One word, never a path.
-      if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
+      // (Devin), Pi's custom ids with dots, OpenClaw's `agent:<id>:<key>`. One word, never a path.
+      const sessionId = payload.resumeSessionId
+      if (typeof sessionId !== 'string' || !(/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(sessionId) || engine === 'openclaw' && OPENCLAW_KEY.test(sessionId))) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
       if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
-      resumeSessionId = payload.resumeSessionId
+      resumeSessionId = sessionId
     }
     let takeOver: 'idle' | 'now' | 'wait' | null = null
     if (payload.takeOver !== undefined && payload.takeOver !== null) {
@@ -529,7 +528,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}) } : {}),
+      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}) } : {}),
       name,
       agent,
       resumeSessionId,

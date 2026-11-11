@@ -179,9 +179,9 @@ class SwarmConversation extends ChangeNotifier
 
   /// The [messages] the chat lists: a reply only in its thread shows there
   /// alone ([SuperTabMessage.inMainStream], the desktop's main stream), and
-  /// what was typed into a terminal, a gap in its recording or the line of an
-  /// instructions save is no row ([SuperTabMessage.terminalPrompt],
-  /// [SuperTabMessage.terminalGap], [SuperTabMessage.instructionsSave]).
+  /// what was typed into a terminal, a gap in its recording or a retired v3
+  /// note is no row ([SuperTabMessage.terminalPrompt],
+  /// [SuperTabMessage.terminalGap], [SuperTabMessage.retiredNotice]).
   List<SuperTabMessage> get stream {
     if (!identical(_streamOf, messages)) {
       _streamOf = messages;
@@ -191,7 +191,7 @@ class SwarmConversation extends ChangeNotifier
               m.inMainStream &&
               !m.terminalPrompt &&
               !m.terminalGap &&
-              !m.instructionsSave,
+              !m.retiredNotice,
         ),
       );
     }

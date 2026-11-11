@@ -15,7 +15,7 @@ export const UPDATE_MESSAGE = 'Update Harness to keep using this Swarm.'
 export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
 /** A live part (`data`), a removed one (`deleted`, never with data), or a group that left the active set (`dormant`).
  *  A group's `data` has its own `messageSeq`, and `dormant`/`audience` only when set; an agent's never has the values that
- *  come in `derived` (`downSince`, `limitedUntil`, `roleId`). */
+ *  come in `derived` (`downSince`, `limitedUntil`). */
 export interface PartEnvelope<T = Json> {
   key: string
   version: number
@@ -27,8 +27,8 @@ export interface PartEnvelope<T = Json> {
 
 /** Values the server recomputes for every response and the client overlays on the parts (design 4.1). */
 export interface Derived {
-  /** Every agent the reader can see. `workDecision` null when the stored value stands; `roleId` null outside Custom. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
+  /** Every agent the reader can see. `workDecision` null when the stored value stands. */
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null }>
   /** Every contributed machine the reader can see. */
   machines: Record<string, Json>
   /** A Lead agent only. */

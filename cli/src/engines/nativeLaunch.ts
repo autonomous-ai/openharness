@@ -18,6 +18,7 @@ import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
 import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
+import { OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
 import { type AgentEngine, isTerminalEngine } from './types.js'
 
@@ -125,6 +126,7 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
   agy: ['AGY_HOME', 'AGY_CONFIG_DIR'],
   devin: ['DEVIN_HOME', 'DEVIN_CONFIG_PATH'],
   amp: ['AMP_PLUGIN_DIR'],
+  openclaw: ['OPENCLAW_STATE_DIR'],
 }
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
@@ -165,6 +167,15 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (output && output.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${output.stderr}\n${output.stdout}`, `it exited with status ${output.code}`))
   // Unknown is an observation of this attempt, never a permanent installed-file answer.
   if (engine === 'opencode' && opencodeMajor === null) return waiting('Waiting to confirm the selected OpenCode executable’s version.')
+  // OpenClaw moves itself onto another Node it can find; on none, its TUI refuses to start. A creation is refused with
+  // the named state rather than opening a pane that says so and exits. No answer is no evidence: the launch goes on.
+  const runtime = engine === 'openclaw' ? await read(executable.command, OPENCLAW_RUNTIME_PROBE, environment) : null
+  const runtimeState = runtime ? openclawRuntimeState(`${runtime.stderr}\n${runtime.stdout}`) : null
+  if (runtime && executable.current() && (runtimeState || runtime.code !== 0)) {
+    if (!runtimeState) return cannotRun(engine, failureReason(`${runtime.stderr}\n${runtime.stdout}`, `it exited with status ${runtime.code}`))
+    console.warn(`[launch] openclaw refused · ${runtimeState}`)
+    return { ...waiting(runtimeState), refusal: 'ENGINE_CANNOT_RUN' }
+  }
   if (!executable.current()) return waiting('Waiting for the selected engine executable to stop changing.')
   // Windows: the startup probe a launch script makes before every run elsewhere (engines/kit/launchStartup.ts), made
   // once here, of the executable this launch holds. No answer holds the launch, as the script ends one.

@@ -3413,6 +3413,7 @@ class AppNotifier extends ChangeNotifier {
           prev.status != agent.status ||
           prev.terminalAvailable != agent.terminalAvailable ||
           prev.terminalUnavailableReason != agent.terminalUnavailableReason ||
+          prev.namedState != agent.namedState ||
           // A row's stats line (`sheet_agent_lines.dart`) — the desktop
           // compares these three too.
           prev.tokensUsed != agent.tokensUsed ||

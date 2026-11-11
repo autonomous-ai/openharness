@@ -67,7 +67,6 @@ void main() {
     expect(integration.ownMachinesOnly, isTrue);
     expect(integration.offersBrowser, isTrue);
     expect(integration.engines, ['claude', 'codex']);
-    expect(integration.agentKind, isNull);
     expect(integration.leadMachines, isNull);
     expect(box.actionLabel, 'New agent');
   });
