@@ -156,8 +156,10 @@ class SwarmPull {
     final rollup = commit is Map ? commit['statusCheckRollup'] : null;
     final base = row['baseRefName'];
     // Harness's train (cli/src/superTabs/githubTrain.ts): it carries pull requests that were read, so nobody reads it and
-    // no agent wrote it. Its checks run on the combined change, and it lands when they pass.
-    final train = branch.startsWith(_trainBranch);
+    // no agent wrote it. Its checks run on the combined change, and it lands when they pass. By its branch and its title:
+    // anyone can push a branch under the prefix, and one not titled as a train is a builder's, still to read.
+    final train =
+        branch.startsWith(_trainBranch) && title.startsWith(_trainTitle);
     final author = train ? null : authorOf(labels, branch);
     final standing = standingOf(
       draft: row['isDraft'] == true,
@@ -196,8 +198,9 @@ class SwarmPull {
     );
   }
 
-  /// The branches Harness's train builds on (cli/src/superTabs/githubTrain.ts TRAIN_BRANCH).
-  static const _trainBranch = 'harness-train/';
+  /// The branches Harness's train builds on, and how it titles its pull request (cli/src/superTabs/githubTrain.ts
+  /// TRAIN_BRANCH, TITLE).
+  static const _trainBranch = 'harness-train/', _trainTitle = 'Train: ';
 
   /// Its author by name, as the merger finds it: its builder label, else its branch's first part (`pip/12`).
   static String? authorOf(List<String> labels, String branch) {
