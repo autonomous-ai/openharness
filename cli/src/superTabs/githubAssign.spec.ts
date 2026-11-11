@@ -611,6 +611,19 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.said().filter(([n, body]) => n === 15 && String(body).includes('has nothing to do'))).toHaveLength(1)
     })
 
+    // The sandbox, 2026-11-11: with one builder free, both of two waiting tasks went back, and the plan then had two to give to it.
+    it('takes back one task for each builder with nothing, the oldest first', async () => {
+      const team: Crew = { ...crew(), builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }] }
+      // Pip works on #14 and waits on #15; Atlas waits on #17, untaken; Juno has nothing.
+      const f = setup([issue(14, ['size:m', 'builder:pip', 'status:taken']), issue(15, ['size:m', 'builder:pip']), issue(17, ['size:m', 'builder:atlas'])],
+        { crew: team })
+      f.github.state.applied = true
+      f.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:00:00Z')])
+      f.github.state.comments.set(17, [gave('Atlas', '2026-11-09T07:05:00Z')])
+      await f.assigner.tick()
+      expect(f.said().filter(([, body]) => String(body).includes('has nothing to do')).map(([n]) => n)).toEqual([15])
+    })
+
     it('stays while it is new, given by hand, or while nobody else has nothing; and the read is made only then', async () => {
       const fresh = waiting()
       fresh.github.state.comments.set(15, [gave('Pip', '2026-11-09T07:25:00Z')])
