@@ -2087,7 +2087,11 @@ describe('registry across a reboot and pane loss', () => {
     hand.load()
     expect(hand.byAgent(pending.agentId)).not.toHaveProperty('browser')
     // The shell left under a new identity is the person's: the agent's browser stays the agent's.
-    expect(reloaded.releaseEngine(pending.agentId, true)).not.toHaveProperty('browser')
+    const saved = { ...reloaded.byAgent(pending.agentId)!, active: false }
+    const shell = reloaded.releaseEngine(pending.agentId, true)!
+    expect(shell).not.toHaveProperty('browser')
+    // Back from the archive on that pane, the agent is rebuilt from the row its archive kept, flag and all.
+    expect(reloaded.reinstateArchived(shell.agentId, saved, processIdentity(51))?.browser).toBe(true)
   })
 
   // The person's Start and Stop (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the flag means its Browser is on.

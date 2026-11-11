@@ -383,6 +383,45 @@ describe('the agent browser, as its agent starts and ends', () => {
     lifecycle.ended('a2')
     expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a1'], ['a2'], ['a2']])
   })
+
+  // Decision 14: an agent back by a path that attaches nothing (back from the archive) is seen by the next scan.
+  it('an agent that ended and is seen running again gets its browser back, once: every later look tells the browser nothing', () => {
+    const { port, lifecycle } = browsers()
+    lifecycle.attached(withBrowser)
+    lifecycle.ended('a1')
+    lifecycle.observed(withBrowser)
+    lifecycle.observed(withBrowser)
+    lifecycle.observed(withBrowser)
+    expect(port!.attached).toHaveBeenCalledTimes(2)
+    expect(port!.attached).toHaveBeenLastCalledWith(withBrowser)
+    lifecycle.ended('a1')
+    expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a1'], ['a1']])
+  })
+
+  it('a look at an agent that is attached already tells nothing: one created with Browser, one its person started, one there at daemon start', () => {
+    const created = row({ agentId: 'created', browser: true })
+    const started = row({ agentId: 'started' })
+    const kept = row({ agentId: 'kept', browser: true })
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(created, started, kept))
+    lifecycle.attached(created)
+    lifecycle.set('started', true)
+    lifecycle.attached(kept)
+    expect(port!.attached).toHaveBeenCalledTimes(3)
+    for (const id of ['created', 'started', 'kept']) lifecycle.observed(rows.byAgent(id)!)
+    expect(port!.attached).toHaveBeenCalledTimes(3)
+  })
+
+  it('a look at an agent whose Browser is off, or that its person turned off, attaches nothing', () => {
+    const turnedOff = row({ agentId: 'off' })
+    const { port, rows, lifecycle } = browsers(undefined, liveRows(turnedOff))
+    lifecycle.observed(row())
+    expect(port!.attached).not.toHaveBeenCalled()
+    lifecycle.set('off', true)
+    lifecycle.set('off', false)
+    lifecycle.observed(rows.byAgent('off')!)
+    expect(port!.attached).toHaveBeenCalledTimes(1)
+    expect(port!.stopped).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('agent_delete', () => {
