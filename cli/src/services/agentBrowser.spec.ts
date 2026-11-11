@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type AddressInfo, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +16,7 @@ import { imageTag } from './agentBrowser/image.js'
 import { READY_LINE, STOPPED_LINE } from './agentBrowser/notices.js'
 import { createPodman } from './agentBrowser/podman.js'
 import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
+import { StateFile } from './agentBrowser/stateFile.js'
 import { AGENT_BROWSER_REQUESTS, daemonIdOf, startAgentBrowser, type AgentBrowserOptions } from './agentBrowser.js'
 
 vi.mock('node:child_process', async (importOriginal) =>
@@ -97,7 +98,9 @@ const savedState = () => JSON.parse(readFileSync(join(dataDir, 'agent-browser.js
 /**
  * The service on a core that turns an agent's Browser on and off as the core does (core/agents/lifecycle.ts `set`): the
  * row's flag, then the port's `attached` or `stopped`, in the same turn; and an agent's own end and resume tell the port
- * only while its flag is on. The lines it types are recorded, and the spec says what became of them.
+ * only while its flag is on. It moves the flag as the core does too (`move`, decision 19): the previous agent's cleared,
+ * its browser stopped if it runs, and the new agent's set and attached. A row stands for a live agent and a stopped
+ * one's record alike. The lines it types are recorded, and the spec says what became of them.
  */
 function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: undefined })], over: {
   count?: (name: string) => void
@@ -132,11 +135,22 @@ function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: un
     attach(row)
     return { ok: true, changed }
   })
+  const moveBrowser = vi.fn(async (from: string, to: string): Promise<BrowserSwitch> => {
+    if (held) await held
+    const row = byId.get(to)
+    if (!row) return { error: 'NOT_RUNNING' }
+    const previous = byId.get(from)
+    if (previous) previous.browser = undefined
+    if (running.delete(from)) port!.stopped(from)
+    row.browser = true
+    attach(row)
+    return { ok: true, changed: true }
+  })
   const core = fakeCore({
     dataDir,
     ...over.core,
     ...(over.count ? { count: over.count } : {}),
-    agents: { setBrowser, byAgent: (agentId: string) => byId.get(agentId), ...over.agents },
+    agents: { setBrowser, moveBrowser, byAgent: (agentId: string) => byId.get(agentId), ...over.agents },
     turns: {
       // Only what a line is: its agent, its text and its id. A delivery's options are the core's to read.
       deliver: vi.fn((agentId: string, text: string, deliveryId: string) => { typed.push({ agentId, text, deliveryId }) }),
@@ -153,6 +167,7 @@ function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: un
     ...started,
     rows: byId,
     setBrowser,
+    moveBrowser,
     typed,
     /** The agent runs (a create, a resume, a daemon start): the core attaches it. */
     attach: (agentId: string) => attach(byId.get(agentId)!),
@@ -164,6 +179,8 @@ function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: un
     },
     /** The agent's own end: the port hears it only while its Browser is on. */
     end: (agentId: string) => { if (running.delete(agentId)) port!.stopped(agentId) },
+    /** [to] took the pane [from] ended in (core/agents/discovery.ts): the port hears both, with the flag [from] kept. */
+    move: (from: string, to: string) => port!.moved(from, byId.get(to)!, byId.get(from)?.browser === true),
     hear: (deliveryId: string, state: TurnDelivery['state']) => {
       for (const listener of [...listeners]) listener({ deliveryId, sessionId: deliveryId.split(':')[1]!, state })
     },
@@ -713,7 +730,7 @@ describe('the person\'s Start and Stop', () => {
   it('start of a failed browser tries again as Retry does', async () => {
     // Another browser of this daemon runs, on a machine with room for one.
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: 3 * GiB } }) })
-    fake.reply('ps', { stdout: JSON.stringify([{ Labels: { 'harness.agent': 'other', 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' }]) })
+    fake.reply('ps', { stdout: JSON.stringify([{ Names: ['harness-browser-other'], Labels: { 'harness.agent': 'other', 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' }]) })
     const sw = startSwitching()
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
     await eventually(() => expect(sw.port.frameContext('a1')).toEqual({ state: 'failed', error: 'browser_limit' }))
@@ -1335,5 +1352,186 @@ describe('the window', () => {
     c.port.stop()
     expect(await running).toEqual({ error: 'NOT_READY', state: 'starting' })
     expect(c.tools[0]!.stdin.writableEnded).toBe(true)
+  })
+})
+
+// Decision 19: an engine typed into the pane its agent ended in is a new agent, and the browser moves with the pane.
+describe('the browser moves with its pane', () => {
+  /** a1 ran with its browser on, told, and ended in its pane; b1 is the agent typed there, with no browser of its own. */
+  async function ended(over: Parameters<typeof startSwitching>[1] = {}) {
+    const sw = startSwitching([session('a1', { browser: undefined }), session('b1', { browser: undefined }), session('c1', { browser: undefined })], over)
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    sw.hear(sw.typed[0]!.deliveryId, 'delivered')
+    sw.end('a1')
+    await eventually(() => expect(secretsRemoved('a1')).toBe(2))
+    return sw
+  }
+  const created = () => asked().filter(call => call.startsWith('create '))
+  const moveFailed = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.filter(([line]) => String(line).includes('browser_move_failed'))
+
+  it('the browser moves with its pane: the previous agent\'s container is removed, the entry and its profile are the new agent\'s, the core is asked to move the flag, the container is created again under the new agent\'s label on the same volume, and the new agent is typed the ready line once', async () => {
+    const sw = await ended()
+    sw.move('a1', 'b1')
+    await ready(sw.port, 'b1')
+    expect(sw.moveBrowser.mock.calls).toEqual([['a1', 'b1']])
+    expect(sw.rows.get('a1')!.browser).toBeUndefined()
+    expect(sw.rows.get('b1')!.browser).toBe(true)
+    expect(Object.keys(savedState().browsers)).toEqual(['b1'])
+    expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+    // The names stay the profile's; the label is the new agent's.
+    const [first, again] = created() as [string, string]
+    expect(created()).toHaveLength(2)
+    expect(first).toContain('--name harness-browser-a1 --label harness.agent=a1 ')
+    expect(again).toContain('--name harness-browser-a1 --label harness.agent=b1 ')
+    expect(again).toContain('-v harness-browser-a1:/var/lib/harness-browser-profile ')
+    const calls = asked()
+    expect(calls.lastIndexOf('rm --force --time 10 harness-browser-a1')).toBeLessThan(calls.lastIndexOf(again))
+    expect(calls.filter(call => call.startsWith('volume rm'))).toEqual([])
+    // A new conversation, never told: typed once. The previous agent's mark went with its entry.
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready'), lineTo('b1', READY_LINE, 'ready')])
+    sw.hear(sw.typed[1]!.deliveryId, 'delivered')
+    expect(savedState().told).toEqual({ b1: true })
+  })
+
+  it('a move with the flag off moves the entry, asks the core nothing and starts nothing; the new agent\'s Start then mounts the same volume', async () => {
+    const sw = startSwitching([session('a1', { browser: undefined }), session('b1', { browser: undefined })])
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    await eventually(() => expect(secretsRemoved('a1')).toBe(2))
+    sw.move('a1', 'b1')
+    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))
+    expect(sw.moveBrowser).not.toHaveBeenCalled()
+    expect(sw.rows.get('b1')!.browser).toBeUndefined()
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(created()).toHaveLength(1)
+    expect(await sw.requests.agent_browser_start!({ agentId: 'b1' }, LOCAL)).toEqual({ ok: true })
+    await ready(sw.port, 'b1')
+    expect(created().at(-1)).toContain('--name harness-browser-a1 --label harness.agent=b1 ')
+    expect(created().at(-1)).toContain('-v harness-browser-a1:/var/lib/harness-browser-profile ')
+  })
+
+  it('the stream and the tool server of a moved browser exec into its profile\'s container', async () => {
+    const c = await commands()
+    c.end('a1')
+    await eventually(() => expect(secretsRemoved('a1')).toBe(2))
+    c.move('a1', 'a2')
+    await ready(c.port, 'a2')
+    expect(c.port.streamCommand('a2')).toEqual({ argv: [fake.path, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'] })
+    const snapshot = c.run('snapshot', {}, { pane: '%8' })
+    await c.line(1)
+    expect(c.tools.map(tool => tool.args)).toEqual([TOOL_SERVER_ARGS('a1')])
+    c.tools[0]!.answer(page('moved'))
+    expect(await snapshot).toMatchObject({ ok: true, text: 'moved' })
+  })
+
+  it('a ready browser whose state file cannot be read has no stream to open', async () => {
+    const { port } = start()
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    writeFileSync(join(dataDir, 'agent-browser.json'), '{')
+    expect(port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
+  })
+
+  // Review Focus 12.
+  it('a state file that cannot be written leaves both agents as they were, asks the core nothing, types nothing, and logs browser_move_failed', async () => {
+    const sw = await ended()
+    const log = vi.spyOn(console, 'log')
+    const before = readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')
+    // The file is written beside itself and renamed over it (agentBrowser/stateFile.ts): a folder there refuses it.
+    mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`))
+    sw.move('a1', 'b1')
+    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (state_unwritable)'))
+    expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)
+    expect(sw.moveBrowser).not.toHaveBeenCalled()
+    expect(sw.rows.get('a1')!.browser).toBe(true)
+    expect(sw.rows.get('b1')!.browser).toBeUndefined()
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
+    expect(created()).toHaveLength(1)
+    // One that cannot be read is named so.
+    writeFileSync(join(dataDir, 'agent-browser.json'), '{')
+    sw.move('a1', 'b1')
+    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (state_unreadable)'))
+    expect(moveFailed(log)).toHaveLength(2)
+    expect(sw.moveBrowser).not.toHaveBeenCalled()
+  })
+
+  it('a core that refuses or does not answer is logged browser_move_failed, and nothing is started', async () => {
+    const moveBrowser = vi.fn<(from: string, to: string) => Promise<BrowserSwitch>>()
+      .mockResolvedValueOnce({ error: 'NOT_RUNNING' })
+      .mockRejectedValueOnce(new Error('the core did not answer within 10000 ms'))
+    const sw = await ended({ agents: { moveBrowser } })
+    const log = vi.spyOn(console, 'log')
+    sw.move('a1', 'b1')
+    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (not_running)'))
+    // The entry stays with the pane's new agent, and its Start finds the logins (call 28).
+    expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+    sw.port.moved('b1', sw.rows.get('c1')!, true)
+    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser c1: browser_move_failed (no_answer)'))
+    expect(moveFailed(log)).toHaveLength(2)
+    expect(moveBrowser.mock.calls).toEqual([['a1', 'b1'], ['b1', 'c1']])
+    expect(sw.rows.get('a1')!.browser).toBe(true)
+    for (const agentId of ['b1', 'c1']) {
+      expect(sw.rows.get(agentId)!.browser).toBeUndefined()
+      expect(sw.port.frameContext(agentId)).toBeUndefined()
+    }
+    expect(created()).toHaveLength(1)
+    expect(sw.typed).toHaveLength(1)
+  })
+
+  it('a move of an agent with no entry asks the core nothing and makes no Podman call', async () => {
+    const read = vi.spyOn(StateFile.prototype, 'read')
+    const sw = startSwitching([session('a1'), session('b1', { browser: undefined })])
+    read.mockClear()
+    sw.move('a1', 'b1')
+    await until(() => read.mock.calls.length > 0)
+    // What is left of the move after its read is one turn of promises.
+    await new Promise(done => setImmediate(done))
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(sw.moveBrowser).not.toHaveBeenCalled()
+    expect(fake.calls()).toEqual([])
+  })
+
+  it('a move counts nothing', async () => {
+    const count = vi.fn()
+    const sw = await ended({ count })
+    count.mockClear()
+    sw.move('a1', 'b1')
+    await ready(sw.port, 'b1')
+    // The new agent's browser is measured as any start is, and nothing more: no Start, no first start.
+    expect(count.mock.calls).toEqual([['agent_browser_start_ok']])
+  })
+
+  it('a line owed to the previous agent is taken back', async () => {
+    const sw = startSwitching([session('a1', { browser: undefined }), session('b1', { browser: undefined })])
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    // Its ready line is still on its way when its pane gets a new agent.
+    sw.move('a1', 'b1')
+    expect(sw.core.turns.cancelDelivery).toHaveBeenLastCalledWith(sw.typed[0]!.deliveryId)
+    await ready(sw.port, 'b1')
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready'), lineTo('b1', READY_LINE, 'ready')])
+  })
+
+  it('a delete of the previous agent after the move removes no volume, and a delete of the new agent removes the moved one', async () => {
+    const sw = await ended()
+    sw.move('a1', 'b1')
+    await ready(sw.port, 'b1')
+    const before = asked().length
+    sw.port.deleted('a1')
+    expect(asked()).toHaveLength(before)
+    sw.port.deleted('b1')
+    await eventually(() => expect(savedState().browsers).toEqual({}))
+    expect(asked().filter(call => call.startsWith('volume rm'))).toEqual(['volume rm harness-browser-a1'])
+  })
+
+  it('on win32 a move does nothing and no process starts', async () => {
+    const { podman, spawn } = podmanHere()
+    const { port } = start(undefined, { platform: 'win32', podman })
+    port.moved('a1', session('b1'), true)
+    expect(fake.calls()).toEqual([])
+    expect(spawn).not.toHaveBeenCalled()
   })
 })

@@ -315,6 +315,19 @@ describe('the core API services stand on', () => {
     expect(createCoreApi(coreDeps()).agents.setBrowser).toBeUndefined()
   })
 
+  // The agent browser moved a pane's browser to its new agent, and asks the core to move the flag (decision 19).
+  it('moveBrowser answers what the lifecycle said, and is absent without it', async () => {
+    const moveBrowser = vi.fn((_from: string, to: string) => (to === 'shell' ? { ok: true as const, changed: true } : { error: 'NOT_RUNNING' as const }))
+    const core = createCoreApi({ ...coreDeps(), moveBrowser })
+    expect(await core.agents.moveBrowser!('ended', 'shell')).toEqual({ ok: true, changed: true })
+    expect(await core.agents.moveBrowser!('ended', 'gone')).toEqual({ error: 'NOT_RUNNING' })
+    expect(moveBrowser.mock.calls).toEqual([['ended', 'shell'], ['ended', 'gone']])
+    // A record that cannot be written is a rejection, never a throw in the asker's turn.
+    moveBrowser.mockImplementationOnce(() => { throw new Error('ENOSPC') })
+    await expect(core.agents.moveBrowser!('ended', 'shell')).rejects.toThrow('ENOSPC')
+    expect(createCoreApi(coreDeps()).agents.moveBrowser).toBeUndefined()
+  })
+
   it('hands a service\'s product counters on only where the core was told where they go', () => {
     const count = vi.fn()
     createCoreApi({ ...coreDeps(), count }).count!('agent_browser_enabled')

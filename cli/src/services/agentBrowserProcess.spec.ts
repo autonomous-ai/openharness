@@ -17,7 +17,7 @@ describe('the agent browser in its own process', () => {
     let api: CoreApi | null = null
     let given: AgentBrowserOptions | undefined
     const port: AgentBrowserPort = {
-      attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), frameContext: vi.fn(), stop: vi.fn(), onCloseViewers: vi.fn(),
+      attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), moved: vi.fn(), frameContext: vi.fn(), stop: vi.fn(), onCloseViewers: vi.fn(),
       streamCommand: vi.fn((agentId: string) => (agentId === 'a9' ? { argv: ['podman', 'exec'] } : { error: 'NOT_READY' as const })),
     }
     const requests = { agent_browser_available: vi.fn() }
@@ -43,6 +43,34 @@ describe('the agent browser in its own process', () => {
     expect(vi.mocked(port.attached).mock.calls).toEqual([[row]])
     expect(vi.mocked(port.stopped).mock.calls).toEqual([['a1']])
     expect(vi.mocked(port.deleted).mock.calls).toEqual([['a2']])
+  })
+
+  // Decision 19: the pane's new agent takes the browser of the agent that ended there.
+  it('a move the core says reaches the port', () => {
+    const { options, port } = setup()
+    const to = { agentId: 'shell', sessionId: '' } as RegisteredSession
+    options.onEvent!({ kind: 'moved', from: 'ended', session: to, on: true })
+    options.onEvent!({ kind: 'moved', from: 'ended', session: to, on: false })
+    expect(vi.mocked(port.moved).mock.calls).toEqual([['ended', to, true], ['ended', to, false]])
+    expect(port.attached).not.toHaveBeenCalled()
+    expect(port.stopped).not.toHaveBeenCalled()
+  })
+
+  it('a move without a session or a flag is dropped', () => {
+    const { options, port } = setup()
+    const to = { agentId: 'shell', sessionId: '' } as RegisteredSession
+    for (const payload of [
+      { kind: 'moved', session: to, on: true }, { kind: 'moved', from: '', session: to, on: true }, { kind: 'moved', from: 7, session: to, on: true },
+      { kind: 'moved', from: 'ended', on: true }, { kind: 'moved', from: 'ended', session: { browser: true }, on: true },
+      { kind: 'moved', from: 'ended', session: to }, { kind: 'moved', from: 'ended', session: to, on: 'yes' },
+      // The fields the other events share are not a move's.
+      { kind: 'moved', agentId: 'ended', session: to, on: true },
+    ]) options.onEvent!(payload)
+    options.onEvent!({ kind: 'moved', from: 'ended', session: to, on: true })
+    expect(vi.mocked(port.moved).mock.calls).toEqual([['ended', to, true]])
+    expect(port.attached).not.toHaveBeenCalled()
+    expect(port.stopped).not.toHaveBeenCalled()
+    expect(port.deleted).not.toHaveBeenCalled()
   })
 
   it('tells the core each browser\'s state, and all of them again at every connection', async () => {
@@ -157,6 +185,28 @@ describe('the agent browser in its own process', () => {
     vi.useFakeTimers()
     options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
     const settled = api.agents.setBrowser!('a1', true).catch((error: Error) => error.message)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await settled).toBe('the core did not answer within 10000 ms')
+  })
+
+  // Decision 19: the browser moved its entry to the pane's new agent; the core moves the flag and attaches it.
+  it('asks the core to move the flag and answers what it said; a core that does not answer rejects', async () => {
+    const { options, api } = setup()
+    await expect(api.agents.moveBrowser!('ended', 'shell')).rejects.toThrow('no core')
+    let answer: Record<string, unknown> = { ok: true, changed: true }
+    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
+    options.onConnected!({ query } satisfies CoreConnection)
+    expect(await api.agents.moveBrowser!('ended', 'shell')).toEqual({ ok: true, changed: true })
+    expect(query).toHaveBeenLastCalledWith('move_browser', { from: 'ended', to: 'shell' })
+    answer = { error: 'NOT_RUNNING' }
+    expect(await api.agents.moveBrowser!('ended', 'shell')).toEqual({ error: 'NOT_RUNNING' })
+    for (const shape of [{ error: 'UNKNOWN_QUERY' }, { ok: true }]) {
+      answer = shape
+      await expect(api.agents.moveBrowser!('ended', 'shell'), JSON.stringify(shape)).rejects.toThrow('no answer')
+    }
+    vi.useFakeTimers()
+    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
+    const settled = api.agents.moveBrowser!('ended', 'shell').catch((error: Error) => error.message)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(await settled).toBe('the core did not answer within 10000 ms')
   })

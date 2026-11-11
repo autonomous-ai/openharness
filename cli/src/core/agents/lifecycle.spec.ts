@@ -276,8 +276,26 @@ describe('the agent browser, as its agent starts and ends', () => {
       }),
     }
   }
-  const browsers = (port: { attached: (session: RegisteredSession) => void; stopped: (agentId: string) => void } | null = { attached: vi.fn(), stopped: vi.fn() },
-    rows = liveRows()) => ({ port, rows, lifecycle: createAgentBrowserLifecycle(() => port, rows) })
+  /** The stopped agents' records, as the store keeps them: `patch` writes the record, and `browser: undefined` takes the
+   *  flag out of it. */
+  const savedRows = (...saved: RegisteredSession[]) => {
+    const records = new Map(saved.map(session => [session.agentId, session]))
+    return {
+      records,
+      get: vi.fn((agentId: string) => records.get(agentId) ?? null),
+      patch: vi.fn((agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd' | 'browser'>>) => {
+        const record = records.get(agentId)
+        if (!record) return false
+        const next = { ...record, ...patch }
+        if (next.browser === undefined) delete next.browser
+        records.set(agentId, next)
+        return true
+      }),
+    }
+  }
+  type Port = { attached: (session: RegisteredSession) => void; stopped: (agentId: string) => void; moved: (from: string, to: RegisteredSession, on: boolean) => void }
+  const browsers = (port: Port | null = { attached: vi.fn(), stopped: vi.fn(), moved: vi.fn() }, rows = liveRows(), saved = savedRows()) =>
+    ({ port, rows, saved, lifecycle: createAgentBrowserLifecycle(() => port, rows, saved) })
 
   it('stops the browser of an agent whose engine exits by itself', () => {
     const { port, lifecycle } = browsers()
@@ -421,6 +439,105 @@ describe('the agent browser, as its agent starts and ends', () => {
     lifecycle.observed(rows.byAgent('off')!)
     expect(port!.attached).toHaveBeenCalledTimes(1)
     expect(port!.stopped).toHaveBeenCalledTimes(1)
+  })
+
+  // Decision 19: a new agent took the pane its previous agent ended in. The agent browser moves the settings and the
+  // profile first, then asks the core to move the flag (`move`).
+  describe('the browser moves with its pane', () => {
+    const ended = () => row({ agentId: 'ended', sessionId: 's0', browser: true })
+    const shell = (over: Partial<RegisteredSession> = {}) => row({ agentId: 'shell', sessionId: '', ...over })
+
+    it('a pane\'s new agent is told to the browser with both ids, and no flag changes until the service asks', () => {
+      const pane = shell()
+      const { port, rows, saved, lifecycle } = browsers(undefined, liveRows(pane), savedRows(ended()))
+      lifecycle.taken('ended', pane, true)
+      lifecycle.taken('ended', pane, false)
+      expect((port!.moved as ReturnType<typeof vi.fn>).mock.calls).toEqual([['ended', pane, true], ['ended', pane, false]])
+      expect(rows.setBrowser).not.toHaveBeenCalled()
+      expect(saved.patch).not.toHaveBeenCalled()
+      expect(saved.records.get('ended')?.browser).toBe(true)
+      expect(pane).not.toHaveProperty('browser')
+      expect(port!.attached).not.toHaveBeenCalled()
+      expect(port!.stopped).not.toHaveBeenCalled()
+      // While the service is down there is nobody to move it.
+      expect(() => browsers(null).lifecycle.taken('ended', pane, true)).not.toThrow()
+    })
+
+    it('a guest\'s new agent, and one whose Browser is on already, are told nothing', () => {
+      const { port, lifecycle } = browsers()
+      lifecycle.taken('ended', shell({ guest: 'kim@acme.io' }), true)
+      // It keeps its own browser: a Start on the shell before the engine was typed.
+      lifecycle.taken('ended', shell({ browser: true }), true)
+      expect(port!.moved).not.toHaveBeenCalled()
+    })
+
+    it('the service\'s ask clears the stopped agent\'s flag in its record, sets the new agent\'s and attaches it, in one turn', () => {
+      const { port, rows, saved, lifecycle } = browsers(undefined, liveRows(shell()), savedRows(ended()))
+      expect(lifecycle.move('ended', 'shell')).toEqual({ ok: true, changed: true })
+      expect(saved.records.get('ended')).not.toHaveProperty('browser')
+      expect(rows.byAgent('shell')?.browser).toBe(true)
+      expect(port!.attached).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'shell', browser: true }))
+      expect(port!.stopped).not.toHaveBeenCalled()
+      // The new agent's browser is the one that stops when it ends; a resume of the previous agent brings none.
+      lifecycle.ended('shell')
+      expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['shell']])
+    })
+
+    it('a previous agent that runs again loses its flag and its browser is stopped', () => {
+      const back = ended()
+      const { port, rows, saved, lifecycle } = browsers(undefined, liveRows(back, shell()), savedRows())
+      lifecycle.attached(back)
+      expect(lifecycle.move('ended', 'shell')).toEqual({ ok: true, changed: true })
+      expect(rows.byAgent('ended')).not.toHaveProperty('browser')
+      expect((port!.stopped as ReturnType<typeof vi.fn>).mock.calls).toEqual([['ended']])
+      expect(rows.byAgent('shell')?.browser).toBe(true)
+      expect(saved.patch).not.toHaveBeenCalled()
+    })
+
+    it('an evicted agent, in no list, is done', () => {
+      const { port, rows, saved, lifecycle } = browsers(undefined, liveRows(shell()), savedRows())
+      expect(lifecycle.move('evicted', 'shell')).toEqual({ ok: true, changed: true })
+      expect(rows.setBrowser.mock.calls).toEqual([['shell', true]])
+      expect(saved.patch).not.toHaveBeenCalled()
+      expect(port!.attached).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'shell', browser: true }))
+    })
+
+    it('a new agent that stopped meanwhile gets the flag in its record and nothing is attached', () => {
+      const { port, rows, saved, lifecycle } = browsers(undefined, liveRows(), savedRows(ended(), shell()))
+      expect(lifecycle.move('ended', 'shell')).toEqual({ ok: true, changed: true })
+      expect(saved.records.get('ended')).not.toHaveProperty('browser')
+      // Its resume brings the browser.
+      expect(saved.records.get('shell')?.browser).toBe(true)
+      expect(rows.setBrowser).not.toHaveBeenCalled()
+      expect(port!.attached).not.toHaveBeenCalled()
+    })
+
+    it('one that is nowhere answers NOT_RUNNING and the previous agent keeps its flag', () => {
+      const { port, rows, saved, lifecycle } = browsers(undefined, liveRows(), savedRows(ended()))
+      expect(lifecycle.move('ended', 'gone')).toEqual({ error: 'NOT_RUNNING' })
+      expect(saved.records.get('ended')?.browser).toBe(true)
+      expect(saved.patch).not.toHaveBeenCalled()
+      expect(rows.setBrowser).not.toHaveBeenCalled()
+      expect(port!.attached).not.toHaveBeenCalled()
+    })
+
+    // Root AGENTS.md: a partial failure leaves data complete or undone.
+    it('a new agent\'s record that cannot be written leaves the previous agent\'s as it was, and the move throws', () => {
+      const { port, saved, lifecycle } = browsers(undefined, liveRows(), savedRows(ended(), shell()))
+      const patch = saved.patch.getMockImplementation()!
+      saved.patch.mockImplementation((agentId, change) => {
+        if (agentId === 'shell') throw new Error('ENOSPC')
+        return patch(agentId, change)
+      })
+      expect(() => lifecycle.move('ended', 'shell')).toThrow('ENOSPC')
+      expect(saved.records.get('ended')?.browser).toBe(true)
+      expect(saved.records.get('shell')).not.toHaveProperty('browser')
+      // From an agent in no list, there is nothing to put back.
+      expect(() => lifecycle.move('evicted', 'shell')).toThrow('ENOSPC')
+      expect(saved.patch.mock.calls.map(([agentId]) => agentId)).toEqual(['ended', 'shell', 'ended', 'shell'])
+      expect(port!.attached).not.toHaveBeenCalled()
+      expect(port!.stopped).not.toHaveBeenCalled()
+    })
   })
 })
 

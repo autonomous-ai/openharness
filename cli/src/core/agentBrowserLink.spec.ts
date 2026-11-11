@@ -157,6 +157,56 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(await bare.answer('set_browser', { agentId: 'a1', on: true })).toEqual({ error: 'UNSUPPORTED' })
   })
 
+  // Decision 19: the pane's new agent takes the browser of the agent that ended there.
+  it('a move is said to the process with both ids and the flag, held until it hears, and asks for the process only when the flag is on', () => {
+    const { link, notify, want } = setup()
+    const to = row('shell', false)
+    link.port.moved('ended', to, false)
+    expect(want).not.toHaveBeenCalled()
+    link.port.moved('ended', to, true)
+    expect(want).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls).toEqual([
+      [{ type: 'service_event', payload: { kind: 'moved', from: 'ended', session: to, on: false } }, { untilDelivered: true }],
+      [{ type: 'service_event', payload: { kind: 'moved', from: 'ended', session: to, on: true } }, { untilDelivered: true }],
+    ])
+    // Once there, it is not asked for again.
+    link.connected()
+    link.port.moved('ended', to, true)
+    expect(want).toHaveBeenCalledTimes(1)
+  })
+
+  it('the previous agent\'s state, command and viewers go at once', async () => {
+    const { link } = setup([row('ended')])
+    const closed: string[] = []
+    link.port.onCloseViewers(agentId => closed.push(agentId))
+    const argv = ['/opt/podman/bin/podman', 'exec', '-i', 'harness-browser-ended', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
+    link.port.attached(row('ended'))
+    await link.answer('browser_state', { agentId: 'ended', state: { state: 'ready' }, command: argv })
+    expect(link.port.streamCommand('ended')).toEqual({ argv })
+    link.port.moved('ended', row('shell', false), true)
+    expect(link.port.frameContext('ended')).toBeUndefined()
+    expect(link.port.streamCommand('ended')).toEqual({ error: 'NO_BROWSER' })
+    expect(closed).toEqual(['ended'])
+    // A late word of it brings nothing back.
+    await link.answer('browser_state', { agentId: 'ended', state: { state: 'ready' }, command: argv })
+    expect(link.port.frameContext('ended')).toBeUndefined()
+  })
+
+  it('move_browser asks the core and answers what it said; anything but two ids is INVALID_REQUEST', async () => {
+    const moveBrowser = vi.fn((_from: string, to: string) => Promise.resolve(to === 'shell'
+      ? { ok: true as const, changed: true } : { error: 'NOT_RUNNING' as const }))
+    const link = createAgentBrowserLink({ core: fakeCore({ agents: { moveBrowser } }), notify: () => true, want: () => {} })
+    expect(await link.answer('move_browser', { from: 'ended', to: 'shell' })).toEqual({ ok: true, changed: true })
+    expect(await link.answer('move_browser', { from: 'ended', to: 'gone' })).toEqual({ error: 'NOT_RUNNING' })
+    for (const payload of [{}, { from: 'ended' }, { to: 'shell' }, { from: '', to: 'shell' }, { from: 'ended', to: '' }, { from: 7, to: 'shell' }, { from: 'ended', to: ['shell'] }]) {
+      expect(await link.answer('move_browser', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(moveBrowser.mock.calls).toEqual([['ended', 'shell'], ['ended', 'gone']])
+    // A core without the call has no answer to give.
+    const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })
+    expect(await bare.answer('move_browser', { from: 'ended', to: 'shell' })).toEqual({ error: 'UNSUPPORTED' })
+  })
+
   it('hands on the agent browser\'s own counters, and no other', async () => {
     const { link, count } = setup()
     expect(await link.answer('count', { metric: 'agent_browser_failed_podman_old' })).toEqual({ ok: true })

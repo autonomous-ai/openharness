@@ -5,8 +5,9 @@
  * The person starts and stops an agent's browser from its chat (`agent_browser_start`, `_stop`), and the agent drives it
  * with `harness browser <command>` from its own pane (docs/superpowers/specs/2026-11-11-browser-from-chat-design.md).
  * The command runs as an agent's shell tool runs it: a child of the engine in the agent's pane, so its parents prove the
- * pane. A browser left on follows its agent through a restart, a stop and a resume, and a daemon restart; its purge
- * removes its container, volume, network and proxy secret; and the service failing costs the agent nothing.
+ * pane. A browser left on follows its agent through a restart, a stop and a resume, and a daemon restart, and moves with
+ * its pane to the agent typed there after it; its purge removes its container, volume, network and proxy secret; and
+ * the service failing costs the agent nothing.
  */
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -14,6 +15,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { browserAssetsHash } from '../src/services/agentBrowser/assets.js'
 import { imageTag } from '../src/services/agentBrowser/image.js'
+import { READY_LINE } from '../src/services/agentBrowser/notices.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -292,6 +294,59 @@ describe('the agent browser on the real daemon', () => {
     client = await LocalClient.connect(d)
     await ready(client, agent.id, 'the browser to be ready after the daemon restarted')
     expect(log().slice(mark).some((line) => line.startsWith('create ') && line.includes(`--name ${name}`))).toBe(true)
+    client.close()
+  })
+
+  // Decision 19: the person quits the engine and types it again in the same pane, a new agent there.
+  it('the browser moves with its pane', async () => {
+    const { d, client, log } = await started((created) => { daemon = created })
+    const agent = await newAgent(d, client, 'moves')
+    const name = `harness-browser-${agent.id}`
+    const bound = await until('the agent to bind its conversation', async () => {
+      const found = await row(client, agent.id)
+      return found?.sessionId && found.tmuxPane ? found : null
+    }, 45_000, 250)
+    const pane = String(bound.tmuxPane)
+    expect(await client.request('agent_browser_start', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
+    await ready(client, agent.id, 'the browser to be ready')
+    // A turn first: until one ends, the fake engine's conversation has no opening, and its resume below is held.
+    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
+    client.send('message', { agentId: agent.id, content: 'One turn before the exit' })
+    await ended
+
+    // The engine quits in its pane: the pane is a shell under a new id, and its browser stops.
+    const gone = client.next((frame) => frame.type === 'agent_deleted' && frame.payload?.agentId === agent.id, 45_000, 'agent_deleted (the engine)')
+    await d.tmux.run('send-keys', '-t', pane, '-l', '!exit')
+    await d.tmux.run('send-keys', '-t', pane, 'Enter')
+    const successor = (await gone).payload?.successor as string | undefined
+    expect(successor, 'the shell that keeps the pane').toBeTruthy()
+    await until('its container to be removed', () => log().includes(`rm --force --time 10 ${name}`) || null, 30_000, 250)
+    await until('the shell to be up', async () => (await d.capture(pane)).includes('This pane is a shell now') || null, 30_000, 250)
+
+    // The engine typed again there: the pane's new agent has the browser, with no Start.
+    const mark = log().length
+    await d.tmux.run('send-keys', '-t', pane, '-l', 'claude')
+    await d.tmux.run('send-keys', '-t', pane, 'Enter')
+    await ready(client, successor!, 'the browser to come back on the pane\'s new agent')
+    const lines = log().slice(mark)
+    expect(lines.some((line) => line.startsWith('create ') && line.includes(`--name ${name} --label harness.agent=${successor} `)), lines.join('\n')).toBe(true)
+    expect(log().filter((line) => line.startsWith('volume rm'))).toEqual([])
+    const browsers = (JSON.parse(readFileSync(join(d.dataDir, 'agent-browser.json'), 'utf8')) as { browsers: Record<string, { profile?: string }> }).browsers
+    expect(Object.keys(browsers)).toEqual([successor])
+    expect(browsers[successor!]?.profile).toBe(agent.id)
+    const snapshot = await inPane(d, client, successor!, ['browser', 'snapshot'])
+    expect(snapshot, JSON.stringify(snapshot)).toMatchObject({ code: 0, out: `${TREE}\n` })
+    await until('the ready line in the pane', async () => (await d.capture(pane)).includes(READY_LINE) || null, 45_000, 250)
+
+    // The agent that ended keeps no browser: resumed, it has none, and the pane's agent keeps its own.
+    expect((await row(client, agent.id))?.status).toBe('stopped')
+    expect((await client.request('agent_resume', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    const resumed = await until('the agent that ended to run again', async () => {
+      const found = await row(client, agent.id)
+      return found?.status === 'active' && found.sessionId ? found : null
+    }, 60_000, 250)
+    expect(resumed.browser).toBeUndefined()
+    expect((await row(client, successor!))?.browser).toMatchObject({ state: 'ready' })
     client.close()
   })
 
