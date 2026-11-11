@@ -7,10 +7,16 @@
 //   BUDGET=250             the solver's milliseconds a solve (the product gives it 1,000)
 //   CASES=0.7:0.3:80,...   noise (sigma of a lognormal) : share of labels a size off : tasks in the day
 //   ONLY=fifo,priced0      the policies to run; the solver's rows take minutes, the others seconds
-//   CORES=8                a machine's cores (6 by default); AWAY=1.2 how much longer a task takes outside a builder's area
+//   CORES=8                a machine's cores (6 by default)
+//   AWAY=1.2               a task's minutes outside a builder's area, as a factor on its size, where inside it is 0.6: 1.2
+//                          is twice as long, 0.9 one and a half times, 0.72 a fifth more, 0.6 no more
+// The README's tables: SEEDS=1,2,3 CASES=0:0:80,0.7:0.3:80,1:0.3:80,0:0:160,0.7:0.3:160 ONLY=fifo,solver,solver1,priced0
+// (and CORES=8 for the second); the default is five seeds of four cases. The solver's rows vary a little with the
+// computer: its search stops on a wall clock (BUDGET). A task starts the minute it is given: the model has no assigner's
+// pass and no GitHub news between the two.
 //
-// Policies: fifo (first come, any free builder); solver (today's allocator); solver1 (the same, one task ahead of each
-// builder, not two); dispatch (the most weight for its minutes, and
+// Policies: fifo (first come, any free builder); solver (today's allocator); solver1 (the same with a list one deep: a
+// task is given only to a builder with nothing); dispatch (the most weight for its minutes, and
 // nothing else); priced0 (the same, but a task another kind of builder does faster is left for one unless waiting costs more
 // than the extra work: "the rule" of the README); priced4 (a builder-minute also costs 4, in a task's weight); queue (it
 // costs what the builder's own area's queue loses meanwhile). Info: fixed (today's table of sizes and its guess of an
