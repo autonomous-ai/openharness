@@ -50,7 +50,7 @@ CHECKS = {
                                                          "cli/src/lib/loginShellEnv*.ts", "cli/src/lib/userShell*.ts",
                                                          "cli/src/lib/shellQuote*.ts")),
     # `make desktop-test ARGS="--timeout N --workers N"` sets the budget and parallelism, never which tests run:
-    # compiling all 1,022 test files does not fit the 900 s default on an Intel iMac, even an idle one.
+    # on the Intel iMac, 294 of 1,022 test files had compiled and run when the 900 s default ran out.
     "desktop-macos": dict(command="make desktop-test", cwd=".", platform="macos", resource_args=("timeout", "workers"),
                           paths=("desktop/macos/*", "desktop/lib/*/mac_*.dart", "desktop/lib/*/macos*.dart",
                                  "desktop/test/macos*.dart", "desktop/pubspec.yaml", "desktop/pubspec.lock")),
