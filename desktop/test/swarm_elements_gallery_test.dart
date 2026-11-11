@@ -36,6 +36,7 @@ import 'package:harness/super_tabs/agent_info.dart';
 import 'package:harness/super_tabs/back_to_chat.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/instructions_link.dart';
+import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/message_receipt.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -705,6 +706,23 @@ class _Gallery extends StatelessWidget {
                   now: () => DateTime.utc(2026, 11, 9, 9),
                   onOpen: (_, _) {},
                   onClose: () {},
+                ),
+              ),
+            ],
+          ),
+          // Manage › Machines (Swarm v4, 2026-11-11): the counts a person acts on, search, Add machine, quiet groups.
+          section(
+            'machines',
+            'Machines: counts, search, Add machine, a row per computer',
+            [
+              SizedBox(
+                width: 760,
+                height: 380,
+                child: SuperTabMachines(
+                  controller: swarm,
+                  onAddAgent: (_) {},
+                  ticks: false,
+                  now: () => DateTime.utc(2026, 11, 9, 9),
                 ),
               ),
             ],
