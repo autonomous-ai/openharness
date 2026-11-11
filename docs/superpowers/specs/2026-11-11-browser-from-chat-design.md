@@ -143,6 +143,9 @@ in an agent that already runs, in every engine, with nothing added to its launch
     Swarm on the command's path. An agent in a regular tab is not refused; its person starts, sees and stops its
     browser through the Swarm chat's Browser button.
 17. **(Ken)** The stop line is `Your person stopped your browser.`
+19. **(Ken)** When a pane's agent is replaced by a new agent in the same pane (the engine typed again in the pane
+    it left, or a scan that finds the engine before its hook and makes a new row), the browser moves to the new
+    agent: its flag, its settings and its profile, so the login is kept. See The browser moves with its pane.
 18. **(Ken)** The browser fits the panel without changing the screen: the screen keeps the Device setting's size, so
     `screen.width` never changes, and only Chrome's window follows the panel, as a person resizing a window that is
     not maximized. The panel shows that window at 1:1. See The window fits the panel.
@@ -167,6 +170,30 @@ in an agent that already runs, in every engine, with nothing added to its launch
 - **How it is set.** The service asks the core to set or clear the flag (a new `CoreApi.agents` call, with its query
   for the service's own process), then goes through the same `attached` and `stopped` paths as today.
 - **The frame.** `browser` is present while the browser is on, with the same `{state, step?, error?}`. Absent means off.
+
+### The browser moves with its pane
+
+- **(Ken) When.** A new agent row takes over a pane whose previous agent ended in that pane, on this machine:
+  `adoptEngine` (the pane was left a shell under a new id and the engine is typed again) and `openProcessAgent`
+  evicting the pane's row (a scan sees the engine before its hook). Not for a fork, Change agent, an adopted
+  conversation from outside, a guest's create, or `--resume` in a second pane: those are other agents.
+- **What moves.** The previous agent's settings entry and its profile move to the new agent's id; the new row's flag
+  takes the previous row's value, and the previous row's flag is cleared. The previous agent keeps no browser: a later
+  resume of it has none, and its person can Start a new, empty one.
+- **The profile.** A browser's profile volume and container are named by a profile id kept in the settings entry,
+  `profile`, which is the agent id when absent (every browser made before this change). The move keeps the profile id,
+  so nothing on disk is renamed or copied; the container is created again under the new agent's labels, on the same
+  volume. Deleting an agent removes the volume of its own profile id; a moved profile goes with the agent that holds
+  it.
+- **Order.** The move runs in the service's queue: stop the previous agent's browser, move the entry, then attach the
+  new agent, which starts it if the flag is on. The new agent is told the ready line once it is ready (a new
+  conversation that was never told).
+- **Failure.** A move that cannot write the state file leaves both agents as they were and is logged by name
+  (`browser_move_failed`); the previous agent's browser stays stopped and on, so a resume of it brings it back.
+- **Data.** One field in the settings entry. Concurrency: the service's per-agent queue, both ids. Nothing is read on
+  a delivery or a command path. Compatibility: an older CLI reads the entry without `profile` as before, so a rolled
+  back daemon finds a moved browser's volume under the old name only when the move never happened; a moved profile is
+  orphaned on rollback until its agent is deleted (accepted, logged).
 
 ### Requests
 
