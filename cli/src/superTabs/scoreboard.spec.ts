@@ -223,19 +223,40 @@ describe('a part GitHub does not give', () => {
     expect(await board(twenty, other, missed)).toMatchObject({ waits: { read: 20, toVerdict: { minutes: 60, of: 20 } }, hot: null })
     expect(missed.mock.calls).toEqual([['files', 'GitHub answered 500.']])
     expect(other.asked.filter(path => path.includes('/files'))).toHaveLength(6)
+    // One answer GitHub failed on its own side, or that never came, is no word to stop asking: the files are read all the
+    // same, and nothing is said of them that was not asked (its third review).
+    for (const fail of [(hub: ReturnType<typeof github>) => { hub.failing.set(/\/comments$/, 500) }, (hub: ReturnType<typeof github>) => { hub.failing.set(/\/comments$/, 502) }]) {
+      const flaky = github(talk, files), told = vi.fn()
+      fail(flaky)
+      expect(await board(twenty, flaky, told)).toMatchObject({ waits: null, hot: { landings: 20, files: [['src/a.ts', 20]] } })
+      expect(told.mock.calls).toEqual([['waits', expect.stringMatching(/^GitHub answered 50[02]\.$/)]])
+    }
+    const late = vi.fn()
+    const timedOut = new GitHubReads(async path => {
+      if (path.includes('/comments')) throw Object.assign(new Error('The operation timed out.'), { code: 'TimeoutError' })
+      return { status: 200, etag: null, body: [{ filename: 'src/a.ts' }], resetAt: null }
+    }, () => NOW)
+    expect(await boardOf(timedOut, 'acme/app', { now: NOW, closed: twenty, team: TEAM }, late)).toMatchObject({ waits: null, hot: { landings: 20, files: [['src/a.ts', 20]] } })
+    expect(late.mock.calls).toEqual([['waits', 'GitHub did not answer.']])
     // A failure with no words of its own is said as it is.
     const wordless = { freshPages: async () => { throw 'no answer' } } as unknown as GitHubReads, both = vi.fn()
     expect(await boardOf(wordless, 'acme/app', { now: NOW, closed: twenty, team: TEAM }, both)).toMatchObject({ waits: null, hot: null })
     expect(both.mock.calls).toEqual([['waits', 'no answer'], ['files', 'no answer']])
   })
 
-  it('asks nothing more once GitHub says to stop for every repository: the files are not tried after the waits', async () => {
+  it('asks nothing more once GitHub says to stop asking (a rate limit, a login refused): the files are not tried after the waits', async () => {
     const hub = github(talk, files), unread = vi.fn()
     const limited = new GitHubReads(async path => { hub.asked.push(path); return { status: 403, etag: null, body: null, resetAt: NOW + HOUR } }, () => NOW)
     expect(await boardOf(limited, 'acme/app', { now: NOW, closed: twenty, team: TEAM }, unread)).toMatchObject({ waits: null, hot: null })
     expect(unread.mock.calls).toEqual([['waits', 'GitHub is limiting this computer\'s requests.'], ['files', 'GitHub is limiting this computer\'s requests.']])
     expect(hub.asked).toHaveLength(6)
     expect(hub.asked.some(path => path.includes('/files'))).toBe(false)
+    // A login GitHub refuses, the same.
+    const refused: string[] = [], said = vi.fn()
+    const signedOut = new GitHubReads(async path => { refused.push(path); return { status: 401, etag: null, body: null, resetAt: null } }, () => NOW)
+    expect(await boardOf(signedOut, 'acme/app', { now: NOW, closed: twenty, team: TEAM }, said)).toMatchObject({ waits: null, hot: null })
+    expect(refused.some(path => path.includes('/files'))).toBe(false)
+    expect(said.mock.calls.map(([part]) => part)).toEqual(['waits', 'files'])
   })
 
   it('is not taken for an empty one when its answer did not arrive whole', async () => {

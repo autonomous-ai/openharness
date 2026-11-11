@@ -37,6 +37,10 @@ const AT_ONCE = 6
 /** A file is named when more than one in [HOT_ONE_IN] of the week's landings touched it, and [HOT_LANDINGS] at least: of five
  *  landings one alone is a fifth, and says nothing. The [HOT_MAX] most touched are named. */
 const HOT_ONE_IN = 10, HOT_LANDINGS = 3, HOT_MAX = 3
+/** The failures after which this login is not to ask again for a while: a rate limit, gh signed out or missing. One answer
+ *  GitHub failed on its own side, or that never came, is none: read on, the files were dropped for the day by one 500 on one
+ *  request for comments (its third review). */
+const STOPS: ReadonlySet<string> = new Set(['RATE_LIMITED', 'GH_SIGNED_OUT', 'GH_MISSING'])
 /** The most letters of a file's path a line says: its end, where its name is. */
 const PATH_MAX = 100
 
@@ -86,7 +90,7 @@ function trainsOf(closed: readonly Json[], now: number): Board['trains'] {
 /**
  * The scoreboard of [repo] at [now], from the [closed] list the assigner's pass read (one page of the issues and pull requests
  * closed last) and the [team]'s labels (assign/crew.ts teamOf). [unread] is told the part GitHub did not give, and why: no more
- * of that part is asked, and the others are read all the same.
+ * of that part is asked, and the others are read all the same, unless GitHub said to stop asking ([STOPS]).
  */
 export async function boardOf(reads: GitHubReads, repo: string, input: { now: number; closed: readonly Json[]; team: ReadonlySet<string> },
   unread: (part: 'waits' | 'files', why: string) => void): Promise<Board> {
@@ -94,11 +98,11 @@ export async function boardOf(reads: GitHubReads, repo: string, input: { now: nu
   /** The team's pull requests that landed within [window], the last landed first. */
   const landed = (window: number) => landedOf(closed, team, now, window).filter(change => Number.isSafeInteger(change.pull.number) && now - change.at < window)
     .sort((a, b) => b.at - a.at)
-  // What GitHub said when it stopped every repository's reads (a rate limit, a login refused): nothing more is asked after it.
+  // What GitHub said when it told this login to stop asking: nothing more is asked after it.
   let stopped: string | null = null
   const part = <T>(name: 'waits' | 'files', read: () => Promise<T>): Promise<T | null> => (stopped === null ? read() : Promise.reject(new Error(stopped))).catch(error => {
     const why = error instanceof Error ? error.message : String(error)
-    if (error instanceof GitHubStop && error.everywhere) stopped = why
+    if (error instanceof GitHubStop && STOPS.has(error.code)) stopped = why
     unread(name, why)
     return null
   })
