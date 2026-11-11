@@ -18,9 +18,10 @@ export const SWARM_DELETE_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 /** The request id Desktop creates the person's Personal Swarm with (desktop super_tabs/swarm_switcher.dart). */
 export const PERSONAL_SWARM_OPERATION = 'personal-swarm'
 
-/** The owner's Personal Swarm: its id is derived from the owner and the Personal request (store.ts create). */
-export const isPersonalSwarm = (state: Pick<SuperTabState, 'id' | 'environment' | 'ownerId'>): boolean =>
-  state.id === stableId('super-tab', state.environment, state.ownerId, PERSONAL_SWARM_OPERATION)
+/** The owner's Personal Swarm: marked so (`personal`), or, made before the mark, with the id derived from the owner and the
+ *  Personal request (store.ts create). */
+export const isPersonalSwarm = (state: Pick<SuperTabState, 'id' | 'environment' | 'ownerId' | 'personal'>): boolean =>
+  state.personal === true || state.id === stableId('super-tab', state.environment, state.ownerId, PERSONAL_SWARM_OPERATION)
 
 /** What a caller who may not delete or restore this Swarm is told: word for word what the store tells about a Swarm that
  *  does not exist (store.ts row), so nobody learns from a refusal whether it exists or was deleted. */
