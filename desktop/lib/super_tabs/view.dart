@@ -3020,7 +3020,7 @@ class _SuperTabViewState extends State<SuperTabView>
             !_phone &&
             !_devicesVisible &&
             !_listViewHoldsThePane
-        ? SwarmTaskBoard.repositoryOf(c, group.id, app: widget.app)
+        ? SwarmTaskBoard.repositoryOf(c, group.id)
         : null;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
@@ -4937,7 +4937,6 @@ class _SuperTabViewState extends State<SuperTabView>
               controller: c,
               conversationId: c.selectedId,
               github: _github,
-              app: widget.app,
               pulls: _boardPulls,
               openNumber: _boardPulls ? null : _issue?.number,
               refreshEvery: kUnderTest ? null : const Duration(minutes: 1),
