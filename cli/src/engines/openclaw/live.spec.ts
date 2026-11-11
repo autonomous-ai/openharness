@@ -293,6 +293,18 @@ describe('OpenclawLive', () => {
       expect(onSessionMissing).toHaveBeenCalledOnce()
     })
 
+    // A store this version cannot read is said as that (`onFatal`); told it holds no session, the person would be sent to
+    // fix a state folder that is right.
+    it('a store that cannot be read says nothing of its sessions', async () => {
+      const { path, db } = store('plain')
+      db.exec('ALTER TABLE session_nodes RENAME COLUMN label TO label_renamed')
+      const { stream, onSessionMissing } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+    })
+
     it('connecting or ready with no session says nothing', async () => {
       // A fresh session reads `ready` before its first message, and `connecting` is no run yet: no node is due.
       const { stream, onSessionMissing } = await watch(store().path)
