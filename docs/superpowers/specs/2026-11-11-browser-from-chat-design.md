@@ -33,7 +33,8 @@ in an agent that already runs, in every engine, with nothing added to its launch
 - **The agent may start it.** `harness browser start`, when its person asks for work that needs one.
 - **Only the person stops it.**
 - **The agent is told.** One line in its chat when its browser is ready, one when its person stops it.
-- **Found without a manual.** One line in the context a Swarm delivery already carries names the command.
+- **Found without a manual.** The first message an agent gets after Browser is set up on its machine carries one line
+  that names the command. Once per agent.
 - **Plain agents.** No launch argument, no MCP server, no checkbox.
 
 ## Non-goals
@@ -55,6 +56,7 @@ in an agent that already runs, in every engine, with nothing added to its launch
 - A read of the backend or of the Swarm on a command's path.
 - A line typed into an agent more than once per start, or at every daemon restart: that spends the person's tokens
   without them knowing.
+- The Browser line given to an agent twice, or on a machine where Browser is not set up.
 - A login lost because the person pressed Stop.
 - Image bytes on the agent's terminal, or a snapshot that floods its context.
 - A guest's agent starting a browser on the owner's machine.
@@ -90,12 +92,17 @@ in an agent that already runs, in every engine, with nothing added to its launch
   Agent Messages, the Wi-Fi device and the orchestrator use. A delivery waits for the agent's turn to end, at most 5
   minutes (`cli/src/lib/sessionInput.ts:16`), and its outcome is heard through `onDelivery`. A service in its own
   process may deliver only when it is in `TURN_DELIVERERS` (`core/api.ts:934`).
-- **What a Swarm delivery carries.** `SuperTabHost.contextLines` (`cli/src/superTabs/host.ts:1689`) puts short lines
-  before a delivered message, built in `cli/src/superTabs/deliveryContext.ts`: where the message is, what the agent
-  works on, its thread. Two kinds of delivery carry none:
-  - a person's own words in their agent's own 1:1 chat, typed exactly as written and nothing else
-    (`plainChat`, `host.ts:1512, 1552`; `plainText`, `host.ts:317`; anh Dee, 2026-11-09);
-  - a notice for the agent alone (`host.ts:1690`).
+- **How a Swarm delivery is typed.** `SuperTabHost` puts every delivery's text together in one place
+  (`cli/src/superTabs/host.ts:1504-1520`), in one of two shapes:
+  - a person's own words in their agent's own 1:1 chat: exactly as typed and nothing else (`plainChat`,
+    `host.ts:1552`; `plainText`, `host.ts:317`; anh Dee, 2026-11-09);
+  - any other message: its context lines, its quote, the message and an Answer line (`prompt`, `host.ts:1779`). A
+    notice for the agent alone is its text alone.
+  - Before anything is typed, the host writes the delivery's journal entry (`stage: 'submitting'`, `host.ts:1525`),
+    and it hears from the core when the delivery was written (`heard`, `host.ts:1824`).
+  - In the agent's own chat it posts the agent's answer by matching the turn to a hash of what was typed
+    (`host.ts:1526`, `cli/src/superTabs/agentReplies.ts`).
+  - The host holds each agent's registry row in memory (`core.agents.byAgent`).
 - **An agent verb's pane.** `runningPane` (`cli/src/superTabs/callerPane.ts`) proves the pane a command runs in from
   its parent processes, and refuses a `TMUX_PANE` that names another pane.
 - **Counters** are one fixed list that the backend also holds and validates
@@ -126,9 +133,14 @@ in an agent that already runs, in every engine, with nothing added to its launch
     "What goes, and what stays for a while".
 15. **(main)** A browser that was on when its agent stopped comes back when the agent runs again.
 16. **(main)** The ready and stopped lines go to the agent only. They are not shown in the person's chat.
-17. **(Ken)** How an agent finds the command: one line, `Browser: harness browser start`, in the context Harness
-    already puts before a Swarm message it delivers. Nothing is added at launch. `harness help agents` lists the
-    command too.
+17. **(Ken)** How an agent finds the command, once per agent: the first message delivered to it after Browser is set
+    up on its machine, on any path (its own 1:1 chat, a task, a project message), carries one extra line:
+    `Harness: you can use a browser: run harness browser start, then harness browser --help`. Every later message is
+    delivered as before. The 1:1 chat stays plain: anh Dee's rule is loosened by exactly this one line, once. That
+    the agent was told is recorded durably, so a daemon restart does not repeat it, and the record goes with the
+    agent. An agent already told through a ready line counts as told. Not on Windows machines. Nothing is added at
+    launch. `harness browser --help` lists every command with a one-line example; the ready line points at it;
+    `harness help agents` lists it too. (This replaces Ken's earlier answer, a line in every delivery's context.)
 18. **(Ken)** Which agents: today's `mayOpenBrowser` rule, applied to the agent. An agent on this machine that is not
     a guest's may start and use its browser. The check uses what the daemon already has, never a read of the backend
     or of the Swarm on the command's path. An agent in a regular tab is not refused; its person sees its browser
@@ -223,10 +235,29 @@ and the help.
 | `screenshot` | `browser_screenshot` | the path of the saved image |
 | `tabs [list \| new \| select <n> \| close [<n>]]` | `browser_tabs` | the tabs, or what it did |
 | `wait <text>` or `wait --ms <n>` | `browser_wait` | `Done` |
-| `--help` | — | the commands, one line each, from `browser-tools.json` |
+| `--help` | — | every command, one line each, with an example |
 
 - There is no `stop`. `harness browser stop` is a wrong command (exit 2).
-- `--help` needs no daemon and no browser.
+- **(Ken) `--help`** lists every command with a one-line example each, and needs no daemon and no browser. Each tool's
+  entry in `browser-tools.json` gains its example, so the help cannot name a command or an argument the tool does not
+  take. The builder may reword it; this is its shape:
+
+```
+Your browser: a Chrome your person can also see and use. Only your person stops it.
+  harness browser start                          start it
+  harness browser navigate https://example.com   open a page in the current tab
+  harness browser snapshot                       read the page; elements get refs such as e12
+  harness browser click e12
+  harness browser type e7 "hello" --submit       replaces what the field holds; --submit presses Enter
+  harness browser press Enter
+  harness browser select e9 "Viet Nam"
+  harness browser scroll 600                     pixels; a negative number scrolls up
+  harness browser screenshot                     saves a JPEG and prints its path; read that file
+  harness browser tabs list                      also: tabs new, tabs select 2, tabs close
+  harness browser wait "Inbox"                   or: wait --ms 2000
+  harness browser back
+```
+
 - `type`'s text is one argument, or standard input when the argument is `-`, so text with quotes and new lines needs
   no shell escaping.
 - **Output.** Plain text on standard output; a failure is one line on standard error. When a page asks for a person,
@@ -327,8 +358,10 @@ removes the container, the volume, the network, the secret and the settings.
   - A daemon restart, and an agent that resumes with its browser on, type nothing: the mark is set.
   - An agent that had a browser before this change has no mark. It is told once, the first time its browser is ready
     under the new daemon. That is how it learns the CLI.
-  - An agent whose conversation was replaced (a handoff to another engine) is not told again. It finds the command as
-    any agent does (see How an agent finds the command).
+  - A ready line that is given also sets the agent's own mark (see How an agent finds the command), so that agent
+    is not given the Browser line as well.
+  - An agent whose conversation was replaced (a handoff to another engine) is given neither line again.
+    `harness help agents` lists the command.
 - **The stop line** is typed when the person's Stop turns off a browser whose agent runs, with two exceptions:
   - one of the agent's commands answered with the stop line: that output is the line, and nothing is typed;
   - the ready line is still waiting to be typed: it is taken back (`cancelDelivery`) and no stop line is typed. That
@@ -343,19 +376,43 @@ removes the container, the volume, the network, the secret and the settings.
 
 ### How an agent finds the command
 
-- **(Ken) The line.** `Browser: harness browser start`, one more of the context lines a Swarm delivery carries. It is
-  built in `deliveryContext.ts` beside `placeLine` and `workLine`, and added in `SuperTabHost.contextLines`.
-- **A constant.** The same words whether the browser is on or off. It reads nothing and waits on nothing: no Swarm
-  read, no question to the browser's service. It is added outside the part of `contextLines` that reads the Swarm, so
-  a read that fails does not drop it. On a browser that is already on, `start` answers at once with the ready line,
-  which names `--help`.
-- **Left out on Windows (spec),** where the command only refuses.
-- **Where the line is not.** The two deliveries that carry no context (see What exists today): a person's own words
-  in their agent's own chat, and a notice for the agent alone. So a message typed in the agent's own chat arrives
-  without it. An agent knows the command there from a delivery it had before in the same conversation, from the ready
-  line, or from `harness help agents`. An agent that has only ever been talked to in its own chat has none of the
-  first two until its person presses Start. See Open for Ken, 1.
-- **(Ken) `harness help agents`** lists `harness browser --help` in one line.
+- **(Ken) Once per agent, with its first message.** The first message Harness delivers to an agent after Browser is
+  set up on its machine carries one extra line, before the message:
+  `Harness: you can use a browser: run harness browser start, then harness browser --help`
+  Every later message is delivered as before.
+- **Any Swarm delivery, whichever comes first:** a person's words in the agent's own chat, a task, a project message,
+  a notice. The line and an empty line come first, then the delivery exactly as it would have been.
+- **The own chat stays plain.** anh Dee's rule (a person's words reach their agent exactly as typed) is loosened by
+  exactly this one line, once per agent. The comment on `plainText` says so.
+- **Where it is added.** In `SuperTabHost`, where a delivery's text is put together (`host.ts:1504-1520`): one place
+  for both shapes. `contextLines` and `deliveryContext.ts` do not change.
+- **Set up (spec).** Browser is set up on a machine once its setup has finished there, or one browser has been ready
+  there. The browser's service records that in its state file, one field for the machine, and says it to the core when
+  it starts and when it changes, as it says a browser's state. The core keeps it in memory.
+  - A machine that has its own Podman and has never run a browser is not known to be set up. It is, from its first
+    browser on.
+  - Windows is never set up: the service does nothing there.
+- **The record (spec).** One mark on the agent's registry row, beside `browser` (`cli/src/lib/registry.ts`; the name
+  is the builder's). The row is durable and is kept through a stop and a resume, so a daemon restart tells nobody
+  again. Deleting the agent removes the row, and the mark with it.
+- **Owed.** An agent is owed the line when Browser is set up here, its row has no mark, and the row is not a guest's.
+  The host reads the row it already holds and the core's flag. No delivery asks Podman, the browser's service, the
+  backend or a file. With no word from the core yet (the service has not said), the delivery goes without the line,
+  and a later one carries it.
+- **Counts as told.** The mark is also set when a ready line is given to the agent, typed or printed by its own
+  `start`, and when a `harness browser` command of the agent's reaches the daemon. An agent that had a browser before
+  this change is given the ready line, and not this one as well.
+- **Once, through a restart.**
+  - One delivery at a time carries the line for an agent. Another put together meanwhile goes without it.
+  - The delivery's journal entry says it carries the line, in the durable write the host already makes before
+    anything is typed. The row is marked when the core says the delivery was written.
+  - After a restart, an entry that had gone to the core with the line marks the row, and nothing is typed again.
+  - A delivery that was never typed keeps the line for its next try. One dropped for good leaves the agent owed, and
+    its next message carries the line.
+- **The answer still comes back.** In the agent's own chat the host matches the turn to a hash of what was typed. The
+  hash is of the whole text, the line included.
+- **Not given the line:** a guest's agent; an agent on Windows; an agent that gets no Swarm delivery (one in no
+  Swarm). For any agent, `harness help agents` lists `harness browser --help` in one line.
 - **Nothing at launch.** The launch arguments and the Swarm's basics do not change.
 - **Not a rule (standard 13).** The line names a command. It tells the agent to do nothing.
 
@@ -480,6 +537,7 @@ New counters, each a fixed name with no id, address, path, command name or text.
 - `agent_browser_stopped`: the person's Stop.
 - `agent_browser_command_ok`, `agent_browser_command_failed`: the agent's tool calls.
 - `agent_browser_notice_failed`: a line given up on.
+- `agent_browser_line_told`: the Browser line written to an agent.
 
 Kept: every counter the first spec added. `agent_browser_enabled` still counts an agent's first start.
 `agent_browser_failed_browser_limit` matters more now: any agent can ask for a browser.
@@ -490,8 +548,9 @@ Kept: every counter the first spec added. `agent_browser_enabled` still counts a
   does nothing. The pull request shows the daemon's CPU at rest with a ready browser, before and after: within 1% of
   one core, and no higher than today, when the same process ran under the relay.
 - **The agent's frame.** Unchanged: `browser` is sent only when it changes.
-- **Swarm delivery.** A delivery's context gains one constant line. It reads nothing and waits on nothing. The pull
-  request shows the time from post to agent, before and after, on the same workload.
+- **Swarm delivery.** A delivery checks, in memory, the agent's row and one flag the core holds. Nothing is read from
+  disk, asked of another process or awaited. Once the row is marked the check is the row alone. The pull request shows
+  the time from post to agent, before and after, on the same workload.
 - **Terminals, the relay.** Not touched. A command is one request on the local socket, and reads nothing outside the
   daemon.
 - **A command's own cost.** A command is a new CLI process each time, where an MCP call was not. That is the price of
@@ -501,17 +560,22 @@ Kept: every counter the first spec added. `agent_browser_enabled` still counts a
 ## Data and design checklist
 
 - **Growth.**
-  - No new store. The row's flag exists. The state file gains one mark per browser (`told`).
+  - No new store. The row's flag exists. The state file gains one mark per browser (`told`) and one field for the
+    machine (Browser is set up here).
+  - One more mark on the agent's registry row (it was given the Browser line). It goes with the row when the agent
+    is deleted.
   - A settings entry can now exist before a first start. It is deleted with its agent, as today, including when the
     service was down at the time.
   - Files: at most 50 per agent in its temporary folder, which is swept as that folder is.
   - Limits, unchanged: at most 8 running browsers per daemon by memory, 4 viewers per browser. New: one tool server
     per ready browser, 8 commands waiting per browser.
 - **Concurrency.** Per agent: start, stop, delete and retry run in the service's one queue for that agent; commands
-  run one at a time per browser. Different agents run side by side. The flag is written inside that queue.
+  run one at a time per browser. Different agents run side by side. The flag is written inside that queue. The
+  Browser line: one delivery at a time per agent carries it.
 - **Read cost.** Only what changed: the frame's `browser` on a change; a waiting `start` is answered by the state
   change, not by a poll. Nothing reads whole state. A command reads the registry row and the service's own memory;
-  the line in a delivery's context is a constant.
+  a delivery reads the agent's row and one flag, both in memory. That Browser is set up is pushed to the core when it
+  changes, never asked per delivery.
 - **Scale (10x).** Browsers per machine are bounded by its memory, not by the number of agents. Ten times the agents
   means the limit is reached more often: `agent_browser_failed_browser_limit` warns first, then
   `agent_browser_start_failed`. Nothing here adds load on the backend.
@@ -524,16 +588,18 @@ Kept: every counter the first spec added. `agent_browser_enabled` still counts a
   - The new Desktop against an older CLI: a browser made with the checkbox still opens; Start and Stop say
     `Update Harness on <machine> first`.
   - The phone and the web are not affected.
-  - The line in a delivery is text for agents. Nothing parses it, and an older CLI simply does not add it.
+  - The Browser line is text for agents. Nothing parses it, and an older CLI does not add it.
 - **Migration and rollback.** No migration: the flag and the state file keep their shapes, and a missing mark reads
   as not told. Rolling the CLI back: an agent with the flag gets its browser and its MCP argument as before; one the
-  person stopped has none; a settings entry made while off stays until its agent is deleted. Rolling Desktop back
-  brings the checkbox back, which the new CLI still honours.
+  person stopped has none; a settings entry made while off stays until its agent is deleted. If the older CLI drops
+  the row's mark when it rewrites a row, that agent is given the Browser line once more after the next update;
+  accepted. Rolling Desktop back brings the checkbox back, which the new CLI still honours.
 - **Audience.** Enforced on the agent's machine: `mayOpenBrowser` for the person's requests; for the agent's, a local
   asker, the proven pane and a row that is not a guest's. The backend only relays.
 - **Identity.** The browser runs on the agent's person's own machine, as that person. The lines are the daemon's own,
-  typed into the agent: never sent as the person, never posted as the agent. No account or login of the machine's
-  owner is used.
+  typed into the agent: never sent as the person, never posted as the agent. The Browser line rides before a message
+  and starts with `Harness:`, so it is not read as the sender's words. No account or login of the machine's owner is
+  used.
 - **Failure.** See Failures.
 - **Platforms.**
   - Agents' machines: macOS and Linux. Every process the service starts uses `ownProcessGroup()`, as today.
@@ -561,7 +627,7 @@ built.
 
 - **CLI specs.**
   - Each command builds the tool call its schema asks for; wrong arguments and `stop` exit 2; `--help` runs with no
-    daemon.
+    daemon, lists every tool, and each of its examples parses as that command.
   - The pane: a command with no pane, and one that names another pane, are refused.
   - Each exit code and its line, from a fake daemon's answers.
   - `screenshot` writes a JPEG and prints only its path; long output is cut, saved and named; the folder keeps 50
@@ -581,9 +647,18 @@ built.
     counter.
   - Settings read and saved while off.
   - The person and the agent starting at once start one browser and tell once.
-- **Swarm host specs.** A delivery with context carries `Browser: harness browser start`, once; a person's own
-  words in their agent's own chat and a notice for the agent alone carry nothing new; the line is there when the Swarm
-  read fails; it is left out on Windows.
+- **Swarm host specs**, for the Browser line.
+  - The first delivery to an owed agent carries it, as a plain message in the agent's own chat and as a message with
+    context; the second carries nothing new, and the own chat is plain again.
+  - Not owed: Browser not set up here, a marked row, a guest's agent. The check waits on nothing: with no word from
+    the core the delivery goes without the line.
+  - Two deliveries put together at once: one carries it.
+  - The row is marked when the delivery is written; a restart after the durable write marks the row and types
+    nothing; a delivery never typed carries it on its next try; one dropped for good leaves the agent owed.
+  - The answer to a plain first message is still posted in the chat.
+- **Service and core specs**, for the Browser line. Set up is recorded when setup finishes and when a browser is first
+  ready, and said to the core at start; a ready line and an agent's first command mark the row; the mark is kept
+  through a stop and a resume and is gone after a purge.
 - **Core specs.** The lifecycle when the flag changes while the agent runs; the link to the service's own process;
   no launch carries a browser argument (create and relaunch); `agent_create` with `browser: true` still starts one;
   `agent_browser_state` still answers.
@@ -616,12 +691,14 @@ built.
   - press Start, see the line typed, ask for a page's title, see the agent use the CLI;
   - ask for a screenshot and see each engine read the file;
   - press Stop mid-task, see the line, and see the login still there after the next Start;
-  - with the browser off, ask for work in a web app in a task the agent is assigned, so the delivery carries the
-    Browser line, and see the agent start it;
-  - press Stop, then ask again in the agent's own chat: the agent, which has seen the line and the stop line in this
-    conversation, starts it again;
-  - a new agent that has only ever been talked to in its own chat, browser off, asked there for work in a web app:
-    record what it does. No line reaches it (Open for Ken, 1).
+  - press Stop, ask for more work in the web app, and see the agent start the browser again itself.
+- **By hand, the Browser line,** on a machine where Browser is set up, with a new agent of each engine that has never
+  been given a message, its browser off:
+  - in its own 1:1 chat ask "check gmail". See that message arrive with the one line before it, see the agent run
+    `harness browser start` itself and open Gmail, and see its answer in the chat;
+  - send a second message and see it arrive exactly as typed;
+  - restart the daemon, send a third, and see it arrive exactly as typed;
+  - on a machine where Browser is not set up, see the first message arrive exactly as typed.
 
 ## Left to the builder
 
@@ -632,16 +709,18 @@ built.
 - The running mark on the button, the Stop control's shape, and any copy that reads better under the naming rules.
 - How the typed line is kept from raising a recap or a notification, if the core can tell it apart.
 - Whether `agent_browser_retry` folds into start. This spec keeps it.
-- Where the Browser line sits among a delivery's context lines.
+- How the core hands the Swarm host that Browser is set up here, and the names of the row's mark and of the state
+  file's field.
 
 ## Open for Ken
 
 Each has the answer this spec takes.
 
-1. **The Browser line does not reach a message typed in the agent's own chat.** That message is typed exactly as
-   written, with no context (anh Dee, 2026-11-09), and that chat is where the Browser button is. So "check gmail",
-   typed there to an agent that has never had a task or a project message, arrives with no line, and the agent may not
-   know the command. Taken: anh Dee's rule stays, and the hand test asks from a task. The other answer is one Browser
-   line before a plain message too, which changes that rule.
-2. **An agent in no Swarm has no chat, so no Browser button.** Under decision 18 it can still start a browser. Its
-   person can stop that browser only by stopping the agent. Taken: accepted, as decided.
+1. **An agent in no Swarm has no chat, so no Browser button, and gets no Browser line.** Under decision 18 it can
+   still start a browser, if it finds the command in `harness help agents`. Its person can stop that browser only by
+   stopping the agent. Taken: accepted, as decided.
+2. **What "set up" means on a machine that already had Podman.** Taken: Browser is set up once a browser has run
+   there. So on such a machine no agent is given the line until someone presses Start there once. The other answer is
+   to ask Podman on every machine at daemon start, which runs Podman on computers that never used Browser.
+
+Closed: how an agent finds the command in its own 1:1 chat (decision 17).
