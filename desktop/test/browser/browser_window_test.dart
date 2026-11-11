@@ -12,7 +12,6 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/native_webview_host.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
-import 'package:harness/ws/ws_conn.dart';
 import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
 import '../support/fake_webview.dart';

@@ -125,6 +125,9 @@ class BrowserPanel extends StatefulWidget {
   /// The page for each stream; a test gives its own.
   final BrowserView Function()? newView;
 
+  /// How long the panel's size holds still before Chrome's window is asked to take it: a drag sends one request.
+  static const windowSettle = Duration(milliseconds: 300);
+
   @override
   State<BrowserPanel> createState() => _BrowserPanelState();
 }
@@ -144,6 +147,11 @@ class _BrowserPanelState extends State<BrowserPanel> {
 
   /// A request the machine did not take, in one line.
   String? _refused;
+
+  /// The screen area's size, in logical pixels, rounded; the last one Chrome's window was asked to take; and the wait
+  /// for the size to hold still.
+  (int, int)? _screen, _asked;
+  Timer? _settle;
 
   AppNotifier get _app => widget.app;
   MachineState? get _machine => _app.stateOf(widget.machineId);
@@ -220,14 +228,51 @@ class _BrowserPanelState extends State<BrowserPanel> {
     _app.productMeasurement.agentBrowserOpened();
     unawaited(stream.closed.then((reason) => _closed(bridge, reason)));
     setState(() => _open = true);
+    // A new page knows no window yet.
+    unawaited(_fitWindow());
   }
 
-  /// Ends the open stream, if any, without a word: what to show comes from whoever ended it.
+  /// Ends the open stream, if any, without a word: what to show comes from whoever ended it. Chrome's window keeps
+  /// its last size.
   void _end() {
     unawaited(_bridge?.close());
     _bridge = null;
     _view = null;
     _open = false;
+    _settle?.cancel();
+    _asked = null;
+  }
+
+  /// The screen area was laid out at [size]: once it holds still, Chrome's window is asked to take it.
+  void _screenSized(Size size) {
+    final screen = (size.width.round(), size.height.round());
+    if (screen == _screen) return;
+    _screen = screen;
+    if (!_open) return;
+    _settle?.cancel();
+    _settle = Timer(BrowserPanel.windowSettle, () => unawaited(_fitWindow()));
+  }
+
+  /// Asks the machine to size Chrome's window to the screen area, and tells the page the size it set. A machine that
+  /// cannot leaves the page scaling the whole screen; the next settled size asks again.
+  Future<void> _fitWindow() async {
+    final bridge = _bridge;
+    final screen = _screen;
+    if (!_open || bridge == null || screen == null || screen == _asked) return;
+    _asked = screen;
+    final (width, height) = screen;
+    final set = await _app.agentBrowserWindow(
+      widget.machineId,
+      widget.agentId,
+      width,
+      height,
+    );
+    if (!mounted || _bridge != bridge) return;
+    if (set == null) {
+      if (_asked == screen) _asked = null;
+      return;
+    }
+    bridge.window(set.width, set.height);
   }
 
   void _refusedOpen(String code) {
@@ -445,12 +490,17 @@ class _BrowserPanelState extends State<BrowserPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                NativeWebViewHost(child: view.build(context)),
-                if (!_open) _starting(),
-              ],
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                _screenSized(constraints.biggest);
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    NativeWebViewHost(child: view.build(context)),
+                    if (!_open) _starting(),
+                  ],
+                );
+              },
             ),
           ),
           // A Stop the machine did not take, under the screen.

@@ -560,9 +560,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   off too), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
   text, only while the screen shows) and ×. × only hides the panel: the
   browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
-  drives`, and the blue `Start` under it. Ready, the screen fills the panel,
-  scaled to fit: the bundled noVNC page in the native webview, which the
-  person uses as the agent does. While it sets up, four lines in 13, `Podman
+  drives`, and the blue `Start` under it. Ready, the screen fills the panel:
+  the bundled noVNC page in the native webview, which the person uses as the
+  agent does. It shows Chrome's window at 1:1, and the window follows the
+  panel: the panel asks the computer for its size when the screen opens and
+  300 ms after the panel last changed size (at least 1024x640, at most the
+  Device setting's screen). Only a window that cannot fit, or one the computer
+  could not size, is scaled to fit. While it sets up, four lines in 13, `Podman
   installed`, `Starting Podman…`, `Building browser`, `Starting browser`, each
   after a mark as Import's steps have: ticked when done, a small spinner on the
   current one, an empty circle (and the line muted) for those to come.
