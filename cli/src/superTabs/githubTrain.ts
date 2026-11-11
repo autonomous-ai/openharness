@@ -215,15 +215,21 @@ export class GitHubTrain<T extends TrainPull> {
     if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, false, 'its branch does not hold what its body names')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged
     // under its author, and the work counts as theirs (shippingRead.ts). Squashed, the members are only closed and the one
-    // commit is this login's. Else a squash, else a rebase, which takes no message.
+    // commit is this login's. Else a squash, else a rebase, which takes no message. The next way is tried too when GitHub
+    // refuses one (405): a base that requires a linear history or signed commits refuses a merge commit the settings allow,
+    // and the same tree lands squashed.
     const settings = await this.deps.reads.one(this.repo, `/repos/${this.repo}`)
-    const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase'
-    // Pinned to the head its checks passed: a push since is a 409, and nothing lands.
-    const reply = await this.sent('PUT', `/pulls/${train.number}/merge`, [200, 405],
-      { sha: train.head, merge_method: method, ...method === 'rebase' ? {} : landingMessage(riders) })
-    if (reply.status === 405) {
-      // A rule of the repository the train does not meet. It stays open, as building the next would only run the checks to be
-      // refused again; said once on the train itself, for a person, and tried again with the merger's waits.
+    const ways = (['merge', 'squash', 'rebase'] as const).filter(way => settings[way === 'merge' ? 'allow_merge_commit' : `allow_${way}_merge`] !== false)
+    let reply: GitHubReply | undefined, method: typeof ways[number] | undefined
+    for (method of ways) {
+      // Pinned to the head its checks passed: a push since is a 409, and nothing lands.
+      reply = await this.sent('PUT', `/pulls/${train.number}/merge`, [200, 405],
+        { sha: train.head, merge_method: method, ...method === 'rebase' ? {} : landingMessage(riders) })
+      if (reply.status !== 405) break
+    }
+    if (!reply || reply.status === 405) {
+      // A rule of the repository the train does not meet any way. It stays open, as building the next would only run the checks
+      // to be refused again; said once on the train itself, for a person, and tried again with the merger's waits.
       const said = 'GitHub refuses to merge this train'
       const comments = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${train.number}/comments?per_page=${PAGE}`, 1)
       if (!comments.some(comment => TEAM.has(comment.author_association) && String(comment.body ?? '').slice(0, 200).includes(said))) {
@@ -236,7 +242,7 @@ export class GitHubTrain<T extends TrainPull> {
     // Merged or not, an answer that does not say so writes nothing more: a merged train is finished on the next pass (landed).
     if (merged.merged !== true || !SHA.test(String(merged.sha))) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to the merge of #${train.number} is not one the train reads.`)
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} landed ${train.members.map(m => `#${m.number}`).join(' ')} as ${String(merged.sha).slice(0, 7)}`)
-    await this.finish(train, String(merged.sha))
+    await this.finish(train, String(merged.sha), method === 'merge')
     // Its members stay open until GitHub marks them (finish): the branch goes here.
     if (method === 'merge') await this.drop(train.branch)
   }
@@ -298,12 +304,16 @@ export class GitHubTrain<T extends TrainPull> {
 
   /** Tells the members of merged [train] still open at the head it names; their numbers. Landed as a merge commit, GitHub
    *  marks each merged by itself, a moment later: closed here first, one would stay closed and never read as merged. Landed
-   *  any other way, each is closed here and the train's branch deleted. A member already told is not told again. */
-  private async finish(train: Train, sha: string): Promise<number[]> {
+   *  any other way, each is closed here and the train's branch deleted. A member already told is not told again. [kept]: whether
+   *  it landed as a merge commit, when this pass landed it; a train found merged is read from its landing commit, whose
+   *  second parent is then the train's tip. */
+  private async finish(train: Train, sha: string, kept?: boolean): Promise<number[]> {
     const open = train.members.filter(member => this.pulls.some(pull => Number(pull.number) === member.number && object(pull.head).sha === member.head))
     if (!open.length) return []
-    const landing = await this.deps.reads.one(this.repo, `/repos/${this.repo}/git/commits/${sha}`)
-    const kept = Array.isArray(landing.parents) && landing.parents.length === 2 && object(landing.parents[1]).sha === train.tip
+    if (kept === undefined) {
+      const landing = await this.deps.reads.one(this.repo, `/repos/${this.repo}/git/commits/${sha}`)
+      kept = Array.isArray(landing.parents) && landing.parents.length === 2 && object(landing.parents[1]).sha === train.tip
+    }
     const said = `landed in #${train.number} as `
     for (const member of open) {
       const comments = await this.deps.reads.current(this.repo, `/repos/${this.repo}/issues/${member.number}/comments?per_page=${PAGE}`, 3)
