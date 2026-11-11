@@ -97,10 +97,16 @@ export function tmuxAvailableNow(
     || tmuxInstallDirectories(environment).some(dir => binaryOnPath(join(dir, 'tmux'), environment))
 }
 
-/** A known location is only a fallback when its tmux actually runs on this computer. */
+/**
+ * A known location is only a fallback when its tmux actually runs on this computer. A broken build fails at once; a
+ * working one answers in milliseconds, but on a loaded Mac (load 30, as it signs in or under a test suite) the start of
+ * any process can take seconds. 2 s read a working tmux as absent there, and the daemon started with no tmux backend;
+ * 5 s is what `probe` already gives the login shell for the same question.
+ */
+export const TMUX_CHECK_MS = 5_000
 function tmuxRuns(binary: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   return new Promise(resolve => {
-    execFile(binary, ['-V'], { env, timeout: 2_000 }, (error, stdout) => {
+    execFile(binary, ['-V'], { env, timeout: TMUX_CHECK_MS }, (error, stdout) => {
       resolve(!error && /^tmux \S+/.test(String(stdout).trim()))
     })
   })

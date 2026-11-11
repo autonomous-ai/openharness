@@ -4,6 +4,8 @@
  * the lean bundle cli.js carries for harnessd's master, its services and its core (src/harnessd/leanBundle.ts),
  * so it is swapped in both: a master reporting the build before is not the build it was handed.
  */
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { LEAN_CORE_ENTRY, LEAN_ENTRY, readLeanBundle } from '../../src/harnessd/leanBundle.js'
 
 const { LEAN_MARKER, leanBlock } = await import('../../scripts/lib/leanBlock.mjs' as string) as {
@@ -30,6 +32,16 @@ export function withLean(bundle: string, files: Record<string, string>): string 
   const at = bundle.lastIndexOf(LEAN_MARKER)
   const head = at < 0 ? bundle : bundle.slice(0, at).replace(/\n$/, '')
   return head + leanBlock(files, FIXTURE_COMPRESSION)
+}
+
+/** A build of the CLI in [dir], as a build lays one out: [bundle]'s cli.js with [files] for its lean bundle, and the notify.mjs
+ *  beside it, which the hooks its daemon installs run (a cli.js alone left Codex's SessionStart failing, and its agent unbound). */
+export function buildWithLean(dir: string, bundle: string, files: Record<string, string>): string {
+  mkdirSync(dir, { recursive: true })
+  const cli = join(dir, 'cli.js')
+  writeFileSync(cli, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+  copyFileSync(join(dirname(bundle), 'notify.mjs'), join(dir, 'notify.mjs'))
+  return cli
 }
 
 /**

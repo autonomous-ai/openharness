@@ -119,9 +119,13 @@ class SuperTabMessageText extends StatelessWidget {
     final said = mentions.isEmpty && addressed.isEmpty
         ? const <String>[]
         : tagsIn(text);
+    // Read once, and only for a post to an agent whose name is several words.
+    String? words;
     final unsaid = [
       for (final name in [...mentions, ...addressed])
-        if (!said.any((tag) => _says(tag, name, addresses))) '@$name',
+        if (!said.any((tag) => _says(tag, name, addresses)) &&
+            _Mention.whole(name)?.hasMatch(words ??= _prose(text)) != true)
+          '@$name',
     ];
     final body = MarkdownBody(
       data: withTags(unsaid, text),
@@ -131,7 +135,7 @@ class SuperTabMessageText extends StatelessWidget {
         _WebAutolink(),
         _WorkgroupReference(references),
         if (mentions.isNotEmpty || agents.isNotEmpty)
-          _Mention([...mentions, ...agents], addresses, labels),
+          _Mention(mentions, agents, addresses, labels),
       ],
       builders: {
         'pre': _CodeBlock(),
@@ -338,18 +342,74 @@ bool _says(String tag, String name, Map<String, String> addresses) {
 /// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
 /// Parsed as inline Markdown, so code and fenced blocks remain literal.
 class _Mention extends md.InlineSyntax {
-  _Mention(this.mentions, this.addresses, this.labels) : super(tag.pattern);
+  _Mention(this.people, this.agents, this.addresses, this.labels)
+    : _spaced = _tables[agents] ??= _table(agents),
+      super(tag.pattern);
   // Never right after a letter, digit, `@` or `/` (an address, a path, a
   // link). A name never ends in a dot: `@dee.` closes a sentence.
   static final tag = RegExp(
     r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
   );
-  final List<String> mentions;
+  static final _gap = RegExp(r'\s+');
+  static final _opens = RegExp(r'^[\w+-]');
+
+  /// The people the message tags, and the Swarm's agents.
+  final List<String> people, agents;
   final Map<String, String> addresses, labels;
+
+  /// The agents whose name is several words, each as the pattern that reads it whole ([whole]), by its first word in lower
+  /// case: only a tag of that word can be one of them. Read once for a list of agents, which the conversation hands every
+  /// row alike (view.dart), so a thousand agents cost a row nothing until its text tags one (review of #3904: each row
+  /// read every name each time it was drawn).
+  final Map<String, List<RegExp>> _spaced;
+  static final _tables = Expando<Map<String, List<RegExp>>>();
+  static Map<String, List<RegExp>> _table(List<String> agents) {
+    final table = <String, List<RegExp>>{};
+    for (final name in agents) {
+      final pattern = whole(name);
+      if (pattern == null) continue;
+      (table[name.trim().split(_gap).first.toLowerCase()] ??= []).add(pattern);
+    }
+    return table;
+  }
+
+  /// `@` and all of [name] when it is several words ("first builder", lampOS's PM; "a2a swarm"), in any case and on one line,
+  /// or null for a name of one word, or one no tag can open: [tag] reads a word, so `@first builder` was drawn as plain text
+  /// and a post to that agent opened with its tag a second time. The backend reads such a name the same way
+  /// (superTabs/mentions.ts agentsNamedIn).
+  static RegExp? whole(String name) {
+    final words = name.trim().split(_gap);
+    return words.length < 2 || !_opens.hasMatch(words.first)
+        ? null
+        : RegExp(
+            '(?<![\\w@/])@${words.map(RegExp.escape).join(r'[^\S\n]+')}'
+            r'(?![\w+-]|\.[\w+-])',
+            caseSensitive: false,
+          );
+  }
+
   @override
   bool onMatch(md.InlineParser parser, Match match) {
     final tag = '${match[1]}${match[2] ?? ''}'.toLowerCase();
-    final name = mentions.where((n) => _says(tag, n, addresses)).firstOrNull;
+    // A person the message tags keeps their tag, though an agent's name opens with the same word. Else the longest
+    // several-word name that starts here is the tag, as written; what the pattern matched is its first word.
+    Match? spaced;
+    if (!people.any((n) => _says(tag, n, addresses))) {
+      for (final name in _spaced[tag] ?? const <RegExp>[]) {
+        final said = name.matchAsPrefix(parser.source, parser.pos);
+        if (said != null && said.end > (spaced?.end ?? 0)) spaced = said;
+      }
+    }
+    if (spaced != null) {
+      parser
+        ..addNode(md.Element.text('mention', spaced[0]!))
+        ..consume(spaced[0]!.length - match[0]!.length);
+      return true;
+    }
+    final name = people
+        .followedBy(agents)
+        .where((n) => _says(tag, n, addresses))
+        .firstOrNull;
     parser.addNode(
       name == null
           ? md.Text(match[0]!)
