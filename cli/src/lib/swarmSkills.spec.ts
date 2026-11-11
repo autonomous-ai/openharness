@@ -33,8 +33,8 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   })
 
   // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
-  // lampOS's builders do on their Queue issue, each post opening with @Name for whom it is for (Harness shows who wrote it and
-  // when); a task's own record stays on GitHub, where Harness shows it in the task's chat.
+  // lampOS's builders do on their Queue issue, a post's @Name waking whom it is for (Harness shows who wrote it and when); a
+  // task's own record stays on GitHub, where Harness shows it in the task's chat.
   // Step 1, item 7 of docs/plans/2026-11-10-swarm-plan.md: every agent's basics held 507 words and grew with each incident.
   // What code does left them, and they are held under 200 words: the next rule is code, or the project's own AGENTS.md.
   it('holds every agent\'s basics under 200 words', () => {
@@ -47,20 +47,28 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   })
   it('keeps what code reads from an agent: its name opening each post on GitHub and its branch, and its label on its pull request', () => {
     // githubMentions.ts signedBy: its own post is not brought back to it. githubMerge.ts authorOf: whose pull request it is.
-    expect(SWARM_BASICS).toContain('open each post with your name')
+    expect(SWARM_BASICS).toContain('open each comment with your name')
     expect(SWARM_BASICS).toContain('Branch <your name>/<N>')
     // githubMentions.ts: what is said on a pull request is brought to the agent whose builder label it carries, matched whole:
     // the agent copies the label its task carries, and never spells one from its name.
     expect(SWARM_BASICS).toContain('Your tasks are GitHub issues labelled builder:<your name>')
     expect(SWARM_BASICS).toContain('has that label')
     expect(SWARM_BASICS).not.toContain('Harness tells you your tasks')
+    // Its name on GitHub, where one login posts for the team; never a time, which a model can only guess (the rehearsal of
+    // 2026-11-11: one agent's in UTC, another's local, both wrong).
+    expect(SWARM_BASICS).toContain('On GitHub, open each comment with your name ("Pip: ...").')
+    expect(SWARM_BASICS).not.toMatch(/\d\d:\d\d/)
   })
   it('tells every agent where the team talks and how a post wakes someone', () => {
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
       const rules = swarmBasics(saved.role === 'coordinator').text
       expect(rules).toContain('Your project\'s channel is the team\'s chat')
       expect(rules).toContain('harness super-tab post CHANNEL \'message\' NEW_ID')
-      expect(rules).toContain('Open with @Name to wake someone')
+      expect(rules).toContain('@Name wakes someone.')
+      // anh Dee, 2026-11-11: "it should be like a human conversation", of a PM's replies that read as its own narration.
+      expect(rules).toContain('answer there.')
+      // The review of #4074: a post that answers nothing, such as a PM's hand-off, is as brief; an issue's body need not be.
+      expect(rules).toContain('- Post briefly, as on Slack.')
     }
   })
   // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
