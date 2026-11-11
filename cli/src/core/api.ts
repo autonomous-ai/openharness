@@ -1297,15 +1297,17 @@ type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
-   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics). */
-  basics(lead: boolean): string
+   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics), then the agent's own `agents/<name>.md` in its folder ([own]: the
+   *  folder it starts in and the name it was started under). */
+  basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
 }
 
-/** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
- *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
+/** Give an agent its person attached (Desktop's Attach, started outside the Swarm) its Swarm role at its first restart or
+ *  resume (superTabs/inCore/adoption.ts): the row to launch, or null when the launch is no longer this one's. Absent while
+ *  the Swarm is off. */
 export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
   /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
    *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller

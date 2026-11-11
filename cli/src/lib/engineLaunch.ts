@@ -16,6 +16,7 @@ import { isTerminalEngine, PROCESS_ENGINES, type AgentEngine } from '../engines/
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { OPENCLAW_LAUNCH } from '../engines/openclaw/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
+import { notStoreAppAlias } from './windows/storeAppAlias.js'
 import { windowsEngineArgv } from './windows/launch.js'
 import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from './windows/engineStart.js'
 import { defaultWindowsShell } from './windows/shell.js'
@@ -1416,7 +1417,11 @@ export async function commandAvailableInInteractiveShell(
 ): Promise<boolean | CommandAvailability> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) {
-    const found = binaryOnPath(command) || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+    // Windows: a Store app's alias passes accessSync but is no engine (lib/windows/storeAppAlias.ts), and a launch looks
+    // past it to install the engine. Counted here, New showed an older Claude desktop app's `claude.exe` as Claude Code
+    // installed, so the install it then got came without the dialog announcing it.
+    const found = binaryOnPath(command, process.env, notStoreAppAlias)
+      || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate, process.env, notStoreAppAlias)) : false)
     return detailed ? { status: found ? 'available' : 'missing' } : found
   }
   const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
