@@ -106,8 +106,10 @@ class SuperTabMessageText extends StatelessWidget {
   /// lowercased, a full address with its domain. Not in code or a link. The
   /// backend reads a message's tags by this same rule (superTabs/mentions.ts);
   /// test/fixtures/tag_fixture.json is the table both pass.
-  static List<String> tagsIn(String text) => [
-    for (final match in _Mention.tag.allMatches(_prose(text)))
+  static List<String> tagsIn(String text) => _tagsOf(_prose(text));
+
+  static List<String> _tagsOf(String prose) => [
+    for (final match in _Mention.tag.allMatches(prose))
       '${match[1]}${match[2] ?? ''}'.toLowerCase(),
   ];
 
@@ -124,20 +126,28 @@ class SuperTabMessageText extends StatelessWidget {
     // its chat is, so its text is read once here, for every name asked of it.
     final read =
         (mentions.isNotEmpty || addressed.isNotEmpty) && text.contains('@');
-    final said = read ? tagsIn(text) : const <String>[];
-    // Read once, and only for a name of several words.
+    // Read once, for every name asked of it: its tags, a name of several words, and an agent the post is to.
     String? words;
+    String prose() => words ??= _prose(text);
+    final said = read ? _tagsOf(prose()) : const <String>[];
     bool tags(String name) =>
         said.any((tag) => _says(tag, name, addresses)) ||
-        read && _Mention.whole(name)?.hasMatch(words ??= _prose(text)) == true;
+        read && _Mention.whole(name)?.hasMatch(prose()) == true;
     bool tagged(String name) {
       final stored = storedNames[name];
       return tags(name) || stored != null && tags(stored);
     }
 
     final unsaid = [
-      for (final name in [...mentions, ...addressed])
+      for (final name in mentions)
         if (!tagged(name)) '@$name',
+      // A post to one agent that names it in its words, as a teammate writes a name ("thanks Kai, confirmed"), is addressed
+      // already: its tag besides read "@Kai thanks Kai" (the rehearsal's channel, 2026-11-11). A post to several keeps each
+      // tag, so whom it is to stays said (review of #4097).
+      for (final name in addressed)
+        if (!tagged(name) &&
+            !(addressed.length == 1 && _Mention.writtenIn(text, name, prose)))
+          '@$name',
     ];
     final body = MarkdownBody(
       data: withTags(unsaid, text),
@@ -292,7 +302,24 @@ final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
 final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
 final _linkTarget = RegExp(r'\]\([^)\]]*\)');
 final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
-String _blank(Match match) => match[0]!.replaceAll(RegExp(r'[^\n]'), ' ');
+
+/// What [_prose] blanks can only be where one of these is: a text with none is its own prose. Any scheme's `://` and an
+/// indented line anywhere, so it stays a few microseconds on a long post (review of #4097). `www` is spelled out: `[wW]{3}`
+/// turned off the engine's fast scan, 152 µs against 3 on a 2,300-character post.
+final _mayBlank = RegExp(r'[`~]|\]\(|://|[wW][wW][wW]\.|\n(?: {4}|\t)');
+bool _hasBlanks(String text) =>
+    text.startsWith('    ') ||
+    text.startsWith('\t') ||
+    _mayBlank.hasMatch(text);
+
+/// A match as spaces, its line breaks kept: by length where it has none, as a regex per character cost a long post's read
+/// most of its time (review of #4097).
+String _blank(Match match) {
+  final found = match[0]!;
+  return found.contains('\n')
+      ? found.replaceAll(RegExp(r'[^\n]'), ' ')
+      : ' ' * found.length;
+}
 
 /// [text] with what is never a tag blanked out, as Markdown renders it: fenced
 /// and indented code, code spans, bare links and link destinations.
@@ -302,7 +329,7 @@ String _prose(String text) {
   var indented = false;
   for (var i = 0; i < lines.length; i++) {
     final line = lines[i];
-    final blank = line.replaceAll(RegExp(r'[^\n]'), ' ');
+    final blank = ' ' * line.length;
     if (fence != null) {
       final close = _fence.firstMatch(line);
       if (close != null &&
@@ -399,6 +426,58 @@ class _Mention extends md.InlineSyntax {
             caseSensitive: false,
           );
   }
+
+  /// Whether [text]'s words hold [name] as a teammate writes it: whole and in its own case, in any script, not part of a
+  /// longer word, a path, a file's name or an address ("Kai's" and "done, Kai.", never "kai", "Kai-only", "Kai/README.md",
+  /// "Kai.md" or "Kai@example.com"), and not in code or a link's address. A row is drawn as often as its chat is, so
+  /// its words ([prose], which only blanks code and links) are read only to confirm a name its text holds beside code or a
+  /// link.
+  static bool writtenIn(String text, String name, String Function() prose) {
+    final words = name.trim().split(_gap);
+    bool holds(String source) {
+      final first = words.first;
+      if (first.isEmpty) return false;
+      for (
+        var at = source.indexOf(first);
+        at >= 0;
+        at = source.indexOf(first, at + 1)
+      ) {
+        if (at > 0 && _joins(source[at - 1], before: true)) continue;
+        var end = at + first.length;
+        for (final word in words.skip(1)) {
+          final gap = _spaces.matchAsPrefix(source, end);
+          end = gap != null && source.startsWith(word, gap.end)
+              ? gap.end + word.length
+              : -1;
+          if (end < 0) break;
+        }
+        if (end < 0) continue;
+        final next = end < source.length ? source[end] : '';
+        if (_joins(next, before: false) ||
+            '/.@'.contains(next) &&
+                next.isNotEmpty &&
+                end + 1 < source.length &&
+                _letter.hasMatch(source[end + 1])) {
+          continue;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    // Found by search, not a pattern run over every place in a long post, which cost a row more than main (review of #4097).
+    return holds(text) && (!_hasBlanks(text) || holds(prose()));
+  }
+
+  /// A letter, digit, mark or underscore, in any script.
+  static final _letter = RegExp(r'[\p{L}\p{N}\p{M}_]', unicode: true);
+  static final _spaces = RegExp(r'[^\S\n]+');
+
+  /// Whether [char] makes a name beside it part of something longer: a word, or, before it, a path, an address or a
+  /// hyphenated word.
+  static bool _joins(String char, {required bool before}) =>
+      char.isNotEmpty &&
+      (_letter.hasMatch(char) || char == '-' || before && '@/.'.contains(char));
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {

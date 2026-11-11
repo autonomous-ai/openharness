@@ -98,6 +98,10 @@ export const startRequestSchema = z.object({
 const MAX_REMOVED_MACHINES = 64
 /** The most projects a Swarm holds. */
 export const MAX_PROJECTS = 100
+/** The most deleted projects a Swarm remembers, the newest, and for how long (SuperTabState.deletedProjects): a year, well past any
+ *  computer of its person's that may still ask for one. */
+export const MAX_DELETED_PROJECTS = 200
+export const DELETED_PROJECT_KEEP_MS = 365 * 24 * 60 * 60_000
 
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
@@ -313,6 +317,9 @@ export interface CommandContext {
   /** For `message.delete`: set by the store's one-time removal of notices of retired kinds alone (store.ts removeRetiredNotice,
    *  migration/retiredNotices.ts), never from a request: the notice goes as its author's delete would take it. */
   retiredNotice?: true
+  /** For `project.delete`: set by the store's one-time removal of the "Personal" project alone (store.ts removePersonalProject,
+   *  migration/personalProjectJob.ts), never from a request. */
+  personalProject?: true
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** The name the machine's owner gave it, from its account row (machines.ts accountMachineName); absent when it has none. */
@@ -421,6 +428,11 @@ function dropRemovedRecord(state: SuperTabState, machineId: string, harnessId: s
   if (!state.removedSessions?.length) delete state.removedSessions
 }
 
+/** The fields of the "Personal" project as every Personal Swarm was made with it, or as only the server writes them (its GitHub
+ *  checks): any other is something its person set, and keeps it (project.delete with personalProject). */
+const PERSONAL_PROJECT_KEYS: ReadonlySet<string> = new Set(['id', 'name', 'ownerId', 'ownerGeneration', 'leadConversationId', 'visibility', 'members',
+  'updateMinutes', 'skillMode', 'githubRevision', 'githubSeen'])
+
 /** What becomes of a removed agent's session (removeAgent). */
 type LeavingSession = 'close' | 'keep' | 'closed'
 
@@ -485,6 +497,13 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
   return state.conversations.some(c => c.assignment?.agentId === agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
+/** Whether [userId] is the person whose Personal Swarm [state] is, while they are its only person: its special cases are theirs
+ *  alone, and once they invite someone it is a Swarm like any other for everyone (anh Dee 2026-11-11), as their Desktop takes it
+ *  (desktop personal_projects.dart eligible: no Lead start once anyone else is in it, so nothing may wait for one). They go with
+ *  the channel exemptions and lead.claim. */
+const personalOwner = (state: SuperTabState, userId: string): boolean =>
+  userId === state.ownerId && state.people.length === 1 && isPersonalSwarm(state)
+
 /** When a person's last words go in a project's channel: a Desktop from before #3965's release (2026-11-11) posts New project's
  *  opening request and a Personal Swarm's first message there, and the Desktop of #3965 sends both to the PM's own 1:1 chat,
  *  which lead.start and lead.claim open (pmChat.ts). Those older Desktops keep working until this, 30 days after that release;
@@ -512,7 +531,8 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
   // hid the composer, so an older app, the phone and the web still posted there (2026-11-09). A post, an upload and a voice
   // message all ask this. Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: a Personal Swarm, whose Desktop
   // started a project's PM on the person's first message in its chat (leadWaiting, lead.claim), and New project's opening request.
-  const exempt = now < CHANNEL_EXEMPTIONS_END && (isPersonalSwarm(state) || actor.kind === 'person' && openingRequest(state, actor.userId, group))
+  // Only its owner's: a person invited to it posts as in any Swarm (anh Dee 2026-11-11: a Personal Swarm is a regular one).
+  const exempt = now < CHANNEL_EXEMPTIONS_END && actor.kind === 'person' && (personalOwner(state, actor.userId) || openingRequest(state, actor.userId, group))
   if (actor.kind === 'person' && !group.kind && !exempt) {
     fail('AGENTS_ONLY', 'Only agents post in a project\'s channel. Talk to your agents.', 403)
   }
@@ -777,6 +797,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // Members elsewhere whose main project it was have none now (spec: they ask their person again, build task 9).
     for (const target of state.agents) if (target.mainProjectId === project.id) delete target.mainProjectId
     deleteProject(state, actor, project.id, orphaned, context.now)
+    // Asked for again by the same request, as Desktop asks for a repo's project on every computer of its person's, it stays
+    // deleted after its receipt is gone (30 days), as its receipt says before (store.ts).
+    state.deletedProjects = [...(state.deletedProjects ?? []).filter(d => d.id !== project.id && context.now - d.at < DELETED_PROJECT_KEEP_MS),
+      { id: project.id, at: context.now }].slice(-MAX_DELETED_PROJECTS)
   }
   /** Takes [target] out of the Swarm. Only a confirmed delete or Stop has its host close its session ([session] 'close'); any
    *  other removal leaves it running (anh Dee 2026-11-11: as closing a pane another tab still shows), recorded for its person so
@@ -981,6 +1005,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'project.create': {
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person creates a project and chooses its lead.', 403)
+      // A project's id is the request that made it, which Desktop sends for a repo on every computer of its person's: the server
+      // answers it by the Swarm itself once the request's receipt is gone (30 days). The project it made, to whoever reads it;
+      // never a second one of the same id (PSW-B review of #4098). One deleted since: what its receipt answered.
+      const made = projectsOf(state).find(p => p.id === operationId)
+      if (made) {
+        readProject(state, actor, made.id)
+        Object.assign(result, { projectId: made.id, conversationId: made.leadConversationId })
+        break
+      }
+      if (state.deletedProjects?.some(d => d.id === operationId)) fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
       if (state.paused) fail('PAUSED', 'New work is paused in this swarm.')
       const project = createProject(actor.userId, command.name, command.visibility, command.brief, command.process ?? 'full')
       result.projectId = project.id
@@ -1012,7 +1046,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Only a Personal Swarm: its person's Desktop starts the Lead on their own machine, where their project's folder is. A
       // Team Swarm's project gets its coordinator from a person who chooses it (task #2633).
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person starts a project\'s coordinator.', 403)
-      if (!isPersonalSwarm(state)) fail('PERSONAL_SWARM_ONLY', 'Only a Personal Swarm starts a project\'s coordinator on its first message.', 409)
+      if (!personalOwner(state, actor.userId)) fail('PERSONAL_SWARM_ONLY', 'Only your own Personal Swarm starts a PM this way.', 409)
       if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
       const project = manageProject(state, actor, command.projectId)
       const home = conversation(state, project.leadConversationId)
@@ -1083,6 +1117,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'project.delete': {
+      if (context.personalProject) {
+        // The repo-less project every Personal Swarm was made with (anh Dee 2026-11-11: its projects are its person's repos): it
+        // goes only as it was made, with nothing in it. Nothing ever said in it, dormant chats too (store.ts loads them); no agent,
+        // start, claim, waiting message or PM chat; no invitation landing in it; nothing its person set on it (a repository, a
+        // name, about, status, members, cadence); no machine its deletion would take out with it (projects.ts deleteProject).
+        // One with anything in it stays, a project like any other: nothing of a person's is hidden.
+        const project = projectsOf(state).find(p => p.id === command.projectId)
+        if (!isPersonalSwarm(state) || command.projectId !== 'lead' || !project) fail('NOT_FOUND', 'This project is unavailable.', 404)
+        const groups = state.conversations.filter(c => !isLeads(c) && !isAgentChat(c) && (c.projectId ?? 'lead') === project.id)
+        const asMade = Object.keys(project).every(key => PERSONAL_PROJECT_KEYS.has(key)) && !project.members.length && project.updateMinutes === 5
+          && project.name === state.name && !state.project
+        if (!asMade || groups.some(c => c.lastMessageSequence) || state.agents.some(a => agentProjectId(state, a) === project.id)
+          || state.starts?.some(s => !s.error && groups.some(c => c.id === s.request.conversationId))
+          || state.invitations.some(i => groups.some(c => c.id === i.conversationId)) || state.machines?.some(m => m.scope !== 'swarm')) {
+          fail('PERSONAL_PROJECT_KEPT', 'This project has something in it.', 409)
+        }
+        deleteWholeProject(deletableProject(state, actor, project.id), 'keep')
+        break
+      }
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions. The Swarm's owner deletes one nobody owns (task #3073).
       deleteWholeProject(deletableProject(state, actor, command.projectId), 'close')
@@ -1542,7 +1595,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
       // run the model its role asked for.
-      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused), [], null, SYSTEM_ROW,
+      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, agentDisplayName(state.agents, agentId)), [], null, SYSTEM_ROW,
         undefined, undefined, stableId(operationId, 'launch-refused'))
       break
     }
@@ -2259,9 +2312,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // the post is waiting. Not an agent-only notice (the sender's own) or one told to stop.
       const away = command.agentOnly ? [] : recipients.filter(id => agent(state, id).workDecision !== 'stop' && downSince(state, agent(state, id), context.now))
       if (away.length) effects.result.offline = offlineLine(away.map(id => agentDisplayName(state.agents, id) ?? agent(state, id).name))
-      // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
-      // A Team Swarm's says Not sent, as before.
-      const unled = actor.kind === 'person' && !recipients.length && isPersonalSwarm(state) ? groupProject(state, group) : undefined
+      // A Personal Swarm project chat with no Lead: its own person's message waits for the Lead their Desktop starts (task #2633).
+      // Anyone else's, and a Team Swarm's, says Not sent, as before: nothing starts a Lead for them.
+      const unled = actor.kind === 'person' && !recipients.length && personalOwner(state, actor.userId) ? groupProject(state, group) : undefined
       if (unled && unled.leadConversationId === group.id && state.projects?.includes(unled) && !(group.leadId && group.agentIds.includes(group.leadId))) {
         leadWaits(unled, operationId, context.now)
       }
