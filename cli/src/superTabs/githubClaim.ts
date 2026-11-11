@@ -14,7 +14,7 @@
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
  * agent's (backend superTabs/githubComments.ts).
  */
-import { labelOf } from './assign/crew.js'
+import { labelOf, openPieces } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
 import { hhmm, recordOwn, type VerdictDeps } from './githubVerdict.js'
 import { object, SuperTabHostError } from './wire.js'
@@ -95,8 +95,9 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     for (let page = 1; page <= HELD_PAGES; page++) {
       const holding = await github(() => deps.get(`${issues}?state=open&labels=${encodeURIComponent(mine.includes(',') ? TAKEN : `${mine},${TAKEN}`)}&per_page=${PAGE}&page=${page}`, null))
       if (holding.status !== 200 || !Array.isArray(holding.body)) throw refused(holding.status)
-      // GitHub lists pull requests among issues: a builder's open pull request is not a task it holds.
-      for (const one of holding.body.map(object)) if (!one.pull_request && labelsOf(one.labels).includes(mine)) held.push(Number(one.number))
+      // GitHub lists pull requests among issues: a builder's open pull request is not a task it holds. Nor is a task that
+      // waits on pieces cut off it (githubSplit.ts), which others build.
+      for (const one of holding.body.map(object)) if (!one.pull_request && labelsOf(one.labels).includes(mine) && !openPieces(one)) held.push(Number(one.number))
       if (holding.body.length < PAGE) break
     }
     if (held.length >= CLAIM_LIMIT) {

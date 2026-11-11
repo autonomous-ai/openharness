@@ -32,9 +32,43 @@ export interface Split { repository: string; number: number; size: 's' | 'm' | '
 /** The most open pieces one task has at a time, the ones not yet attached among them. The run's captain cut its hardest
  *  statement into ten areas, and each grew deeper as it proved too big; past ten, a piece is cut from a piece. */
 export const PIECES_MAX = 10
-/** The most pieces one agent cuts in an hour, on this computer: the run's helpers wrote about two tasks an hour each. A flood
+/** The most cuts one agent starts in an hour, on this computer: the run's helpers wrote about two tasks an hour each. A flood
  *  of pieces would push a project's older tasks out of the plan, which reads its newest thousand (githubAssign.ts). */
 export const CUTS_PER_HOUR = 30
+const HOUR_MS = 60 * 60_000
+
+/**
+ * One computer's cuts. Each agent's run one after another, so what a cut reads of its task (its pieces, for PIECES_MAX) is what
+ * the cut before it left; and each is counted as it starts, one that fails too, so thirty sent at once are thirty counted. The
+ * second review of the split sent ninety in three rounds of thirty, and every one was let through: each had read the count
+ * before any had written it. Only the command again, which changes nothing, is not one more. In memory: a restart starts the
+ * hour again.
+ */
+export class Cuts {
+  private readonly started = new Map<string, number[]>()
+  private readonly last = new Map<string, Promise<void>>()
+  constructor(private readonly now: () => number = () => Date.now()) {}
+
+  /** Runs [cut] for [agentId] after its cuts before it, or refuses it when the hour is full. */
+  run<T extends { cut: boolean }>(agentId: string, cut: () => Promise<T>): Promise<T> {
+    const at = this.now(), recent = (this.started.get(agentId) ?? []).filter(began => at - began < HOUR_MS)
+    if (recent.length >= CUTS_PER_HOUR) {
+      return Promise.reject(new SuperTabHostError('CUT_LIMIT', `You started ${recent.length} cuts in the last hour, and ${CUTS_PER_HOUR} is the most. `
+        + 'Build what is cut, or ask your PM to cut the rest.', 429))
+    }
+    this.started.set(agentId, [...recent, at])
+    const made = (this.last.get(agentId) ?? Promise.resolve()).then(cut).then(done => {
+      // Not there any more when it ran for over an hour and a later cut counted the hour afresh.
+      const kept = this.started.get(agentId)!, index = done.cut ? -1 : kept.indexOf(at)
+      if (index >= 0) kept.splice(index, 1)
+      return done
+    })
+    const tail = made.then(() => {}, () => {})
+    this.last.set(agentId, tail)
+    void tail.then(() => { if (this.last.get(agentId) === tail) this.last.delete(agentId) })
+    return made
+  }
+}
 const PAGE = 100, TITLE_MAX = 200, TAKEN = 'status:taken'
 /** How far back an issue this login opened and could not attach is looked for. */
 const LEFT_MS = 60 * 60_000
@@ -75,12 +109,14 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
     throw new SuperTabHostError('REPOSITORY_NOT_PROJECT', `${asked.repository} is not the repository of a project you are in.`, 422)
   }
   // Once the piece is open, a failure names it and says the same command finishes the cut: "nothing was changed" would be false.
-  let made = 0
+  // And while it is being opened, a failure may have left an issue: the same command finds it.
+  let made = 0, opening = false
   const again = () => `#${made} is open and not yet ${at}'s piece in full. Run the same command again: it finishes the cut and opens nothing twice.`
   const github = async (call: () => Promise<GitHubReply>): Promise<GitHubReply> => {
     try { return await call() } catch (error) {
       const said = error instanceof Error ? error.message : 'GitHub could not be reached.'
-      throw new SuperTabHostError('GITHUB_UNAVAILABLE', made ? `${said.replace(/[.!]?$/, '.')} ${again()}` : said, 503)
+      throw new SuperTabHostError('GITHUB_UNAVAILABLE', made ? `${said.replace(/[.!]?$/, '.')} ${again()}`
+        : opening ? `${said.replace(/[.!]?$/, '.')} An issue may have been opened for ${at}. Run the same command again: it finds it, and opens nothing twice.` : said, 503)
     }
   }
   const refused = (status: number) => new SuperTabHostError('GITHUB_REFUSED',
@@ -138,7 +174,9 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
       }
       // What the task says of every piece of it: its area, what its machine needs, how urgent it is. Not yet its size.
       const carried = labels.filter(label => label.startsWith('part:') || label.startsWith('needs:') || /^p[0-2]$/.test(label))
+      opening = true
       const opened = await github(() => deps.send('POST', issues, { title: asked.title, body: `${asked.text.trim() ? `${asked.text.trim()}\n\n` : ''}${marker}`, labels: carried }))
+      opening = false
       if (opened.status !== 201) throw refused(opened.status)
       piece = object(opened.body)
       if (!Number.isSafeInteger(piece.number) || !Number.isSafeInteger(piece.id)) {
@@ -147,13 +185,23 @@ export async function splitTask(deps: VerdictDeps, builder: { name: string; repo
     }
     made = Number(piece.number)
     const reply = await github(() => deps.send('POST', `${task}/sub_issues`, { sub_issue_id: piece!.id }))
+    // GitHub failing or limiting on its side is worth the command again: its limit on writes answers 403 or 429, with no word of
+    // when it lifts. A 403 may also be a login that may not attach, which the same command will not get past.
+    if (reply.status >= 500 || reply.status === 429 || reply.resetAt !== null) throw refused(reply.status)
+    if (reply.status === 403) {
+      throw new SuperTabHostError('GITHUB_REFUSED', `GitHub answered 403 for ${at}. ${again()} If it answers 403 again, this login may not attach it: close #${made}.`, 502)
+    }
     if (reply.status !== 201) {
-      // GitHub failing or limiting on its side is worth the command again. Anything else it would answer again: a task eight
-      // levels deep or with a hundred pieces, a login that may not attach. The issue is closed, so nothing is left open.
-      if (reply.status >= 500 || reply.status === 429 || reply.resetAt !== null) throw refused(reply.status)
-      const closed = await deps.send('PATCH', `${issues}/${made}`, { state: 'closed', state_reason: 'not_planned' }).then(answer => answer.status, () => 0)
-      throw new SuperTabHostError('PIECE_REFUSED', `GitHub will not make #${made} a piece of ${at} (it answered ${reply.status}): a task holds a hundred pieces, eight levels deep. `
-        + (closed === 200 ? `#${made} was closed again.` : `#${made} is still open: close it.`), 409)
+      // Refused as it would be again (a task holds a hundred pieces, eight levels deep), unless the piece is under the task
+      // after all: an attach whose answer was lost, or a list read before GitHub showed it. Read again before anything is
+      // closed: a piece rightly attached was closed as not planned otherwise (second review).
+      const now = await github(() => deps.get(`${task}/sub_issues?per_page=${PAGE}`, null))
+      if (now.status !== 200 || !Array.isArray(now.body)) throw refused(now.status)
+      if (!now.body.map(object).some(one => Number(one.number) === made)) {
+        const closed = await deps.send('PATCH', `${issues}/${made}`, { state: 'closed', state_reason: 'not_planned' }).then(answer => answer.status, () => 0)
+        throw new SuperTabHostError('PIECE_REFUSED', `GitHub will not make #${made} a piece of ${at}: it answered ${reply.status}. A task holds at most a hundred pieces, eight levels deep. `
+          + (closed === 200 ? `#${made} was closed again.` : `#${made} is still open: close it.`), 409)
+      }
     }
     changed = attachedNow = true
   }

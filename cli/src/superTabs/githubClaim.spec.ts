@@ -230,6 +230,12 @@ describe('a task\'s claim, made by command', () => {
     t.repo.issues.set(50, { number: 50, state: 'open', labels: [{ name: 'builder:pip' }] })
     expect(await refusal(t.take(50))).toEqual({ code: 'CLAIM_LIMIT', message: 'You hold 4 tasks already (#1, #2, #3, #34), and 4 is the most. Finish or release one first.' })
     expect(t.labelsOf(50)).toEqual(['builder:pip'])
+    // A task that waits on pieces cut off it is others' to build (githubSplit.ts): it is not one of the four.
+    Object.assign(t.repo.issues.get(2)!, { sub_issues_summary: { total: 3, completed: 1 } })
+    expect((await t.take(50)).taken).toBe(true)
+    t.repo.issues.set(51, { number: 51, state: 'open', labels: [{ name: 'builder:pip' }] })
+    Object.assign(t.repo.issues.get(2)!, { sub_issues_summary: { total: 3, completed: 3 } })
+    expect(await refusal(t.take(51))).toMatchObject({ code: 'CLAIM_LIMIT', message: expect.stringContaining('You hold 5 tasks already (#1, #2, #3, #34, #50)') })
     // GitHub reads a comma in its labels filter as "and": a name with one is counted by the taken label alone.
     const junior = { ...t.pip, name: 'Pip, Jr' }
     for (const number of [60, 61, 62, 63, 64]) t.repo.issues.set(number, { number, state: 'open', labels: [{ name: 'builder:pip,-jr' }, ...(number < 64 ? [{ name: 'status:taken' }] : [])] })

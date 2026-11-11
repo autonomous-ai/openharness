@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { PIECES_MAX, sameCut, splitAsked, splitTask } from './githubSplit.js'
+import { Cuts, CUTS_PER_HOUR, PIECES_MAX, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -103,6 +103,62 @@ function setup() {
 interface Failure { method: string; path: RegExp; status: number; resetAt?: number }
 const refusal = async (made: Promise<unknown>) => made.then(() => null, error => error instanceof SuperTabHostError ? { code: error.code, message: error.message } : { thrown: error })
 const AGAIN = '#57 is open and not yet acme/app#34\'s piece in full. Run the same command again: it finishes the cut and opens nothing twice.'
+
+describe('one computer\'s cuts', () => {
+  const HOUR = 60 * 60_000
+  const refused = { code: 'CUT_LIMIT', message: 'You started 30 cuts in the last hour, and 30 is the most. Build what is cut, or ask your PM to cut the rest.' }
+  it('counts a cut as it starts, so as many sent at once as an hour holds are let through and no more', async () => {
+    const clock = { now: NOW }, cuts = new Cuts(() => clock.now)
+    let ran = 0
+    const round = () => Promise.all(Array.from({ length: CUTS_PER_HOUR }, () => refusal(cuts.run('pip', async () => { ran++; return { cut: true } }))))
+    expect(await round()).toEqual(Array(CUTS_PER_HOUR).fill(null))
+    expect(await round()).toEqual(Array(CUTS_PER_HOUR).fill(refused))
+    expect(ran).toBe(CUTS_PER_HOUR)
+    // Another agent's hour is its own; this one's is over an hour after its cuts began.
+    expect(await cuts.run('juno', async () => ({ cut: true }))).toEqual({ cut: true })
+    clock.now += HOUR - 1
+    expect(await refusal(cuts.run('pip', async () => ({ cut: true })))).toEqual(refused)
+    clock.now += 1
+    expect(await cuts.run('pip', async () => ({ cut: true }))).toEqual({ cut: true })
+  })
+
+  it('counts a cut that failed, and not the command again that changed nothing', async () => {
+    const cuts = new Cuts(() => NOW)
+    for (let n = 0; n < CUTS_PER_HOUR; n++) expect(await cuts.run('pip', async () => ({ cut: false }))).toEqual({ cut: false })
+    for (let n = 0; n < CUTS_PER_HOUR; n++) expect(await refusal(cuts.run('pip', async () => { throw new SuperTabHostError('PIECE_REFUSED', 'No.', 409) }))).toMatchObject({ code: 'PIECE_REFUSED' })
+    expect(await refusal(cuts.run('pip', async () => ({ cut: true })))).toEqual(refused)
+  })
+
+  it('takes nothing off the count for a command again that ran past its own hour, and reads this computer\'s clock when given none', async () => {
+    const clock = { now: NOW }, cuts = new Cuts(() => clock.now)
+    let finish = (_done: { cut: boolean }) => {}
+    const slow = cuts.run('pip', () => new Promise<{ cut: boolean }>(resolve => { finish = resolve }))
+    await Promise.resolve()
+    clock.now += HOUR + 1
+    // The next cut waits for the slow one, and counts the hour afresh as it starts: the slow one is no longer in it.
+    const next = cuts.run('pip', async () => ({ cut: true }))
+    finish({ cut: false })
+    expect(await slow).toEqual({ cut: false })
+    expect(await next).toEqual({ cut: true })
+    for (let n = 1; n < CUTS_PER_HOUR; n++) await cuts.run('pip', async () => ({ cut: true }))
+    expect(await refusal(cuts.run('pip', async () => ({ cut: true })))).toEqual(refused)
+    expect(await new Cuts().run('pip', async () => ({ cut: true }))).toEqual({ cut: true })
+  })
+
+  it('runs one agent\'s cuts one after another, a failed one among them, and another agent\'s beside them', async () => {
+    const cuts = new Cuts(() => NOW), order: string[] = []
+    const cut = (agent: string, name: string, fail = false) => cuts.run(agent, async () => {
+      order.push(`${name} starts`)
+      await new Promise(resolve => setImmediate(resolve))
+      order.push(`${name} ends`)
+      if (fail) throw new Error('No.')
+      return { cut: true }
+    })
+    await Promise.allSettled([cut('pip', 'a'), cut('pip', 'b', true), cut('juno', 'x'), cut('pip', 'c')])
+    expect(order.filter(step => !step.startsWith('x'))).toEqual(['a starts', 'a ends', 'b starts', 'b ends', 'c starts', 'c ends'])
+    expect(order.indexOf('x starts')).toBeLessThan(order.indexOf('a ends'))
+  })
+})
 
 describe('a piece cut off a task, by command', () => {
   it('opens the piece with the task\'s own labels, makes it a sub-issue, sizes it last, says so on the task and records that', async () => {
@@ -236,16 +292,60 @@ describe('a piece cut off a task, by command', () => {
   })
 
   it('closes again an issue GitHub will not make a piece, and says so', async () => {
-    for (const status of [422, 403, 404, 410]) {
+    for (const status of [422, 404, 410]) {
       const t = setup()
       t.repo.fail = { method: 'POST', path: /\/sub_issues$/, status }
-      expect(await refusal(t.split())).toEqual({ code: 'PIECE_REFUSED', message: `GitHub will not make #57 a piece of acme/app#34 (it answered ${status}): `
-        + 'a task holds a hundred pieces, eight levels deep. #57 was closed again.' })
+      expect(await refusal(t.split())).toEqual({ code: 'PIECE_REFUSED', message: `GitHub will not make #57 a piece of acme/app#34: it answered ${status}. `
+        + 'A task holds at most a hundred pieces, eight levels deep. #57 was closed again.' })
       expect(t.calls()).toEqual(['POST /issues', 'POST /issues/34/sub_issues', 'PATCH /issues/57'])
       expect(t.sent[2]!.body).toEqual({ state: 'closed', state_reason: 'not_planned' })
       expect(t.repo.issues.get(57)).toMatchObject({ state: 'closed' })
       expect(t.record).not.toHaveBeenCalled()
     }
+  })
+
+  // GitHub's limit on writes answers 403 with no word of when it lifts: closing the piece then would undo a cut the same
+  // command finishes a minute on. A login that may not attach answers 403 too, and is told what to do.
+  it('leaves open, unsized, a piece GitHub answers 403 for, and says how it ends either way', async () => {
+    const t = setup()
+    t.repo.fail = { method: 'POST', path: /\/sub_issues$/, status: 403 }
+    expect(await refusal(t.split())).toEqual({ code: 'GITHUB_REFUSED', message: `GitHub answered 403 for acme/app#34. ${AGAIN} If it answers 403 again, this login may not attach it: close #57.` })
+    expect(t.repo.issues.get(57)).toMatchObject({ state: 'open', labels: [{ name: 'part:sync' }, { name: 'needs:macos' }, { name: 'p1' }] })
+    t.repo.fail = null
+    expect(await t.split()).toMatchObject({ number: 57, cut: true, sized: true })
+  })
+
+  // An attach whose answer was lost, sent again, is refused as already there; so is one a list read too early did not show.
+  it('reads the task\'s pieces again before it closes one GitHub refused, and goes on with one that is there after all', async () => {
+    const t = setup(), send = t.send
+    let lost = true
+    const cut = () => splitTask({ get: t.get, record: t.record, login: async () => 'pips-person', now: () => NOW,
+      send: async (method, path, body) => {
+        const reply = await send(method, path, body)
+        // The first attach lands and answers 422, as GitHub answers the second of two.
+        if (lost && method === 'POST' && path.endsWith('/sub_issues')) { lost = false; return { ...reply, status: 422, body: null } }
+        return reply
+      } }, t.pip, { repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: '' })
+    expect(await cut()).toEqual({ url: 'https://github.com/acme/app/issues/57', number: 57, cut: true, sized: true })
+    expect(t.calls()).toEqual(['POST /issues', 'POST /issues/34/sub_issues', 'POST /issues/57/labels', 'POST /issues/34/comments'])
+    expect(t.repo.issues.get(57)).toMatchObject({ state: 'open' })
+    // The read it would close on is not given: nothing is closed, and the same command goes on from there.
+    const u = setup()
+    u.repo.fail = { method: 'POST', path: /\/sub_issues$/, status: 422 }
+    let reads = 0
+    const made = splitTask({ send: u.send, record: u.record, login: async () => 'pips-person', now: () => NOW,
+      get: async (path, etag) => path.includes('/sub_issues') && ++reads === 2 ? { status: 502, etag: null, resetAt: null, body: null } : u.get(path, etag) },
+    u.pip, { repository: 'acme/app', number: 34, size: 'm', title: 'Sync the theme', text: '' })
+    expect(await refusal(made)).toEqual({ code: 'GITHUB_REFUSED', message: `GitHub answered 502 for acme/app#34. ${AGAIN}` })
+    expect(u.repo.issues.get(57)).toMatchObject({ state: 'open' })
+    expect(u.calls()).toEqual(['POST /issues', 'POST /issues/34/sub_issues'])
+  })
+
+  it('says an issue may be open when GitHub did not answer as it was opened', async () => {
+    const t = setup()
+    t.repo.fail = { method: 'POST', path: /\/issues$/, status: 0 }
+    expect(await refusal(t.split())).toEqual({ code: 'GITHUB_UNAVAILABLE',
+      message: 'fetch failed. An issue may have been opened for acme/app#34. Run the same command again: it finds it, and opens nothing twice.' })
   })
 
   it('says an issue it could not close again when GitHub does not answer', async () => {
@@ -286,8 +386,8 @@ describe('a piece cut off a task, by command', () => {
     answers['POST /repos/acme/app/issues'] = { status: 201, body: { id: 5700, number: 57 } }
     answers['POST /repos/acme/app/issues/34/sub_issues'] = { status: 422, body: null }
     answers['PATCH /repos/acme/app/issues/57'] = { status: 403, body: null }
-    expect(await refusal(made())).toEqual({ code: 'PIECE_REFUSED', message: 'GitHub will not make #57 a piece of acme/app#34 (it answered 422): '
-      + 'a task holds a hundred pieces, eight levels deep. #57 is still open: close it.' })
+    expect(await refusal(made())).toEqual({ code: 'PIECE_REFUSED', message: 'GitHub will not make #57 a piece of acme/app#34: it answered 422. '
+      + 'A task holds at most a hundred pieces, eight levels deep. #57 is still open: close it.' })
   })
 
   it('takes for its own only an issue this login opened in the last hour for this task', async () => {

@@ -1036,8 +1036,8 @@ describe('a verdict by command', () => {
     // An agent cuts no more than thirty pieces in an hour here: the next is refused, with nothing asked of GitHub.
     for (let n = 3; n <= CUTS_PER_HOUR; n++) expect(await split({ title: `Piece ${n}` })).toMatchObject({ ok: true })
     const asked = t.github.get.mock.calls.length
-    expect(await split({ title: 'One too many' })).toEqual({ error: 'CUT_LIMIT',
-      detail: 'You cut 30 pieces in the last hour, and 30 is the most. Build what is cut, or ask your PM to cut the rest.' })
+    expect(await split({ title: 'One too many' })).toMatchObject({ error: 'CUT_LIMIT',
+      detail: 'You started 30 cuts in the last hour, and 30 is the most. Build what is cut, or ask your PM to cut the rest.' })
     expect(t.github.get.mock.calls).toHaveLength(asked)
     // A claim is not counted with them.
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)).not.toHaveProperty('error', 'CUT_LIMIT')
