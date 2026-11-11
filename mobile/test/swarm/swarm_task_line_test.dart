@@ -36,12 +36,6 @@ Map<String, dynamic> taskLine({
   },
 };
 
-Map<String, dynamic> legacyShip(String target, int sequence) => {
-  ...taskLine(id: 'ship-$target', sequence: sequence),
-  'text': 'Shipped: $target',
-  'source': {'kind': 'ship', 'conversationId': target, 'title': target},
-};
-
 FakeSwarm taskLineBackend(
   List<Map<String, dynamic>> page, {
   bool target = true,
@@ -362,17 +356,6 @@ void main() {
     expect(find.byKey(const ValueKey('swarm-quote-line-1')), findsNothing);
     expect(find.textContaining('Reply to'), findsOneWidget);
     expect(find.byType(SwarmConversationPage), findsOneWidget);
-  });
-
-  testWidgets('legacy ship text stays readable beside an ordinary task root', (
-    tester,
-  ) async {
-    await pumpTaskChat(
-      tester,
-      taskLineBackend([taskLine(), legacyShip('task-1', 3)]),
-    );
-    expect(find.text('Fix login · working'), findsOneWidget);
-    expect(find.text('Shipped: task-1'), findsOneWidget);
   });
 
   test('a task root with no tag follows ordinary same-author grouping', () {

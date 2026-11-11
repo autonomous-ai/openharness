@@ -13,12 +13,11 @@ import 'swarm_session.dart';
 import 'swarm_switch_pm.dart';
 
 // The notes in a chat that are not chat from their author, drawn as Desktop
-// draws them: a routing note (route_row.dart), a note about a terminal
-// (terminal_row.dart), and a Buddy's proposal as one line that opens its
+// draws them: a note about a terminal (terminal_row.dart), and a Buddy's proposal as one line that opens its
 // thread (task_line.dart). Each has no author heading, reply or receipt.
 
 /// The reader of the Swarm whose chat [conversationId] is; null until one is
-/// read (as the ship card finds its people).
+/// read.
 SwarmReader? swarmReaderOf(BuildContext context, String conversationId) {
   final inbox = SwarmScope.of(context)?.inbox;
   if (inbox == null) return null;
@@ -68,145 +67,6 @@ class _NoteAction extends StatelessWidget {
       ),
     ),
   );
-}
-
-/// "Routed to …" with Details, read only (Desktop's `SuperTabRouteRow`).
-class SwarmRouteRow extends StatefulWidget {
-  const SwarmRouteRow({super.key, required this.message, required this.route});
-  final SuperTabMessage message;
-  final SuperTabRoute route;
-
-  @override
-  State<SwarmRouteRow> createState() => _SwarmRouteRowState();
-}
-
-class _SwarmRouteRowState extends State<SwarmRouteRow> {
-  Map<String, dynamic>? _details;
-  bool _expanded = false, _loading = false, _failed = false;
-
-  /// The CLI's titleOf writes "name · engine model effort · machine"; a name
-  /// with separators, or a title in another form, is kept whole.
-  String get _target {
-    final title = widget.route.pick.title;
-    final parts = RegExp(r'^(.*) · ((?:Claude|Codex) .*) · (.*)$')
-        .firstMatch(title);
-    if (parts == null) return title;
-    final name = parts.group(1)!;
-    return name == 'New agent'
-        ? 'new ${parts.group(2)!.split(' ').first} agent'
-        : name;
-  }
-
-  String get _how => switch (widget.route.via) {
-    'jev' => 'Jev ${((widget.route.p ?? 0) * 100).round()}%',
-    'only' => 'Only available candidate',
-    // Task #2901 (Ken, 2026-11-04): the route names no pick; the coordinator
-    // chose by the project's Routing instructions, and its start says which.
-    'instructions' => 'Chosen by the project\'s Routing instructions',
-    _ => 'Ranked by strength, price and quota',
-  };
-
-  Future<void> _load() async {
-    if (_loading || _details != null) return;
-    final reader = swarmReaderOf(context, widget.message.conversationId);
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    try {
-      if (reader == null) throw StateError('No Swarm read yet');
-      final answer = superTabMap(
-        await reader.request(
-          'GET',
-          '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/route-decisions/'
-              '${Uri.encodeComponent(widget.route.decisionId)}',
-        ),
-      );
-      if (mounted) setState(() => _details = answer);
-    } catch (_) {
-      if (mounted) setState(() => _failed = true);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  void _toggle() {
-    setState(() => _expanded = !_expanded);
-    if (_expanded) unawaited(_load());
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final style = _quiet();
-    return Padding(
-      padding: _inset,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Flexible(child: Text('Routed to $_target', style: style)),
-              Semantics(
-                expanded: _expanded,
-                child: _NoteAction(
-                  label: _expanded ? 'Hide details' : 'Details',
-                  onTap: _toggle,
-                ),
-              ),
-            ],
-          ),
-          if (_expanded) _detailsView(style),
-        ],
-      ),
-    );
-  }
-
-  Widget _detailsView(TextStyle style) {
-    Text line(String words) => Text(words, style: style);
-    final r = widget.route;
-    final record = superTabMap(_details?['record'] ?? const {});
-    final candidates = (record['candidates'] as List? ?? const []).map(
-      superTabMap,
-    );
-    final excluded = (record['excluded'] as List? ?? const []).map(superTabMap);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      spacing: AppSpace.xs,
-      children: [
-        line(r.pick.title),
-        if (r.why.isNotEmpty) line(r.why),
-        line('Selection: $_how'),
-        if (_loading) line('Loading details…'),
-        if (_failed)
-          Row(
-            children: [
-              Flexible(child: line('Could not load this decision.')),
-              _NoteAction(label: 'Retry', onTap: () => unawaited(_load())),
-            ],
-          ),
-        if (record['instructionsRevision'] case final num revision)
-          line(
-            revision == 0
-                ? 'Relied on the built-in instructions'
-                : 'Relied on instructions revision ${revision.toInt()}',
-          ),
-        if (candidates.isNotEmpty) ...[
-          line('Considered'),
-          for (final c in candidates)
-            if (c['title'] case final String title)
-              line(
-                [
-                  title,
-                  if (c['label'] case final String label) label,
-                ].join(' — '),
-              ),
-        ],
-        for (final e in excluded)
-          line('Unavailable: ${e['title']} — ${e['reason']}'),
-      ],
-    );
-  }
 }
 
 /// A Lead's typing into a worker's terminal, or a machine's alert about one

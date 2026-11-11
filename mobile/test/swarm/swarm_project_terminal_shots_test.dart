@@ -12,7 +12,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -143,7 +142,6 @@ void main() {
               home: const SwarmProjectPage(
                 swarmId: tab,
                 projectId: project,
-                tabs: SwarmProjectTab.homeC,
               ),
             ),
           ),

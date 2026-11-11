@@ -13,21 +13,12 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'profile_model.dart';
 import 'swarm_face.dart';
-import 'team_glance.dart';
 
 /// The pieces Swarm's screens are drawn with, as the approved prototype v2
 /// draws them: a top bar with its title beside the menu or back button,
 /// captions in sentence case, cards of rows, round avatars, a project's
 /// initial in a tile, filled counts, and buttons a thumb can find. Every
 /// colour is one of the app's own tokens.
-
-/// The colour of an agent's state: working green, waiting yellow, down red.
-Color swarmStateColor(SwarmAgentState state) => switch (state) {
-  SwarmAgentState.working => AppColors.success,
-  SwarmAgentState.waiting || SwarmAgentState.stuck => AppColors.warning,
-  SwarmAgentState.down => AppColors.danger,
-  SwarmAgentState.limited || SwarmAgentState.idle => AppPalette.textFaint,
-};
 
 /// The colour [id]'s avatar takes, the same on every screen and every run.
 Color swarmAvatarColor(String id) {
