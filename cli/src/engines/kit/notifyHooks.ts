@@ -33,9 +33,15 @@ export function hookScriptCandidates(dir: string, script: string | undefined, pl
 }
 export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
 
+/** The notify.mjs every hook line names, when it is not there; null when it is. */
+export function missingHookScript(): string | null {
+  return existsSync(HOOK_SCRIPT) ? null : HOOK_SCRIPT
+}
+
 /** Refuses an install whose hook lines would name a notify.mjs that is not there ([HookScriptMissing]). */
 export function requireHookScript(): void {
-  if (!existsSync(HOOK_SCRIPT)) throw new HookScriptMissing(HOOK_SCRIPT)
+  const missing = missingHookScript()
+  if (missing) throw new HookScriptMissing(missing)
 }
 
 /** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
