@@ -596,6 +596,34 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.state.main.at(-1)!.files).toEqual(['cli/src/f4.ts', 'cli/src/f5.ts'])
   })
 
+  // GitHub refuses a merge with a 405 as the base moves, too. The next way must not land the train on a base it was not tested on.
+  it('sends no second way when the base moved as GitHub refused the merge commit: the train is closed and built again', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const built = f.state.sent.length, branch = f.train().head.ref
+    f.state.answer = (method, path) => {
+      if (method !== 'PUT' || path !== '/pulls/900/merge') return undefined
+      f.moveMain(['cli/src/other.ts'])
+      return { status: 405 }
+    }
+    await f.ends(PASSED)
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'PATCH /pulls/900', `DELETE /git/refs/heads/${branch}`])
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', merged_at: null, title: 'Train: #4 #5' })
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: main moved under it')
+  })
+
+  it('sends no second way when the head moved (409): nothing lands', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const built = f.state.sent.length
+    f.state.answer = (method, path) => method === 'PUT' && path === '/pulls/900/merge' ? { status: 409 } : undefined
+    await f.ends(PASSED)
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge'])
+    expect(f.train().state).toBe('open')
+  })
+
   it('says once on the train that GitHub refuses its merge every way, and leaves it open for a person', async () => {
     const f = setup()
     f.add(4); f.add(5)
