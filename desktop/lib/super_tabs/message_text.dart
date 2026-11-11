@@ -304,8 +304,9 @@ final _linkTarget = RegExp(r'\]\([^)\]]*\)');
 final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
 
 /// What [_prose] blanks can only be where one of these is: a text with none is its own prose. Any scheme's `://` and an
-/// indented line anywhere, so it stays a few microseconds on a long post (review of #4097).
-final _mayBlank = RegExp(r'[`~]|\]\(|://|[wW]{3}\.|\n(?: {4}|\t)');
+/// indented line anywhere, so it stays a few microseconds on a long post (review of #4097). `www` is spelled out: `[wW]{3}`
+/// turned off the engine's fast scan, 152 µs against 3 on a 2,300-character post.
+final _mayBlank = RegExp(r'[`~]|\]\(|://|[wW][wW][wW]\.|\n(?: {4}|\t)');
 bool _hasBlanks(String text) =>
     text.startsWith('    ') ||
     text.startsWith('\t') ||

@@ -278,6 +278,9 @@ void main() {
       say(server, 'Faye', 'Juno/README.md is updated.', to: ['juno']);
       say(server, 'Faye', 'Juno.md is updated.', to: ['juno']);
       say(server, 'Faye', 'see src/Juno now.', to: ['juno']);
+      say(server, 'Faye', 'see [the guide](Juno) first', to: ['juno']);
+      say(server, 'Faye', 'see www.example.com/?who=Juno now', to: ['juno']);
+      say(server, 'Faye', '    Juno says hi', to: ['juno']);
       say(server, 'Faye', 'mail Juno@example.com about it.', to: ['juno']);
       say(
         server,
@@ -301,6 +304,9 @@ void main() {
         'README.md is updated',
         'Juno.md is updated',
         'see src/Juno now.',
+        'the guide',
+        'who=Juno now',
+        'Juno says hi',
         'about it',
         'first.',
         'later.',
