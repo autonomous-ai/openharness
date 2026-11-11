@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/leaderboard/leaderboard_page.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -217,13 +218,24 @@ void main() {
       await tap(tester, key('super-human-dee'));
       // The bar above names the page: the page does not say it again.
       expect(find.text('Leaderboard'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabLeaderboardPage),
+          matching: find.text('Leaderboard'),
+        ),
+        findsNothing,
+      );
       for (final (pill, words) in [
         ('leaderboard-week', 'This week'),
         ('leaderboard-all', 'All time'),
       ]) {
+        final box = tester.getRect(key(pill));
+        final label = tester.getRect(find.text(words));
+        // Laid out at its own height and in the pill's middle, not drawn at the top of the pill's whole height.
+        expect(label.height, lessThan(box.height), reason: words);
         expect(
-          tester.getCenter(find.text(words)).dy,
-          moreOrLessEquals(tester.getCenter(key(pill)).dy, epsilon: 0.5),
+          label.center.dy,
+          moreOrLessEquals(box.center.dy, epsilon: 0.5),
           reason: words,
         );
       }
