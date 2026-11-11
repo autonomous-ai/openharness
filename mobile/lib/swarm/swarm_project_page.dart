@@ -70,9 +70,9 @@ Route<void> swarmChatRoute({
 );
 
 /// A chat opened by its id. A project's own chat is that project, so it
-/// opens as the project's page ([SwarmProjectPage], on Chat at
-/// [messageId]); any other — work, a Buddy chat, one not open to the
-/// person — as its chat page, which says what it cannot show.
+/// opens as the project's page ([SwarmProjectPage], at [messageId]); any
+/// other — an agent's chat, a Buddy chat, one not open to the person — as
+/// its chat page, which says what it cannot show.
 ///
 /// Which it is, only the Swarm's read knows: in that Swarm alone, so an id
 /// from another Swarm names nothing. Until it is read the chat page shows,
@@ -269,9 +269,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   void _findInChat() => _findRequests.value++;
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
-  /// reader, whether there are several Swarms, why the list was not read.
+  /// reader, and why the list was not read.
   SwarmReader? _reader;
-  bool _several = false;
   String? _listError;
 
   /// A read of the Swarm since the page opened has finished ([_readOnOpen]).
@@ -321,18 +320,13 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   void _inboxChanged() {
     final inbox = _session?.inbox;
     if (inbox == null) return;
-    final seen = (
-      inbox.reader(widget.swarmId),
-      inbox.swarms.length > 1,
-      inbox.error,
-    );
-    if (seen != (_reader, _several, _listError)) setState(_seeInbox);
+    final seen = (inbox.reader(widget.swarmId), inbox.error);
+    if (seen != (_reader, _listError)) setState(_seeInbox);
   }
 
   void _seeInbox() {
     final inbox = _session?.inbox;
     _reader = inbox?.reader(widget.swarmId);
-    _several = (inbox?.swarms.length ?? 0) > 1;
     _listError = inbox?.error;
   }
 

@@ -1783,11 +1783,17 @@ class SuperTabMessage {
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
 
-  /// A line the backend posted for an instructions save: no chat row and
-  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
-  /// #3165). The backend posts none since #3132; the History keeps every
-  /// revision.
-  bool get instructionsSave => source['kind'] == 'instructions';
+  /// A note v1-v3 posted that v4 has no row for: an instructions save (#3165),
+  /// a routing note and its override, a ship line. No chat row and nothing
+  /// unread: the backend posts none now and removes the old ones a page at a
+  /// time, so one may still be read until it is gone.
+  bool get retiredNotice => _retiredKinds.contains(source['kind']);
+  static const _retiredKinds = {
+    'instructions',
+    'route',
+    'route-override',
+    'ship',
+  };
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and

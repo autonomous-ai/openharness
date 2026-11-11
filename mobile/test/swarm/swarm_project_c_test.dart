@@ -11,7 +11,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_code_block.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
@@ -185,50 +184,9 @@ void main() {
     },
   };
 
-  /// [fake] whose first read has Nova's g1 progress 4m 30s and Juno's g2
-  /// 2h before [at].
-  FakeSwarm timed(FakeSwarm fake, DateTime at) {
-    final load = fake.routes['/api/super-tabs/$tab/parts']!;
-    fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
-      final read = (await load(body))! as Map<String, dynamic>;
-      read['groups'] = [
-        for (final g in (read['groups'] as List).cast<Map<String, dynamic>>())
-          switch (g['key']) {
-            'g1' => {
-              ...g,
-              'data': progressed(
-                g['data'] as Map<String, dynamic>,
-                at,
-                const Duration(minutes: 4, seconds: 30),
-              ),
-            },
-            'g2' => {
-              ...g,
-              'data': progressed(
-                g['data'] as Map<String, dynamic>,
-                at,
-                const Duration(hours: 2),
-              ),
-            },
-            _ => g,
-          },
-      ];
-      return read;
-    };
-    return fake;
-  }
-
   /// The page with its Leaderboard sheet open.
   Future<SwarmHost> leaderboard(WidgetTester tester, FakeSwarm fake) =>
       fromMenu(tester, fake, 'swarm-project-menu-leaderboard');
-
-  /// The words of the row keyed [k], its rich text included.
-  String said(WidgetTester tester, String k) => [
-    for (final text in tester.widgetList<RichText>(
-      find.descendant(of: key(k), matching: find.byType(RichText)),
-    ))
-      text.text.toPlainText(),
-  ].join(' | ');
 
   /// How a screen reader says the row keyed [k].
   String heard(WidgetTester tester, String k) =>
@@ -720,16 +678,6 @@ void main() {
   });
 
   group('the project screen', () {
-    /// What the header's line under the name says, whole.
-    String? teamLine(WidgetTester tester) => tester
-        .widget<Text>(
-          find.descendant(
-            of: key('swarm-project-team-line'),
-            matching: find.byType(Text),
-          ),
-        )
-        .data;
-
     testWidgets('has no tab bar: its chat fills the screen under its header', (
       tester,
     ) async {

@@ -298,6 +298,33 @@ void main() {
     expect(find.textContaining('See revision'), findsNothing);
   });
 
+  testWidgets('a v3 routing note, its override and a ship line are no chat '
+      'row, as the backend removes them', (tester) async {
+    await show(
+      tester,
+      backend([
+        row('said', 2, 'A real update', {}),
+        row('routed', 3, 'Routed to Nico', {
+          'kind': 'route',
+          'decisionId': 'd1',
+          'pick': {'id': 'c0', 'title': 'Nico'},
+        }),
+        row('override', 4, 'Route changed to Ivy', {'kind': 'route-override'}),
+        row('shipped', 5, 'Shipped #12', {'kind': 'ship'}),
+        row('later', 6, 'Next', {}),
+      ]),
+    );
+    expect(inRow('said', find.text('A real update')), findsOneWidget);
+    expect(inRow('later', find.text('Next')), findsOneWidget);
+    for (final gone in [
+      'Routed to Nico',
+      'Route changed to Ivy',
+      'Shipped #12',
+    ]) {
+      expect(find.textContaining(gone), findsNothing, reason: gone);
+    }
+  });
+
   group('an ordinary message says', () {
     testWidgets('Terminal answer above a terminal\'s answer', (tester) async {
       await show(

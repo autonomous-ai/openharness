@@ -8,7 +8,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
-import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -16,7 +15,6 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
-import '../theme/sheet_shape.dart';
 
 /// Half a second of frames, for a screen that cannot settle.
 Future<void> frames(WidgetTester tester) async {

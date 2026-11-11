@@ -129,48 +129,20 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
               ),
             ],
             const SizedBox(height: AppSpace.m),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _row(
-                  'leaderboard',
-                  LucideIcons.trophy300,
-                  'Leaderboard',
-                  () => choose(onLeaderboard),
-                ),
-              ],
+            SwarmRow(
+              key: const ValueKey('swarm-project-details-leaderboard'),
+              leading: Icon(
+                LucideIcons.trophy300,
+                size: 18,
+                color: AppPalette.textSecondary,
+              ),
+              title: 'Leaderboard',
+              onTap: () => choose(onLeaderboard),
             ),
           ],
         ),
       );
     },
-  );
-
-  Widget _row(
-    String name,
-    IconData icon,
-    String title,
-    VoidCallback onTap, {
-    String? value,
-  }) => SwarmRow(
-    key: ValueKey('swarm-project-details-$name'),
-    leading: Icon(icon, size: 18, color: AppPalette.textSecondary),
-    title: title,
-    trailing: value == null
-        ? null
-        : Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(value, style: AppType.caption(color: AppPalette.textFaint)),
-              const SizedBox(width: AppSpace.xs),
-              Icon(
-                LucideIcons.chevronRight300,
-                size: 18,
-                color: AppPalette.textFaint,
-              ),
-            ],
-          ),
-    onTap: onTap,
   );
 }
 

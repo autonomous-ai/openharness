@@ -17,7 +17,7 @@ import 'swarm_switch_pm.dart';
 // thread (task_line.dart). Each has no author heading, reply or receipt.
 
 /// The reader of the Swarm whose chat [conversationId] is; null until one is
-/// read (as the ship card finds its people).
+/// read.
 SwarmReader? swarmReaderOf(BuildContext context, String conversationId) {
   final inbox = SwarmScope.of(context)?.inbox;
   if (inbox == null) return null;

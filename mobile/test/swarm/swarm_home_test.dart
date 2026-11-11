@@ -6,15 +6,12 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
-import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
-import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_agents.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
@@ -280,8 +277,6 @@ void main() {
   double y(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
   Finder inside(String k, Finder matching) =>
       find.descendant(of: key(k), matching: matching);
-  double middle(WidgetTester tester, Finder finder) =>
-      tester.getCenter(finder).dy;
 
   /// The Swarm switcher, from Home's title.
   Future<void> openSwitcher(WidgetTester tester) async {
