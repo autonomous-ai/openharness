@@ -7,7 +7,8 @@
  * older clients send the local credential. So a secret heard must open nothing: the listeners also ask who is calling.
  *
  * Asked only after the secret matched, so a stranger cannot make the daemon spawn anything, and once per connection.
- * A lookup that fails answers no: this guards a credential, and a client refused can say so and retry.
+ * A lookup that fails answers no: this guards a credential, and a client refused can say so and retry. On macOS an lsof
+ * that ran out of time gave no answer, and that is not kept: the connection's next request asks again.
  */
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
@@ -18,7 +19,7 @@ import { runPowershellAsync } from './windows/powershell.js'
 
 export type PeerAccount = (socket: Socket) => Promise<boolean>
 
-const LSOF_MS = 3_000
+export const LSOF_MS = 3_000
 
 /** Linux: the row of /proc/net/tcp whose local end is the peer's and whose remote end is ours, and that row's uid. */
 export function procNetOwner(table: string, peerPort: number, ownPort: number): number | null {
@@ -41,17 +42,28 @@ export function lsofShowsPeer(output: string, peerPort: number, ownPort: number)
   return output.split('\n').some(line => /^n127\.0\.0\.1:(\d+)->127\.0\.0\.1:(\d+)$/.exec(line)?.slice(1).join() === `${peerPort},${ownPort}`)
 }
 
-function lsof(peerPort: number, ownPort: number, uid: number): Promise<boolean> {
+/**
+ * lsof walks every process of this account: about a second with 1,150 of them at load 28, and past LSOF_MS at times
+ * under more. One killed at that limit gave no answer (`unanswered`), which is not kept on the connection: kept, it
+ * refused every later request of the person's own keep-alive client on that socket. Any other failure is a no, as before.
+ */
+function lsof(peerPort: number, ownPort: number, uid: number): Promise<boolean | 'unanswered'> {
   return new Promise((resolve) => {
     execFile('/usr/sbin/lsof', ['-nP', '-a', '-u', String(uid), `-iTCP@127.0.0.1:${peerPort}`, '-Fn'], { timeout: LSOF_MS }, (error, stdout) => {
       // lsof exits 1 when it found nothing: that is an answer, and its empty output says no.
+      // Killed at the limit: no code. Node also kills a child past maxBuffer, and names that with a code.
+      if (error?.killed && error.code == null) {
+        console.warn(`[peer] lsof did not say who is calling in ${LSOF_MS} ms`)
+        resolve('unanswered')
+        return
+      }
       if (error && typeof error.code !== 'number') console.warn(`[peer] could not ask lsof who is calling: ${error.message}`)
       resolve(lsofShowsPeer(stdout ?? '', peerPort, ownPort))
     })
   })
 }
 
-async function ask(socket: Socket, platform: NodeJS.Platform): Promise<boolean> {
+async function ask(socket: Socket, platform: NodeJS.Platform): Promise<boolean | 'unanswered'> {
   const peerPort = socket.remotePort, ownPort = socket.localPort
   const uid = process.getuid?.()
   if (uid === undefined || !peerPort || !ownPort) return false
@@ -325,13 +337,14 @@ const answers = new WeakMap<Socket, Promise<boolean>>()
 export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = process.platform, run: WindowsPeerRun = runWindowsPeer): Promise<boolean> {
   let answer = answers.get(socket)
   if (!answer) {
-    const asked: Promise<WindowsAnswer> = platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)
+    const asked: Promise<WindowsAnswer | 'unanswered'> = platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)
     answer = asked.then((result) => {
       const why = result === 'busy' ? 'busy, too many lookups are running; asked again on its next request'
+        : result === 'unanswered' ? 'lsof did not answer in time; asked again on its next request'
         : result === 'timeout' ? 'Windows did not say who the caller is in time'
         : typeof result === 'object' ? `the caller is not this account (${result.no})` : 'the caller is not this account'
       if (result !== true) console.warn(`[peer] refused a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
-      if (result === 'busy') answers.delete(socket)
+      if (result === 'busy' || result === 'unanswered') answers.delete(socket)
       return result === true
     })
     answers.set(socket, answer)
