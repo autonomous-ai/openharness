@@ -97,7 +97,7 @@ class SwarmAgentStates extends ChangeNotifier {
   bool get busy => _settling != null || _running;
 
   /// What [agent]'s row says in a word or two, the first of (Swarm plan, step 1, item 1: "What Harness knows is a state
-  /// anyone can see"): not running (`offline`); `starting`; waiting on its person (`needs you` to them, `waiting on its
+  /// anyone can see"): not running (`offline`); `paused` by its person or the Swarm's owner; `starting`; waiting on its person (`needs you` to them, `waiting on its
   /// person` to anyone else: a question on its screen, or its terminal waits on their input); out of quota until a time (`limited until
   /// 15:40`, what its machine saw on its screen); `waiting on a build` (at a task whose pull request's checks run, while no turn
   /// of its runs); at a task (`on #12`); `working` (a turn runs); `free`. Idle, or nothing known, says nothing. What its computer's daemon says of it is known where [app] reads that computer; tasks and free
@@ -110,6 +110,8 @@ class SwarmAgentStates extends ChangeNotifier {
     DateTime? now,
   }) {
     if (offlineOf(agent) case final offline?) return offline;
+    // Paused (backend agent.pause): nothing else it does is new work, and it is what its person did.
+    if (agent.paused) return 'paused';
     if (app?.engineStarting(agent.machineId, agent.harnessId) ?? false) {
       return 'starting';
     }

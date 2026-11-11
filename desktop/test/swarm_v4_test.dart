@@ -430,6 +430,44 @@ void main() {
     },
   );
 
+  // anh Dee, 2026-11-11: "how do we pause finn while we're fixing bugs rather than finn keep receiving tasks?" and "make it
+  // subtle. right click you see pause". A paused agent's row says so, quietly, and the same right-click resumes it.
+  testWidgets(
+    'its person pauses an agent: right-click, Pause, the row says paused; right-click, Resume',
+    (tester) async {
+      final c = await show(tester);
+      await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Pause'), findsOneWidget);
+      await tester.tap(find.text('Pause'));
+      await tester.pumpAndSettle();
+      final agent = c.snapshot!.agents.firstWhere((a) => a.name == 'second');
+      expect(agent.paused, isTrue);
+      expect(
+        find.descendant(
+          of: key('super-agent-second'),
+          matching: find.text('paused'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Resume'));
+      await tester.pumpAndSettle();
+      expect(
+        c.snapshot!.agents.firstWhere((a) => a.name == 'second').paused,
+        isFalse,
+      );
+      expect(
+        find.descendant(
+          of: key('super-agent-second'),
+          matching: find.text('paused'),
+        ),
+        findsNothing,
+      );
+    },
+  );
+
   testWidgets(
     'Cancel keeps the agent, and a project\'s PM stays until its project goes',
     (tester) async {

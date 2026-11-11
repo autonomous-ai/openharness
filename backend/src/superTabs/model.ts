@@ -60,6 +60,10 @@ export interface Agent {
   /** The kind an older client started it as, kept for older readers. Absent reads as builder (agentRole); the Lead is derived
    *  from leadId. It decides nothing (project instructions, phase 4). */
   role?: AgentRole
+  /** Paused by its person, its machine's owner or the Swarm's owner (agent.pause; anh Dee, 2026-11-11: "how do we pause finn
+   *  while we're fixing bugs rather than finn keep receiving tasks?"). Its session runs on and its chats reach it; Harness gives it
+   *  no task, asks it to read nothing and types it no nudge until it is resumed (the CLI's crew and watched agents leave it out). */
+  paused?: true
   /** `awaiting`: its task's work ended (finishWorker), shown and read by no command; `keep` and `stop`: asked for
    *  (agent.release, tidy.ts). Kept when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'

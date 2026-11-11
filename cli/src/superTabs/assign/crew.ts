@@ -46,7 +46,7 @@ export interface CrewBuilder { id: string; name: string; label: string; machineI
 export interface CrewMachine { machineId: string; name?: string; observation?: Json }
 /** A builder of the team that cannot work now: its person is stopping it, its machine has been down since [since], or its
  *  subscription has no room until [until] (minutes from now). */
-export interface AwayBuilder { name: string; label: string; why: 'stopping' | 'down' | 'quota'; since?: string; until?: number }
+export interface AwayBuilder { name: string; label: string; why: 'stopping' | 'down' | 'quota' | 'paused'; since?: string; until?: number }
 export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[]; away?: AwayBuilder[] }
 
 /** How long a builder's machine is down before its queued tasks go to others, and before the ones it took do too: a sleep
@@ -256,12 +256,15 @@ export function crewOf(state: Json, project: { pmAgentId: string; projectId: str
   const team = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId
     && typeof a.machineId === 'string' && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
     && ['claude', 'codex'].includes(String(object(a.configuration).engine)))
-  const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince).map(a => {
+  // Paused by its person or the Swarm's owner (backend agent.pause): given nothing and asked nothing, its pull requests still read
+  // and merged, the tasks it took kept for it as one out of quota keeps them (takeBacks).
+  const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince || a.paused === true).map(a => {
     const name = String(a.displayName ?? a.name ?? a.id)
     return a.workDecision === 'stop' ? { name, label: labelOf(name), why: 'stopping' as const }
-      : { name, label: labelOf(name), why: 'down' as const, since: String(a.downSince) }
+      : a.downSince ? { name, label: labelOf(name), why: 'down' as const, since: String(a.downSince) }
+      : { name, label: labelOf(name), why: 'paused' as const }
   })
-  const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince)
+  const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince && a.paused !== true)
     .map(a => {
       const name = String(a.displayName ?? a.name ?? a.id)
       const model = object(a.configuration).model
@@ -294,10 +297,11 @@ export function takeBacks(issues: Json[], away: AwayBuilder[], now: number): Tak
       const since = Date.parse(builder.since ?? '')
       if (!Number.isFinite(since) || now - since < (taken ? TAKEN_AWAY_MS : QUEUED_AWAY_MS)) continue
     }
-    // Out of quota: what it took it finishes; what waits for it goes to another.
-    if (builder.why === 'quota' && taken) continue
+    // Out of quota, or paused: what it took it finishes; what waits for it goes to another.
+    if ((builder.why === 'quota' || builder.why === 'paused') && taken) continue
     const down = builder.why === 'down' ? `${builder.name}'s machine has been down since ${new Date(Date.parse(builder.since!)).toISOString().slice(11, 16)} UTC`
       : builder.why === 'quota' ? `${builder.name}'s subscription has no room for ${Math.round((builder.until ?? 0) / 60)} h`
+      : builder.why === 'paused' ? `${builder.name} is paused`
       : `${builder.name} is being stopped`
     out.push({ number: Number(issue.number), label: builder.label, taken, why: down })
   }

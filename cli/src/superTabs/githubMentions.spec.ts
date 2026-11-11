@@ -657,7 +657,7 @@ describe('whom it reads for (watchedAgents)', () => {
   it('takes only this computer\'s person\'s v4 agents running here, each with its chat and its projects\' GitHub repositories', async () => {
     const watched = await watchedAgents({ me: 'dee', live: id => id !== 'h-gone', read,
       roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }), row({ id: 'old', regular: false }), row({ id: 'gone', harnessId: 'h-gone' }),
-        row({ id: 'stopping' }, { stopRequested: true }), row({ id: 'theirs', machineOwnerId: 'ken' })] })
+        row({ id: 'stopping' }, { stopRequested: true }), row({ id: 'theirs', machineOwnerId: 'ken' }), row({ id: 'paused', paused: true })] })
     expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
   })
 

@@ -1198,6 +1198,29 @@ class ConversationServer {
         }
         revision++;
         agent['displayName'] = (command['name'] as String).trim();
+      } else if (command['type'] == 'agent.pause') {
+        // As the backend's: its person, its machine's owner or the Swarm's owner pauses or resumes it, for every reader.
+        final agent = (state['agents'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((a) => a['id'] == command['agentId'])
+            .firstOrNull;
+        final who = reader ?? 'owner';
+        if (agent == null ||
+            (agent['contributorId'] != who &&
+                agent['machineOwnerId'] != who &&
+                state['ownerId'] != who)) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Only the person who runs this agent, its machine\'s owner or the Swarm\'s owner can pause it.',
+            statusCode: 403,
+          );
+        }
+        revision++;
+        if (command['paused'] == true) {
+          agent['paused'] = true;
+        } else {
+          agent.remove('paused');
+        }
       } else if (command['type'] == 'agent.remove') {
         // As the backend's: its contributor or the Swarm's owner withdraws it, and it leaves every chat it was in.
         final agents = (state['agents'] as List).cast<Map<String, dynamic>>();

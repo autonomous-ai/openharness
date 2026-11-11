@@ -181,6 +181,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   // Rename Harness on the agent's Mac renames the agent for every reader (task #2912); the contributor or machine owner only.
   z.object({ type: z.literal('agent.rename'), agentId: id, name: z.string().max(200) }).strict(),
+  z.object({ type: z.literal('agent.pause'), agentId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   githubRelaySchema,
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
@@ -1913,6 +1914,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'agent.rename':
       renameAgentTo(state, actor, agent(state, command.agentId), command.name)
       break
+    case 'agent.pause': {
+      // Its person and its machine's owner, as for a rename; and the Swarm's owner, who leads the work it would be given.
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'person' || ![state.ownerId, target.contributorId, target.machineOwnerId].includes(actor.userId)) {
+        fail('FORBIDDEN', 'Only the person who runs this agent, its machine\'s owner or the Swarm\'s owner can pause it.', 403)
+      }
+      if (command.paused) target.paused = true
+      else delete target.paused
+      break
+    }
     case 'github.relay':
       relayGitHub(state, actor, command, operationId, effects.messages)
       break

@@ -119,6 +119,8 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     const agent = object(row.agent)
     if (agent.regular !== true || row.closeSession === true || row.stopRequested === true || !identifier(row.tabId) || !identifier(agent.id)) continue
     if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
+    // Paused (backend agent.pause): Harness relays it nothing from GitHub and types it no next thing (nextThing.ts) until resumed.
+    if (agent.paused === true) continue
     // The name people see first (backend agentNames.ts: a chosen name, else a free one): it names the agent's label and its
     // instructions file as the assigner and Desktop name them. Its stored name can be its engine's ("Claude Code").
     const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim())
