@@ -2403,8 +2403,13 @@ class Registry {
     if (separateShell) delete entry.parentAgentId
     // Its browser is the archived agent's, with that agent's logins: never the shell's.
     if (separateShell) delete entry.browser
-    // And its first task, or the shell would carry a copy and both could type it.
-    if (separateShell) delete entry.firstTask
+    // And its first task: the shell under a new identity would carry a copy beside the archived agent's. A row that stays
+    // has had its launch end before the task was typed, and an engine the person starts in its shell is theirs: one they
+    // typed the task into themselves would get it twice.
+    if (entry.firstTask) {
+      delete entry.firstTask
+      if (!separateShell) console.log(`[agent] ${sid(agentId)} first task dropped · its engine exited before it was typed`)
+    }
     this.releaseBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume

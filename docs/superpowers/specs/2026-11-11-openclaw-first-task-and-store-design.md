@@ -83,7 +83,8 @@ Two defects:
   its existing failure (`onError`, delivery `unknown`).
 - No timeout while it waits. While the pane cannot take it, the agent already says why (`no-gateway`, `no-token`,
   `remote` holds); the task goes in once the Gateway answers, however late. A relaunch keeps a field not yet handed
-  over; deleting the agent drops it.
+  over; deleting the agent drops it, and so does its engine exiting to the shell (logged `dropped`): an OpenClaw the
+  person starts there is theirs, and one they typed the task into would get it twice.
 - The confirmation window covers a Gateway that stalls 18 s: OpenClaw's submit verification (`OPENCLAW_SUBMIT_VERIFY_MS`
   and its retries) gives the user row at least **30 s** before the session input gives up, for every message to
   OpenClaw, not only the first (same cause).
