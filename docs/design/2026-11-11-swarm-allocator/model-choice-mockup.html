@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New agent: Auto</title>
+<!--
+  Mockup for package 14 of the Swarm allocator (model-for-each-task.md): the one screen change.
+  + New agent in a Swarm, with Choose model open. Left: the sheet as it is. Right: the same sheet with one new row, Auto.
+  Drawn from the code, not from a running app:
+    desktop/lib/widgets/new_harness_form.dart   the sheet, its pills, its chooser and their sizes
+    desktop/lib/widgets/desktop_chrome.dart     DesktopPill, DesktopDialogSurface
+    desktop/lib/shared/theme/app_theme.dart     AppDesktop, AppMenu, AppPalette (the colours below)
+    desktop/lib/shared/theme/app_icons.dart     Lucide, regular weight
+  Dark as it opens; add #light to the address for the light appearance. No script, no network.
+-->
+<style>
+  :root {
+    /* AppMenu.fillDark, AppMenu.rimDark, AppDesktop.field, AppPalette text inks, AppPalette.accent, AppDesktop.focusDark */
+    --surface: #2e2e2e; --rim: rgba(255, 255, 255, .12); --field: #303030;
+    --ink: #f5f5f5; --ink-rgb: 245, 245, 245; --muted: #a8a8a2; --faint: #6e6e68;
+    --accent: #2f5bea; --accent-ink: #8ba9ff; --accent-ink-rgb: 139, 169, 255;
+    /* AppDesktop.darkVeil (95% black) over the Graphite workspace. */
+    --veil: #020202; --page: #161616; --note: #8a8a85; --claude: #cc7c5e;
+    --shadow: 0 8px 24px rgba(0, 0, 0, .24);
+  }
+  #light:target {
+    --surface: #ffffff; --rim: rgba(0, 0, 0, .08); --field: #f2f2f4;
+    --ink: #1a1a18; --ink-rgb: 26, 26, 24; --muted: #62615b; --faint: #7a7973;
+    --accent-ink: #2f5bea; --accent-ink-rgb: 47, 91, 234;
+    --veil: #fefefe; --page: #e9e9e6; --note: #62615b; --claude: #c2633f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", "Ubuntu", "Noto Sans", Arial, sans-serif; }
+  #light { min-height: 100vh; background: var(--page); color: var(--ink); padding: 28px 40px 32px; }
+  .pair { display: flex; flex-wrap: wrap; gap: 40px; justify-content: center; }
+  figure { margin: 0; }
+  figcaption { font-size: 12px; line-height: 1.35; letter-spacing: .12px; color: var(--note); margin: 0 0 8px 4px; }
+  .note { font-size: 12px; line-height: 1.35; letter-spacing: .12px; color: var(--note); text-align: center; margin: 16px 0 0; }
+
+  /* The veil the sheet floats on: the dialog is frameless over it. */
+  .stage { position: relative; width: 640px; max-width: 100%; height: 596px; padding: 28px 20px; background: var(--veil); border-radius: 12px; overflow: hidden; }
+  .sheet { position: relative; }
+
+  svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Header: agent, computer and repo capsules (DesktopPill, capsule), then Close. */
+  .head { display: flex; align-items: flex-start; gap: 8px; }
+  .capsules { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; }
+  .capsule {
+    display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 4px 11px;
+    border: 1.5px solid rgba(var(--ink-rgb), .09); border-radius: 20px;
+    background: linear-gradient(rgba(var(--ink-rgb), .055), rgba(var(--ink-rgb), .055)), var(--surface);
+    font-size: 13px; line-height: 1.25; letter-spacing: .05px; color: var(--ink); white-space: nowrap;
+  }
+  .close { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; color: var(--muted); }
+  .close svg { width: 18px; height: 18px; }
+
+  /* The task box: field colour, a hairline rim, radius 12, three lines to start. */
+  .task { margin-top: 12px; padding: 10px 8px 8px 6px; background: var(--field); border: 1px solid var(--rim); border-radius: 12px; }
+  .task .hint { padding-left: 7px; min-height: 57px; font-size: 13px; line-height: 1.45; letter-spacing: .05px; color: var(--faint); }
+  .task .actions { display: flex; align-items: flex-end; justify-content: space-between; margin-top: 8px; }
+  .attach { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; color: var(--muted); }
+  .start {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 90px; min-height: 32px; padding: 6px 12px;
+    border: 1.5px solid transparent; border-radius: 16px; background: var(--accent); color: #fff;
+    font-size: 13px; font-weight: 500; line-height: 1.45; letter-spacing: .05px;
+  }
+
+  /* Under the task: quiet, borderless pills (DesktopPill, quiet and compact), 12-point muted. */
+  .settings { display: flex; justify-content: space-between; gap: 16px; margin-top: 6px; }
+  .settings > div { display: flex; gap: 2px; }
+  .settings > div + div { gap: 0; }
+  .quiet {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 28px; padding: 4px 6px;
+    border: 1.5px solid transparent; border-radius: 10px;
+    font-size: 12px; line-height: 1.25; letter-spacing: .12px; color: var(--muted); white-space: nowrap;
+  }
+  .quiet.worktree { width: 100px; }
+
+  /* Choose model: the popover (radius 16, one rim, a soft shadow), 8 points under the pill it opened from. */
+  .chooser {
+    position: absolute; left: 0; top: 201px; width: 340px; background: var(--surface);
+    border: 1px solid var(--rim); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden;
+  }
+  .search { display: flex; align-items: center; gap: 10px; height: 31px; padding: 1px 16px; border-bottom: 1px solid rgba(var(--ink-rgb), .24); color: var(--faint); }
+  .search span { font-size: 14px; line-height: 1.45; letter-spacing: .05px; border-left: 2px solid var(--ink); padding-left: 1px; }
+  .list { padding: 6px; }
+  .group { display: flex; align-items: center; height: 35px; padding: 0 10px; font-size: 13px; font-weight: 600; line-height: 1.45; letter-spacing: .05px; color: var(--ink); }
+  .group.next { margin-top: 6px; border-top: 1px solid var(--rim); }
+  .row { display: flex; align-items: center; padding: 8px 10px; border-radius: 10px; }
+  .row.current { background: rgba(var(--accent-ink-rgb), .14); }
+  .row .name { flex: 1; min-width: 0; }
+  /* A row with a status: the name and the status share the free width in halves (Expanded beside Flexible), and what the
+     status leaves of its half stays at the row's end, after the check. */
+  .row.status .name { flex: 0 0 136px; }
+  .row .title, .row .detail { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .title { font-size: 14px; line-height: 1.45; letter-spacing: .05px; color: var(--ink); }
+  .row .detail { margin-top: 3px; font-size: 12px; line-height: 1.35; letter-spacing: .12px; color: var(--muted); }
+  .row .meta { flex: 0 1 auto; margin-left: 12px; font-size: 12px; line-height: 1.35; letter-spacing: .12px; color: var(--muted); white-space: nowrap; }
+  .row .gap { flex: 1; }
+  .row .end { display: inline-flex; width: 16px; height: 16px; margin-left: 8px; color: var(--muted); }
+  .row.current .end { color: var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- Lucide, as desktop/lib/shared/theme/app_icons.dart names them. -->
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-square-check" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-git-branch" viewBox="0 0 24 24"><path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <!-- Claude Code's mark, as EngineMark paints it: four strokes through the centre. -->
+  <symbol id="i-claude" viewBox="0 0 16 16"><path d="M1.76 8h12.48M8 1.76v12.48M3.59 3.59l8.82 8.82M3.59 12.41l8.82-8.82" style="stroke: var(--claude); stroke-width: 1.57"/></symbol>
+</svg>
+
+<div id="light">
+  <div class="pair">
+
+    <figure>
+      <figcaption>Now</figcaption>
+      <div class="stage">
+        <div class="sheet">
+          <div class="head">
+            <div class="capsules">
+              <span class="capsule"><svg class="i"><use href="#i-claude"/></svg>Claude Code<svg class="i"><use href="#i-chevron-down"/></svg></span>
+              <span class="capsule"><svg class="i"><use href="#i-laptop"/></svg>This Mac<svg class="i"><use href="#i-chevron-down"/></svg></span>
+              <span class="capsule"><svg class="i"><use href="#i-folder"/></svg>openharness<svg class="i"><use href="#i-chevron-down"/></svg></span>
+            </div>
+            <span class="close"><svg class="i"><use href="#i-x"/></svg></span>
+          </div>
+          <div class="task">
+            <div class="hint">What would you like to work on?</div>
+            <div class="actions">
+              <span class="attach"><svg class="i"><use href="#i-paperclip"/></svg></span>
+              <span class="start">New agent</span>
+            </div>
+          </div>
+          <div class="settings">
+            <div>
+              <span class="quiet"><svg class="i"><use href="#i-brain"/></svg>Anthropic</span>
+              <span class="quiet"><svg class="i"><use href="#i-shield-check"/></svg>Auto-approve</span>
+            </div>
+            <div>
+              <span class="quiet worktree"><svg class="i"><use href="#i-square-check"/></svg>Worktree</span>
+              <span class="quiet"><svg class="i"><use href="#i-git-branch"/></svg>From main</span>
+            </div>
+          </div>
+          <div class="chooser">
+            <div class="search"><svg class="i"><use href="#i-search"/></svg><span>Search subscriptions and models</span></div>
+            <div class="list">
+              <div class="group">Subscription</div>
+              <div class="row status current">
+                <div class="name"><div class="title">Anthropic</div><div class="detail">Default account on M2</div></div>
+                <span class="meta">79% remaining</span>
+                <span class="end"><svg class="i"><use href="#i-check"/></svg></span><span class="gap"></span>
+              </div>
+              <div class="group next">Your models</div>
+              <div class="row">
+                <div class="name"><div class="title">qwen3:4b</div><div class="detail">M2</div></div>
+                <span class="end"></span>
+              </div>
+              <div class="row">
+                <div class="name"><div class="title">Refresh models</div></div>
+                <span class="end"><svg class="i"><use href="#i-chevron-right"/></svg></span>
+              </div>
+              <div class="row">
+                <div class="name"><div class="title">Your models…</div></div>
+                <span class="end"><svg class="i"><use href="#i-chevron-right"/></svg></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
+
+    <figure>
+      <figcaption>With Auto</figcaption>
+      <div class="stage">
+        <div class="sheet">
+          <div class="head">
+            <div class="capsules">
+              <span class="capsule"><svg class="i"><use href="#i-claude"/></svg>Claude Code<svg class="i"><use href="#i-chevron-down"/></svg></span>
+              <span class="capsule"><svg class="i"><use href="#i-laptop"/></svg>This Mac<svg class="i"><use href="#i-chevron-down"/></svg></span>
+              <span class="capsule"><svg class="i"><use href="#i-folder"/></svg>openharness<svg class="i"><use href="#i-chevron-down"/></svg></span>
+            </div>
+            <span class="close"><svg class="i"><use href="#i-x"/></svg></span>
+          </div>
+          <div class="task">
+            <div class="hint">What would you like to work on?</div>
+            <div class="actions">
+              <span class="attach"><svg class="i"><use href="#i-paperclip"/></svg></span>
+              <span class="start">New agent</span>
+            </div>
+          </div>
+          <div class="settings">
+            <div>
+              <span class="quiet"><svg class="i"><use href="#i-brain"/></svg>Auto</span>
+              <span class="quiet"><svg class="i"><use href="#i-shield-check"/></svg>Auto-approve</span>
+            </div>
+            <div>
+              <span class="quiet worktree"><svg class="i"><use href="#i-square-check"/></svg>Worktree</span>
+              <span class="quiet"><svg class="i"><use href="#i-git-branch"/></svg>From main</span>
+            </div>
+          </div>
+          <div class="chooser">
+            <div class="search"><svg class="i"><use href="#i-search"/></svg><span>Search subscriptions and models</span></div>
+            <div class="list">
+              <div class="group">Subscription</div>
+              <div class="row status">
+                <div class="name"><div class="title">Anthropic</div><div class="detail">Default account on M2</div></div>
+                <span class="meta">79% remaining</span>
+                <span class="end"></span><span class="gap"></span>
+              </div>
+              <div class="row current">
+                <div class="name"><div class="title">Auto</div></div>
+                <span class="end"><svg class="i"><use href="#i-check"/></svg></span>
+              </div>
+              <div class="group next">Your models</div>
+              <div class="row">
+                <div class="name"><div class="title">qwen3:4b</div><div class="detail">M2</div></div>
+                <span class="end"></span>
+              </div>
+              <div class="row">
+                <div class="name"><div class="title">Refresh models</div></div>
+                <span class="end"><svg class="i"><use href="#i-chevron-right"/></svg></span>
+              </div>
+              <div class="row">
+                <div class="name"><div class="title">Your models…</div></div>
+                <span class="end"><svg class="i"><use href="#i-chevron-right"/></svg></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
+
+  </div>
+  <p class="note">+ New agent in a Swarm, Choose model open. One new row.</p>
+</div>
+
+</body>
+</html>

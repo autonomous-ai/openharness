@@ -351,6 +351,10 @@ by hand.
 
 ### 14. A model for each task
 
+**Designed** (#NNNN): [the design](model-for-each-task.md), [the tiers experiment's plan and cost](tiers-experiment.md)
+and [the mockup of the one screen change](model-choice-mockup.html). Its code waits for anh Dee's yes to the mockup and
+to the experiment.
+
 **Read first.** What v3's routing was and why it went: eight designs, removed in #3908. And
 `cli/src/engines/claude/launch.ts`: `--model` and `--effort` are for the session (Codex's launch has neither);
 `/model` typed in a pane becomes its person's default, so Harness types it only when a person changes a running
