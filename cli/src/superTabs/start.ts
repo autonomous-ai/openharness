@@ -72,7 +72,6 @@ export const startNote = (name: unknown): string => {
   return shown ? `You are ${shown}.` : ''
 }
 
-/** Whether a start's folder is made in Harness's worktrees folder, whose disk then admits it (disk.ts). */
 /** A start that works in a folder of its own, made for it here under the worktrees folder (agentFolder.ts): a Regular agent
  *  (backend agent.new, task #4116), which starts in no project, or one whose folder is a temporary one, a scratchpad, which Claude
  *  Code asks about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). */
