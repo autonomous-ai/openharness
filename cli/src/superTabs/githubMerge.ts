@@ -123,6 +123,13 @@ export const recordedAuthors = (ask: (path: string) => Promise<unknown>) => asyn
 }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
+/** Whether [project]'s PM runs on this computer: the session of its roster row's agent is registered here ([running], by its
+ *  harness id). A project is led here while its PM is stopped too (ledProjects). */
+export function pmRunsHere(roster: Json[], project: LedProject, running: (harnessId: string) => boolean): boolean {
+  const agent = roster.map(row => object(row.agent)).find(agent => agent.id === project.pmAgentId)
+  return typeof agent?.harnessId === 'string' && running(agent.harnessId)
+}
+
 export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean | Promise<boolean>; roster: () => Promise<Json[]>
   read: (tabId: string, agentId: string) => Promise<Json> }): Promise<LedProject[]> {
   if (!deps.me) return []
@@ -523,13 +530,25 @@ const FAILING_KEPT_MS = 10 * 60_000, FAILING_MAX = 500
  *  a check run again changes one, and each pass, or each turn's end, would read it again meanwhile. */
 export class FailingHeads {
   private readonly at = new Map<string, number>()
+  private readonly said = new Set<string>()
 
-  constructor(private readonly reads: GitHubReads, private readonly now: () => number) {}
+  constructor(private readonly reads: GitHubReads, private readonly now: () => number, private readonly log: (line: string) => void) {}
 
+  /** Whether [head]'s checks failed. Checks this login cannot read hold nothing back, as before Harness read them to ask for a read
+   *  or type one: the merger reads them again before it merges. A stop for every repository (GitHub limiting this computer, its gh
+   *  signed out, GitHub down) stops the pass that asked, as any read's. */
   async failing(repo: string, head: string): Promise<boolean> {
     const key = `${repo}@${head}`, at = this.at.get(key)
     if (at !== undefined && this.now() - at < FAILING_KEPT_MS) return true
-    const failed = (await headChecks(this.reads, repo, head)).state === 'failed'
+    let failed: boolean
+    try {
+      failed = (await headChecks(this.reads, repo, head)).state === 'failed'
+    } catch (error) {
+      if (!(error instanceof GitHubStop) || error.everywhere) throw error
+      const line = `[super-tab] CHECKS_UNREAD ${repo}: ${error.code}`
+      if (!this.said.has(line)) { this.said.add(line); this.log(line) }
+      return false
+    }
     this.at.delete(key)
     if (failed) this.at.set(key, this.now())
     // The one found longest ago goes first.

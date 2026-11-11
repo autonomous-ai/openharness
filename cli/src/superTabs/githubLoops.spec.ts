@@ -151,7 +151,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
 
     const make = () => {
       const deps = { projects: async () => [PROJECT], crew: async () => structuredClone(CREW), get: gh.get, send: gh.send, now: () => clock.now, log: () => {}, records: new VerdictRecords(gh.authors, () => clock.now, () => {}) }
-      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} } }) }
+      return { merger: new GitHubMerge(deps), assigner: new GitHubAssign({ ...deps, numbers: { pass: async () => {} }, pmRunning: async () => true }) }
     }
     let loops = make()
     for (let pass = 0; pass < PASSES; pass++) {

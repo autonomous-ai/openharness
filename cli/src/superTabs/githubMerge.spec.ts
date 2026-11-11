@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, pmRunsHere, recordedAuthors, VerdictRecords, verdicts } from './githubMerge.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
@@ -811,6 +811,16 @@ describe('the rule\'s parts', () => {
     expect(authorOf(pull())).toBe('pip')
     expect(authorOf(pull({ labels: [], head: { sha: HEAD, ref: 'Juno/7' } }))).toBe('juno')
     expect(authorOf(pull({ labels: [], head: { sha: HEAD, ref: 'fix-tests' } }))).toBeNull()
+  })
+
+  // Code review of #4060: a roster row holds its agent (row.agent); a PM looked up by the wrong id was never asked to read.
+  it('finds the PM of a project running here by the agent of its roster row, and that agent\'s harness id', () => {
+    const project = { repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }
+    const roster = [{ agent: { id: 'pip', harnessId: 'h-pip' } }, { agent: { id: 'juno', harnessId: 'h-juno' } }]
+    expect(pmRunsHere(roster, project, id => id === 'h-juno')).toBe(true)
+    expect(pmRunsHere(roster, project, id => id === 'h-pip')).toBe(false)
+    expect(pmRunsHere([{ agent: { id: 'juno' } }], project, () => true)).toBe(false)
+    expect(pmRunsHere([], project, () => true)).toBe(false)
   })
 
   it('passes checks only when every run and status passed, and none at all passes', () => {

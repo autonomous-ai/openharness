@@ -13,7 +13,6 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { object } from './wire.js'
 import { authorOf, FailingHeads, isHeld, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 import { goalOf, type Score } from './goal.js'
@@ -96,13 +95,16 @@ export class GitHubAssign {
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
+    /** Whether [project]'s PM runs here now: GitHub news brings an agent what is said only while it runs (githubMentions.ts), so a
+     *  PM asked while stopped never hears it (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader). */
+    pmRunning: (project: LedProject) => Promise<boolean>
     /** Takes what a pass counted of a project, for its PM and its people, and how to read its goal when a line says it
      *  (pmNumbers.ts PmNumbers). */
     numbers: { pass: (project: LedProject, numbers: Numbers, goal: () => Promise<Score | null>) => Promise<void> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
-    this.failing = new FailingHeads(this.reads, this.now)
+    this.failing = new FailingHeads(this.reads, this.now, this.log)
   }
 
   start(): void {
@@ -275,6 +277,7 @@ export class GitHubAssign {
   private async askReaders(project: LedProject, read: Read, open: Json[], crew: Crew): Promise<Set<number>> {
     const { repo } = project
     const team = teamOf(crew, project.pm)
+    const pmHears = await this.deps.pmRunning(project)
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
@@ -289,16 +292,14 @@ export class GitHubAssign {
       // One on hold waits for a person to lift it: nobody is asked to read it meanwhile, and its task waits with it, not its
       // builder (askQuiet asks nothing of it, and it is not taken back).
       if (isHeld(pull)) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
+      // Nobody is asked to read a head whose checks failed: its builder fixes it first, and the fix is a new head, read again. Its
+      // task waits on its builder meanwhile, not on readers: askQuiet asks after it, and takes it back from a builder gone.
+      if (await this.failing.failing(repo, head)) continue
       // While who made its verdicts cannot be read, nobody is asked: a READ-OK made by command would read as typed.
       const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
       if (!comments) { for (const task of tasksOf(pull)) withReaders.add(task); continue }
       const people = pullPeople(pull, team)
-      // Nobody is asked to read a head whose checks failed: its builder fixes it first, and the fix is a new head, read again.
-      let failed: boolean | undefined
-      const askNow = async (name: string, why: string, nth?: number) => {
-        if (failed ??= await this.checksFailed(repo, head)) return
-        await this.ask(repo, number, head, name, why, nth)
-      }
+      const askNow = (name: string, why: string, nth?: number) => this.ask(repo, number, head, name, why, nth)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       // A verdict on an earlier head whose change is the head's is one on it, a HOLD as much as a READ-OK (sameChange): its author
       // has changed nothing to read again.
@@ -377,7 +378,7 @@ export class GitHubAssign {
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
         const pm = readerKey(project.pm)
-        const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
+        const reader = builder ?? (!own(pm) && !skip.has(pm) && pmHears ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it. A reader asked about an earlier head, with no verdict on this one, is asked about this one: once,
           // and half an hour after its last ask at the soonest, so a run of pushes is one ask. One asked about this head is not asked
@@ -388,9 +389,9 @@ export class GitHubAssign {
             && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
             .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
           if (again) await askNow(written.get(again)!, `the head is now ${head.slice(0, 7)}: please read this pull request`)
-          // Said once for its head, unless its checks failed: its builder fixes those first.
-          else if (!(failed ??= await this.checksFailed(repo, head))) this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}@${head.slice(0, 7)}: `
-            + (asked.size ? 'its readers asked have not read it, and nobody else can' : 'nobody but its author can read it'))
+          else this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}@${head.slice(0, 7)}: `
+            + (!own(pm) && !skip.has(pm) && !pmHears ? 'its PM, the reader left, is stopped'
+              : [...asked.keys()].some(name => !own(name)) ? 'its readers asked have not read it, and nobody else can' : 'nobody but its author can read it'))
           break
         }
         skip.add(reader.id)
@@ -399,15 +400,6 @@ export class GitHubAssign {
       }
     }
     return withReaders
-  }
-
-  /** Whether [head]'s checks failed (githubMerge.ts FailingHeads). Checks that cannot be read hold no reader back, as before
-   *  Harness read them here, nor the pull requests after it in the pass: the merger reads them again before it merges. */
-  private async checksFailed(repo: string, head: string): Promise<boolean> {
-    return this.failing.failing(repo, head).catch((error: unknown) => {
-      this.once(`[super-tab] Task assignment: CHECKS_UNREAD ${repo}: ${error instanceof GitHubStop ? error.code : 'unreadable'}`)
-      return false
-    })
   }
 
   /** Learns how long finished tasks took: for a few closed sized issues a pass not measured yet, from its builder's

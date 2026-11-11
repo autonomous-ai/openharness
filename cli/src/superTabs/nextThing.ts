@@ -31,6 +31,9 @@ import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
+/** How long after a turn's end what it was told is read again before its person is told nothing changed: GitHub shows a push
+ *  some seconds after it. */
+export const TELL_SETTLE_MS = 60_000
 export const NEXT_SETTLE_MS = 3_000
 /** How many times the same next thing is typed with no change before it goes to the agent's person instead: once. An agent that
  *  heard it and ended its turn with nothing changed is blocked or has chosen, and typing it again each turn spent its turns and
@@ -88,6 +91,8 @@ export class NextThing {
   /** Each terminal idle with a task of its own in hand, by its id: the next look at it, and what it holds. */
   private readonly idle = new Map<string, { timer: NodeJS.Timeout; agent: WatchedAgent; repo: string; task: Record<string, unknown> }>()
   private readonly looking = new Set<string>()
+  /** When each terminal's last turn ended, by its id: what it is told it did not do is read a while after (give). */
+  private readonly endedAt = new Map<string, number>()
   private readonly reads: GitHubReads
   private readonly failing: FailingHeads
   private memory: Record<string, Kept> | null = null
@@ -122,7 +127,7 @@ export class NextThing {
     log?: (line: string) => void
   }) {
     this.reads = new GitHubReads(deps.get)
-    this.failing = new FailingHeads(this.reads, Date.now)
+    this.failing = new FailingHeads(this.reads, Date.now, line => this.log(line))
     this.log = deps.log ?? (line => console.warn(line))
   }
 
@@ -161,13 +166,19 @@ export class NextThing {
       if (watched) this.watch(watched.agent, watched.repo, watched.task, Date.now(), false)
       return
     }
-    clearTimeout(this.timers.get(end.agentId))
+    this.endedAt.set(end.agentId, Date.now())
+    this.lookIn(end.agentId, NEXT_SETTLE_MS)
+  }
+
+  /** Looks at terminal [harnessId] in [ms]; a later call moves the look. */
+  private lookIn(harnessId: string, ms: number): void {
+    clearTimeout(this.timers.get(harnessId))
     const timer = setTimeout(() => {
-      this.timers.delete(end.agentId)
-      void this.look(end.agentId)
-    }, NEXT_SETTLE_MS)
+      this.timers.delete(harnessId)
+      void this.look(harnessId)
+    }, ms)
     timer.unref()
-    this.timers.set(end.agentId, timer)
+    this.timers.set(harnessId, timer)
   }
 
   /** Each of its agents once, as it starts, but those a turn's end since has looked at. */
@@ -228,9 +239,14 @@ export class NextThing {
 
   /** Its next thing: the first that waits, typed; or the task it holds, watched while it sits idle with it. */
   private async next(agent: WatchedAgent): Promise<void> {
+    let told = false
     for await (const thing of this.waiting(agent)) {
       if ('held' in thing) return this.watch(agent, thing.repo, thing.held, Date.now(), false)
-      return this.give(agent, thing.key, thing.typed, thing.did)
+      // A thing its person was told of waits for them, and nothing after it is typed meanwhile; the task it holds is still watched
+      // while it sits idle (code review of #4060).
+      if (told) continue
+      if (await this.give(agent, thing.key, thing.typed, thing.did)) return
+      told = true
     }
   }
 
@@ -373,24 +389,32 @@ export class NextThing {
   }
 
   /** Types [typed] to [agent] for [key], or, once that was typed [NEXT_TIMES] times with no change, says to its person, once, what
-   *  Harness [did] that many times. */
-  private async give(agent: WatchedAgent, key: string, typed: string, did: string): Promise<void> {
+   *  Harness [did] that many times. True while the agent has it to act on (typed, or read again soon); false once its person has it. */
+  private async give(agent: WatchedAgent, key: string, typed: string, did: string): Promise<boolean> {
     const memory = this.memory ??= this.load()
     let kept = memory[agent.agentId]
     if (kept?.key !== key) kept = { key, times: 0, told: false }
     delete memory[agent.agentId]
     memory[agent.agentId] = kept
     if (kept.times >= NEXT_TIMES) {
-      if (kept.told) return
+      if (kept.told) return false
+      // GitHub shows a push some seconds after it, so a turn that pushed as it ended can read as nothing changed: what is still the
+      // same a while after its turn ended is told (code review of #4060).
+      const wait = (this.endedAt.get(agent.harnessId) ?? 0) + TELL_SETTLE_MS - Date.now()
+      if (wait > 0) { this.lookIn(agent.harnessId, wait); return true }
       const name = agent.names[0]!
       await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} as its turn ended, and nothing changed by its next. `
         + `Harness says it no more: tell ${name} what to do.`)
       kept.told = true
+      this.save(memory)
+      // Its person has it now: the task it holds is still watched (next).
+      return false
     } else {
       await this.deps.tell(agent, this.operation(agent, key, String(kept.times)), typed)
       kept.times++
     }
     this.save(memory)
+    return true
   }
 
   /** The same each time this agent is given this task this many times, so a post that failed is not made twice when tried again. */
