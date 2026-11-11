@@ -230,7 +230,9 @@ export const PRODUCT_USAGE_AGENT_BROWSER_METRICS = ['agent_browser_enabled', 'ag
   'agent_browser_start_ok', 'agent_browser_start_failed', ...AGENT_BROWSER_FAILED_STATES.map(state => `agent_browser_failed_${state}` as const),
   'agent_browser_limit_dropped', 'agent_browser_proxy_set', 'agent_browser_proxy_removed',
   'agent_browser_proxy_test_ok', 'agent_browser_proxy_test_failed', 'agent_browser_stream_opened',
-  ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened'] as const
+  ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened',
+  'agent_browser_started', 'agent_browser_stopped', 'agent_browser_command_ok', 'agent_browser_command_failed',
+  'agent_browser_notice_failed'] as const
 export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_HEALTH_METRICS,
   'active_installation_days', 'working_installation_days', 'first_work_installations',

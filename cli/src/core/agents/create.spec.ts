@@ -801,7 +801,7 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
-    it('with Browser ticked, the row says so and its browser is attached; without, neither', async () => {
+    it('with an older Desktop\'s browser: true, the row says so and its browser is attached; without, neither', async () => {
       const attachBrowser = vi.fn()
       vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, browser: true } } as never)
       const { create } = setup({ attachBrowser })
@@ -998,24 +998,16 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
-    it('browser:true adds the args; absent adds nothing', async () => {
+    it('no launch carries a browser argument: Claude Code, Codex and OpenCode, with browser:true and without', async () => {
       const { create } = setup()
-      await create(request({ browser: true }))
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
-        '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'])
-      vi.mocked(buildEngineLaunchArgv).mockClear()
-      await create(request())
-      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
-    })
-
-    it('browser:true gives Codex its own args, and an engine with no browser MCP form nothing', async () => {
-      const { create } = setup()
-      await create(request({ engine: 'codex', browser: true }))
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(expect.arrayContaining([
-        '-c', 'mcp_servers.browser.command="harness"', '-c', 'mcp_servers.browser.args=["browser-mcp"]']))
-      vi.mocked(buildEngineLaunchArgv).mockClear()
-      await create(request({ engine: 'opencode', browser: true }))
-      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
+      for (const engine of ['claude', 'codex', 'opencode'] as const) {
+        for (const browser of [true, undefined]) {
+          vi.mocked(buildEngineLaunchArgv).mockClear()
+          await create(request({ engine, ...(browser ? { browser } : {}) }))
+          const argv = ((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as { extraArgs?: string[] }).extraArgs ?? []).join(' ')
+          for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)
+        }
+      }
     })
 
     it('gives a Swarm agent the machine MCP servers, as its owner\'s own session has them', async () => {

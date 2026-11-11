@@ -228,6 +228,32 @@ describe('stopped harness persistence', () => {
     expect(store.patch('never-saved', { cwd: '/tmp' })).toBe(false)
   })
 
+  // A stopped shell that is opened again is a new pane: the agent that ended in its old one is nobody's to take.
+  it('a saved record never keeps previousAgentId', async () => {
+    const { saved, store } = await fixture()
+    store.save({ ...saved, previousAgentId: 'agent-that-ended' })
+    const file = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8')) as { session: Record<string, unknown> }
+    expect(file.session).not.toHaveProperty('previousAgentId')
+    expect(store.get(saved.agentId)).not.toHaveProperty('previousAgentId')
+  })
+
+  // The browser moves with its pane (decision 19): a stopped agent's flag is written in place.
+  it('patch sets and clears browser in place: the name and touchedAt stay, a cleared flag is absent from the file, and an id with no record answers false', async () => {
+    const { saved, store } = await fixture()
+    store.save({ ...saved, defaultName: 'harness Desktop' })
+    const before = store.get(saved.agentId)!
+    expect(store.patch(saved.agentId, { browser: true })).toBe(true)
+    expect(store.get(saved.agentId)).toEqual({ ...before, browser: true })
+    expect(store.patch(saved.agentId, { browser: undefined })).toBe(true)
+    const file = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8')) as { session: Record<string, unknown> }
+    expect(file.session).not.toHaveProperty('browser')
+    const after = store.get(saved.agentId)!
+    expect(after).toEqual(before)
+    expect(after.touchedAt).toBe(before.touchedAt)
+    expect(after.defaultName).toBe('harness Desktop')
+    expect(store.patch('never-saved', { browser: true })).toBe(false)
+  })
+
   // The global "last used" order must not forget an agent because it was paused: the archive keeps
   // the stamp, the store reads it back, and the resumed row carries it into the live registry.
   it('keeps when an app last opened the agent through a stop and a resume', async () => {

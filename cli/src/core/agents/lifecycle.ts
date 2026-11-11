@@ -15,7 +15,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
-import type { AgentBrowserPort } from '../api.js'
+import type { AgentBrowserPort, BrowserSwitch } from '../api.js'
 import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -146,17 +146,91 @@ export function createAgentLifecycle({
  * or crashes by itself (lib/retainExitedSession.ts). Only a stop used to tell the browser, so the 2 GB container of
  * an agent whose engine exited on its own kept running and held a limit slot (review, 2026-11-10). One end is
  * seen more than once (an exit, then the forget of the same id), so the browser is told once per start.
+ *
+ * `set` is its person's Start and Stop, which the agent browser asks of the core (`CoreApi.agents.setBrowser`): the
+ * row's flag, then the browser's own start or stop, in one turn, so the flag changes in the order the service's
+ * queue asked. A browser left on comes back when its agent runs again; one turned off does not.
+ *
+ * How it comes back (decision 14): create, resume and daemon start attach it at once, before the engine is seen, so
+ * the browser starts with its agent. Every other path is caught at the next scan: the reconciler's look at each
+ * running agent (agents/discovery.ts `onObserved`) says `observed`. Only those three paths were handed `attached`, so
+ * an agent back from the archive (a restore that could not see its engine, or two missed scans) ran on with its flag
+ * set and no browser, and its Browser button was gone for good (a teammate's Mac, released build, 2026-11-11).
+ *
+ * The one case a flag changes id (decision 19): a new agent takes the pane its previous agent ended in (agents/
+ * discovery.ts: an engine typed into the shell an exit left, or a scan that opens a new agent over a bound one).
+ * `taken` tells the browser both ids; the agent browser moves the settings entry and its profile first, in its queue,
+ * and then asks `move` (`CoreApi.agents.moveBrowser`), so a move that fails there leaves both flags as they were.
+ * [stopped] is where a stopped agent's flag is written: the agent that ended is stopped by then, and so may the new one
+ * be.
  */
-export function createAgentBrowserLifecycle(browser: () => Pick<AgentBrowserPort, 'attached' | 'stopped'> | null) {
-  // Only agents with Browser that run here: bounded by them, not by every agent the daemon ever saw.
+export function createAgentBrowserLifecycle(
+  browser: () => Pick<AgentBrowserPort, 'attached' | 'stopped' | 'moved'> | null,
+  rows: { byAgent(agentId: string): RegisteredSession | undefined; setBrowser(agentId: string, on: boolean): RegisteredSession | null },
+  stopped: Pick<StoppedAgentStore, 'get' | 'patch'>,
+) {
+  // Only agents whose Browser is on that run here: bounded by them, not by every agent the daemon ever saw.
   const running = new Set<string>()
+  const attached = (session: RegisteredSession): void => {
+    if (session.browser) running.add(session.agentId)
+    browser()?.attached(session)
+  }
+  const ended = (agentId: string): void => {
+    if (running.delete(agentId)) browser()?.stopped(agentId)
+  }
+  // Said on every scan of every running agent, while the daemon is idle: a browser already attached costs one lookup.
+  const observed = (session: RegisteredSession): void => {
+    if (session.browser && !running.has(session.agentId)) attached(session)
+  }
   return {
-    attached(session: RegisteredSession): void {
-      if (session.browser) running.add(session.agentId)
-      browser()?.attached(session)
+    attached,
+    ended,
+    observed,
+    set(agentId: string, on: boolean): BrowserSwitch {
+      const row = rows.byAgent(agentId)
+      if (!on) {
+        // A Stop of a browser that is off, or of an agent gone since, is done already.
+        if (!row?.browser) return { ok: true, changed: false }
+        rows.setBrowser(agentId, false)
+        ended(agentId)
+        return { ok: true, changed: true }
+      }
+      if (!row) return { error: 'NOT_RUNNING' }
+      // The machine's Podman, memory and network are its owner's: never a guest's agent's.
+      if (row.guest) return { error: 'NOT_ALLOWED' }
+      const changed = !row.browser
+      // The row byAgent just gave, in the same turn: it is still live. Every Start attaches, as every look at an agent
+      // does (`AgentBrowserPort.attached` is idempotent).
+      attached(rows.setBrowser(agentId, true)!)
+      return { ok: true, changed }
     },
-    ended(agentId: string): void {
-      if (running.delete(agentId)) browser()?.stopped(agentId)
+    /** [to] took the pane [from] ended in. A guest's agent gets nothing of the owner's; one whose Browser is on keeps its
+     *  own, and [from] keeps its flag and its logins. No flag changes here. */
+    taken(from: string, to: RegisteredSession, on: boolean): void {
+      if (to.guest || to.browser) return
+      browser()?.moved(from, to, on)
+    },
+    /** The agent browser moved [from]'s entry to [to], and [from]'s Browser was on: the flag follows it. */
+    move(from: string, to: string): BrowserSwitch {
+      const live = rows.byAgent(to)
+      if (!live && !stopped.get(to)) return { error: 'NOT_RUNNING' }
+      // [from] runs again only if it was resumed since; an evicted agent is in neither list, and has nothing to clear.
+      const back = rows.byAgent(from)
+      const record = back ? null : stopped.get(from)
+      if (record) stopped.patch(from, { browser: undefined })
+      if (!live) {
+        // Its resume brings the browser. A record that cannot be written puts [from]'s back: whole or not at all.
+        try { stopped.patch(to, { browser: true }) } catch (error) {
+          if (record) stopped.patch(from, { browser: record.browser })
+          throw error
+        }
+      }
+      if (back) {
+        rows.setBrowser(from, false)
+        ended(from)
+      }
+      if (live) attached(rows.setBrowser(to, true)!)
+      return { ok: true, changed: true }
     },
   }
 }

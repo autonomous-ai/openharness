@@ -77,6 +77,11 @@ describe('the core API services stand on', () => {
     expect(TURN_END_HEARERS.every(service => TURN_DELIVERERS.includes(service))).toBe(true)
   })
 
+  // The agent browser types its ready and stopped lines into the agent, from its own process too.
+  it('lets the agent browser write turns into agents from its own process', () => {
+    expect(TURN_DELIVERERS).toContain('agentBrowser')
+  })
+
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
     const agents = [{ ...row('a'), sessionId: '' }, row('b')]
     expect(resolveAgent(agents, 'b')?.agentId).toBe('b')
@@ -267,8 +272,60 @@ describe('the core API services stand on', () => {
     const paned = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
     const core = createCoreApi({ ...deps, registry: { ...deps.registry, list: vi.fn(() => [paned]) } as unknown as CoreApiDeps['registry'] })
     expect(await core.agents.ids!()).toEqual({ live: ['live'], stopped: ['stopped'] })
-    expect(await core.agents.ofPane!('%7')).toBe('live')
+    expect(await core.agents.ofPane!('%7')).toEqual({ agentId: 'live', guest: false })
     expect(await core.agents.ofPane!('%8')).toBeNull()
+  })
+
+  // Review Focus 1 (re-check 2 of #2093): pane ids restart in every tmux server, so a private server inside one agent's
+  // pane counts up to another agent's pane id. `harness browser` sends its parents' pids, and the pane's own process,
+  // read from the daemon's terminal backend, has to be among them.
+  it('ofPane with ancestors is null when the pane\'s process is not among them (another tmux server\'s pane of the same id), and the agent when it is; without ancestors it answers as before', async () => {
+    const deps = coreDeps()
+    const live = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
+    const kim = { ...row('kim'), guest: 'kim@acme.io', runtimes: [{ backend: 'tmux', paneId: '%8' }] } as RegisteredSession
+    const registry = { ...deps.registry, list: vi.fn(() => [live, kim]) } as unknown as CoreApiDeps['registry']
+    const panePid = vi.fn(async (session: RegisteredSession): Promise<number | null> => (session.agentId === 'live' ? 4242 : 4343))
+    const core = createCoreApi({ ...deps, registry, panePid })
+    // Run in a private server's %7 inside kim's pane: its parents are kim's pane's, never live's.
+    expect(await core.agents.ofPane!('%7', [9001, 9000, 4343, 1])).toBeNull()
+    expect(await core.agents.ofPane!('%7', [9001, 4242, 1])).toEqual({ agentId: 'live', guest: false })
+    expect(panePid).toHaveBeenLastCalledWith(live)
+    expect(await core.agents.ofPane!('%8', [4343, 1])).toEqual({ agentId: 'kim', guest: true })
+    expect(await core.agents.ofPane!('%9', [4242])).toBeNull()
+    // A pane whose process cannot be read proves nothing.
+    panePid.mockResolvedValueOnce(null)
+    expect(await core.agents.ofPane!('%7', [4242])).toBeNull()
+    panePid.mockRejectedValueOnce(new Error('tmux did not answer'))
+    expect(await core.agents.ofPane!('%7', [4242])).toBeNull()
+    // Nor does a core that cannot read it.
+    expect(await createCoreApi({ ...deps, registry }).agents.ofPane!('%7', [4242])).toBeNull()
+    // Without ancestors, as an older relay's `agent_browser_state` asks: the pane's agent, read from nothing else.
+    const calls = panePid.mock.calls.length
+    expect(await core.agents.ofPane!('%7')).toEqual({ agentId: 'live', guest: false })
+    expect(panePid).toHaveBeenCalledTimes(calls)
+  })
+
+  // The person's Start and Stop reach the core through the agent browser (core/agents/lifecycle.ts `set`).
+  it('agents.setBrowser is the dep\'s answer, and absent without one', async () => {
+    const setBrowser = vi.fn((agentId: string, on: boolean) => (agentId === 'a1' ? { ok: true as const, changed: on } : { error: 'NOT_RUNNING' as const }))
+    const core = createCoreApi({ ...coreDeps(), setBrowser })
+    expect(await core.agents.setBrowser!('a1', true)).toEqual({ ok: true, changed: true })
+    expect(await core.agents.setBrowser!('gone', true)).toEqual({ error: 'NOT_RUNNING' })
+    expect(setBrowser.mock.calls).toEqual([['a1', true], ['gone', true]])
+    expect(createCoreApi(coreDeps()).agents.setBrowser).toBeUndefined()
+  })
+
+  // The agent browser moved a pane's browser to its new agent, and asks the core to move the flag (decision 19).
+  it('moveBrowser answers what the lifecycle said, and is absent without it', async () => {
+    const moveBrowser = vi.fn((_from: string, to: string) => (to === 'shell' ? { ok: true as const, changed: true } : { error: 'NOT_RUNNING' as const }))
+    const core = createCoreApi({ ...coreDeps(), moveBrowser })
+    expect(await core.agents.moveBrowser!('ended', 'shell')).toEqual({ ok: true, changed: true })
+    expect(await core.agents.moveBrowser!('ended', 'gone')).toEqual({ error: 'NOT_RUNNING' })
+    expect(moveBrowser.mock.calls).toEqual([['ended', 'shell'], ['ended', 'gone']])
+    // A record that cannot be written is a rejection, never a throw in the asker's turn.
+    moveBrowser.mockImplementationOnce(() => { throw new Error('ENOSPC') })
+    await expect(core.agents.moveBrowser!('ended', 'shell')).rejects.toThrow('ENOSPC')
+    expect(createCoreApi(coreDeps()).agents.moveBrowser).toBeUndefined()
   })
 
   it('hands a service\'s product counters on only where the core was told where they go', () => {
@@ -281,7 +338,8 @@ describe('the core API services stand on', () => {
   // A verified machine share is `owner` too, and the browser holds its person's logins.
   it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
     expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
-      'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'])
+      'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
+      'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'])
     expect(mayOpenBrowser({ local: true, owner: true })).toBe(true)
     expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true })).toBe(true)
     expect(mayOpenBrowser({ local: false, owner: true })).toBe(false)
@@ -435,6 +493,10 @@ describe('the core API services stand on', () => {
     }
     // A grid command may run half an hour, and is waited for longer than that.
     expect(LONG_ANSWERS.models!.grid_fleet_run).toBeGreaterThan(30 * 60_000)
+    // An agent's browser command runs up to 70 s (navigation's 60 s and the service's 10 s), and `harness browser`
+    // waits 75 s for it: the core waits longer, so the CLI's own line says it timed out.
+    expect(LONG_ANSWERS.agentBrowser).toEqual({ agent_browser_run: 80_000 })
+    expect(AGENT_BROWSER_REQUESTS).toContain('agent_browser_run')
   })
 
   it('gives a service that acts on no agent nothing to create and no harness to read, and a daemon it was never told of', async () => {

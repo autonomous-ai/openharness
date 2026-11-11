@@ -222,9 +222,23 @@ export interface CoreApi {
     /** The ids of every agent here, live and stopped, read now: what the agent browser keeps a browser for (a browser
      *  whose agent is in neither is deleted). Absent where the core is not asked it; a failed or missing answer is no answer. */
     ids?(): Promise<{ live: string[]; stopped: string[] }>
-    /** The live agent whose terminal is the pane [pane] (`$HARNESS_PANE`), or null: the agent browser's
-     *  tools in an agent's pane name it so. Absent where the core is not asked it. */
-    ofPane?(pane: string): Promise<string | null>
+    /** The live agent whose terminal is the pane [pane] (`$TMUX_PANE`, `$HARNESS_PANE`), and whether it is a guest's,
+     *  or null: `harness browser` in an agent's pane names it so. With [ancestors] (the command's parents' pids), null
+     *  unless the pane's own process, read from the daemon's terminal backend, is among them: pane ids restart in every
+     *  tmux server, so a private server's pane of the same id is another agent's (re-check 2 of #2093). Without them,
+     *  the pane's agent as before, for the `browser-mcp` relays still running (`agent_browser_state`). Delete that on or
+     *  after 2026-12-18: 30 days after the CLI release that took the relay away (assumed by 2026-11-18; whoever
+     *  releases later moves the date). Absent where the core is not asked it. */
+    ofPane?(pane: string, ancestors?: number[]): Promise<{ agentId: string; guest: boolean } | null>
+    /** Turn a live agent's Browser on or off, its person's Start and Stop (registry `browser`), and tell its browser
+     *  (`AgentBrowserPort.attached`, `stopped`) in the same turn: the flag changes in the order the agent browser asks.
+     *  Only a live agent that is not a guest's is turned on. Absent where the core is not asked it. */
+    setBrowser?(agentId: string, on: boolean): Promise<BrowserSwitch>
+    /** The agent browser moved [from]'s entry to [to], the agent that took the pane [from] ended in, and [from]'s Browser
+     *  was on (decision 19): [from]'s flag is cleared and [to]'s is set, each where its row is, live or stopped; a live
+     *  [to] is attached in the same turn. Whole or not at all: it rejects with both flags as they were. Absent where the
+     *  core is not asked it. */
+    moveBrowser?(from: string, to: string): Promise<BrowserSwitch>
   }
   /** A fixed-name product counter (`GatewayPort.usageCounter`): no id, URL, host, reason or content. Absent where the
    *  core offers a service none. */
@@ -587,8 +601,10 @@ export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, mach
 /** How a delivery is told apart: `answersQuestion` marks a person's Swarm message, which closes the question it answers
  *  in a Claude pane (core/input.ts `beforeTeamWrite`);
  *  `writtenAt` is when it was written (ms), as only a question open since then is its to close;
- *  `personsOwn` marks their own words in their agent's own 1:1 chat: their input, which the short-turn guard never holds. */
-export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number; personsOwn?: true }
+ *  `personsOwn` marks their own words in their agent's own 1:1 chat: their input, which the short-turn guard never holds;
+ *  `quiet` marks a line a service types for the agent alone: the turn it starts is nobody's news, and ends with no recap
+ *  and no notification (core/deliveries.ts, core/turns/recaps.ts). `turns.onEnd` still tells that end. */
+export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number; personsOwn?: true; quiet?: true }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
@@ -708,11 +724,13 @@ export interface SuperTabsPort { connected(): void; disconnected(): void; stop()
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /**
  * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up (this computer only), a
- * browser's state for its agent's tools (this computer only), and Retry and the settings (the machine's own person
- * only, `mayOpenBrowser`).
+ * browser's state for the MCP relay of an agent launched before the browser moved to its chat (this computer only),
+ * its person's Start and Stop, Retry, the settings and the size of Chrome's window (the machine's own person only,
+ * `mayOpenBrowser`), and the agent's own commands, from `harness browser` in its pane (this computer only).
  */
 export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
-  'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'] as const
+  'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
+  'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',
   'agent_instructions_read', 'agent_instructions_write'] as const
@@ -822,6 +840,10 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
   // A guest's first harness makes their OS account (`dscl`, a home); turning guest access on waits on the
   // owner at the admin prompt, which gives up after ten minutes (lib/guestHelperInstall.ts).
   sharedMachines: { guestLaunch: 2 * MINUTE, shared_machines: 11 * MINUTE },
+  // An agent's browser command runs up to 70 s (navigation's 60 s and the 10 s the service gives a call more), after
+  // those before it, and `harness browser` waits at most 75 s: the core waits longer, so the agent reads its own
+  // `<command> timed out` rather than an unavailable service.
+  agentBrowser: { agent_browser_run: 80_000 },
 }
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
@@ -929,9 +951,10 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
 }
 
 /** The services that may write turns into agents from a process of their own (core/deliveries.ts): the experiments,
- *  and Agent Messages, which left them for the edge host and still types a message into an idle agent. No other
- *  process may: writing into a pane is no other service's to ask. */
-export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages']
+ *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
+ *  browser, which types its two lines into an agent when its person starts and stops its browser. No other process
+ *  may: writing into a pane is no other service's to ask. */
+export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser']
 
 /** The services in their own processes that are told each live turn's end (core/turns/ends.ts): the Swarm's, which posts an
  *  agent's answer into its person's chat when the turn that answers them ends. No other asks, so none is sent every end. */
@@ -1012,8 +1035,9 @@ export interface RecapWatchers { device: boolean; active: boolean; remote?: bool
 
 /** The turn lifecycle, as the core tells the recaps. */
 export type TurnLifecycle =
-  /** A session's events (a turn started, its text, its tools and sub-agents, its end), as one batch. */
-  | { kind: 'events'; session: RecapSession; events: LiveEvent[]; replay: boolean }
+  /** A session's events (a turn started, its text, its tools and sub-agents, its end), as one batch. `quiet`: the turn
+   *  that ends in this batch was started by a quiet delivery (`DeliveryOptions.quiet`); absent from an older core. */
+  | { kind: 'events'; session: RecapSession; events: LiveEvent[]; replay: boolean; quiet?: true }
   /** The core's five-second turn heartbeat, and whether the turn is verifiably working right now. */
   | { kind: 'beat'; session: RecapSession; working: boolean }
   /** The turn was cancelled: no turn end comes. */
@@ -1066,29 +1090,37 @@ export interface AgentCleanupPort {
 export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, stop: undefined }
 
 /**
- * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent with Browser ticked, and
+ * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
  * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
  * runs in its own process: core/agentBrowserLink.ts).
  */
 export interface AgentBrowserPort {
-  /** An agent is here and running: its browser starts, for one created with Browser. Idempotent, as `ViewersPort.attach`. */
+  /** An agent is here and running: its browser starts, for one whose Browser is on. Idempotent, as `ViewersPort.attach`. */
   attached(session: RegisteredSession): void
-  /** The agent stopped: its browser stops, and its profile stays for a resume. */
+  /** The agent stopped, or its person turned its Browser off: its browser stops, and its profile stays. */
   stopped(agentId: string): void
   /** The agent was purged: its browser and its profile go. */
   deleted(agentId: string): void
+  /** The pane [from] ended in has a new agent, [to] (decision 19): [from]'s settings and profile go to [to], and then
+   *  the service asks `agents.moveBrowser`. [on]: [from]'s Browser was on. */
+  moved(from: string, to: RegisteredSession, on: boolean): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
   /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
-   *  `exec -i harness-browser-<id> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
+   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
   streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
   /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
   onCloseViewers(listener: (agentId: string) => void): void
   stop(): void
 }
+/** What turning an agent's Browser on or off answered (`CoreApi.agents.setBrowser`): whether its flag changed, or why
+ *  it was not turned on. */
+export type BrowserSwitch = { ok: true; changed: boolean } | { error: 'NOT_RUNNING' | 'NOT_ALLOWED' }
+
 /** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream to open. A
- *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. */
+ *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. A move it
+ *  misses leaves the browser with the agent that ended, whose resume brings it back. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, streamCommand: { error: 'NO_BROWSER' }, onCloseViewers: undefined, stop: undefined,
+  attached: undefined, stopped: undefined, deleted: undefined, moved: undefined, frameContext: undefined, streamCommand: { error: 'NO_BROWSER' }, onCloseViewers: undefined, stop: undefined,
 }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
@@ -2034,6 +2066,15 @@ export interface CoreApiDeps {
   summaries?: CoreApi['agents']['summaries']
   /** One `agent_close` (core/agents/close.ts), for `closeStarted`; absent, a service closes nothing. */
   closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
+  /** An agent's Browser turned on or off (core/agents/lifecycle.ts `createAgentBrowserLifecycle`), for `setBrowser`;
+   *  absent, the core offers none. */
+  setBrowser?: (agentId: string, on: boolean) => BrowserSwitch
+  /** A pane's browser's flag moved to its new agent (the same lifecycle's `move`), for `moveBrowser`; absent, the core
+   *  offers none. */
+  moveBrowser?: (from: string, to: string) => BrowserSwitch
+  /** The process a session's pane runs, from its own terminal backend (`TerminalBackend.paneInfo`), or null: what
+   *  `ofPane` holds a command's parents to. Absent, no pane is proven. */
+  panePid?: (session: RegisteredSession) => Promise<number | null>
   /** When an agent's conversation last moved (lib/transcriptActivity.ts), for `lastActivity`. */
   activityAt?: (session: RegisteredSession) => Promise<number | null>
   /** A resume of a stopped agent (core/agents/lifecycle.ts `resumeAgent`), for `keepLeadAlive`. */
@@ -2074,7 +2115,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, swarmAgents,
+  closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -2129,7 +2170,17 @@ export function createCoreApi({
         return session && activityAt ? activityAt(session) : null
       },
       ids: async () => ({ live: registry.list().map(session => session.agentId), stopped: stoppedAgents.ids() }),
-      ofPane: async (pane) => sessionForPaneId(registry.list(), pane)?.agentId ?? null,
+      ofPane: async (pane, ancestors) => {
+        const session = sessionForPaneId(registry.list(), pane)
+        if (!session) return null
+        if (ancestors) {
+          const pid = panePid ? await panePid(session).catch(() => null) : null
+          if (pid === null || !ancestors.includes(pid)) return null
+        }
+        return { agentId: session.agentId, guest: !!session.guest }
+      },
+      ...(setBrowser ? { setBrowser: async (agentId: string, on: boolean) => setBrowser(agentId, on) } : {}),
+      ...(moveBrowser ? { moveBrowser: async (from: string, to: string) => moveBrowser(from, to) } : {}),
     },
     ...(count ? { count } : {}),
     turns,

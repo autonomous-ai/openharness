@@ -39,7 +39,6 @@ import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
-import { browserMcpArgs } from './browserMcpArgs.js'
 import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
@@ -175,8 +174,6 @@ export interface LaunchSource extends NativeLaunchSource {
   /** The owner's extra launch words (the registry row's `launchArgs`). Checked again at each launch (`checkLaunchWords`):
    *  a row edited by hand, or a flag a later release refuses, applies none. */
   launchArgs?: string[]
-  /** The registry row's `browser`: the agent was created with Browser, and every relaunch gives it its browser tools. */
-  browser?: true
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
@@ -327,8 +324,6 @@ export async function prepareLaunchOverrides(
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
     const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
-    // A Browser agent's `browser` MCP server (lib/browserMcpArgs.ts), in the slot `agent_create` gave it.
-    if (source.browser && (engine === 'claude' || engine === 'codex')) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...browserMcpArgs(engine, 'harness')] }
     // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
     if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
     // The owner's own flags (`agent_restart`'s `launchArgs`) are the owner's, so they come last on the command line, in a

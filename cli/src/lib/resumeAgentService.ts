@@ -50,7 +50,7 @@ export interface ResumeAgentServiceDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
-  /** Its browser starts again, for an agent created with Browser (core/api.ts `AgentBrowserPort.attached`). */
+  /** Its browser starts again, for an agent whose Browser is on (core/api.ts `AgentBrowserPort.attached`). */
   attachBrowser?(session: RegisteredSession): void
   /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
   attachSession(session: RegisteredSession): Promise<boolean>

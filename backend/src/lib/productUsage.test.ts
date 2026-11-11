@@ -115,6 +115,13 @@ it('names launch refusals and agent-started launches', () => {
     'launch_refused_code_session_in_harness', 'launch_refused_code_invalid_request']) expect(metrics.has(m), m).toBe(true)
 })
 
+it('names the browser-from-chat counters', () => {
+  const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
+  expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)
+  for (const m of ['agent_browser_started', 'agent_browser_stopped', 'agent_browser_command_ok', 'agent_browser_command_failed',
+    'agent_browser_notice_failed']) expect(metrics.has(m), m).toBe(true)
+})
+
 it('names every launch code in each of its families, once, as a fixed word that can carry no message', () => {
   const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
   expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)

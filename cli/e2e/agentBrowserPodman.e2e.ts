@@ -1,8 +1,15 @@
 /**
- * The agent browser on real Podman (Task 20 of docs/superpowers/plans/2026-11-10-agent-browser.md): the image built from
- * the CLI's own files, a browser agent's Chrome driven through `harness browser-mcp` as an engine drives it, its screen
- * streamed as the Desktop opens it, a page that asks for a person, a page that cannot reach the host, its login kept across a stop, its restart after a
- * crash, Device, a proxy that fails closed, and a delete that leaves nothing behind. agentBrowser.e2e.ts runs the same daemon against a fake `podman`.
+ * The agent browser on real Podman (Task 20 of docs/superpowers/plans/2026-11-10-agent-browser.md, driven as Task 18 of
+ * docs/superpowers/plans/2026-11-11-browser-from-chat.md has it): the image built from the CLI's own files, a plain agent's
+ * browser started by its person (`agent_browser_start`), its Chrome driven by `harness browser` run in the agent's pane as
+ * its engine's shell tool runs it, its screen streamed as the Desktop opens it, Chrome's window sized to the panel, a page
+ * that asks for a person, a page that cannot reach the host, its login kept across the person's Stop and the agent's own
+ * stop, its restart after a crash, Device, a proxy that fails closed, and a delete that leaves nothing behind.
+ * agentBrowser.e2e.ts runs the same daemon against a fake `podman`.
+ *
+ * `harness browser` proves its pane from its parent processes (lib/callerPane.ts), so it must run below the pane's own
+ * process: the agent's fake engine (its wrapper here, `writeEngine`) runs each command the test leaves it, as Claude
+ * Code's Bash tool does, with the pane's environment. Typing into the pane would type into the engine's composer.
  *
  * The daemon finds a `podman` first on its PATH that runs the real one, so nothing a person or another run keeps in
  * Podman is seen or touched, and the clean-up can remove all the run made:
@@ -20,20 +27,19 @@
  * The cases run in order on one daemon and one agent, each starting where the last left the browser; once one fails,
  * the rest are skipped and say which.
  */
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import http from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
 import { networkInterfaces, tmpdir, userInfo } from 'node:os'
-import { delimiter, join } from 'node:path'
-import { createInterface } from 'node:readline'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { daemonIdOf } from '../src/services/agentBrowser.js'
 import { artifactLog } from './harness/artifacts.js'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemon.js'
 
 // The image build may take its whole 15 minutes (image.ts) on a cold runner, and the browser's start follows it.
 const BUILD_MS = 20 * 60_000
@@ -44,12 +50,23 @@ const OWN_MACHINE = 'harness'
 // A container created again (new settings) or started again (after an exit): the ready check's 60 s and the restart's
 // backoff, with room.
 const START_MS = 3 * 60_000
-// A navigation's own 60 s (browser-tools.mjs), plus the relay asking the daemon and starting `podman exec`.
+// The CLI's longest wait (navigate: 75 s, agentClient/browser.ts), plus its start.
 const CALL_MS = 90_000
 const TYPED = 'Xin chào 👋'
 const DEVICE = { gpuVendor: 'Harness E2E Vendor', gpuRenderer: 'Harness E2E Renderer', cpuCores: 12, memoryGb: 4 }
 const PROXY_LOGIN = { username: 'harness-e2e', password: 'e2e-proxy-password' }
 const CHAT_LINE = 'This page asks for a person. Tell your person in chat what to do in Browser, wait for their answer, and do not act on the challenge yourself.'
+// What `harness browser` prints (the spec's copy).
+const OFF_LINE = 'Your browser is off. Ask your person to start it: Browser in your chat.'
+const STOP_LINE = 'Your person stopped your browser.'
+const START_STOP_LINE = 'Only your person starts and stops your browser: Browser in your chat.'
+// Text no page here shows: a `wait` for it runs its whole 30 s unless something ends it.
+const NEVER_SHOWN = 'Text no page here shows'
+// The tool server in the image, as the daemon starts it (services/agentBrowser.ts TOOL_SERVER).
+const TOOL_SERVER = ['node', '/opt/harness-browser/browser-tools.mjs']
+// How `harness browser` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs: the build that
+// ships.
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 // Inside the container, the machine it runs on; Podman writes the name into the container's /etc/hosts. The browser's
 // relay refuses it (proxy-relay.mjs), so only what does not go through the browser uses it.
 const HOST = 'host.containers.internal'
@@ -105,12 +122,16 @@ const SKIP = unavailable()
 interface Store { dir?: string; flags: string[] }
 interface Ran { code: number; stdout: string; stderr: string }
 
-/** Never rejects: a command that failed or ran out of time answers its code (-1 when it had none) and what it said. */
-function run(file: string, args: string[], timeoutMs: number): Promise<Ran> {
+/**
+ * Never rejects: a command that failed or ran out of time answers its code (-1 when it had none) and what it said.
+ * [input], when given, is its whole standard input.
+ */
+function run(file: string, args: string[], timeoutMs: number, input?: string): Promise<Ran> {
   return new Promise((done) => {
-    execFile(file, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: podmanEnv }, (error, stdout, stderr) => {
+    const child = execFile(file, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: podmanEnv }, (error, stdout, stderr) => {
       done({ code: !error ? 0 : typeof error.code === 'number' ? error.code : -1, stdout, stderr: error?.killed ? `timed out after ${timeoutMs} ms` : stderr })
     })
+    if (input !== undefined) child.stdin!.end(input)
   })
 }
 
@@ -134,6 +155,41 @@ function writePodman(d: IsolatedDaemon, store: Store): void {
   writeFileSync(join(d.env.ZDOTDIR!, '.zprofile'), `path=(${quote(bin)} $path)\n`, { flag: 'a' })
 }
 
+/**
+ * The agent's engine (the fake Claude Code, as the daemon's own wrapper starts it) also runs each `harness browser` the
+ * test leaves in [runs]: `<n>.json`, `{pane, args}`, taken by the engine in that pane, which writes `<n>.out`, `<n>.err`
+ * and, last, `<n>.code`. So the command's parents are the engine and the pane's shell, as when the engine's shell tool runs
+ * it, and its environment is the pane's. A probe of the engine (`--version`) runs in no pane and takes nothing.
+ */
+function writeEngine(d: IsolatedDaemon, runs: string): void {
+  const runner = `
+if (process.env.TMUX_PANE && !process.argv.slice(2).some((arg) => ['--version', '-v', '--help', '-h'].includes(arg))) {
+  const fs = process.getBuiltinModule('node:fs'), { join } = process.getBuiltinModule('node:path'), { spawn } = process.getBuiltinModule('node:child_process')
+  const runs = ${JSON.stringify(runs)}
+  const done = (base, code) => { fs.writeFileSync(base + '.exit', String(code)); fs.renameSync(base + '.exit', base + '.code') }
+  setInterval(() => {
+    let names = []
+    try { names = fs.readdirSync(runs).filter((name) => name.endsWith('.json')) } catch { return }
+    for (const name of names) {
+      const base = join(runs, name.slice(0, -'.json'.length))
+      let request
+      try { request = JSON.parse(fs.readFileSync(base + '.json', 'utf8')) } catch { continue }
+      if (request.pane !== process.env.TMUX_PANE) continue
+      try { fs.renameSync(base + '.json', base + '.taken') } catch { continue }
+      const out = fs.openSync(base + '.out', 'w'), err = fs.openSync(base + '.err', 'w')
+      const child = spawn(process.execPath, [...${JSON.stringify(CLI_ENTRY)}, 'browser', ...request.args],
+        { cwd: ${JSON.stringify(CLI_ROOT)}, env: process.env, stdio: ['ignore', out, err] })
+      fs.closeSync(out)
+      fs.closeSync(err)
+      child.on('error', () => done(base, -1))
+      child.on('exit', (code, signal) => done(base, code ?? signal))
+    }
+  }, 100).unref()
+}
+`
+  writeFileSync(join(d.root, 'bin', 'claude'), fakeEngineShim('claude', { ...d.engineConfig }) + runner, { mode: 0o755 })
+}
+
 /** The default connection's name, as `podman system connection list` shows it. */
 async function defaultConnection(): Promise<string> {
   const listed = await run(realPodman!, ['system', 'connection', 'list', '--format', 'json'], 10_000)
@@ -151,6 +207,8 @@ const PAGES: Record<string, string> = {
   '/set-cookie': '<p>Cookie set</p>',
   '/cookie': '<p>Cookie read</p>',
   '/addr': '<p>Your address</p>',
+  // The tab's size and the screen's, in its title, which `navigate` prints (the window case).
+  '/window': '<script>document.title = `inner ${innerWidth}x${innerHeight} screen ${screen.width}x${screen.height}`</script>',
   // Each `host:port` in `targets`, by fetch and by WebSocket: reached only when the canary itself answered.
   '/probe': '<script>'
     + 'const targets = new URLSearchParams(location.search).get("targets").split(",");'
@@ -302,69 +360,6 @@ function screenOf(client: LocalClient, streamId: string): (n: number) => Promise
   }
 }
 
-type ToolReply = { text: string; isError: boolean; content: Array<Record<string, any>> }
-
-/** `harness browser-mcp` from the agent's pane, as its engine starts it: requests in on stdin, answers by id on stdout. */
-class Relay {
-  stderr = ''
-  private next = 1
-  private readonly waiting = new Map<number, { done: (reply: Record<string, any>) => void; fail: (error: Error) => void }>()
-  private readonly exited: Promise<void>
-
-  private constructor(private readonly child: ChildProcess) {
-    createInterface({ input: child.stdout! }).on('line', (line) => {
-      let reply: Record<string, any>
-      try { reply = JSON.parse(line) } catch { return }
-      this.waiting.get(reply.id)?.done(reply)
-    })
-    child.stderr!.on('data', (chunk) => { this.stderr += chunk })
-    this.exited = new Promise((done) => child.once('exit', (code, signal) => {
-      for (const entry of this.waiting.values()) entry.fail(new Error(`harness browser-mcp exited (${signal ?? code}): ${this.stderr.slice(-2000)}`))
-      this.waiting.clear()
-      done()
-    }))
-  }
-
-  static async open(d: IsolatedDaemon, pane: string): Promise<Relay> {
-    // The run's bundle when there is one (E2E_BUNDLE), as the daemon runs: the build that ships.
-    const bundle = process.env.E2E_BUNDLE_PATH
-    const child = spawn(process.execPath, [...(bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']), 'browser-mcp'], {
-      cwd: CLI_ROOT, env: { ...d.env, TMUX_PANE: pane }, stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    const relay = new Relay(child)
-    await relay.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'agent-browser-e2e', version: '1' } }, 30_000)
-    child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
-    return relay
-  }
-
-  request(method: string, params: Record<string, unknown>, ms: number): Promise<Record<string, any>> {
-    const id = this.next++
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.waiting.delete(id); reject(new Error(`${method} got no answer in ${ms} ms: ${this.stderr.slice(-2000)}`)) }, ms)
-      this.waiting.set(id, {
-        done: (reply) => { clearTimeout(timer); this.waiting.delete(id); resolve(reply) },
-        fail: (error) => { clearTimeout(timer); reject(error) },
-      })
-      this.child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
-    })
-  }
-
-  async call(name: string, args: Record<string, unknown> = {}): Promise<ToolReply> {
-    const reply = await this.request('tools/call', { name, arguments: args }, CALL_MS)
-    const content = (reply.result?.content ?? []) as Array<Record<string, any>>
-    return { content, isError: reply.result?.isError === true, text: content.filter((part) => part.type === 'text').map((part) => part.text).join('\n') }
-  }
-
-  /** As the engine closes it: stdin ends, and the relay ends its tool server. Killed if it has not gone in 10 s. */
-  async close(): Promise<void> {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return
-    this.child.stdin!.end()
-    const timer = setTimeout(() => this.child.kill('SIGKILL'), 10_000)
-    await this.exited
-    clearTimeout(timer)
-  }
-}
-
 /** The ref a snapshot gave the element of this role and name (browser-tools-lib.mjs roleSnapshot). */
 function refOf(snapshot: string, role: string, name: string): string {
   const line = snapshot.split('\n').find((entry) => entry.includes(`${role} "${name}"`) && /\[ref=e\d+\]/.test(entry))
@@ -381,13 +376,16 @@ describe('the agent browser on real Podman', () => {
   let pages: Pages | undefined
   let proxy: LoginProxy | undefined
   let canary: Canary | undefined
-  let relay: Relay | undefined
   let agent: Record<string, any> | undefined
   let broken: string | null = null
   /** macOS: the person's default connection before the run, which must be theirs after it. */
   let personsConnection = ''
 
-  const podman = (args: string[], timeoutMs = 60_000) => run(realPodman!, [...store!.flags, ...args], timeoutMs)
+  /** The last `harness browser` the agent ran, and what it said: a failing case's evidence. */
+  let lastCommand = ''
+  let commands = 0
+
+  const podman = (args: string[], timeoutMs = 60_000, input?: string) => run(realPodman!, [...store!.flags, ...args], timeoutMs, input)
   const name = () => `harness-browser-${agent!.id}`
   const inside = (cmd: string[]) => podman(['exec', name(), ...cmd])
   const row = async () => (await client!.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true })).agents
@@ -431,19 +429,34 @@ describe('the agent browser on real Podman', () => {
     expect(saved.error, JSON.stringify(saved)).toBeUndefined()
   }
 
-  async function openRelay(): Promise<Relay> {
+  const runs = () => join(d!.root, 'browser-runs')
+
+  /**
+   * `harness browser <args>` in the agent's pane, run by its engine (writeEngine): its exit code and what it printed. The
+   * agent's pane is read again each time, as an agent's stop and resume may give it another.
+   */
+  async function browser(args: string[], ms = CALL_MS): Promise<Ran> {
     const live = await until('the agent to be active in a pane', async () => {
       const found = await row()
       return found?.status === 'active' && found.tmuxPane ? found : null
     }, 60_000, 500)
-    relay = await Relay.open(d!, String(live.tmuxPane))
-    return relay
+    const base = join(runs(), String(++commands))
+    writeFileSync(`${base}.request`, JSON.stringify({ pane: String(live.tmuxPane), args }))
+    renameSync(`${base}.request`, `${base}.json`)
+    const code = await until(`harness browser ${args[0]} to exit`, () => readFileSync(`${base}.code`, 'utf8'), ms, 100)
+    const ran = { code: /^\d+$/.test(code) ? Number(code) : -1, stdout: readFileSync(`${base}.out`, 'utf8'), stderr: readFileSync(`${base}.err`, 'utf8') }
+    // Its command's name only, as the daemon logs it: the rest can be a page's words.
+    lastCommand = `harness browser ${args[0]}: exit ${code}\n${ran.stderr.slice(-2000)}`
+    return ran
   }
 
-  /** What a failing case leaves to read: the daemon's log, the relay's, and the browser's own logs in its container. */
+  /** Whether the tool server runs in the container: the daemon starts it at the first command after a Start. */
+  const toolServerRuns = async () => (await inside(['pgrep', '-f', '--', TOOL_SERVER[1]!])).code === 0
+
+  /** What a failing case leaves to read: the daemon's log, the last command's, and the browser's own logs in its container. */
   async function evidence(): Promise<void> {
     if (d) console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`)
-    if (relay) console.log(`---- harness browser-mcp stderr\n${relay.stderr.slice(-4000)}`)
+    if (lastCommand) console.log(`---- the last command\n${lastCommand}`)
     if (!agent || !store) return
     const logs = await podman(['logs', '--tail', '200', name()])
     const own = await inside(['sh', '-c', 'tail -n 80 /tmp/chrome.log /tmp/xvnc.log /tmp/proxy-relay.log /tmp/device.log 2>/dev/null; true'])
@@ -495,7 +508,7 @@ describe('the agent browser on real Podman', () => {
     }
     if (left.length > 0) console.log(`agent browser e2e: removed what the run left in Podman: ${left.join(', ')}`)
     if (process.platform === 'darwin') return await removeMachine()
-    // The daemon's `podman events` and the relay's `podman exec` start in process groups of their own, so a core that
+    // The daemon's `podman events` and its tool servers' `podman exec` start in process groups of their own, so a core that
     // died hard leaves them running. Every one names this store on its command line, and nothing else does.
     await run('pkill', ['-KILL', '-f', '--', store!.dir!], 10_000)
     // The store's files belong to the user namespace's subordinate ids: only inside it can they be removed.
@@ -505,7 +518,7 @@ describe('the agent browser on real Podman', () => {
 
   /** macOS: Harness's own machine, with the images in it. None of that name was here before the run (unavailable). */
   async function removeMachine(): Promise<void> {
-    // As on Linux, the daemon's `podman events` and the relay's `podman exec` can outlive a core that died hard; each
+    // As on Linux, the daemon's `podman events` and its tool servers' `podman exec` can outlive a core that died hard; each
     // names the connection on its command line.
     await run('pkill', ['-KILL', '-f', '--', `--connection ${OWN_MACHINE} `], 10_000)
     await run(realPodman!, ['machine', 'stop', OWN_MACHINE], 120_000)
@@ -550,13 +563,14 @@ describe('the agent browser on real Podman', () => {
     pages = await Pages.start()
     d = await IsolatedDaemon.create()
     writePodman(d, store)
+    mkdirSync(runs(), { recursive: true })
+    writeEngine(d, runs())
     await d.start()
     client = await LocalClient.connect(d)
   }, 120_000)
 
   afterAll(async () => {
     if (SKIP) return
-    await relay?.close()
     client?.close()
     // Its own errors (hooks outside the root) are kept for after the clean-up, which must run regardless.
     const closed = await d?.close().then(() => null, (error: unknown) => error)
@@ -567,57 +581,113 @@ describe('the agent browser on real Podman', () => {
     if (closed) throw closed
   }, 600_000)
 
-  step('builds the image, and a browser agent is ready with no published port', MACHINE_MS + BUILD_MS + 120_000, async () => {
+  step('builds the image, and a plain agent\'s browser, started by its person, is ready with no published port', MACHINE_MS + BUILD_MS + 120_000, async () => {
     const cwd = join(d!.projectsDir, 'with-browser')
     mkdirSync(cwd, { recursive: true })
-    // As the Desktop's form asks before it creates the agent: a stopped machine is one Harness starts, so it goes on.
+    // As the Desktop's panel asks before its Start: a stopped machine is one Harness starts, so it goes on.
     if (process.platform === 'darwin') expect(await client!.request('agent_browser_available', {})).toMatchObject({ state: 'stopped' })
-    const created = await client!.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, browser: true }, 60_000)
+    // A plain agent: New agent sends no `browser`.
+    const created = await client!.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     agent = created.agent as Record<string, any>
+    await until('the agent to bind its conversation', async () => (await row())?.sessionId || null, 60_000, 500)
+    expect((await row())?.browser).toBeUndefined()
+    // The person's Start, in the agent's chat.
+    expect(await client!.request('agent_browser_start', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
     const pressed = process.platform === 'darwin' ? await installOwnMachine() : Date.now()
     await settled('the image to build and the browser to be ready', MACHINE_MS + BUILD_MS)
-    console.log(`agent browser e2e: ready ${Math.round((Date.now() - pressed) / 1000)} s after ${process.platform === 'darwin' ? 'Install' : 'the agent was created'}`)
+    console.log(`agent browser e2e: ready ${Math.round((Date.now() - pressed) / 1000)} s after ${process.platform === 'darwin' ? 'Install' : 'Start'}`)
     if (process.platform === 'darwin') expect(await defaultConnection()).toBe(personsConnection)
-    await until('the agent to bind its conversation', async () => (await row())?.sessionId || null, 60_000, 500)
     // Only `podman exec` reaches the browser (spec § The container).
     const ports = await podman(['container', 'port', name()])
     expect(ports.code, ports.stderr).toBe(0)
     expect(ports.stdout.trim()).toBe('')
   })
 
-  step('the agent\'s tools drive it: navigate, snapshot, click by ref, type, screenshot', 6 * CALL_MS, async () => {
-    const tools = await openRelay()
-    const opened = await tools.call('browser_navigate', { url: pages!.url('/form') })
-    expect(opened.isError, opened.text).toBe(false)
-    expect(opened.text).toContain('/form')
-    // The form is hidden until the button is clicked: its textbox in the second snapshot is the click's doing.
-    const button = refOf((await tools.call('browser_snapshot')).text, 'button', 'Open form')
-    const clicked = await tools.call('browser_click', { ref: button })
-    expect(clicked.text, clicked.text).toBe('Clicked')
-    const box = refOf((await tools.call('browser_snapshot')).text, 'textbox', 'Name')
-    const typed = await tools.call('browser_type', { ref: box, text: TYPED, submit: true })
-    expect(typed.isError, typed.text).toBe(false)
-    const submitted = await until('the typed form to reach the page server', () => pages!.seen.find((seen) => seen.path === '/submitted'), 30_000)
-    expect(submitted.query.get('name')).toBe(TYPED)
-    const shot = await tools.call('browser_screenshot')
-    expect(shot.isError, shot.text).toBe(false)
-    expect(shot.content[0]).toMatchObject({ type: 'image', mimeType: 'image/jpeg' })
-    expect([...Buffer.from(String(shot.content[0].data), 'base64').subarray(0, 2)]).toEqual([0xff, 0xd8])
+  step('harness browser start and stop exit 2, and the browser runs on as it was', 2 * CALL_MS, async () => {
+    const before = await container()
+    expect(before).not.toBeNull()
+    for (const word of ['start', 'stop']) {
+      const answered = await browser([word])
+      expect(answered.code, `${word}: ${answered.stderr}`).toBe(2)
+      expect(answered.stderr.trim()).toBe(START_STOP_LINE)
+      expect(answered.stdout).toBe('')
+    }
+    expect(await container()).toEqual(before)
+    expect((await row())?.browser).toEqual({ state: 'ready' })
   })
 
-  step('a page that asks for a person: the reply names the challenge and tells the agent to ask in chat', CALL_MS, async () => {
-    const reply = await relay!.call('browser_navigate', { url: pages!.url('/challenge') })
-    expect(reply.isError, reply.text).toBe(false)
-    expect(reply.text).toContain('challenge: perimeterx')
-    expect(reply.text).toContain(CHAT_LINE)
+  step('the person\'s Stop during a wait ends that command with the stop line', CALL_MS + 60_000, async () => {
+    // No command reached this browser since its Start, so a tool server in its container is the wait's own.
+    expect(await toolServerRuns()).toBe(false)
+    const waiting = browser(['wait', NEVER_SHOWN])
+    await until('the wait to reach the tool server', () => toolServerRuns(), 20_000, 100)
+    expect(await client!.request('agent_browser_stop', { agentId: agent!.id }, 60_000)).toMatchObject({ ok: true })
+    const ended = await waiting
+    expect(ended.code, ended.stderr).toBe(4)
+    expect(ended.stderr.trim()).toBe(STOP_LINE)
+    expect(ended.stdout).toBe('')
+    await until('the frame to drop its browser', async () => (await row())?.browser === undefined || null, 30_000, 250)
+  })
+
+  step('a command while off exits 4 with the off line, until the person\'s Start', START_MS + 2 * CALL_MS, async () => {
+    const off = await browser(['snapshot'])
+    expect(off.code, off.stderr).toBe(4)
+    expect(off.stderr.trim()).toBe(OFF_LINE)
+    expect(off.stdout).toBe('')
+    expect(await container()).toBeNull()
+    expect(await client!.request('agent_browser_start', { agentId: agent!.id }, 60_000)).toMatchObject({ ok: true })
+    await settled('the browser to be ready after the Start', START_MS, () => true)
+    const on = await browser(['snapshot'])
+    expect(on.code, on.stderr).toBe(0)
+  })
+
+  step('the agent\'s commands drive it: navigate, snapshot, click by ref, type, screenshot to a file', 6 * CALL_MS, async () => {
+    const opened = await browser(['navigate', pages!.url('/form')])
+    expect(opened.code, opened.stderr).toBe(0)
+    expect(opened.stdout).toContain('/form')
+    // The form is hidden until the button is clicked: its textbox in the second snapshot is the click's doing.
+    const button = refOf((await browser(['snapshot'])).stdout, 'button', 'Open form')
+    const clicked = await browser(['click', button])
+    expect(clicked.code, clicked.stderr).toBe(0)
+    expect(clicked.stdout.trim()).toBe('Clicked')
+    const box = refOf((await browser(['snapshot'])).stdout, 'textbox', 'Name')
+    const typed = await browser(['type', box, TYPED, '--submit'])
+    expect(typed.code, typed.stderr).toBe(0)
+    const submitted = await until('the typed form to reach the page server', () => pages!.seen.find((seen) => seen.path === '/submitted'), 30_000)
+    expect(submitted.query.get('name')).toBe(TYPED)
+    // Only the file's path on the terminal; the agent reads the JPEG with its own file tool.
+    const shot = await browser(['screenshot'])
+    expect(shot.code, shot.stderr).toBe(0)
+    const file = shot.stdout.trim()
+    expect(file.split('\n')).toHaveLength(1)
+    expect(isAbsolute(file), file).toBe(true)
+    expect([...readFileSync(file).subarray(0, 2)]).toEqual([0xff, 0xd8])
+  })
+
+  step('a page that asks for a person: the output names the challenge and tells the agent to ask in chat', CALL_MS, async () => {
+    const reply = await browser(['navigate', pages!.url('/challenge')])
+    expect(reply.code, reply.stderr).toBe(0)
+    expect(reply.stdout).toContain('challenge: perimeterx')
+    expect(reply.stdout).toContain(CHAT_LINE)
+  })
+
+  step('the tool server calls initialize an unknown method', 60_000, async () => {
+    // A `browser-mcp` relay still running in an agent launched before speaks MCP to it: its handshake, listing and ping
+    // are no longer answered (Task 9).
+    const asked = ['initialize', 'tools/list', 'ping'].map((method, n) => JSON.stringify({ jsonrpc: '2.0', id: n + 1, method, params: {} })).join('\n')
+    const answered = await podman(['exec', '-i', name(), ...TOOL_SERVER], 30_000, `${asked}\n`)
+    // Its input closed, it exits by itself.
+    expect(answered.code, answered.stderr).toBe(0)
+    const replies = answered.stdout.trim().split('\n').map((line) => JSON.parse(line) as { id: number }).sort((a, b) => a.id - b.id)
+    expect(replies).toEqual(['initialize', 'tools/list', 'ping'].map((method, n) => ({ jsonrpc: '2.0', id: n + 1, error: { code: -32601, message: `Unknown method ${method}` } })))
   })
 
   step('a stream opened as the Desktop opens one: the banner, a handshake, the local profile at Xvnc, and a close that ends the exec', 2 * CALL_MS, async () => {
     // Xvnc sends a full-colour rectangle as Tight JPEG only when the viewer set a quality level. This viewer sets none,
     // so a JPEG rectangle is the shaper's level (q6/c2 for a local connection, core/browserStreams.ts) reaching Xvnc.
-    const noise = await relay!.call('browser_navigate', { url: pages!.url('/noise') })
-    expect(noise.isError, noise.text).toBe(false)
+    const noise = await browser(['navigate', pages!.url('/noise')])
+    expect(noise.code, noise.stderr).toBe(0)
     const opened = await client!.request<{ streamId?: string; error?: string }>('agent_browser_open', { agentId: agent!.id })
     expect(opened.error, JSON.stringify(opened)).toBeUndefined()
     const streamId = opened.streamId!
@@ -682,6 +752,30 @@ describe('the agent browser on real Podman', () => {
     }, 30_000, 250)
   })
 
+  step('a window request changes window.innerWidth and leaves screen.width as the Device setting', 6 * CALL_MS, async () => {
+    // Inside every screen the Device setting offers, and over the smallest window (1024x640): set as asked.
+    const asked = { width: 1100, height: 700 }
+    const { screen } = await client!.request<{ screen?: string }>('agent_browser_settings', { agentId: agent!.id })
+    expect(screen).toMatch(/^\d+x\d+$/)
+    const read = async () => {
+      const shown = await browser(['navigate', pages!.url('/window')])
+      expect(shown.code, shown.stderr).toBe(0)
+      const [, innerWidth, screenSize] = /inner (\d+)x\d+ screen (\d+x\d+)/.exec(shown.stdout) ?? []
+      expect(innerWidth, shown.stdout).toBeDefined()
+      return { innerWidth: Number(innerWidth), screen: screenSize }
+    }
+    const before = await read()
+    expect(before.innerWidth, 'the window before the request').toBeGreaterThan(asked.width)
+    expect(before.screen).toBe(screen)
+    expect(await client!.request('agent_browser_window', { agentId: agent!.id, ...asked }, 30_000)).toMatchObject(asked)
+    // Read again by a fresh navigation, until the page lays out in the new window.
+    const after = await until('the page to lay out in the window asked for', async () => {
+      const now = await read()
+      return now.innerWidth <= asked.width ? now : null
+    }, 4 * CALL_MS, 500)
+    expect(after.screen).toBe(screen)
+  })
+
   step('the daemon\'s loopback API refuses a request from inside the container', 60_000, async () => {
     const status = (url: string) => inside(['sh', '-c', `curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${quote(url)}; true`])
     // The container does reach this machine, so a refusal below is the daemon's, not a missing route.
@@ -692,9 +786,9 @@ describe('the agent browser on real Podman', () => {
 
   step('a page cannot reach the host, gvproxy or the container\'s gateway, by fetch or WebSocket, and a public page loads', 3 * CALL_MS, async () => {
     // With no proxy, every request still goes through the relay (proxy-relay.mjs), which refuses these.
-    const shown = await relay!.call('browser_navigate', { url: 'https://example.com/' })
-    expect(shown.isError, shown.text).toBe(false)
-    expect((await relay!.call('browser_snapshot')).text).toContain('Example Domain')
+    const shown = await browser(['navigate', 'https://example.com/'])
+    expect(shown.code, shown.stderr).toBe(0)
+    expect((await browser(['snapshot'])).stdout).toContain('Example Domain')
 
     canary = await Canary.start()
     const route = await inside(['cat', '/proc/net/route'])
@@ -708,8 +802,8 @@ describe('the agent browser on real Podman', () => {
     // The same probe to this machine's own network address reaches the canary, so a failure above is the relay's.
     const allowed = `${PAGES_HOST}:${canary.port}`
     const from = pages!.seen.length
-    const probed = await relay!.call('browser_navigate', { url: pages!.url(`/probe?targets=${[...refused, allowed].join(',')}`) })
-    expect(probed.isError, probed.text).toBe(false)
+    const probed = await browser(['navigate', pages!.url(`/probe?targets=${[...refused, allowed].join(',')}`)])
+    expect(probed.code, probed.stderr).toBe(0)
     const report = await until('the probe to report', () => pages!.seen.slice(from).find((seen) => seen.path === '/probe-report'), 60_000, 250)
     expect(JSON.parse(report.query.get('r') ?? '[]')).toEqual([
       ...refused.map((target) => [target, 'failed', 'failed']),
@@ -722,11 +816,9 @@ describe('the agent browser on real Podman', () => {
     for (const leak of [HOST, gateway, '192.168.127', String(canary.port)]) expect(log).not.toContain(leak)
   })
 
-  step('a stop keeps the login: a cookie set before it is sent after the agent resumes', START_MS + 4 * CALL_MS, async () => {
-    const set = await relay!.call('browser_navigate', { url: pages!.url('/set-cookie') })
-    expect(set.isError, set.text).toBe(false)
-    await relay!.close()
-    relay = undefined
+  step('the agent\'s stop then resume keeps the login: its browser follows it back, and a cookie set before is sent after', START_MS + 4 * CALL_MS, async () => {
+    const set = await browser(['navigate', pages!.url('/set-cookie')])
+    expect(set.code, set.stderr).toBe(0)
     // A turn first, as every agent a person stops has had (core.e2e.ts does the same): until one ends, the fake engine's
     // conversation has no opening to keep, and the stop is held (IDENTITY_UNAVAILABLE).
     const ended = client!.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent!.id, 45_000, 'turn_ended')
@@ -738,12 +830,30 @@ describe('the agent browser on real Podman', () => {
     // Its container and network go with the stop; the volume, which holds the login, stays.
     await until('its container and network to go', async () => (!(await exists('container', name())) && !(await exists('network', name()))) || null, 60_000, 500)
     expect(await exists('volume', name())).toBe(true)
+    // No Start: the browser left on follows its agent back (decision 14).
     expect((await client!.request('agent_resume', { agentId: agent!.id }, 90_000)).error).toBeUndefined()
-    await settled('the browser to be ready again after the resume', START_MS)
-    const tools = await openRelay()
+    await settled('the browser to be ready again after the resume', START_MS, () => true)
     const from = pages!.seen.length
-    const read = await tools.call('browser_navigate', { url: pages!.url('/cookie') })
-    expect(read.isError, read.text).toBe(false)
+    const read = await browser(['navigate', pages!.url('/cookie')])
+    expect(read.code, read.stderr).toBe(0)
+    const asked = await until('the page server to be asked for /cookie', () => pages!.seen.slice(from).find((seen) => seen.path === '/cookie'), 30_000)
+    expect(asked.cookie).toContain('harness_e2e=kept')
+  })
+
+  step('the person\'s Stop then Start keeps the login: a cookie set before the Stop is sent after the Start', START_MS + 4 * CALL_MS, async () => {
+    const set = await browser(['navigate', pages!.url('/set-cookie')])
+    expect(set.code, set.stderr).toBe(0)
+    expect(await client!.request('agent_browser_stop', { agentId: agent!.id }, 60_000)).toMatchObject({ ok: true })
+    await until('the frame to drop its browser', async () => (await row())?.browser === undefined || null, 30_000, 250)
+    // The agent runs on; its container and network go, and the volume, which holds the login, stays.
+    expect((await row())?.status).toBe('active')
+    await until('its container and network to go', async () => (!(await exists('container', name())) && !(await exists('network', name()))) || null, 60_000, 500)
+    expect(await exists('volume', name())).toBe(true)
+    expect(await client!.request('agent_browser_start', { agentId: agent!.id }, 60_000)).toMatchObject({ ok: true })
+    await settled('the browser to be ready again after the Start', START_MS, () => true)
+    const from = pages!.seen.length
+    const read = await browser(['navigate', pages!.url('/cookie')])
+    expect(read.code, read.stderr).toBe(0)
     const asked = await until('the page server to be asked for /cookie', () => pages!.seen.slice(from).find((seen) => seen.path === '/cookie'), 30_000)
     expect(asked.cookie).toContain('harness_e2e=kept')
   })
@@ -755,8 +865,8 @@ describe('the agent browser on real Podman', () => {
     const killed = await inside(['pkill', '-KILL', '-o', '-f', '--', '--remote-debugging-port=9222'])
     expect(killed.code, killed.stderr).toBe(0)
     await settled('the browser to be started again', START_MS, (found) => found.startedAt !== before!.startedAt)
-    const back = await relay!.call('browser_navigate', { url: pages!.url('/addr?restarted') })
-    expect(back.isError, back.text).toBe(false)
+    const back = await browser(['navigate', pages!.url('/addr?restarted')])
+    expect(back.code, back.stderr).toBe(0)
   })
 
   step('Device: a tab opened without any tool call reports the chosen GPU, cores and memory', START_MS + 2 * 60_000, async () => {
@@ -786,21 +896,20 @@ describe('the agent browser on real Podman', () => {
     expect(await exists('secret', `harness-proxy-${agent!.id}`)).toBe(true)
     // From the new container on: the old one's requests, before it went, were rightly direct.
     const from = pages!.seen.length
-    const through = await relay!.call('browser_navigate', { url: pages!.url('/addr?through') })
-    expect(through.isError, through.text).toBe(false)
+    const through = await browser(['navigate', pages!.url('/addr?through')])
+    expect(through.code, through.stderr).toBe(0)
     await until('the page to be reached through the proxy', () => pages!.seen.slice(from).find((seen) => seen.query.has('through')), 30_000)
     await proxy.stop()
-    const after = await relay!.call('browser_navigate', { url: pages!.url('/addr?after') })
-    const shown = await relay!.call('browser_snapshot')
-    expect(after.isError || shown.text.includes('the proxy cannot be used'), `${after.text}\n${shown.text}`).toBe(true)
+    // A navigation that fails exits 1 with the tool's words; one Chrome shows as its own error page exits 0.
+    const after = await browser(['navigate', pages!.url('/addr?after')])
+    const shown = await browser(['snapshot'])
+    expect(after.code !== 0 || shown.stdout.includes('the proxy cannot be used'), `${after.stdout}${after.stderr}\n${shown.stdout}`).toBe(true)
     const seen = pages!.seen.slice(from)
     expect(seen.filter((one) => one.query.has('after')).map((one) => one.path)).toEqual([])
     expect(seen.filter((one) => !proxy!.upstreamPorts.has(one.port)).map((one) => `${one.path} from ${one.address}:${one.port}`)).toEqual([])
   })
 
   step('a delete removes its container, volume, network and proxy secret', 4 * 60_000, async () => {
-    await relay!.close()
-    relay = undefined
     const bound = await row()
     expect(bound?.sessionId).toBeTruthy()
     const createdAt = Date.parse(bound!.createdAt ?? agent!.createdAt)

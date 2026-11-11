@@ -42,7 +42,6 @@ class HarnessLaunchIntegration {
     this.createRepository,
     this.checkRepositoryAgain,
     this.ownMachinesOnly = false,
-    this.offersBrowser = false,
   });
   final String creationId, actionLabel;
 
@@ -60,9 +59,6 @@ class HarnessLaunchIntegration {
   /// Only the person's own computers, never a shared, guest or Team one: an
   /// agent they start runs in their own account.
   final bool ownMachinesOnly;
-
-  /// Swarm New agent: the Browser pill, an agent's own sandboxed Chrome.
-  final bool offersBrowser;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and

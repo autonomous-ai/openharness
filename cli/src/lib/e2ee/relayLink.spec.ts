@@ -220,7 +220,9 @@ describe('remote-password link + relay session crypto (interop with the real E2e
 
       // An agent browser's settings from another of the owner's computers carry the proxy and its password, and a proxy
       // test's reply the proxy's exit address: sealed both ways, for every request a remote Desktop sends.
-      for (const type of ['agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+      // The person's Start, Stop and window size from their other Desktop are sealed the same way.
+      for (const type of ['agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
+        'agent_browser_start', 'agent_browser_stop', 'agent_browser_window']) {
         const browser = { requestId: `browser-${type}`, agentId: 'faye-agent', settings: { proxy: { host: 'proxy.example', password: 'pw-secret' } } }
         const browserRequest = crypto.wrapOutgoing({ type, payload: browser })
         expect(JSON.stringify(browserRequest), type).not.toContain('pw-secret')
@@ -399,6 +401,14 @@ describe('remote-password link + relay session crypto (interop with the real E2e
     expect(frames.at(-1)?.type).toBe('e2e_welcome')
     expect(manager.untrustPeer(C.b64e(other.pub))).toBe(true)
     expect(manager.untrustPeer(C.b64e(other.pub))).toBe(false)
+  })
+
+  // The agent's own browser commands are answered to a local asker only (services/agentBrowser.ts): nothing relays them.
+  it('agent_browser_run is on no sealed list', async () => {
+    const frames = await import('./applicationFrames.js')
+    expect(frames.encryptDownFrame('agent_browser_run')).toBe(false)
+    expect(frames.encryptDownFrameFor('agent_browser_run', { strictDown: true })).toBe(false)
+    expect(frames.encryptRpcResult('agent_browser_run_result')).toBe(false)
   })
 
   it('replies the daemon now seals to the requester open on the relay client as it has always shipped', async () => {
