@@ -559,12 +559,14 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
-      // A message waits while its engine starts: it says so, before anything else it is doing.
-      detail:
-          SwarmAgentStates.offlineOf(agent) == null &&
-              (app?.engineStarting(agent.machineId, agent.harnessId) ?? false)
-          ? 'starting'
-          : agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
+      // What it is doing, in a word or two (agent_state.dart rowOf): a message waits while its engine starts, so starting
+      // comes before anything else it is doing.
+      detail: SwarmAgentStates.rowOf(
+        agent,
+        states: agentStates,
+        app: app,
+        me: controller.accountId,
+      ),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {

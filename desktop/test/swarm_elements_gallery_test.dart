@@ -235,7 +235,7 @@ Future<List<SuperTabController>> _show(
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
-  tester.view.physicalSize = const Size(760, 5600);
+  tester.view.physicalSize = const Size(760, 6600);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -578,6 +578,9 @@ class _Gallery extends StatelessWidget {
                         ('Kai', false, true, false, 'free'),
                         ('Wren', false, false, false, 'offline'),
                         ('Moss', false, false, false, 'starting'),
+                        ('Ash', false, false, false, 'working'),
+                        ('Juno', false, false, false, 'needs you'),
+                        ('Pip', false, false, false, 'limited until 15:40'),
                       ])
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.agent(
