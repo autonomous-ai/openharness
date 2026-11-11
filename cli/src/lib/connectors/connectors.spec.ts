@@ -634,6 +634,27 @@ describe('the page', () => {
     expect(vault.token('linear')).toBeUndefined()
   })
 
+  it('offers Gmail, Calendar and Drive through the Claude Code and Codex this computer has', async () => {
+    const asked: string[] = []
+    const viaPage = new PageServer(vault, env, {
+      binary: (name) => (name === 'codex' ? '/bin/codex' : null),
+      run: async (_command, args) => { asked.push(args.join(' ')); return '{"installed": [{"pluginId": "gmail@openai-curated-remote"}]}' },
+    })
+    await viaPage.listen()
+    closers.push(() => viaPage.close())
+    const headers = { 'X-Harness-Connections': viaPage.key, Origin: viaPage.origin, 'Content-Type': 'application/json' }
+    const status = await (await fetch(viaPage.origin + '/api/elsewhere', { headers })).json()
+    expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'installed' } } })
+    const post = (path: string, body: unknown) => fetch(viaPage.origin + path, { method: 'POST', headers, body: JSON.stringify(body) })
+    expect(await (await post('/api/connect_via', { connector: 'google_drive', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    expect(await (await post('/api/disconnect_via', { connector: 'gmail', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    expect(asked).toEqual(['plugin list --json', 'plugin add google-drive@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    const refused = await post('/api/connect_via', { connector: 'gmail', via: 'claude' })
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toEqual({ error: 'Claude Code is not installed on this computer.' })
+    expect((await fetch(viaPage.origin + '/api/elsewhere')).status).toBe(403)
+  })
+
   it('adds a custom server with its own headers, and refuses bad ones', async () => {
     const added = await (await ask('/api/custom', { method: 'POST', headers: auth(), body: JSON.stringify({ name: 'My Tools', url: 'https://tools.example/mcp', headers: { Authorization: 'Bearer pat' } }) })).json()
     expect(added).toEqual({ connector: 'my-tools', state: 'connected' })

@@ -19,6 +19,12 @@ class _ConnectorsApp extends ModelManagerTestApp {
   final connected = <String>{};
   final flowScript = <Object>[];
 
+  /// The engines that computer has (`elsewhere`), or null for a daemon too old to say.
+  Set<String>? engines;
+
+  /// Gmail's state through each engine.
+  final via = <String, String>{};
+
   Map<String, dynamic> _card(String code, String name, String auth) => {
     'connector': code,
     'name': name,
@@ -46,6 +52,7 @@ class _ConnectorsApp extends ModelManagerTestApp {
             _card('linear', 'Linear', 'dcr'),
             _card('github', 'GitHub', 'app'),
             _card('notion', 'Notion', 'dcr'),
+            if (engines != null) _card('gmail', 'Gmail', 'app'),
           ],
         };
       case 'connect':
@@ -68,6 +75,48 @@ class _ConnectorsApp extends ModelManagerTestApp {
         return {'connector': payload['connector'], 'state': 'not_connected'};
       case 'custom':
         return {'connector': 'mine', 'state': 'connected'};
+      case 'elsewhere':
+        if (engines == null) break;
+        return {
+          'engines': {
+            for (final e in ['claude', 'codex']) e: engines!.contains(e),
+          },
+          'connections': {
+            'gmail': {for (final e in engines!) e: via[e] ?? 'not_connected'},
+            'microsoft_365': {for (final e in engines!) e: 'not_connected'},
+          },
+          'scopes': {
+            'gmail': {
+              'claude': 'Read, search and draft email. Cannot send.',
+              'codex': 'Read, search and manage email.',
+              'harness': 'Send only.',
+            },
+            // No Harness way in.
+            'microsoft_365': {
+              'claude': 'Outlook mail, calendar and files.',
+              'codex': 'Outlook mail, calendar, SharePoint.',
+            },
+          },
+          'services': [
+            {
+              'connector': 'microsoft_365',
+              'name': 'Microsoft 365',
+              'description': 'Outlook mail, calendar and files.',
+            },
+          ],
+        };
+      case 'connect_via':
+        via[payload['via'] as String] = payload['via'] == 'codex'
+            ? 'installed'
+            : 'connected';
+        return {
+          'url': payload['via'] == 'codex'
+              ? 'https://chatgpt.com/#settings/Connectors'
+              : 'https://claude.ai/settings/connectors',
+        };
+      case 'disconnect_via':
+        via.remove(payload['via']);
+        return {'url': 'https://chatgpt.com/#settings/Connectors'};
     }
     return {'error': 'CONNECTORS_FAILED', 'detail': 'Unknown action.'};
   }
@@ -84,8 +133,11 @@ void main() {
     ConnectorsController.pollEvery = Duration.zero;
   });
 
-  Future<_ConnectorsApp> pump(WidgetTester tester) async {
-    final app = _ConnectorsApp();
+  Future<_ConnectorsApp> pump(
+    WidgetTester tester, {
+    Set<String>? engines,
+  }) async {
+    final app = _ConnectorsApp()..engines = engines;
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -109,6 +161,108 @@ void main() {
       expect(find.text('Needs harness login'), findsOneWidget);
       expect(find.textContaining('Run harness login'), findsOneWidget);
       expect(find.text('AVAILABLE  3'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'Gmail offers Claude and Codex only where that computer has them, each with what it can do',
+    (tester) async {
+      final app = await pump(tester, engines: {'codex'});
+      await tester.tap(find.byKey(const ValueKey('connector-choose-gmail')));
+      await tester.pumpAndSettle();
+      // Codex is on that computer, Claude Code is not; Harness's own way is always there.
+      expect(
+        find.byKey(const ValueKey('connector-way-row-codex')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('connector-way-row-claude')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('connector-way-row-harness')),
+        findsOneWidget,
+      );
+      expect(find.text('Read, search and manage email.'), findsOneWidget);
+      expect(find.textContaining('Codex only'), findsOneWidget);
+      expect(find.textContaining('All agents'), findsOneWidget);
+      expect(find.textContaining('Your admin may need'), findsOneWidget);
+
+      // Codex installs its plugin and ChatGPT opens; Gmail is connected from then on.
+      await tester.tap(
+        find.byKey(const ValueKey('connector-way-connect-codex')),
+      );
+      await tester.pumpAndSettle();
+      expect(app.requests.where((r) => r['action'] == 'connect_via').single, {
+        'action': 'connect_via',
+        'connector': 'gmail',
+        'via': 'codex',
+      });
+      expect(
+        opened.last,
+        Uri.parse('https://chatgpt.com/#settings/Connectors'),
+      );
+      expect(find.text('✓ Installed'), findsOneWidget);
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+      expect(find.text('CONNECTED  1'), findsOneWidget);
+      expect(find.text('✓ Codex · sign-in on first use'), findsOneWidget);
+      expect(find.text('Manage'), findsOneWidget);
+
+      // Removed: the plugin goes, and the card goes back to the services to connect.
+      await tester.tap(find.byKey(const ValueKey('connector-choose-gmail')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('connector-way-remove-codex')),
+      );
+      await tester.pumpAndSettle();
+      expect(app.requests.last['action'], 'elsewhere');
+      expect(
+        find.byKey(const ValueKey('connector-way-connect-codex')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'with neither engine, or a daemon too old to say, Gmail signs in through Harness as before',
+    (tester) async {
+      final app = await pump(tester, engines: {});
+      expect(
+        find.byKey(const ValueKey('connector-choose-gmail')),
+        findsNothing,
+      );
+      // GitHub's and Gmail's: both wait for harness login, as before.
+      expect(find.byTooltip('Needs harness login'), findsNWidgets(2));
+      expect(app.requests.map((r) => r['action']), ['list', 'elsewhere']);
+      // Microsoft 365 connects only through an engine: with none, it is not offered at all.
+      expect(find.text('Microsoft 365'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Microsoft 365 has no Harness card or Harness way: only the engines that computer has',
+    (tester) async {
+      await pump(tester, engines: {'claude', 'codex'});
+      expect(find.text('Microsoft 365'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('connector-choose-microsoft_365')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Connect Microsoft 365'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('connector-way-row-claude')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('connector-way-row-codex')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('connector-way-row-harness')),
+        findsNothing,
+      );
+      expect(find.text('Outlook mail, calendar, SharePoint.'), findsOneWidget);
     },
   );
 
@@ -175,7 +329,11 @@ void main() {
     expect(find.text('Disconnect Notion?'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, 'Disconnect'));
     await tester.pumpAndSettle();
-    expect(app.requests.last['action'], 'list');
+    // The list again, then (after it) what Claude Code and Codex hold.
+    expect(
+      app.requests.lastWhere((r) => r['action'] != 'elsewhere')['action'],
+      'list',
+    );
     expect(
       app.requests.any(
         (r) => r['action'] == 'disconnect' && r['connector'] == 'notion',

@@ -180,6 +180,216 @@ class _ConnectorsPageState extends State<ConnectorsPage>
           .map((row) => _Card(row.cast<String, dynamic>()))
           .toList();
     });
+    // Slower (the computer asks its Claude Code and Codex), so after the list is on screen.
+    unawaited(_loadVia());
+  }
+
+  /// The engines [_machineId] has that connect Gmail, Calendar and Drive through their own account
+  /// (`connectors` `elsewhere`, cli/src/lib/connectors/elsewhere.ts): only those are offered.
+  Set<String> _engines = const {};
+
+  /// Per service, its state through each engine: `connected`, `reconnect`, `installed` (Codex), `not_connected`.
+  Map<String, Map<String, String>> _via = const {};
+
+  /// Per service, what each way lets an agent do (`claude`, `codex`, `harness`).
+  Map<String, Map<String, String>> _scopes = const {};
+
+  static const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
+
+  bool _hasWays(String code) =>
+      _via[code]?.keys.any(_engines.contains) ?? false;
+
+  bool _onVia(String code) =>
+      _via[code]?.entries.any(
+        (e) => _engines.contains(e.key) && e.value != 'not_connected',
+      ) ??
+      false;
+
+  Future<void> _loadVia() async {
+    final machineId = _machineId;
+    if (machineId == null) return;
+    final reply = await _app.connectors(machineId, {
+      'action': 'elsewhere',
+    }, timeout: const Duration(seconds: 60));
+    // An older Harness there: the three services sign in through Harness alone, as before.
+    if (!mounted || machineId != _machineId || reply['error'] != null) return;
+    Map<String, Map<String, String>> table(Object? raw) => {
+      if (raw is Map)
+        for (final MapEntry(:key, :value) in raw.entries)
+          if (value is Map)
+            '$key': {
+              for (final MapEntry(key: k, value: v) in value.entries)
+                if (v is String) '$k': v,
+            },
+    };
+    final said = reply['engines'];
+    setState(() {
+      _engines = {
+        if (said is Map)
+          for (final MapEntry(:key, :value) in said.entries)
+            if (value == true) '$key',
+      };
+      _via = table(reply['connections']);
+      _scopes = table(reply['scopes']);
+      // Services only an engine connects (Microsoft 365): a card of their own where the computer has
+      // an engine for them. Added once, after the computer's own list.
+      final cards = [...?_cards?.where((c) => c.auth != _viaOnly)];
+      for (final row in (reply['services'] as List? ?? const [])) {
+        if (row is! Map) continue;
+        final card = _Card({
+          ...row.cast<String, dynamic>(),
+          'auth': _viaOnly,
+          'state': 'not_connected',
+        });
+        if (_hasWays(card.code) && !cards.any((c) => c.code == card.code)) {
+          cards.add(card);
+        }
+      }
+      _cards = cards
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    });
+  }
+
+  /// The `auth` of a card the computer's Harness list does not have: only an engine connects it.
+  static const _viaOnly = 'elsewhere';
+
+  /// What a service with ways says under its name: the ways it is connected by.
+  String _waysDetail(_Card card) => [
+    for (final MapEntry(key: engine, value: name) in _engineNames.entries)
+      if (_engines.contains(engine))
+        switch (_via[card.code]?[engine]) {
+          'connected' => name,
+          'installed' => '$name (sign-in on first use)',
+          'reconnect' => '$name: reconnect',
+          _ => null,
+        },
+    if (card.connected) 'Harness',
+    if (card.needsAttention) 'Harness: reconnect',
+  ].nonNulls.join(' · ');
+
+  /// Gmail, Calendar or Drive: through the computer's Claude Code or Codex (only those it has), or
+  /// Harness's own sign-in, each with what it lets an agent do.
+  void _chooseWay(_Card card) {
+    final scope = _scopes[card.code] ?? const {};
+    String status(String? state) => switch (state) {
+      'connected' => 'Connected',
+      'installed' => 'Installed',
+      'reconnect' => 'Reconnect',
+      _ => 'Connect',
+    };
+    unawaited(
+      showPhoneSheet(
+        context,
+        title: 'Connect ${card.name}',
+        actions: [
+          for (final MapEntry(key: engine, value: name) in _engineNames.entries)
+            if (_engines.contains(engine))
+              PhoneSheetAction(
+                icon: LucideIcons.bot300,
+                label: '$name only: ${scope[engine] ?? ''}'.trim(),
+                value: _busy.contains('${card.code}:$engine')
+                    ? 'Working…'
+                    : status(_via[card.code]?[engine]),
+                onTap: switch (_via[card.code]?[engine]) {
+                  'connected' ||
+                  'installed' => () => unawaited(_disconnectVia(card, engine)),
+                  _ => () => unawaited(_connectVia(card, engine)),
+                },
+              ),
+          // Not for a service only an engine connects (Microsoft 365).
+          if (scope.isEmpty || scope.containsKey('harness'))
+            PhoneSheetAction(
+              icon: LucideIcons.plug300,
+              label: 'All agents: ${scope['harness'] ?? card.description}',
+              value: card.reason.isNotEmpty && !card.connected
+                  ? card.reason
+                  : card.needsAttention
+                  ? 'Reconnect'
+                  : card.connected
+                  ? 'Connected'
+                  : 'Connect',
+              enabled:
+                  card.connected || card.needsAttention || card.reason.isEmpty,
+              onTap: card.connected
+                  ? () => unawaited(_disconnect(card))
+                  : () => unawaited(_connect(card)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Through [engine]'s own account: the computer installs Codex's plugin first, then the page to
+  /// connect it on opens here, in this phone's browser (the connection is the account's, not a
+  /// computer's).
+  Future<void> _connectVia(_Card card, String engine) async {
+    final machineId = _machineId;
+    final key = '${card.code}:$engine';
+    if (machineId == null || _busy.contains(key)) return;
+    setState(() {
+      _busy.add(key);
+      _say('');
+    });
+    final reply = await _app.connectors(machineId, {
+      'action': 'connect_via',
+      'connector': card.code,
+      'via': engine,
+    }, timeout: const Duration(seconds: 150));
+    if (!mounted) return;
+    final url = reply['url'] as String?;
+    if (reply['error'] != null || url == null) {
+      setState(() {
+        _busy.remove(key);
+        _say('${card.name}: ${_failure(reply)}', fades: true);
+      });
+      return;
+    }
+    final opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!mounted) return;
+    setState(() {
+      _busy.remove(key);
+      _say(
+        !opened
+            ? 'Open $url to connect ${card.name}.'
+            : engine == 'codex'
+            ? 'Codex has the ${card.name} plugin. Connect ${card.name} in ChatGPT; Codex asks for Google sign-in the first time it uses it.'
+            : 'Connect ${card.name} on claude.ai. Claude Code on ${_machineName(machineId)} gets it in a moment.',
+        fades: true,
+      );
+    });
+    await _loadVia();
+  }
+
+  /// Stop [engine] using [card]: the computer removes Codex's plugin, and the engine's account page
+  /// opens, where the grant itself is ended.
+  Future<void> _disconnectVia(_Card card, String engine) async {
+    final machineId = _machineId;
+    if (machineId == null) return;
+    final reply = await _app.connectors(machineId, {
+      'action': 'disconnect_via',
+      'connector': card.code,
+      'via': engine,
+    }, timeout: const Duration(seconds: 90));
+    if (!mounted) return;
+    final url = reply['url'] as String?;
+    if (url != null) {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    }
+    if (!mounted) return;
+    setState(
+      () => _say(
+        reply['error'] != null
+            ? '${card.name}: ${_failure(reply)}'
+            : engine == 'codex'
+            ? 'Codex stopped using ${card.name}. To end its access to your Google account, disconnect it in ChatGPT too.'
+            : 'Disconnect ${card.name} on claude.ai: Claude Code follows your claude.ai account.',
+        fades: true,
+      ),
+    );
+    await _loadVia();
   }
 
   String _machineName(String? id) {
@@ -507,12 +717,10 @@ class _ConnectorsPageState extends State<ConnectorsPage>
         query.isEmpty ||
         card.name.toLowerCase().contains(query) ||
         card.description.toLowerCase().contains(query);
-    final connected = [
-      ...?cards?.where((c) => (c.connected || c.needsAttention) && shown(c)),
-    ];
-    final available = [
-      ...?cards?.where((c) => !c.connected && !c.needsAttention && shown(c)),
-    ];
+    // Connected through Harness, or through the computer's Claude Code or Codex.
+    bool on(_Card c) => c.connected || c.needsAttention || _onVia(c.code);
+    final connected = [...?cards?.where((c) => on(c) && shown(c))];
+    final available = [...?cards?.where((c) => !on(c) && shown(c))];
     return Scaffold(
       backgroundColor: tty.ground,
       // PhoneShell's Scaffold already makes room for the keyboard, and the MediaQuery it hands down
@@ -638,13 +846,19 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                                   name: card.name,
                                 ),
                                 title: card.name,
-                                detail: card.needsAttention
+                                detail: _hasWays(card.code)
+                                    ? _waysDetail(card)
+                                    : card.needsAttention
                                     ? 'Connect again'
                                     : card.description,
-                                value: card.needsAttention
+                                value: _hasWays(card.code)
+                                    ? 'Manage'
+                                    : card.needsAttention
                                     ? 'Reconnect'
                                     : 'Connected',
-                                onTap: () => _manage(card),
+                                onTap: _hasWays(card.code)
+                                    ? () => _chooseWay(card)
+                                    : () => _manage(card),
                               ),
                           ],
                         ),
@@ -663,12 +877,16 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                                   : card.description,
                               value: _busy.contains(card.code)
                                   ? 'Signing in…'
+                                  : _hasWays(card.code)
+                                  ? 'Add'
                                   : card.reason.isNotEmpty
                                   ? null
                                   : 'Add',
-                              onTap:
-                                  card.reason.isNotEmpty ||
-                                      _busy.contains(card.code)
+                              // Through Claude Code or Codex, it needs no Harness sign-in.
+                              onTap: _hasWays(card.code)
+                                  ? () => _chooseWay(card)
+                                  : card.reason.isNotEmpty ||
+                                        _busy.contains(card.code)
                                   ? null
                                   : () => unawaited(_connect(card)),
                             ),

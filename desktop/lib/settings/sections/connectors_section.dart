@@ -69,8 +69,11 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
     bool matches(ConnectorCard card) =>
         query.isEmpty ||
         '${card.name} ${card.description}'.toLowerCase().contains(query);
-    final on = _controller.cards.where((c) => c.connected && matches(c)).toList();
-    final off = _controller.cards.where((c) => !c.connected && matches(c)).toList();
+    // Connected through Harness, or through Claude Code or Codex on that computer.
+    bool connected(ConnectorCard card) =>
+        card.connected || _controller.connectedVia(card.code);
+    final on = _controller.shownCards.where((c) => connected(c) && matches(c)).toList();
+    final off = _controller.shownCards.where((c) => !connected(c) && matches(c)).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -219,7 +222,10 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
                       SizedBox(width: width, child: _ConnectorTile(
                         card: card,
                         waiting: _controller.pending.contains(card.code),
-                        onConnect: () => _controller.connect(card),
+                        ways: _controller.hasWays(card.code) ? _ways(card) : null,
+                        onConnect: _controller.hasWays(card.code)
+                            ? () => _chooseWay(context, card)
+                            : () => _controller.connect(card),
                         onDisconnect: () => _confirmDisconnect(context, card),
                       )),
                   ],
@@ -248,6 +254,27 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
     if (yes == true) await _controller.disconnect(card);
   }
 
+  /// The ways [card] is connected, as the chips on its tile: Harness's own, then each engine's.
+  List<_Way> _ways(ConnectorCard card) => [
+    for (final engine in const ['claude', 'codex'])
+      if (_controller.engines.contains(engine))
+        if (_controller.via[card.code]?[engine] case final state?
+            when state != 'not_connected')
+          _Way(ConnectorsController.engineName(engine), state),
+    if (card.connected) _Way('Harness', card.state),
+  ];
+
+  Future<void> _chooseWay(BuildContext context, ConnectorCard card) =>
+      showAppDialog<void>(
+        context: context,
+        builder: (context) => _ChooseWayDialog(
+          controller: _controller,
+          code: card.code,
+          onHarness: () => _controller.connect(card),
+          onHarnessOff: () => _confirmDisconnect(context, card),
+        ),
+      );
+
   Future<void> _addCustom(BuildContext context) => showAppDialog<void>(
     context: context,
     builder: (context) => _AddCustomDialog(controller: _controller),
@@ -262,6 +289,7 @@ class _ConnectorTile extends StatelessWidget {
     required this.waiting,
     required this.onConnect,
     required this.onDisconnect,
+    this.ways,
   });
 
   final ConnectorCard card;
@@ -269,8 +297,14 @@ class _ConnectorTile extends StatelessWidget {
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
 
+  /// Set for a service that also connects through Claude Code or Codex: the ways it is connected now, as chips, and
+  /// [onConnect] opens the choice of ways instead of signing in through Harness.
+  final List<_Way>? ways;
+
   @override
   Widget build(BuildContext context) {
+    final ways = this.ways;
+    if (ways != null) return _withWays(context, ways);
     final theme = Theme.of(context);
     final muted = theme.colorScheme.onSurfaceVariant;
     final connected = card.state == 'connected';
@@ -340,6 +374,272 @@ class _ConnectorTile extends StatelessWidget {
       ),
     );
   }
+}
+
+extension on _ConnectorTile {
+  /// The tile of a service with more than one way in: which ways it is connected by, and Manage (or +) for the rest.
+  Widget _withWays(BuildContext context, List<_Way> ways) {
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
+    return Container(
+      key: ValueKey('connector-${card.code}'),
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppPalette.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppPalette.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ConnectorMark(code: card.code, name: card.name),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  card.name,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (waiting)
+                Text('Waiting for sign-in…', style: theme.textTheme.labelSmall?.copyWith(color: muted))
+              else if (ways.isEmpty)
+                AppIconButton(
+                  key: ValueKey('connector-choose-${card.code}'),
+                  icon: AppIcons.plus,
+                  tooltip: 'Connect ${card.name}',
+                  onPressed: onConnect,
+                )
+              else
+                TextButton(
+                  key: ValueKey('connector-choose-${card.code}'),
+                  onPressed: onConnect,
+                  child: const Text('Manage'),
+                ),
+            ],
+          ),
+          if (ways.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [for (final way in ways) _WayChip(way: way)],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            card.description,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(color: muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One way a service is connected: who holds it ("Claude", "Codex", "Harness") and its state.
+@immutable
+class _Way {
+  const _Way(this.who, this.state);
+
+  final String who;
+
+  /// `connected`, `reconnect`, or `installed` (Codex: the Google sign-in comes on first use).
+  final String state;
+}
+
+class _WayChip extends StatelessWidget {
+  const _WayChip({required this.way});
+
+  final _Way way;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final again = way.state == 'reconnect';
+    final color = again ? Colors.amber : theme.colorScheme.primary;
+    final text = switch (way.state) {
+      'reconnect' => '${way.who} · Reconnect',
+      'installed' => '✓ ${way.who} · sign-in on first use',
+      _ => '✓ ${way.who}',
+    };
+    return Container(
+      key: ValueKey('connector-way-${way.who.toLowerCase()}'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(6)),
+      child: Text(text, style: theme.textTheme.labelSmall?.copyWith(color: color)),
+    );
+  }
+}
+
+/// Gmail, Calendar or Drive: connect it through Harness, or through Claude Code's or Codex's own account on that
+/// computer, each with what it lets an agent do and which agents get it. Only the engines that computer has are offered.
+class _ChooseWayDialog extends StatelessWidget {
+  const _ChooseWayDialog({
+    required this.controller,
+    required this.code,
+    required this.onHarness,
+    required this.onHarnessOff,
+  });
+
+  final ConnectorsController controller;
+  final String code;
+  final VoidCallback onHarness;
+  final VoidCallback onHarnessOff;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final theme = Theme.of(context);
+      final muted = theme.colorScheme.onSurfaceVariant;
+      final card = controller.shownCards.firstWhere((c) => c.code == code);
+      final scopes = controller.scopes[code] ?? const {};
+      Widget row({
+        required String key,
+        required String title,
+        required String scope,
+        required String who,
+        String? note,
+        required String state,
+        required bool waiting,
+        required VoidCallback? onConnect,
+        required VoidCallback onRemove,
+        String? unavailable,
+      }) {
+        final on = state != 'not_connected';
+        final status = switch (state) {
+          'connected' => '✓ Connected',
+          'installed' => '✓ Installed',
+          'reconnect' => 'Needs sign-in again',
+          _ => null,
+        };
+        return Padding(
+          key: ValueKey('connector-way-row-$key'),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                        if (status != null) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            status,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: state == 'reconnect' ? Colors.amber : theme.colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(scope, style: theme.textTheme.bodySmall),
+                    const SizedBox(height: 2),
+                    Text(who, style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+                    if (note != null) ...[
+                      const SizedBox(height: 2),
+                      Text(note, style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              if (waiting)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text('Working…', style: theme.textTheme.labelSmall?.copyWith(color: muted)),
+                )
+              else if (unavailable != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(unavailable, style: theme.textTheme.labelSmall?.copyWith(color: muted)),
+                )
+              else if (on && state != 'reconnect')
+                TextButton(
+                  key: ValueKey('connector-way-remove-$key'),
+                  onPressed: onRemove,
+                  child: const Text('Remove'),
+                )
+              else
+                FilledButton(
+                  key: ValueKey('connector-way-connect-$key'),
+                  onPressed: onConnect,
+                  child: Text(state == 'reconnect' ? 'Reconnect' : 'Connect'),
+                ),
+            ],
+          ),
+        );
+      }
+
+      final engines = [
+        for (final engine in const ['claude', 'codex'])
+          if (controller.engines.contains(engine)) engine,
+      ];
+      return AlertDialog(
+        title: Text('Connect ${card.name}'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final engine in engines) ...[
+                  row(
+                    key: engine,
+                    title: ConnectorsController.engineName(engine),
+                    scope: scopes[engine] ?? '',
+                    who: engine == 'claude'
+                        ? 'Claude Code only · via claude.ai'
+                        : 'Codex only · via ChatGPT',
+                    state: controller.via[code]?[engine] ?? 'not_connected',
+                    waiting: controller.pending.contains('$code:$engine'),
+                    onConnect: () => controller.connectVia(card, engine),
+                    onRemove: () => controller.disconnectVia(card, engine),
+                  ),
+                  Divider(height: 1, color: AppPalette.divider),
+                ],
+                // Not for a service only an engine connects (Microsoft 365).
+                if (controller.harnessWay(code))
+                  row(
+                    key: 'harness',
+                    title: 'Harness',
+                    // A daemon from before the short scopes: the service's own description.
+                    scope: scopes['harness'] ?? card.description,
+                    who: 'All agents · via Harness',
+                    state: card.state,
+                    waiting: controller.pending.contains(code),
+                    unavailable: card.connected || card.reason.isEmpty ? null : card.reason,
+                    onConnect: onHarness,
+                    onRemove: onHarnessOff,
+                  ),
+                const SizedBox(height: 12),
+                Text(
+                  'Company account? Your admin may need to allow it.',
+                  style: theme.textTheme.bodySmall?.copyWith(color: muted),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Done')),
+        ],
+      );
+    },
+  );
 }
 
 /// A service's icon, bundled with the app (assets/connector-icons), or its

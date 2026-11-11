@@ -64,6 +64,16 @@ percent-encoded, an optional parameter left out is left out, Gmail's message is 
 injection) in base64url, a Drive upload is `multipart/related`, and a failed call is a result the model
 reads (`isError`), in words a person can act on.
 
+**Through Claude Code or Codex instead** (`elsewhere.ts`). Gmail, Google Calendar and Google Drive can also be
+connected in an agent's own account, where Harness holds no token: claude.ai's connector, which Claude Code
+picks up from the account it signed in with (Claude's Gmail reads and searches mail, Harness's grant only
+sends), or the ChatGPT plugin Codex installs. The computer offers only the engines it has (`claude`, `codex`
+on the login shell's PATH), reads their state from `claude mcp list` and `codex plugin list --json`
+(Codex's Google grant is asked for on first use, so "installed" is all it can know), installs or removes the
+Codex plugin, and answers the page to open in that engine's account. The same three requests serve the
+desktop (`connectors` `elsewhere`, `connect_via`, `disconnect_via`), the phone and this page
+(`/api/elsewhere`, `/api/connect_via`, `/api/disconnect_via`). Only the agent of that engine gets it.
+
 **Add custom** takes any remote MCP server URL: one that asks for sign-in uses the `dcr` path, one with
 static headers (a personal token) is saved as given.
 

@@ -9,7 +9,7 @@ import 'package:harness_mobile/state/app_state.dart';
 /// One computer, answering `connectors` from a script: its connections, and whether it passes
 /// them on to the account's other computers ([shared]). Records what it was asked.
 class _App extends AppNotifier {
-  _App({required this.shared})
+  _App({required this.shared, this.engines})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
@@ -27,6 +27,10 @@ class _App extends AppNotifier {
 
   final bool shared;
   final asked = <Map<String, dynamic>>[];
+
+  /// The engines the computer has (`elsewhere`), with Gmail connected through Codex; null for an
+  /// older Harness that does not know the request.
+  final Set<String>? engines;
 
   /// Tracker is connected; Wiki is not. Codes with no bundled icon: the page draws an initial.
   @override
@@ -54,7 +58,65 @@ class _App extends AppNotifier {
             'auth': 'dcr',
             'state': 'not_connected',
           },
+          if (engines != null) ...[
+            {
+              'connector': 'gmail',
+              'name': 'Gmail',
+              'description': 'Send email',
+              'auth': 'app',
+              'state': 'not_connected',
+              'reason': 'Needs harness login',
+            },
+            {
+              'connector': 'google_drive',
+              'name': 'Google Drive',
+              'description': 'Files',
+              'auth': 'app',
+              'state': 'not_connected',
+              'reason': 'Needs harness login',
+            },
+          ],
         ],
+      },
+      'elsewhere' when engines != null => {
+        'engines': {
+          for (final e in ['claude', 'codex']) e: engines!.contains(e),
+        },
+        'connections': {
+          'gmail': {
+            for (final e in engines!)
+              e: e == 'codex' ? 'installed' : 'not_connected',
+          },
+          'google_drive': {for (final e in engines!) e: 'not_connected'},
+          'microsoft_365': {for (final e in engines!) e: 'not_connected'},
+        },
+        'services': [
+          {
+            'connector': 'microsoft_365',
+            'name': 'Microsoft 365',
+            'description': 'Outlook mail, calendar and files.',
+          },
+        ],
+        'scopes': {
+          'gmail': {
+            'claude': 'Read, search, draft. No sending.',
+            'codex': 'Read, search, manage.',
+            'harness': 'Send only.',
+          },
+          'google_drive': {
+            'claude': 'Search and read files.',
+            'codex': 'Drive, Docs, Sheets, Slides.',
+            'harness': 'Only files it creates.',
+          },
+          'microsoft_365': {
+            'claude': 'Outlook mail, calendar and files.',
+            'codex': 'Outlook mail, calendar, SharePoint.',
+          },
+        },
+      },
+      'elsewhere' => {
+        'error': 'CONNECTORS_FAILED',
+        'detail': 'Unknown action.',
       },
       // No address to open: the sign-in is the computer's own, and the page only follows it.
       'connect' => {'flow': 'f1'},
@@ -76,6 +138,56 @@ void main() {
     await tester.pumpAndSettle();
     return app;
   }
+
+  testWidgets(
+    'Gmail and Drive offer only the engines the computer has, and Gmail through Codex reads as connected',
+    (tester) async {
+      final app = _App(shared: true, engines: {'codex'});
+      addTearDown(app.dispose);
+      await tester.pumpWidget(MaterialApp(home: ConnectorsPage(notifier: app)));
+      await tester.pumpAndSettle();
+      expect(app.actions, containsAllInOrder(['list', 'elsewhere']));
+      // Gmail is in through Codex, so it is with the connected ones; its row says how.
+      expect(find.text('Codex (sign-in on first use)'), findsOneWidget);
+      expect(find.text('Manage'), findsOneWidget);
+      // Drive needs no Harness sign-in to be added through Codex.
+      await tester.tap(find.text('Google Drive'));
+      await tester.pumpAndSettle();
+      expect(find.text('Connect Google Drive'), findsOneWidget);
+      expect(
+        find.text('Codex only: Drive, Docs, Sheets, Slides.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Claude only'), findsNothing);
+      expect(find.text('All agents: Only files it creates.'), findsOneWidget);
+      expect(find.text('Needs harness login'), findsWidgets);
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      // Microsoft 365: a card the Harness list does not have, and no Harness way in.
+      await tester.tap(find.text('Microsoft 365'));
+      await tester.pumpAndSettle();
+      expect(find.text('Connect Microsoft 365'), findsOneWidget);
+      expect(
+        find.text('Codex only: Outlook mail, calendar, SharePoint.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('All agents'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'an older Harness that cannot say keeps Gmail to Harness, as before',
+    (tester) async {
+      final app = _App(shared: true, engines: null);
+      addTearDown(app.dispose);
+      await tester.pumpWidget(MaterialApp(home: ConnectorsPage(notifier: app)));
+      await tester.pumpAndSettle();
+      expect(app.actions, containsAllInOrder(['list', 'elsewhere']));
+      expect(find.text('Manage'), findsNothing);
+      expect(find.text('Gmail'), findsNothing);
+    },
+  );
 
   /// Tracker's sheet, then its Disconnect: the question it asks, on screen.
   Future<void> askToDisconnect(WidgetTester tester) async {

@@ -4,7 +4,9 @@
  * again as it starts, so an agent installed since a service was connected gets it too.
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
- * `custom` {name, url, headers}, `callback` {flow, url}. The app opens a returned `authorize_url` in the
+ * `custom` {name, url, headers}, `callback` {flow, url}; and for Gmail, Calendar and Drive through this computer's
+ * Claude Code or Codex instead of Harness, `elsewhere`, `connect_via` / `disconnect_via` {connector, via}, which answer
+ * the page to open in that engine's account (lib/connectors/elsewhere.ts). The app opens a returned `authorize_url` in the
  * browser and follows the flow. A phone signing in for this computer opens it in its own browser and,
  * for a service this computer signs in to itself, sends back the redirect to 127.0.0.1 it caught as
  * `callback`: the code alone is useless without the PKCE verifier kept here. Never a token in a reply.
@@ -22,6 +24,7 @@ import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connect
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
+import { connectVia, disconnectVia, elsewhere, type ElsewhereDeps } from '../lib/connectors/elsewhere.js'
 import { keepAlive, KEEP_ALIVE_S } from '../lib/connectors/renew.js'
 import { ConnectorError, Store, validateCode } from '../lib/connectors/store.js'
 import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
@@ -140,6 +143,8 @@ function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: num
 
 export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
   holderIsMine?: (port: number) => Promise<boolean | null>
+  /** How Claude Code and Codex are found and asked (a spec's fakes). */
+  elsewhere?: ElsewhereDeps
   /** Seconds a connection goes unrenewed before it is kept alive (renew.ts `keepAlive`); by default a day and up to 12 hours more. */
   keepAliveAfter?: number
   /** The platform it runs on, and on Windows where its pipe is (a test's socket named as a pipe). */
@@ -238,6 +243,10 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
       }
       case 'custom': return payload.kind === 'api' ? addApiKey(vault, payload, env) : addCustom(vault, flows, payload, env)
       case 'callback': return { ...flows.deliver(String(payload.flow ?? ''), String(payload.url ?? '')) }
+      // Gmail, Calendar and Drive through this computer's Claude Code or Codex instead (lib/connectors/elsewhere.ts).
+      case 'elsewhere': return { ...(await elsewhere(overrides.elsewhere)) }
+      case 'connect_via': return await connectVia(payload.connector, payload.via, overrides.elsewhere)
+      case 'disconnect_via': return await disconnectVia(payload.connector, payload.via, overrides.elsewhere)
       default: return { error: 'CONNECTORS_FAILED', detail: 'Unknown action.' }
     }
   }

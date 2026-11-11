@@ -107,6 +107,26 @@ describe('the connectors service', () => {
     } finally { warn.mockRestore(); vi.useRealTimers() }
   })
 
+  it('connects Gmail, Calendar and Drive through this computer\'s Claude Code or Codex, and says what each holds', async () => {
+    const asked: string[] = []
+    const requests = startConnectors(fakeCore(), {
+      env,
+      elsewhere: {
+        binary: (name) => (name === 'codex' ? '/bin/codex' : null),
+        run: async (_command, args) => { asked.push(args.join(' ')); return '{"installed": []}' },
+      },
+    })
+    const status = await requests.connectors({ action: 'elsewhere' }, OWNER)
+    expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'not_connected' } } })
+    expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'codex' }, OWNER))
+      .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    expect(await requests.connectors({ action: 'disconnect_via', connector: 'gmail', via: 'codex' }, OWNER))
+      .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    expect(asked).toEqual(['plugin list --json', 'plugin add gmail@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'claude' }, OWNER))
+      .toEqual({ error: 'CONNECTORS_FAILED', detail: 'Claude Code is not installed on this computer.' })
+  })
+
   it('answers exactly the request it declares, and only for the owner', async () => {
     const requests = startConnectors(fakeCore(), { env })
     expect(Object.keys(requests)).toEqual([...CONNECTORS_REQUESTS])
