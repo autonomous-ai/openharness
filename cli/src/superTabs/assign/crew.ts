@@ -432,3 +432,9 @@ export function readerFor(read: Read, author: string | null, skip: ReadonlySet<s
     || (read.open.get(a.id) ?? 0) - (read.open.get(b.id) ?? 0) || a.name.localeCompare(b.name))
   return candidates[0] ?? null
 }
+
+/** Harness's ask to read a pull request (githubAssign.ts ask): "Harness, 14:20, to **Juno**: please read this pull request, then run
+ *  `harness super-tab read ok owner/repo#24 f6edb44 …`": the reader it names, and the head it is asked to read. An ask from before
+ *  the verdict was a command named the head after "READ-OK", and is on open pull requests still: that form can go after
+ *  2026-12-10. The assigner finds its own asks by it, and GitHub news keeps each agent's as owed (githubMentions.ts). */
+export const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/

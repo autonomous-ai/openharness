@@ -50,7 +50,7 @@ describe('a v4 agent in a project\'s channel', () => {
     const pip = f.newAgent(owner, 'Pip')
     const held = structuredClone(f.state)
     freeze(held)
-    expect(postable(held, pip, 'lead').joining).toBe(pip.agentId)
+    expect(postable(held, pip, 'lead', 1_000).joining).toBe(pip.agentId)
     expect(held.conversations.find(c => c.id === 'lead')!.agentIds).not.toContain(pip.agentId)
   })
 

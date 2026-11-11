@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { ASKED, DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -46,10 +46,6 @@ const ISSUE_PAGES = 10
 const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
-/** Harness's ask of a reader, as `ask` writes it: who was asked, and for which head. An ask from before the verdict was a
- *  command named the head after "READ-OK", and is on open pull requests still: that form can go after 2026-12-10. */
-const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/
-
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
@@ -544,5 +540,5 @@ function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
   return pattern.exec(String(comment.body ?? '').slice(0, 500))
 }
 
-const labelNames = (issue: Json): string[] =>
+export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))
