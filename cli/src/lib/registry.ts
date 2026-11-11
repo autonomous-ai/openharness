@@ -329,6 +329,12 @@ export interface RegisteredSession {
   tmuxPane: string
   source: string | null
   title: string | null
+  /**
+   * The title its engine gave its conversation from a line typed for the agent alone (a quiet delivery,
+   * core/agents/quietTitles.ts), as `sessionDisplayTitle` reads one: never its name (`updateTitle`). Kept on the row because the
+   * engine shows it again after a restart or a resume (Codex keeps the first name it gave a thread). Absent until there is one.
+   */
+  quietTitle?: string
   model: string | null
   cliVersion: string | null
   processIdentity: ProcessIdentity | null
@@ -1464,6 +1470,7 @@ class Registry {
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
           ...(raw.browser === true ? { browser: true as const } : {}),
+          ...(typeof raw.quietTitle === 'string' && raw.quietTitle ? { quietTitle: raw.quietTitle } : {}),
           ...(engine === 'terminal' && parentAgentIdOf(raw.previousAgentId) ? { previousAgentId: raw.previousAgentId as string } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
@@ -2187,6 +2194,8 @@ class Registry {
       ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
       // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
       ...(existing?.browser ? { browser: true as const } : {}),
+      // And the title its engine gave from a quiet line: dropped, a resumed conversation's title would name the agent.
+      ...(existing?.quietTitle ? { quietTitle: existing.quietTitle } : {}),
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
@@ -2855,12 +2864,25 @@ class Registry {
     return true
   }
 
-  updateTitle(sessionId: string, title: string | null): RegisteredSession | null {
+  /**
+   * The engine's title for [sessionId]'s conversation, as the title sync reads it. [quiet]: the agent's last turn was a line typed
+   * for it alone (core/agents/quietTitles.ts), so a title that would name it is that line's: kept as its `quietTitle` and not taken,
+   * then or later. The agent keeps the name it had until its engine titles the conversation anew.
+   */
+  updateTitle(sessionId: string, title: string | null, quiet = false): RegisteredSession | null {
     const session = this.resolve(sessionId)
     if (!session) return null
     const next = titleDisplayName(title)
     const current = titleDisplayName(session.title)
     if (next === current) return session
+    // Only a title that changed pays for this: the sync reads every agent's title every 5 s, and most are as they were.
+    const naming = namingTitle(next, session)
+    if (naming && (quiet || naming === session.quietTitle)) {
+      if (naming === session.quietTitle) return session
+      session.quietTitle = naming
+      this.save()
+      return session
+    }
     session.title = next
     session.touchedAt = Date.now()
     this.save()
