@@ -229,7 +229,7 @@ describe('Containers', () => {
 
   it('a create refused because the name is in use removes that container and creates again, once; a second refusal fails', async () => {
     // The container a previous agent's failed stop left under this name, labelled with that agent: no listing of
-    // this agent finds it. Podman 4.9's words.
+    // this agent finds it. Podman's words.
     const inUse = { code: 125, stderr: 'Error: creating container storage: the container name "harness-browser-a1" is already in use by 5cce206ab3bd. You have to remove that container to be able to reuse that name: that name is already in use' }
     fake.reply('create', inUse, {})
     expect(await containers.start('b1', 'a1', IMAGE, base, 'UTC', '')).toEqual({ limitsDropped: [] })

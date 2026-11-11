@@ -1,15 +1,22 @@
 /**
- * `<data dir>/agent-browser.json`: every browser this daemon created with its settings, any delete in progress, the
- * setup step (spec § Lifecycle), and the agents told their browser is ready. It holds proxy passwords, so it is the
- * person's alone (0600).
+ * `<data dir>/agent-browser.json`: every browser this daemon created with its settings and the profile its names come
+ * from, any delete in progress, the setup step (spec § Lifecycle), and the agents told their browser is ready. It holds
+ * proxy passwords, so it is the person's alone (0600).
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { PodmanError } from './podman.js'
 import type { BrowserSettings } from './settings.js'
 import type { SetupStep } from './setup.js'
 
+/**
+ * An agent's entry. `profile`: the id its browser's container, network, volume and proxy secret are named by, which a
+ * move with its pane keeps (decision 19). Absent, it is the agent's own id: every browser that never moved, and every
+ * one made before this field, so their file is what an older CLI writes and reads.
+ */
+export type SavedBrowser = BrowserSettings & { profile?: string }
+
 export interface BrowserStateData {
-  browsers: Record<string, BrowserSettings>
+  browsers: Record<string, SavedBrowser>
   deleting: string[]
   setup: { step: SetupStep } | null
   /** Harness's own Podman machine's connection, once setup made one (spec § Podman); absent for the person's. */
