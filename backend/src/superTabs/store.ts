@@ -731,7 +731,7 @@ export class SuperTabStore {
         if (prior || row || found) return { id, revision: prior?.revision ?? 0 }
         break
       }
-      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility, !personal)
       if (personal) state.personal = true
       nameFromAccount(state.people[0]!, await accountNameOf(tx, user.sub))
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
@@ -879,6 +879,23 @@ export class SuperTabStore {
       throw error
     }
     return 'deleted'
+  }
+
+  /** Deletes the repo-less project every Personal Swarm was made with (migration/personalProjectJob.ts), as its owner's
+   *  `project.delete` would, given `personalProject` by the store alone: only as it was made, with nothing in it. 'kept' when
+   *  anything is, or someone else owns it now, which stays a project like any other; 'gone' when the Swarm or the project is not
+   *  there or is not that one. [row]: the Swarm's row as the job read it. */
+  async removePersonalProject(row: { id: string; ownerId: string; autonomousEnv: string }): Promise<'removed' | 'kept' | 'gone'> {
+    const user: AuthUser = { sub: row.ownerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    try {
+      await this.executeOnce(user, row.id, { operationId: 'personal-project-removal', command: { type: 'project.delete', projectId: 'lead' } },
+        undefined, undefined, { personalProject: true })
+    } catch (error) {
+      if (error instanceof SuperTabError && ['PERSONAL_PROJECT_KEPT', 'PROJECT_OWNER_REQUIRED'].includes(error.code)) return 'kept'
+      if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'gone'
+      throw error
+    }
+    return 'removed'
   }
 
   /** Removes notice [messageId] of a retired kind (migration/retiredNotices.ts) as its author's `message.delete` would, run as the
@@ -1089,7 +1106,7 @@ export class SuperTabStore {
    *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm), `retiredNotice` for message.delete
    *  (removeRetiredNotice). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true; personalProject?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -1170,6 +1187,7 @@ export class SuperTabStore {
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
+      if (command.type === 'project.delete' && only.personalProject) context.personalProject = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }

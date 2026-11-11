@@ -306,7 +306,7 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
     const again = [await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal'), await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')]
     expect(again[0]!.id).not.toBe(wiped)
     expect(again[1]!.id).toBe(again[0]!.id)
-    expect((await w.store.read(who, again[0]!.id)).state.id).toBe(again[0]!.id)
+    expect((await w.store.read(who, again[0]!.id)).state.projects).toEqual([])
     expect((await w.store.list(who)).tabs.filter(t => t.personal).map(t => t.id)).toEqual([again[0]!.id])
     expect((await w.reads.list(who)).tabs.filter(t => t.personal).map(t => t.id)).toEqual([again[0]!.id])
     expect((await w.store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')).id).toBe(again[0]!.id)
