@@ -29,6 +29,7 @@ import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS, TERMINAL_RECHECK_MS } from '../src/superTabs/terminal.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
+import { EMPTY_CHAT_MS } from '../src/superTabs/paneChats.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
@@ -283,6 +284,31 @@ describe('Change agent on a Swarm member', () => {
     const occupied = (await store.read(owner, second.tab)).state.agents[0]!
     await expect(run(first.tab, { type: 'agent.rebind', agentId: first.lead, machineId: 'test-host', projectId: 'lead',
       previousHarnessId: previous.harnessId, harnessId: occupied.harnessId, configuration: config }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_CONTRIBUTED' })
+  })
+})
+
+// PSW-B review (2026-11-11): a session's chat is named by the session, so Attach retried, or from the person's other computer,
+// opens the one chat; an archived one opens again; the empty chats random requests made are archived by the time checks.
+describe('a session\'s one chat', () => {
+  it('is the same on every ask, opens again from an archive, and an empty chat is archived after an hour', async () => {
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    const tab = (await timed.create(owner, randomUUID(), 'Pane chats')).id
+    const exec = (command: Command) => timed.execute(owner, tab, { operationId: randomUUID(), command })
+    const harnessId = randomUUID()
+    const attach = async () => String((await exec({ type: 'agent.new', kind: 'regular', machineId: OWN_MAC, engine: 'codex', name: 'Juno', local: true, harnessId }))
+      .result.conversationId)
+    const chat = await attach()
+    expect(await attach()).toBe(chat)
+    await exec({ type: 'conversation.archive', conversationId: chat, archived: true })
+    expect(await attach()).toBe(chat)
+    const shown = async (id: string) => (await storedState(tab)).conversations.find(c => c.id === id)
+    expect(await shown(chat)).toMatchObject({ archived: false })
+    expect(await shown(chat)).not.toHaveProperty('dormant')
+    now += EMPTY_CHAT_MS
+    await timed.runTimeChecks(tab)
+    expect(await shown(chat)).toMatchObject({ archived: true, dormant: true })
+    expect((await timed.read(owner, tab)).state.conversations.some(c => c.id === chat)).toBe(false)
   })
 })
 
