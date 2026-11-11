@@ -164,9 +164,6 @@ class SuperTabAgent {
       atPrompt =
           row['alerting'] is List &&
           (row['alerting'] as List).contains('prompt'),
-      switchRequest = row['switchRequest'] is Map
-          ? Map.unmodifiable(superTabMap(row['switchRequest']))
-          : null,
       gridModel = row['gridModel'] as String?,
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
@@ -193,10 +190,6 @@ class SuperTabAgent {
   /// Whether its computer has seen its terminal sit on a prompt for 3 minutes: a question, a menu or a screen only its person
   /// can answer (the Swarm host's terminal watch, cli superTabs/terminal.ts; the backend's `alerting`).
   final bool atPrompt;
-
-  /// A Product Manager's engine switch that is asked for and not yet
-  /// done (backend `switchRequest`); null otherwise.
-  final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription
   /// (backend Agent.gridModel).
@@ -318,6 +311,9 @@ class SuperTabConversation {
   final int reactionSeq;
 }
 
+/// A GitHub `owner/name`.
+final _ownerName = RegExp(r'^[\w.-]+/[\w.-]+$');
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -344,10 +340,18 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       archived = row['archived'] == true,
+      githubRepository = switch (row['githubRepository']) {
+        final String name when _ownerName.hasMatch(name) => name,
+        _ => null,
+      },
       pmChatId = row['pmChat'] is Map
           ? superTabMap(row['pmChat'])['id'] as String?
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The GitHub repository (`owner/name`) its owner's Desktop set for it when its record names no address (backend
+  /// `project.github`): what its Tasks board reads on every computer. Null until set, and from a backend before it.
+  final String? githubRepository;
 
   /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts): only its person reads it, so null
   /// for anyone else, once a PM took it, and from a backend before it.
@@ -668,16 +672,6 @@ class SuperTabSnapshot {
     return id == null ? null : agent(id);
   }
 
-  /// Whether [accountId] may switch [projectId]'s Product Manager: the project's
-  /// owner, or the owner of the machine it runs on (the backend decides again).
-  bool maySwitchLead(String projectId, String? accountId) {
-    final lead = leadOf(projectId);
-    return lead != null &&
-        accountId != null &&
-        (projectById(projectId)?.ownerId == accountId ||
-            lead.machineOwnerId == accountId);
-  }
-
   /// The role [agentId] goes by, and its badge: the role the backend names (`roleName`), else its kind's (Product
   /// Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent.
   ({String name, String badge})? roleOf(String agentId) {
@@ -841,32 +835,6 @@ List<SuperTabServedModel> superTabServedModels(
           name: m['name'] is String
               ? m['name'] as String
               : m['model'] as String,
-        ),
-  ];
-}
-
-/// One account of a machine as its report lists it (backend
-/// `observation.profiles`, each engine's default alone): opaque id, and what
-/// is left of its allowance when known.
-typedef SuperTabProfile = ({
-  String engine,
-  String id,
-  int? leftPercent,
-  DateTime? resetsAt,
-});
-
-/// The accounts [pool] reports; empty from a machine that reports none.
-List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
-  final observation = pool?['observation'];
-  final rows = observation is Map ? observation['profiles'] : null;
-  return [
-    for (final p in rows is List ? rows : const [])
-      if (p is Map && p['engine'] is String && p['id'] is String)
-        (
-          engine: p['engine'] as String,
-          id: p['id'] as String,
-          leftPercent: (p['leftPercent'] as num?)?.toInt(),
-          resetsAt: DateTime.tryParse(p['resetsAt'] as String? ?? ''),
         ),
   ];
 }

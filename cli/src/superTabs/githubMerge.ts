@@ -119,6 +119,9 @@ const RECORD_AGAIN_MS = 10 * 60_000
 interface Ready extends TrainPull { author: string; comments: Json[] }
 /** The label a person puts on a pull request to keep Harness from landing it (AGENTS.md). */
 const HOLD_LABEL = 'hold'
+/** Whether a person put [pull] on hold: the label in any case, as GitHub keeps one label whatever its case. The merger merges
+ *  none, the assigner asks no reader for one, and its builder is typed nothing of it (nextThing.ts). */
+export const isHeld = (pull: Json): boolean => (Array.isArray(pull.labels) ? pull.labels.map(object) : []).some(label => String(label.name).toLowerCase() === HOLD_LABEL)
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -130,6 +133,13 @@ export const recordedAuthors = (ask: (path: string) => Promise<unknown>) => asyn
   const answer = object(await ask(`/api/super-tabs/${project.tabId}/github-comments?repository=${encodeURIComponent(project.repo)}`
     + `&ids=${ids.map(encodeURIComponent).join(',')}&asAgentId=${project.pmAgentId}`))
   return Object.fromEntries(Object.entries(object(answer.authors)).map(([id, author]) => [id, { name: String(object(author).name ?? '') }]))
+}
+
+/** Whether [project]'s PM runs on this computer: the session of its roster row's agent is registered here ([running], by its
+ *  harness id). A project is led here while its PM is stopped too (ledProjects). */
+export function pmRunsHere(roster: Json[], project: LedProject, running: (harnessId: string) => boolean): boolean {
+  const agent = roster.map(row => object(row.agent)).find(agent => agent.id === project.pmAgentId)
+  return typeof agent?.harnessId === 'string' && running(agent.harnessId)
 }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
@@ -502,6 +512,8 @@ export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? nul
 export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
   const failed: string[] = [], seen: string[] = []
   let running = false
+  // GitHub lists each check's latest run (check-runs' filter=latest): two of one name are two checks, two workflows' jobs, and
+  // either failing fails the head (code review of #4060).
   for (const run of runs) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
@@ -514,7 +526,48 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|') }
+  // Each named once: a workflow's check run and the status it sets share a name (#4055: "ci/required, process-checks, ci/required").
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], summary: seen.sort().join('|') }
+}
+
+/** [head]'s checks as [reads] has them: its check runs and its combined status (checksOf). */
+export async function headChecks(reads: GitHubReads, repo: string, head: string): Promise<ReturnType<typeof checksOf>> {
+  const runs = object(await reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
+  return checksOf(Array.isArray(runs) ? runs.map(object) : [], await reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+}
+
+/** How long a head found failing its checks is taken as failing without reading them again, and the most heads kept so. */
+const FAILING_KEPT_MS = 10 * 60_000, FAILING_MAX = 500
+
+/** The heads found failing their checks (headChecks), each taken as failing for [FAILING_KEPT_MS] without reading them again: only
+ *  a check run again changes one, and each pass, or each turn's end, would read it again meanwhile. */
+export class FailingHeads {
+  private readonly at = new Map<string, number>()
+  private readonly said = new Set<string>()
+
+  constructor(private readonly reads: GitHubReads, private readonly now: () => number, private readonly log: (line: string) => void) {}
+
+  /** Whether [head]'s checks failed. Checks this login cannot read hold nothing back, as before Harness read them to ask for a read
+   *  or type one: the merger reads them again before it merges. A stop for every repository (GitHub limiting this computer, its gh
+   *  signed out, GitHub down) stops the pass that asked, as any read's. */
+  async failing(repo: string, head: string): Promise<boolean> {
+    const key = `${repo}@${head}`, at = this.at.get(key)
+    if (at !== undefined && this.now() - at < FAILING_KEPT_MS) return true
+    let failed: boolean
+    try {
+      failed = (await headChecks(this.reads, repo, head)).state === 'failed'
+    } catch (error) {
+      if (!(error instanceof GitHubStop) || error.everywhere) throw error
+      const line = `[super-tab] CHECKS_UNREAD ${repo}: ${error.code}`
+      if (!this.said.has(line)) { this.said.add(line); this.log(line) }
+      return false
+    }
+    this.at.delete(key)
+    if (failed) this.at.set(key, this.now())
+    // The one found longest ago goes first.
+    if (this.at.size > FAILING_MAX) this.at.delete(this.at.keys().next().value!)
+    return failed
+  }
 }
 
 export class GitHubMerge {
@@ -634,7 +687,7 @@ export class GitHubMerge {
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
-      if ((Array.isArray(pull.labels) ? pull.labels : []).some(label => object(label).name === HOLD_LABEL)) continue
+      if (isHeld(pull)) continue
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
       const at = this.see(open, `${repo}#${number}@${head}`)
       // Only a READ-OK made by command is a read: while the records cannot be read, nothing merges (said once, VerdictRecords).
@@ -736,8 +789,7 @@ export class GitHubMerge {
   /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
    *  A pull request's and a train's alike. */
   private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
-    const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
-    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    const checks = await headChecks(this.reads, repo, head)
     // No check and no status at all: a repository with no CI, or CI that has not started on this head.
     const none = checks.summary === ''
     if (checks.state !== 'passed') return { ...checks, none }

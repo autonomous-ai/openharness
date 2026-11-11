@@ -75,11 +75,29 @@ describe('reads with their ETags kept (GitHubReads)', () => {
     expect(etags).toEqual([null, null, null, null, null])
     // An answer that is no list stops the repository's read, as any list's does.
     await expect(new GitHubReads(answering({ [path]: { message: 'no' } })).freshPages('acme/app', path, 3)).rejects.toMatchObject({ code: 'GH_FAILED' })
-    // Nor one whose body did not arrive (a 200 cut off on its way): asked outright there is no 304, and read as the list's end
-    // it would count as nothing. A feed's 304 is still nothing new.
-    const cut = new GitHubReads(async () => ({ status: 200, etag: '"cut"', body: null, resetAt: null }))
-    await expect(cut.freshPages('acme/app', path, 3)).rejects.toMatchObject({ code: 'GH_FAILED', message: 'GitHub\'s answer did not arrive whole.', everywhere: false })
+    // A feed's 304 is still nothing new.
     expect(await new GitHubReads(async () => ({ status: 304, etag: '"same"', body: null, resetAt: null })).changed('acme/app', path)).toEqual([])
+  })
+
+  // Review of scoreboard.ts: a list of two issues, cut off once on its way, read as empty for three passes.
+  it('fails a read whose answer did not arrive whole, and never keeps it for an empty one', async () => {
+    const path = '/repos/acme/app/issues?state=open', whole = [{ id: 1 }, { id: 2 }]
+    let cut = true
+    const etags: Array<string | null> = []
+    const reads = new GitHubReads(async (_url, etag) => {
+      etags.push(etag)
+      if (cut) return { status: 200, etag: '"list"', body: null, resetAt: null }
+      return etag === '"list"' ? { status: 304, etag: '"list"', body: null, resetAt: null } : { status: 200, etag: '"list"', body: whole, resetAt: null }
+    })
+    const failed = { code: 'GH_FAILED', message: 'GitHub\'s answer did not arrive whole.', everywhere: false }
+    for (const read of [() => reads.current('acme/app', path), () => reads.changed('acme/app', path), () => reads.one('acme/app', path), () => reads.fresh('acme/app', path),
+      () => reads.freshPages('acme/app', path, 3), () => reads.file('acme/app', 'agents/GOAL.md')]) await expect(read()).rejects.toMatchObject(failed)
+    // Nothing of it was kept: the next read asks with no ETag, and has the list.
+    cut = false
+    etags.length = 0
+    expect(await reads.current('acme/app', path)).toEqual(whole)
+    expect(await reads.current('acme/app', path)).toEqual(whole)
+    expect(etags).toEqual([null, '"list"'])
   })
 
   it('stops one repository it cannot read and every repository while gh is signed out', async () => {

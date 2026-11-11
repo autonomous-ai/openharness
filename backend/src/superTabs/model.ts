@@ -470,6 +470,13 @@ export interface SuperTabState {
   /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
    *  the ids of their own (visibleState). */
   removedMachines?: Array<{ machineId: string; contributorId: string }>
+  /** The projects deleted from this Swarm, by id (the request that created each) and when (ms), so the same request never makes
+   *  one again (commands.ts project.create): at most MAX_DELETED_PROJECTS, the newest, each for DELETED_PROJECT_KEEP_MS; no reader
+   *  gets it (visibleState). */
+  deletedProjects?: Array<{ id: string; at: number }>
+  /** Its owner's Personal Swarm (deletion.ts isPersonalSwarm): set on every one made since 2026-11-12, as one made after its
+   *  person's last was deleted has an id of its own (store.ts create). Read by the server alone: a list marks the reader's own. */
+  personal?: true
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -556,8 +563,10 @@ export const AGENT_ONLY = { kind: 'agent-only' }
 export const NOTICE_READERS = {
   // Only its agent: a skill update (cli host.ts).
   'agent-only': 'agent',
-  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
-  github: 'people',
+  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): its agent's alone. The person read
+  // it in their chat until anh Dee saw that chat a feed of cards (2026-11-11: "so terrible. it should be like a human
+  // conversation"); the agent's work shows on the Tasks board and in the channel.
+  github: 'recipients',
   // A worker's lost task, to its Lead (liveness.ts).
   'work-lost': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
@@ -749,14 +758,17 @@ export function swarmGridName(tabId: string): string {
   return `swarm-${createHash('sha256').update(tabId).digest('hex').slice(0, 12)}`
 }
 
-export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string, visibility?: ProjectVisibility): SuperTabState {
+/** [firstProject]: a project named as the Swarm, its first. A Personal Swarm has none: its projects are its person's repos
+ *  (anh Dee 2026-11-11), and the repo-less "Personal" one every Personal Swarm was made with showed on the phone, web and CLI. */
+export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string, visibility?: ProjectVisibility,
+  firstProject = true): SuperTabState {
   const state: SuperTabState = {
     version: 1, id, name, ownerId: owner.id, environment, paused: false,
     people: [{ ...owner, email: owner.email.trim().toLowerCase(), role: 'owner', generation: id }],
     agents: [], invitations: [],
-    conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
+    conversations: firstProject ? [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }] : [],
   }
-  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
+  state.projects = firstProject ? [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }] : []
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
   // Swarm as it is, and the owner's first share or run in Your models sets the models up then.
@@ -774,7 +786,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // command may still load one. Nor `overlapAlerts`, which backends up to 1.4.68 (before S18) still wrote into the heads of
   // Swarms made after the wipe's cut-off; goes on or after 2026-12-12.
   const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, closingSessions: _closing,
-    removedSessions: _removed, overlapAlerts: _alerts, ...kept } = state as SuperTabState & { overlapAlerts?: string[] }
+    removedSessions: _removed, overlapAlerts: _alerts, deletedProjects: _deleted, personal: _personal, ...kept } = state as SuperTabState & { overlapAlerts?: string[] }
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
   // ordinary people and agent syncs must never receive the note or its correlation fields.

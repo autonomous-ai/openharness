@@ -749,15 +749,27 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agents says nothing of them.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   one thing: `Project settings…`, whose rows are Rename project, Project
-  details, Switch PM… and Delete Project. It has no Notifications: a channel
+  details, Product Manager and Delete Project. It has no Notifications: a channel
   is agent to agent only (anh Dee, 2026-11-09). Status, Pull requests, the
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted. Switch PM… opens a dialog of the
-  machine, its engines and the model: each engine is one row, `Claude Code`
-  with `Current · 40% left` under it, for its machine's default account,
-  the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
+  archived, so no other way to them is wanted. Product Manager, for the
+  project's owner, shows its PM's name (`None` without one) and opens Choose PM
+  (`super_tabs/choose_pm.dart`; anh Dee, 2026-11-11: "the person chooses the PM
+  from their agents. Choosing again switches it. No new folders."): their own
+  agents, each a row with its face and name, the PM itself `Current` and
+  another project's PM `PM of web` at the right, neither chosen; in their
+  Personal Swarm, their panes in Your Team not in it yet follow, each with its
+  face, its name and under it its computer as its row says it, `offline` and
+  not chosen while that computer is off (PSQA, 2026-11-12: a person whose
+  agents were all panes met an empty list). Then Cancel and the blue
+  `Choose`. A pane chosen joins first, as a click on its row joins it, and the
+  dialog stays until that is done. Choosing sends `project.pm`: the agent becomes the
+  PM, the one before keeps running in Your Team, nothing is started, and the
+  PM's own chat opens. A refusal of this choice is said under the list; an
+  empty list shows nothing. While the PM New project started is on its way
+  (its chat waits for it), the row says `Starting…`.
 - **Goal score** (`SwarmGoalScore`, `super_tabs/goal_score.dart`; in the
   gallery; [design note](../../docs/design/2026-11-11-swarm-goal/README.md)).
   A project that states its goal in `agents/GOAL.md` says how far it is in its
@@ -802,19 +814,15 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   id), before the PM is up. New project sends its task and files there and
   opens it. What the person sends there waits for the PM, and their newest
   message's receipt says `Waiting for the Product Manager` in muted grey with
-  a clock; a row the server wrote there (a start that failed) carries none. A
-  Personal start that failed says `Couldn’t start the Product Manager: <why>`
-  there instead, in red. Nothing goes to the channel.
-- **Start PM** (`SwarmPmStart`, `super_tabs/personal_lead_card.dart`; in the
-  gallery). A Personal project's empty channel with no PM shows one card above
+  a clock; a row the server wrote there (a start that failed) carries none.
+  Nothing goes to the channel.
+- **Choose PM** (`SwarmPmChoose`, `super_tabs/choose_pm.dart`; in the
+  gallery). A project's empty channel with no PM shows its owner one card above
   the agents-only line: one line, `This project has no Product Manager.`, and
-  the blue `Start PM` (`Starting…` while it starts). The click starts the PM on the
-  person's own computer, with Claude Code in the repo's folder (Codex when
-  Claude Code isn't there), and opens its chat. A start that failed says
-  `Couldn’t start the Product Manager: <why>` in the line, back in the channel
-  if its chat was still open, and Start PM tries again. With none of their
-  computers able to start it, the line says
-  `Can’t start a Product Manager: <why>` and there is no button.
+  the blue `Choose PM`, which opens Choose PM (Project menu above); not while
+  a PM New project started is on its way. Anyone else sees the empty channel as
+  it is. A message's `Not sent · this chat has no Lead` in a project's channel
+  offers Choose PM too, never a new agent.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
   see any agent to agent chat"; 2026-11-10: "channel chat here replaces the
   queue", "why not use tag? like in a group chat"). A project's channel is where
@@ -831,8 +839,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   its words and `--to` address) stands on its own row, however soon after the
   agent's last, and each of those agents its words do not tag opens the bubble
   as a tag (`@Juno`, `SuperTabMessageText.addressed`): the agents the Swarm has,
-  each once, never its author. A post that names nobody (`free: Pip`) has no
-  tag. Under a post that names an agent that was offline
+  each once, never its author. A post to one agent whose words name it as a
+  teammate writes a name (`thanks Juno, confirmed`: the whole name, in its own
+  case, not in a path, an address, code or a link's address) opens nothing: its
+  tag besides read `@Juno thanks Juno`. A post to several keeps each tag. A post
+  to nobody (`free: Pip`) has no tag. Under a post that names an agent that was offline
   when it was posted and still is (`downSince`), one quiet line
   (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
   `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
@@ -885,11 +896,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Chat cards.** A compact card (`SwarmChatCard`) is an icon and a small
   label, one title line, and one blue action that shows the rest in place.
   What GitHub said to your agent (a comment, review or line comment that names it or is on
-  its own task or pull request, or a task labelled for it) is a card on the
-  left in your chat with it, never your bubble (`SuperTabGitHubRow`): the pull
-  request or issue mark, where it was and who wrote it (PR #4 · deehw, Review,
-  Line, New task · #13), its first line or a review's verdict, and Read for
-  the rest and Open in GitHub.
+  its own task or pull request, or a task labelled for it) is your agent's alone since 2026-11-12: your chat
+  with it is your conversation, not a feed of GitHub's (anh Dee). A server before that one still sends it to
+  you, as a card on the left, never your bubble (`SuperTabGitHubRow`): the pull request or issue mark, where it
+  was and who wrote it (PR #4 · deehw, Review, Line, New task · #13), its first line or a review's verdict, and
+  Read for the rest and Open in GitHub. The card goes on or after 2026-12-11.
 - **Long messages.** Every message shows whole: nothing folds behind More
   (anh Dee, 2026-11-09). So does a code block in it: every line, a line wider
   than the column wrapped, never a scroll inside the chat, with its language
@@ -969,9 +980,10 @@ Top to bottom:
 | Agent menu | `ProjectSidebar` (`super_tabs/project_sidebar.dart`), `showContextMenuAt` | An agent's row has a right-click menu and nothing else to pause or delete it (anh Dee, 2026-11-11: "make it subtle. right click you see pause. it should be available but shouldn't be too visible"). `Pause` (`Resume` once paused) for its person, its machine's owner and the Swarm's owner, who leads the work it would be given (backend `agent.pause`), never on a project's PM, which gives the work; `Delete` under it for its person alone, disabled with why for a project's PM. A pause refused says why in a short notice. Anyone else's right-click opens nothing. |
 | Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, its field `Search agents` (`No matching agents`; an empty list says nothing), of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Team fold | `ProjectSidebar.teamShown` (`super_tabs/project_sidebar.dart`) | Your Team shows at most 8 rows, so Projects stays in sight with forty agents (tester Q1, 2026-11-10: 880x560). The 8 are the rows with something new, then those on a task, then the rest, each in its place in the list; the open agent's row always shows. Under them, a quiet row with `chevronDown`, `N more`, opens every row; then `chevronUp`, `Show fewer`, folds them again. The reader's choice is kept (`agentsAllShown`). |
-| Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it until its person clicks it: the click makes it an agent as Attach does (its own 1:1 chat opens, its terminal shows beside the chat) and the row is then the agent's. The row says `joining` while that goes on and waits, one join at a time; a refusal is said in a line at the foot and the next click finishes the join; a row of a computer that is off does nothing. |
-| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). The Swarm's own first project (Personal) is not listed while it names no repository, except while its chat is open or has something unread; nothing of it is deleted. |
-| Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
+| Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail, or `offline` with its face grey, as an agent's row says it, while that computer is off (PSQA, 2026-11-12: a long computer name cut `· offline` off; in the gallery). Nothing is sent for it until its person clicks it: the click makes it an agent as Attach does (its own 1:1 chat opens, its terminal shows beside the chat) and the row is then the agent's. The row says `joining` while that goes on and waits, one join at a time; a refusal is said in a line at the foot and the next click finishes the join; a row of a computer that is off does nothing. |
+| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Which project a repo has is asked of the server by the same request on every computer, and nothing of it is kept on one. Its Tasks board reads the repo's GitHub issues with the reader's own `gh`, on every computer: for a repo on GitHub the Desktop sets the project's `owner/name` once (`project.github`), so the server learns the project's name and that, nothing of a pane. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list; this computer keeps their ids until 2026-12-10). The Swarm's own first project (Personal), which the server keeps only while it has messages, is listed as any project. |
+| Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu, Personal first. |
+| Personal outside a Swarm | `swarmsToOpen` (`super_tabs/swarm_switcher.dart`) | A person's Personal Swarm is in reach on each of their computers without another Swarm open (anh Dee, 2026-11-11): on the Desktop it is the first of Recent Swarms on the New Tab page and a Swarm draft, and in ⌘K, always, listed once whether it is open, closed or not made yet. Picking it shows it (its tab if one shows it, else in that page's tab), made by the server the first time; one that cannot be made says why in a line at the foot. The web lists only the Swarms closed there. |
 | Invite people | `ProjectSidebar.onInvite` (`super_tabs/project_sidebar.dart`) | A quiet row with `AppIcons.userPlus`, right under the org name, for the Swarm's owner alone (only an owner invites: backend `commands.ts`, `invite.create`), and never in their Personal Swarm, which is theirs alone; it opens the Swarm's people (`showSuperTabSharing`). In sight, not in Manage: people join a Swarm by an invitation, and each brings their agents and computers (anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible"). |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
@@ -1089,6 +1101,9 @@ clamps to the window; narrower layouts retain their existing preview toggle.
 Section headings use their natural text height with 8-point group spacing,
 never a full result-row height. Loading, failed refresh and settled emptiness
 are different states; keep existing results visible while refreshing.
+In a full tab the footer says `This tab is full. Open a new tab to add more.`
+once, and the empty list says nothing. A Swarm's pickers (Attach, Add agent)
+bring an agent into its team, so a full tab never limits them or their footer.
 
 **Cmd-N / New Tab** — one shared form and controller. Agent and project above
 the “Harness anything” prompt; model, approvals and profile below; Worktree and

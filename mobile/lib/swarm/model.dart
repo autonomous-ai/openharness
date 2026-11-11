@@ -645,10 +645,17 @@ class SuperTabProject {
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
       deciderId = row['decider'] is String ? row['decider'] as String : null,
+      githubRepository = row['githubRepository'] is String
+          ? row['githubRepository'] as String
+          : null,
       pmChatId = row['pmChat'] is Map
           ? superTabMap(row['pmChat'])['id'] as String?
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The GitHub repository (`owner/name`) its owner's Desktop set (backend `project.github`), read as the desktop's model
+  /// reads it; the phone draws nothing of it yet.
+  final String? githubRepository;
 
   /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts), read as the desktop's model reads
   /// it: only its person reads it, so null for anyone else, once a PM took it, and from a backend before it.

@@ -73,10 +73,14 @@ interface RepoMemory { comments: string; reviewComments: string; issues: string;
   over?: Record<string, { count: number; since: number }> }
 /** One relay a paused thread kept from its agent: what it is, and when its pause began, which names the one notice of it. */
 interface Held { agentId: string; number: number; key: string; item: Json; since: number }
-interface Memory { repos: Record<string, RepoMemory> }
+/** What this computer's GitHub cannot do for its agents (`UNREADABLE <repo>`, `GH_SIGNED_OUT`, `GH_MISSING`): since when, when
+ *  last found, and whether its person was told. Kept until it can again, so a restart tells nobody twice; a new failure after it
+ *  could, or one found again after [FORGET_MS] unseen (no agent here worked there), is told anew. */
+type Unable = Record<string, { since: number; seen: number; told: boolean }>
+interface Memory { repos: Record<string, RepoMemory>; unable: Unable }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** Whether [body] is the agent's own post: it signs its posts with its name first ("Pip, 14:05: ..."). */
+/** Whether [body] is the agent's own post: it signs its GitHub comments with its name first ("Pip: ...", "Pip, 14:05: ..." before). */
 export const signedBy = (body: string, names: readonly string[]): boolean =>
   names.some(name => new RegExp(`^\\W*${escape(name)}[*_]*\\s*[,:]`).test(body))
 /** Whether [body] names the agent: one of its names as written, as a whole word ("Pip", "@Pip", "**Pip**"). In its own case:
@@ -163,6 +167,8 @@ export class GitHubMentions {
     relay: (tabId: string, operationId: string, command: Json) => Promise<unknown>
     /** Tells one agent something only it reads, in its chat with its person (an agent-only notice). */
     tell?: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
+    /** Says [text] to [agent]'s person, in its chat, not typed to the agent. */
+    say: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
     file: string
     now?: () => number
     log?: (line: string) => void
@@ -203,12 +209,14 @@ export class GitHubMentions {
     if (repos.every(([repo]) => this.waits.held(repo, this.now()))) return
     const memory = this.load()
     const relays = { left: MAX_RELAYS, sent: 0 }
+    // What this pass found GitHub cannot do, told after it.
+    const unable: Array<{ key: string; agent: WatchedAgent }> = []
     // Whether a repository is being left alone: the pass then says nothing of reading again.
     let held = false
     try {
       for (const [repo, watching] of repos) {
         if (this.waits.held(repo, this.now())) { held = true; continue }
-        try { await this.readRepo(repo, watching, memory, relays); this.waits.ok(repo) } catch (error) {
+        try { await this.readRepo(repo, watching, memory, relays); this.waits.ok(repo); delete memory.unable[`UNREADABLE ${repo}`] } catch (error) {
           // What was read but not handed on is read again next pass: an ETag kept now would answer it with a 304.
           this.reads.forget(repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
@@ -216,9 +224,13 @@ export class GitHubMentions {
           // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so), and what it owes goes then.
           const wait = this.waits.miss(repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
           this.tell(error instanceof GitHubStop ? error.code : 'RELAY_FAILED', `${repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
+          // A read GitHub refuses inside the repository (one pull request's reviews) is not the repository unread: it is asked.
+          if (error instanceof GitHubStop && error.code === 'UNREADABLE' && await this.unseen(repo)) unable.push({ key: `UNREADABLE ${repo}`, agent: watching[0]! })
         }
       }
       this.waits.ran()
+      delete memory.unable.GH_SIGNED_OUT
+      delete memory.unable.GH_MISSING
       if (!held) this.tell('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
@@ -226,9 +238,24 @@ export class GitHubMentions {
       const wait = error.code === 'BUSY' ? 0 : this.waits.stop(error.until - this.now())
       this.offUntil = this.now() + wait
       this.tell(error.code, `${error.message}${wait ? ` (again in ${waitWords(wait)})` : ''}`)
+      if (error.code === 'GH_SIGNED_OUT' || error.code === 'GH_MISSING') unable.push({ key: error.code, agent: agents[0]! })
     } finally {
       for (const [repo, kept] of Object.entries(memory.repos)) if (!byRepo.has(repo) && this.now() - kept.usedAt > FORGET_MS) delete memory.repos[repo]
+      // A repository no agent here works in any more is not told of again: one that comes back is read, and told if it fails.
+      for (const key of Object.keys(memory.unable)) if (key.startsWith('UNREADABLE ') && !byRepo.has(key.slice('UNREADABLE '.length))) delete memory.unable[key]
+      // Told after the reads, so a slow server holds none of them back.
+      for (const { key, agent } of unable) await this.unableTo(memory.unable, key, agent)
       this.save(memory)
+    }
+  }
+
+  /** Whether this computer's GitHub login cannot see [repo] itself: not added to it, or it is gone. */
+  private async unseen(repo: string): Promise<boolean> {
+    try {
+      await this.reads.fresh(repo, `/repos/${repo}`)
+      return false
+    } catch (error) {
+      return error instanceof GitHubStop && error.code === 'UNREADABLE'
     }
   }
 
@@ -483,6 +510,26 @@ export class GitHubMentions {
     }
   }
 
+  /** Says to [agent]'s person what this computer's GitHub cannot do for its agents ([key]), and how to fix it: once, until it can
+   *  again. A teammate whose GitHub login cannot read the project's repository, or whose gh is not signed in, has agents that sit
+   *  with no task, and only the daemon's log said why. One its person could not be told is told at the next pass, under the same
+   *  operation, which the backend takes once. */
+  private async unableTo(unable: Unable, key: string, agent: WatchedAgent): Promise<void> {
+    const now = this.now(), found = unable[key]
+    const kept = unable[key] = !found || now - found.seen > FORGET_MS ? { since: now, seen: now, told: false } : { ...found, seen: now }
+    if (kept.told) return
+    const text = key === 'GH_SIGNED_OUT' ? 'GitHub isn\'t signed in on this computer, so your agents get no tasks. Sign in: gh auth login'
+      : key === 'GH_MISSING' ? 'GitHub CLI isn\'t installed on this computer, so your agents get no tasks. Install it from https://cli.github.com, then: gh auth login'
+      : `Your GitHub login can't read ${key.slice('UNREADABLE '.length)}, so your agents there get no tasks. Ask its owner to add you, `
+        + 'or sign in as someone who can: gh auth login'
+    try {
+      await this.deps.say(agent, `github-unable-${createHash('sha256').update(`${agent.agentId}\n${key}\n${kept.since}`).digest('hex').slice(0, 40)}`, text)
+      kept.told = true
+    } catch (error) {
+      this.log(`[super-tab] GitHub news could not tell ${agent.agentId}'s person: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   private tell(code: string, detail: string): void {
     const line = code ? `${code} ${detail}` : ''
     if (line === this.told) return
@@ -493,8 +540,8 @@ export class GitHubMentions {
   private load(): Memory {
     try {
       const saved = object(JSON.parse(readFileSync(this.deps.file, 'utf8')))
-      return { repos: object(saved.repos) as Memory['repos'] }
-    } catch { return { repos: {} } }
+      return { repos: object(saved.repos) as Memory['repos'], unable: object(saved.unable) as Unable }
+    } catch { return { repos: {}, unable: {} } }
   }
 
   private save(memory: Memory): void {
