@@ -97,11 +97,16 @@ export function tmuxAvailableNow(
     || tmuxInstallDirectories(environment).some(dir => binaryOnPath(join(dir, 'tmux'), environment))
 }
 
-/** A known location is only a fallback when its tmux actually runs on this computer. */
-function tmuxRuns(binary: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+/**
+ * A known location is only a fallback when its tmux actually runs on this computer: a build for another machine, or a
+ * broken one, exits with an error at once. One killed at the limit has not answered, which under load (a Mac at load 30
+ * as it signs in) is not a broken tmux: `unanswered`, never "does not run".
+ */
+function tmuxRuns(binary: string, env: NodeJS.ProcessEnv): Promise<boolean | 'unanswered'> {
   return new Promise(resolve => {
     execFile(binary, ['-V'], { env, timeout: 2_000 }, (error, stdout) => {
-      resolve(!error && /^tmux \S+/.test(String(stdout).trim()))
+      if (error?.killed) resolve('unanswered')
+      else resolve(!error && /^tmux \S+/.test(String(stdout).trim()))
     })
   })
 }
@@ -190,12 +195,22 @@ export async function ensureTmuxOnPath(
   // That PATH belongs only to the installer: a fresh macOS user's rc files do not inherit it.
   // Desktop explicitly checks these locations too. Preserve the user's existing PATH/shell choice
   // above, then verify the installed fallback without invoking Homebrew or changing shell profiles.
+  // A tmux that did not answer in time is adopted only when no later one runs: read as absent, it left the daemon with
+  // no terminals until its next start (tmuxOnPath.spec under load).
+  let unanswered: string | null = null
   for (const dir of installDirectories) {
     if (!isAbsolute(dir)) continue
     const candidate = join(dir, 'tmux')
-    if (!binaryOnPath(candidate, env) || !await tmuxRuns(candidate, env)) continue
+    if (!binaryOnPath(candidate, env)) continue
+    const runs = await tmuxRuns(candidate, env)
+    if (runs === 'unanswered') unanswered ??= dir
+    if (runs !== true) continue
     env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
     return { state: 'adopted', path: candidate, from: 'standard install location' }
+  }
+  if (unanswered) {
+    env.PATH = env.PATH ? `${unanswered}${delimiter}${env.PATH}` : unanswered
+    return { state: 'adopted', path: join(unanswered, 'tmux'), from: 'standard install location, whose `tmux -V` did not answer in time' }
   }
   return {
     state: 'absent',
