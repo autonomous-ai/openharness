@@ -426,14 +426,13 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
-  it('relaunch of a browser agent keeps the args', async () => {
-    const claude = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null, browser: true }, 'a')
-    expect(claude).toMatchObject({ ok: true, overrides: { extraArgs: [
-      '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'] } })
-    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null, browser: true }, 'a')
-    expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.browser.command="harness"', 'mcp_servers.browser.args=["browser-mcp"]']))
-    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null }, 'a')
-    expect(JSON.stringify(plain)).not.toContain('browser-mcp')
+  it('a relaunch of an agent whose browser is on adds no browser argument', async () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const relaunch = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, engine, { startedBy: null, cwd: null, browser: true }, 'a')
+      expect(relaunch.ok).toBe(true)
+      const argv = relaunch.ok ? relaunch.overrides.extraArgs.join(' ') : ''
+      for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)
+    }
   })
 
   it('relaunches a Swarm agent with them, as its owner\'s own session', async () => {
