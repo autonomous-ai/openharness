@@ -30,8 +30,8 @@ String switchPmTime(BuildContext context, DateTime at) {
   return '$day, $time';
 }
 
-/// Moves [projectId]'s Product Manager to another machine, engine/account, or
-/// model. The host starts the replacement and sends the handoff note.
+/// Moves [projectId]'s Product Manager to another machine, engine or model.
+/// The host starts the replacement and sends the handoff note.
 Future<void> showSwitchPm(
   BuildContext context,
   SuperTabController c,
@@ -161,6 +161,8 @@ Future<void> showSwitchPm(
             final activePool = machineRows
                 .where((pool) => pool['machineId'] == machineId)
                 .firstOrNull;
+            // One account per engine: the server keeps a machine's default accounts alone, the only ones a PM runs on
+            // (backend machines.ts storedObservation, pmAccount.ts).
             List<SuperTabProfile> profilesFor(Map<String, dynamic>? pool) {
               final rows = superTabProfilesOf(pool);
               if (rows.isNotEmpty) return rows;
@@ -173,7 +175,6 @@ Future<void> showSwitchPm(
                     (
                       engine: engine,
                       id: 'default',
-                      label: 'Default',
                       leftPercent: null,
                       resetsAt: null,
                     ),
@@ -274,7 +275,8 @@ Future<void> showSwitchPm(
                       if (profiles.isEmpty) ...[
                         const SizedBox(height: 12),
                         Text(
-                          unavailable(activePool ?? const {}) ?? 'No engine or account is available on this machine.',
+                          unavailable(activePool ?? const {}) ??
+                              'No engine is available on this machine.',
                           style: DesktopChrome.metadata(),
                         ),
                       ],
@@ -295,18 +297,17 @@ Future<void> showSwitchPm(
                                 selected:
                                     picked?.engine == p.engine &&
                                     picked?.id == p.id,
-                                title: Text(
-                                  '${leadEngineLabel(p.engine)} · ${p.label}',
-                                ),
-                                subtitle: Text(
-                                  [
-                                    if (current(p)) 'Current',
-                                    if (p.leftPercent != null)
-                                      '${p.leftPercent}% left',
-                                    if (p.resetsAt != null)
-                                      'resets ${switchPmTime(context, p.resetsAt!)}',
-                                  ].join(' · '),
-                                ),
+                                title: Text(leadEngineLabel(p.engine)),
+                                subtitle: switch ([
+                                  if (current(p)) 'Current',
+                                  if (p.leftPercent != null)
+                                    '${p.leftPercent}% left',
+                                  if (p.resetsAt != null)
+                                    'resets ${switchPmTime(context, p.resetsAt!)}',
+                                ]) {
+                                  [] => null,
+                                  final words => Text(words.join(' · ')),
+                                },
                                 onTap: () => update(() {
                                   picked = (engine: p.engine, id: p.id);
                                   model = null;
@@ -350,8 +351,8 @@ Future<void> showSwitchPm(
                         const SizedBox(height: 12),
                         Text(
                           otherMachines.isEmpty
-                              ? 'No other machine or account can run a Product Manager right now.'
-                              : 'No engine or account can run a Product Manager right now.',
+                              ? 'No other machine or engine can run a Product Manager right now.'
+                              : 'No engine can run a Product Manager right now.',
                           key: const ValueKey('switch-pm-no-choice'),
                           style: DesktopChrome.metadata(),
                         ),
