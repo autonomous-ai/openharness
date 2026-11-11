@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { TurnEnd } from '../core/api.js'
 import type { WatchedAgent } from './githubMentions.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { IDLE_ASK_MS, IDLE_BACK_MS, NEXT_SETTLE_MS, NEXT_TIMES, NextThing } from './nextThing.js'
+import { IDLE_ASK_MS, IDLE_BACK_MS, INBOX_MAX, NEXT_SETTLE_MS, NEXT_TIMES, NextThing, START_LOOK_MS } from './nextThing.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -466,6 +466,48 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     g.next.stop()
   })
 
+  // Swarm plan, step 1, item 2: "Harness types it once after a restart". A turn that ended while the daemon was down (an update,
+  // a restart) was never heard, and its agent slept with its next thing until something else woke it.
+  it('looks at each of its agents once as it starts: an idle one is typed its next thing, a busy one is left to its turn', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug')] })
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS - 1)
+    expect(f.tell).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
+    // Once: started again while running, it looks no more.
+    f.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.tell).toHaveBeenCalledOnce()
+    f.next.stop()
+    // Busy, or one whose turn just ended and is looked at by that: nothing more.
+    const busy = setup({ working: true })
+    busy.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(busy.tell).not.toHaveBeenCalled()
+    busy.next.stop()
+    const ended = setup()
+    ended.next.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS - NEXT_SETTLE_MS)
+    await ended.end()
+    expect(ended.tell).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(ended.tell).toHaveBeenCalledOnce()
+    ended.next.stop()
+    // Stopped before it looked: nothing; and a failure to list its agents is said.
+    const stopped = setup()
+    stopped.next.start()
+    stopped.next.stop()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(stopped.tell).not.toHaveBeenCalled()
+    const failing = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
+      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
+    failing.start()
+    await vi.advanceTimersByTimeAsync(START_LOOK_MS)
+    expect(f.log).toHaveBeenCalledWith('[super-tab] next things as Harness started: Error.')
+    failing.stop()
+  })
+
   it('hears turn ends once however often it is started, and none once stopped', async () => {
     const f = setup()
     f.next.start()
@@ -477,5 +519,52 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
     expect(f.tell).not.toHaveBeenCalled()
     f.next.stop()
+  })
+})
+
+// Swarm plan, step 1, item 2: "One command, harness inbox, lists what waits for an agent." Each line is what its turns' ends type
+// it, one at a time, in the same order: a compaction or a restart loses nothing it can read again.
+describe('what waits for an agent, as harness super-tab inbox lists it (nextThing.ts inbox)', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('lists its own pull requests\' HOLD and branch behind, the reads it owes and the task it holds, and types nothing', async () => {
+    const f = setup({ items: [item(14, 'Tidy the docs', ['status:taken']), item(15, 'Next one'),
+      { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' }, item(12, 'Fix the login bug', ['status:taken']),
+      { ...item(31, 'Add the export', [], true), body: 'Closes #13' }, item(13, 'Add the export', ['status:taken'])] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12 checks the old token.`)]
+    f.state.pulls[31] = { mergeable_state: 'behind' }
+    f.state.owed = [{ number: 40, sha: HEAD.slice(0, 7) }]
+    expect(await f.next.inbox('h-pip')).toEqual([
+      `Your acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)}: fix what it asks and push, and it is read again. Read it: gh pr view 30 --repo acme/app --comments`,
+      'Your acme/app#31 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push',
+      `Read acme/app#40 at ${HEAD.slice(0, 7)}, as Harness asked you: harness super-tab read ok acme/app#40 ${HEAD.slice(0, 7)} 'what you found' (or read hold, with the file, line and fix)`,
+      'You hold acme/app#14 (Tidy the docs): go on with it: gh issue view 14 --repo acme/app',
+    ])
+    expect(f.tell).not.toHaveBeenCalled()
+    expect(f.say).not.toHaveBeenCalled()
+  })
+
+  it('lists its next task when it holds none, and nothing when nothing waits or the terminal is no Swarm agent of its person\'s', async () => {
+    const f = setup({ items: [item(15, 'Next one'), item(12, 'Fix the login bug')] })
+    const next = `Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`
+    for (let i = 0; i <= NEXT_TIMES; i++) expect(await f.next.inbox('h-pip')).toEqual([next])
+    // Listed, it was not typed: its turn's end types it as the first time.
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([next])
+    expect(await f.next.inbox('h-other')).toEqual([])
+    f.state.items = []
+    expect(await f.next.inbox('h-pip')).toEqual([])
+    f.next.stop()
+  })
+
+  it('lists at most INBOX_MAX, and fails by GitHub\'s code when GitHub cannot be read', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = Array.from({ length: INBOX_MAX + 3 }, (_, i) => ({ number: 40 + i, sha: HEAD.slice(0, 7) }))
+    expect(await f.next.inbox('h-pip')).toHaveLength(INBOX_MAX)
+    f.state.down = true
+    // A new one, as the one before holds what it read this instant.
+    await expect(f.make().inbox('h-pip')).rejects.toMatchObject({ code: expect.any(String) })
   })
 })
