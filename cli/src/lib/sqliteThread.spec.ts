@@ -38,8 +38,10 @@ withBuiltin('SQLite reads off the core\'s thread', () => {
     expect(turned).toBe(true)
   })
 
+  // Slow enough to pass a 20 ms deadline, short enough to end soon after: a thread cannot be stopped mid-query, so the
+  // reset after this test waits for it (50M counted for over 10 s on CI and timed the reset out).
   it('answers a read past its deadline as transient, and the read after it as ever', async () => {
-    const late = await sqliteReadAll(db, SLOW, [50_000_000], { timeoutMs: 20 })
+    const late = await sqliteReadAll(db, SLOW, [3_000_000], { timeoutMs: 20 })
     expect(late).toMatchObject({ ok: false, reason: 'transient' })
     expect((late as { error: Error }).error.message).toMatch(/deadline/)
     expect(await sqliteReadAll(db, 'SELECT id FROM message ORDER BY id')).toEqual({ ok: true, rows: [{ id: 'm1' }, { id: 'm2' }], via: 'builtin' })
