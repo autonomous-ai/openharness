@@ -48,12 +48,9 @@ class _FinderChangesViewState extends State<FinderChangesView> {
       message: 'This folder isn’t in a Git repository.',
       compact: true,
     ),
-    FinderLoaded(:final value?) when value.changes.isEmpty => const EmptyState(
-      icon: AppIcons.gitBranch,
-      title: 'No changes',
-      message: 'Everything here matches the last commit.',
-      compact: true,
-    ),
+    // An empty list shows nothing.
+    FinderLoaded(:final value?) when value.changes.isEmpty =>
+      const SizedBox.shrink(),
     FinderLoaded(:final value?) => LaidOutListView(
       key: const ValueKey('finder-changes'),
       padding: const EdgeInsets.symmetric(vertical: 4),
