@@ -1,6 +1,7 @@
 # Swarm: the allocator, after its audit
 
-Status: **second version, 11 November. Proposed; nothing is built, and nothing is built until anh Dee says.** It
+Status: **second version, 11 November. Nothing is built yet.** anh Dee, the same day: "let's have another session
+build this", and "do not park anything, build it all": [what to build, in order](BUILD.md). It
 follows an audit of today's allocator, three reads of published work, one experiment, two independent critiques of the
 first version, and the four walls anh Dee named. The first version is in this file's history.
 
@@ -19,8 +20,8 @@ machine"; "agents create worktrees, so disk and storage go out fast."
 3. **Fix what the solver is fed and when it commits**: five faults in today's allocator, found in its code.
 4. **Measure before the rest.** What an agent's own area is worth, what a task costs in tokens, and whether a cheaper
    model lands the same work are not known. The first version assumed them.
-5. **Parked, with what each needs first**: prices for subscriptions, a model for each task, offers accepted on the
-   agent's own computer, Jev, a public record of costs.
+5. **After the walls, each with what it needs first**: prices for subscriptions, a model for each task, offers
+   accepted on the agent's own computer, Jev, a public record of costs.
 
 ## What the first version got wrong
 
@@ -130,7 +131,7 @@ From GitHub's own timestamps, with no new record: where a change waits (to start
 to land), conflicts and on which files, trains lost and why, and builders free while work they could do waited. It
 goes in the day's post, and every change above is judged by it.
 
-### 5. Parked, and what each needs first
+### 5. After the walls, and what each needs first
 
 | Idea | Needs first |
 |---|---|
@@ -149,14 +150,15 @@ goes in the day's post, and every change above is judged by it.
 
 ## Order
 
-Nothing is built until anh Dee says. When he does:
+As anh Dee asked on 11 November, everything is built, in this order ([the packages](BUILD.md)):
 
 1. **The scoreboard**, and the measurements in the table of what is not known.
 2. **The five faults.**
 3. **The merge wall.**
 4. **Disk, then CPU.**
 5. **End-to-end tests across machines**, for private teams.
-6. **Whatever the measurements then ask for** of the parked ideas.
+6. **The rest**: tokens for a task and the cost on a landed change, Jev for areas, a model for each task, a price
+   for a subscription's window, offers accepted on the agent's own computer.
 
 ## Decisions for anh Dee
 
@@ -168,7 +170,7 @@ Nothing is built until anh Dee says. When he does:
 | 4 | A budget of cores for each machine's agents | Yes |
 | 5 | Only the train lands on a Swarm's project | Yes |
 | 6 | Count tokens for a task again, on its person's own computer first | Yes: no saving can be claimed without it |
-| 7 | The three measurements: an area's worth, the tiers, a list one deep by turns | Yes, before anything parked |
+| 7 | The three measurements: an area's worth, the tiers, a list one deep by turns | Yes, as each package's first step |
 
 ## The experiment
 
