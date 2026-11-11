@@ -1338,12 +1338,39 @@ describe('Super Tab native delivery handoff', () => {
       expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
     })
 
-    it('is typed again when its agent\'s session has no turn yet', async () => {
-      const { t, typed } = await killedMidway()
+    // Code review of #4047: the core reads null when it cannot read the transcript as when there is no turn, so null says nothing.
+    it('is left uncertain when the core reads no last turn, as it does when it cannot read one', async () => {
+      const { t } = await killedMidway()
       session(t, null)
       const second = t.open()
       t.wait(RESTART_SETTLE_MS); await second.tick()
-      expect(vi.mocked(t.core.turns.deliver).mock.calls.map(call => call[1])).toEqual([typed, typed])
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+    })
+
+    it('is acknowledged as delivered when a turn of it ended since the restart, whatever turn came after it', async () => {
+      const { t, typed } = await killedMidway()
+      // It took the message and answered it; its next thing was typed at that turn's end, and is its last turn now.
+      session(t, 'Your next thing: #12.')
+      const second = t.open()
+      t.end({ prompt: promptHash(typed) })
+      t.end({ prompt: promptHash('Your next thing: #12.'), turnId: 2 })
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+    })
+
+    // Code review of #4047: a turn since the restart may be over the message it took, so its last turn being another says nothing.
+    it('is left uncertain when another turn ended since the restart, which may hide it', async () => {
+      const { t } = await killedMidway()
+      session(t, 'Your next thing: #12.')
+      const second = t.open()
+      t.end({ prompt: promptHash('Your next thing: #12.') })
+      t.wait(RESTART_SETTLE_MS); await second.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+      // Turns of an agent no restart cut a message off for are not kept.
+      t.end({ agentId: 'another', prompt: promptHash('Hello.') })
     })
 
     it('is acknowledged as delivered, and not typed again, when the last prompt its engine wrote is the message', async () => {

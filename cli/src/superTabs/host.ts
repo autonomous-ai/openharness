@@ -5,10 +5,11 @@ import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { CommandRetries, permanentRefusal } from './retries.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
+import { promptHash } from '../lib/promptIdentity.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -101,11 +102,6 @@ const QUOTED_OTHER_ACCOUNT = 'Quoted from another account: an agent of another a
  *  that took the prompt as the daemon went to write it in its transcript, and for the core to have the session again. */
 export const RESTART_SETTLE_MS = 30_000
 
-/** What was typed, hashed, the journal keeps no words: its spaces folded and its first 1,000 characters, so that the prompt an
- *  engine wrote in its transcript, read back with its own line ends, is still the same. */
-const typedMark = (text: string): string =>
-  createHash('sha256').update(text.replace(/\s+/g, ' ').trim().slice(0, 1_000)).digest('hex').slice(0, 32)
-
 interface Entry {
   tabId: string
   agentId: string
@@ -120,8 +116,8 @@ interface Entry {
   /** Its receipt checks' back-off (RECEIPT_RETRY_MS), kept in the journal so a restart neither forgets nor bursts them. */
   nextCheckAt?: number
   checkFails?: number
-  /** What it was typed as ([typedMark]), from the moment its intent to type was written: after a restart in the middle of typing, it
-   *  tells a message its agent got from one it did not. */
+  /** What it was typed as, by what it says (lib/promptIdentity.ts), from the moment its intent to type was written: after a restart in
+   *  the middle of typing, it tells a message its agent got from one it did not. */
   typed?: string
   /** Cut off in the middle of typing by a restart, with no word of what became of it: looked for among its agent's prompts
    *  before it is typed again. */
@@ -385,6 +381,8 @@ export class SuperTabHost {
   /** What this host owes the people who talked to their agent in its own chat, and posts when the agent's turn ends. */
   private readonly replies: AgentReplies
   private readonly stopEnds: () => void
+  /** The prompts of the turns that ended since this host started, of each agent a restart cut a message off for (hadBeforeRestart). */
+  private readonly ended = new Map<string, Set<string>>()
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
@@ -525,7 +523,7 @@ export class SuperTabHost {
     this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: receiptRefused })
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
-    this.stopEnds = core.turns.onEnd(event => { this.turnEnded(event.agentId); void this.replies.ended(event) })
+    this.stopEnds = core.turns.onEnd(event => { this.turnEnded(event.agentId); this.endedSince(event); void this.replies.ended(event) })
     this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
   }
 
@@ -899,19 +897,37 @@ export class SuperTabHost {
     return { state: known.state, ended }
   }
 
-  /** Whether the core says this agent is working now; unknown or a failed read is not working, so nothing is held for it. */
-  /** Whether its agent took a message a restart cut off in the middle of typing: the prompt of the last turn its engine wrote, which
-   *  the core reads from its transcript, is what was typed. It waits RESTART_SETTLE_MS from this host's start, and while the agent
-   *  works, as its last turn is then not over; a session the core no longer has, or cannot read, cannot tell. */
+  /**
+   * Whether its agent took a message a restart cut off in the middle of typing. A turn of it that ended since this host started says
+   * so, and so does the last turn its engine wrote, which the core reads from its transcript. Only that last turn being another, with
+   * no turn ended since, says it did not: a turn since may have hidden the message under it (a next thing typed at its end, its person
+   * typing), and the core reads null when it cannot read as when there is no turn (core/transcripts/lastTurn.ts), so either cannot
+   * tell (code review of #4047). It waits RESTART_SETTLE_MS from this host's start, and while the agent works, as its last turn is
+   * then not over; a session the core no longer has cannot tell.
+   */
   private async hadBeforeRestart(entry: Entry): Promise<'yes' | 'no' | 'unknown' | 'wait'> {
     if (this.now() - this.started < RESTART_SETTLE_MS) return 'wait'
     const sessionId = this.core.agents.byAgent(entry.harnessId)?.sessionId
     if (!sessionId) return 'unknown'
     if (await this.working(entry.harnessId)) return 'wait'
-    const turn = await this.core.transcripts.lastTurn(sessionId).then(read => read, () => undefined)
-    if (turn === undefined) return 'unknown'
-    return turn && typedMark(turn.userMessage) === entry.typed ? 'yes' : 'no'
+    const since = this.ended.get(entry.harnessId)
+    if (since?.has(entry.typed!)) return 'yes'
+    const turn = await this.core.transcripts.lastTurn(sessionId).catch(() => null)
+    if (!turn) return 'unknown'
+    if (promptHash(turn.userMessage) === entry.typed) return 'yes'
+    return since?.size ? 'unknown' : 'no'
   }
+  /** A message a restart cut off is decided: once none of its agent's is left, what ended since is no longer kept for it. */
+  private decidedRestart(entry: Entry): void {
+    delete entry.restarted
+    if (!Object.values(this.journal.entries).some(other => other.restarted && other.harnessId === entry.harnessId)) this.ended.delete(entry.harnessId)
+  }
+  /** Keeps the prompt of a turn that ended, of an agent a restart cut a message off for, until that message is decided. */
+  private endedSince(event: TurnEnd): void {
+    if (!Object.values(this.journal.entries).some(entry => entry.restarted && entry.harnessId === event.agentId)) return
+    this.ended.set(event.agentId, (this.ended.get(event.agentId) ?? new Set<string>()).add(event.prompt))
+  }
+  /** Whether the core says this agent is working now; unknown or a failed read is not working, so nothing is held for it. */
   private async working(harnessId: string): Promise<boolean> {
     return (await this.core.agents.activity([harnessId]).catch(() => ({} as Record<string, string>)))[harnessId] === 'working'
   }
@@ -1466,7 +1482,7 @@ export class SuperTabHost {
       if (moved) delete moved.busyUntil
       else if (entry.stage === 'submitting' || entry.restarted) {
         entry.stage = 'uncertain'
-        delete entry.restarted
+        this.decidedRestart(entry)
         entry.receipt = 'The member changed terminals before native submission was confirmed. Inspect the earlier session before retrying.'
       }
       this.persist()
@@ -1482,7 +1498,7 @@ export class SuperTabHost {
     if (entry.restarted) {
       const had = await this.hadBeforeRestart(entry)
       if (had === 'wait' || this.stopped || this.journal.entries[deliveryId] !== entry) return false
-      delete entry.restarted
+      this.decidedRestart(entry)
       if (had === 'yes') {
         entry.stage = 'delivered'
         entry.receipt = 'delivered: its session had it when the host restarted'
@@ -1576,7 +1592,7 @@ export class SuperTabHost {
     // it owes its person is saved by the same write, so a restart in the middle of its turn still posts the answer.
     const before = entry.stage
     entry.stage = 'submitting'
-    entry.typed = typedMark(text)
+    entry.typed = promptHash(text)
     if (plain) this.replies.owe({ ...entry, name: shownName(target.agent, 'The agent') }, message, text)
     try { this.persist() } catch (error) {
       entry.stage = before
