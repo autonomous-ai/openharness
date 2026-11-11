@@ -9,8 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
-import 'package:harness/super_tabs/leaderboard/model.dart';
-import 'package:harness/super_tabs/leaderboard/person_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -100,10 +98,7 @@ void main() {
       expect(swarm.authorName(_from('dee', 'dee@autonomous.ai')), 'dee');
     });
 
-    test('the leaderboard and the avatar name a person by it', () {
-      final score = SuperTabPersonScore.fromJson({'personId': 'relay'});
-      expect(leaderboardName(minh, score), 'Minh Nguyen');
-      expect(leaderboardName(dee, null), 'dee');
+    test('the avatar names a person by it', () {
       expect(SuperTabAvatar.person(minh).name, 'Minh Nguyen');
       expect(SuperTabAvatar.person(dee).name, 'dee');
     });
