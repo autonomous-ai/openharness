@@ -252,6 +252,15 @@ describe('the bytes of a browser stream', () => {
     const closed: string[] = []
     const key = new Uint8Array(32).fill(9)
     let counter = 0
+    // A frame's sealed length is the sealer's, taken once for each shape a frame comes in: sealing every one of three
+    // minutes of frames for real took 0.9 s of CPU alone and past 30 s on a loaded gate.
+    const lengths = new Map<string, number>()
+    const sealedLength = (frame: TerminalBinaryClear): number => {
+      const shape = `${frame.kind}:${frame.bytes.length}:${frame.compressed ? 1 : 0}:${frame.tabId ?? ''}`
+      let length = lengths.get(shape)
+      if (length === undefined) lengths.set(shape, length = sealTerminalBinary(key, counter++, frame)!.length)
+      return length
+    }
     const children: FakeChild[] = []
     const manager = new BrowserStreamManager({
       command: () => ({ argv: ARGV }),
@@ -263,7 +272,7 @@ describe('the bytes of a browser stream', () => {
         return true
       },
       sendBinaryTarget: (_connId, frame) => {
-        const sealed = sealTerminalBinary(key, counter++, frame)!.length
+        const sealed = sealedLength(frame)
         if (Date.now() - startedAt >= 60_000) { startedAt = Date.now(); windows.push(0) }
         if (windows[windows.length - 1] + sealed > BUDGET) refused++
         else windows[windows.length - 1] += sealed
