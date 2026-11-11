@@ -100,6 +100,14 @@ describe('where the day\'s landed changes waited', () => {
       '/repos/acme/app/pulls/1/files?per_page=100', '/repos/acme/app/pulls/4/files?per_page=100'])
   })
 
+  it('takes a change that landed a minute over a day ago for none of the day\'s, and still one of the week\'s', async () => {
+    const hub = github({ 1: [ok(2 * HOUR)], 8: [ok(26 * HOUR)] })
+    const read = await board([landed(1, 3 * HOUR, HOUR), landed(8, 30 * HOUR, DAY + MINUTE)], hub)
+    expect(read.waits).toMatchObject({ read: 1, toLanded: { minutes: 60, of: 1 } })
+    expect(read.hot).toMatchObject({ landings: 2 })
+    expect(hub.asked).toEqual(['/repos/acme/app/issues/1/comments?per_page=100', '/repos/acme/app/pulls/1/files?per_page=100', '/repos/acme/app/pulls/8/files?per_page=100'])
+  })
+
   it('reads the fifty that landed last in the day, however GitHub lists them, up to three pages of comments each, and keeps nothing', async () => {
     // Sixty landed in the day, #1 the last; one a minute over a day ago. GitHub lists by last update: here, the oldest first.
     const closed = [landed(99, 30 * HOUR, DAY + MINUTE), ...Array.from({ length: 60 }, (_, at) => landed(60 - at, 20 * HOUR, (60 - at) * MINUTE))]
@@ -165,6 +173,12 @@ describe('the files most landings touch', () => {
     const asked = hub.asked.filter(path => path.includes('/files'))
     expect(asked).toHaveLength(20)
     expect(asked.slice(0, 2)).toEqual(['/repos/acme/app/pulls/1/files?per_page=100', '/repos/acme/app/pulls/2/files?per_page=100'])
+    // Two of ten is a fifth, and still says nothing: of a few landings two share a file by chance. Three of ten does.
+    const few = own(10)
+    for (const number of [1, 2]) few[number]!.push('src/pair.ts')
+    expect((await board(week(10), github({}, few))).hot).toEqual({ landings: 10, files: [] })
+    few[3]!.push('src/pair.ts')
+    expect((await board(week(10), github({}, few))).hot).toEqual({ landings: 10, files: [['src/pair.ts', 3]] })
     // Three of thirty is a tenth, not more; four of thirty is.
     const edge = own(30)
     for (const number of [1, 2, 3]) edge[number]!.push('src/edge.ts')
