@@ -111,9 +111,18 @@ class ConnectorsController extends ChangeNotifier {
   /// Whether [code] is connected, or installed, through an engine.
   bool connectedVia(String code) =>
       via[code]?.entries.any(
+        // Codex's plugin installed counts: whether its account is signed in is ChatGPT's to know.
         (e) => engines.contains(e.key) && e.value != 'not_connected',
       ) ??
       false;
+
+  /// ChatGPT's connectors, where the accounts Codex's plugins use are added, or the main one chosen: more than
+  /// one Google account if the person wants. Codex's own, not Harness's to hold.
+  static final codexAccounts = Uri.parse(
+    'https://chatgpt.com/#settings/Connectors',
+  );
+
+  Future<void> openCodexAccounts() => openInBrowser(codexAccounts);
 
   /// What the last action came to. It goes away on its own: Settings keeps this page alive, and a
   /// "disconnected" from days ago was still standing there.
@@ -155,10 +164,13 @@ class ConnectorsController extends ChangeNotifier {
 
   String? get _target => machineId ?? app.localMachineState?.machine.machineId;
 
-  Future<Map<String, dynamic>> _ask(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> _ask(
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
     final target = _target;
     if (target == null) throw StateError('This computer is not connected yet.');
-    final answer = await app.connectors(target, payload);
+    final answer = await app.connectors(target, payload, timeout: timeout);
     final failure = answer['error'];
     if (failure != null) {
       throw _Refused(
@@ -175,11 +187,19 @@ class ConnectorsController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  Future<void> refresh() async {
+  /// [sync]: the Refresh button. The computer exchanges the account's connections first, so one made on
+  /// another computer (or this computer only just added to the account) is here when it answers.
+  Future<void> refresh({bool sync = false}) async {
     loading = true;
     _changed();
     try {
-      final answer = await _ask({'action': 'list'});
+      // A Sync waits on the account's connections first (up to 15 s there).
+      final answer = await _ask(
+        {'action': 'list', if (sync) 'sync': true},
+        timeout: sync
+            ? const Duration(minutes: 1)
+            : const Duration(seconds: 20),
+      );
       cards = [
         for (final row in (answer['connections'] as List? ?? const []))
           if (row is Map) ConnectorCard.fromJson(row.cast<String, dynamic>()),
@@ -199,7 +219,37 @@ class ConnectorsController extends ChangeNotifier {
 
   /// What Claude Code and Codex on that computer hold. A daemon too old to say leaves the three
   /// services to Harness alone, as before.
-  Future<void> refreshVia() async {
+  Future<void> refreshVia() {
+    final loading = _readVia();
+    viaLoading = loading;
+    return loading.whenComplete(() {
+      if (viaLoading == loading) viaLoading = null;
+    });
+  }
+
+  /// [refreshVia] under way: a click on Gmail before its answer waits for it ([afterChecking]),
+  /// rather than going straight to Harness's own sign-in.
+  Future<void>? viaLoading;
+
+  /// The services a computer may offer through Claude Code or Codex (cli/src/lib/connectors/elsewhere.ts).
+  static const wayCodes = {
+    'gmail',
+    'google_calendar',
+    'google_drive',
+    'microsoft_365',
+  };
+
+  /// Still asking whether [code] connects through Claude Code or Codex.
+  bool checking(String code) =>
+      viaLoading != null && wayCodes.contains(code) && !hasWays(code);
+
+  /// Once the computer has said what its engines have: whether [code] has ways.
+  Future<bool> afterChecking(String code) async {
+    await viaLoading;
+    return hasWays(code);
+  }
+
+  Future<void> _readVia() async {
     try {
       final answer = await _ask({'action': 'elsewhere'});
       Map<String, Map<String, String>> table(Object? raw) => {

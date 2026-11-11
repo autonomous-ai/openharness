@@ -184,7 +184,10 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Read, search and manage email.'), findsOneWidget);
-      expect(find.textContaining('Codex only'), findsOneWidget);
+      expect(
+        find.textContaining('Only Codex on the same ChatGPT account'),
+        findsOneWidget,
+      );
       expect(find.textContaining('All agents'), findsOneWidget);
       expect(find.textContaining('Your admin may need'), findsOneWidget);
 
@@ -206,7 +209,7 @@ void main() {
       await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       expect(find.text('CONNECTED  1'), findsOneWidget);
-      expect(find.text('✓ Codex · sign-in on first use'), findsOneWidget);
+      expect(find.text('✓ Codex · accounts in ChatGPT'), findsOneWidget);
       expect(find.text('Manage'), findsOneWidget);
 
       // Removed: the plugin goes, and the card goes back to the services to connect.
@@ -322,7 +325,7 @@ void main() {
   testWidgets('disconnect asks first', (tester) async {
     final app = await pump(tester);
     app.connected.add('notion');
-    await tester.tap(find.byTooltip('Refresh'));
+    await tester.tap(find.byTooltip(ConnectorsSection.syncTooltip));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Disconnect Notion'));
     await tester.pumpAndSettle();

@@ -99,12 +99,12 @@ class _App extends AppNotifier {
         ],
         'scopes': {
           'gmail': {
-            'claude': 'Read, search, draft. No sending.',
+            'claude': 'Read, search, draft, send.',
             'codex': 'Read, search, manage.',
             'harness': 'Send only.',
           },
           'google_drive': {
-            'claude': 'Search and read files.',
+            'claude': 'Search, read, manage files.',
             'codex': 'Drive, Docs, Sheets, Slides.',
             'harness': 'Only files it creates.',
           },
@@ -147,19 +147,16 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: ConnectorsPage(notifier: app)));
       await tester.pumpAndSettle();
       expect(app.actions, containsAllInOrder(['list', 'elsewhere']));
-      // Gmail is in through Codex, so it is with the connected ones; its row says how.
-      expect(find.text('Codex (sign-in on first use)'), findsOneWidget);
+      // Gmail is in through Codex, so it is with the connected ones; its row says where its accounts are.
+      expect(find.text('Codex (accounts in ChatGPT)'), findsOneWidget);
       expect(find.text('Manage'), findsOneWidget);
       // Drive needs no Harness sign-in to be added through Codex.
       await tester.tap(find.text('Google Drive'));
       await tester.pumpAndSettle();
       expect(find.text('Connect Google Drive'), findsOneWidget);
-      expect(
-        find.text('Codex only: Drive, Docs, Sheets, Slides.'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Claude only'), findsNothing);
-      expect(find.text('All agents: Only files it creates.'), findsOneWidget);
+      expect(find.text('Drive, Docs, Sheets, Slides.'), findsOneWidget);
+      expect(find.byKey(const Key('connector-way-claude')), findsNothing);
+      expect(find.text('Only files it creates.'), findsOneWidget);
       expect(find.text('Needs harness login'), findsWidgets);
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
@@ -168,11 +165,8 @@ void main() {
       await tester.tap(find.text('Microsoft 365'));
       await tester.pumpAndSettle();
       expect(find.text('Connect Microsoft 365'), findsOneWidget);
-      expect(
-        find.text('Codex only: Outlook mail, calendar, SharePoint.'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('All agents'), findsNothing);
+      expect(find.text('Outlook mail, calendar, SharePoint.'), findsOneWidget);
+      expect(find.byKey(const Key('connector-way-harness')), findsNothing);
     },
   );
 

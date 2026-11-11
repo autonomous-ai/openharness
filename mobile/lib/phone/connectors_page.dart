@@ -194,6 +194,18 @@ class _ConnectorsPageState extends State<ConnectorsPage>
   /// Per service, what each way lets an agent do (`claude`, `codex`, `harness`).
   Map<String, Map<String, String>> _scopes = const {};
 
+  /// The computer [_engines], [_via] and [_scopes] were read from. Another computer starts with
+  /// none of them: what one computer has is never shown as another's.
+  String? _viaFrom;
+
+  void _forgetVia() {
+    _engines = const {};
+    _via = const {};
+    _scopes = const {};
+    _viaFrom = null;
+    _cards = _cards?.where((c) => c.auth != _viaOnly).toList();
+  }
+
   static const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
 
   bool _hasWays(String code) =>
@@ -201,18 +213,83 @@ class _ConnectorsPageState extends State<ConnectorsPage>
 
   bool _onVia(String code) =>
       _via[code]?.entries.any(
+        // Codex's plugin installed counts: whether its account is signed in is ChatGPT's to know, and the
+        // person chose to read installed as in.
         (e) => _engines.contains(e.key) && e.value != 'not_connected',
       ) ??
       false;
 
-  Future<void> _loadVia() async {
+  /// The services a computer may offer through Claude Code or Codex (cli/src/lib/connectors/elsewhere.ts).
+  static const _wayCodes = {
+    'gmail',
+    'google_calendar',
+    'google_drive',
+    'microsoft_365',
+  };
+
+  /// [_readVia] under way, for a tap that comes before its answer.
+  Future<void>? _viaLoading;
+
+  /// Still asking whether [card] connects through Claude Code or Codex: its row says so, and a tap
+  /// waits for the answer rather than going straight to Harness's own sign-in.
+  bool _checking(_Card card) =>
+      _viaLoading != null &&
+      _wayCodes.contains(card.code) &&
+      !_hasWays(card.code);
+
+  /// A tap on [card] before the computer said what its engines have: once it has, the ways if
+  /// there are any, else what the tap would have done ([otherwise]).
+  Future<void> _afterChecking(_Card card, VoidCallback? otherwise) async {
+    await _viaLoading;
+    if (!mounted) return;
+    if (_hasWays(card.code)) return _chooseWay(card);
+    otherwise?.call();
+  }
+
+  Future<void> _loadVia() {
+    final loading = _readVia();
+    // A block, not `=>`: assigned through an arrow, the Future is what the callback returns, and
+    // setState throws on that.
+    setState(() {
+      _viaLoading = loading;
+    });
+    return loading.whenComplete(() {
+      if (mounted && _viaLoading == loading) {
+        setState(() => _viaLoading = null);
+      }
+    });
+  }
+
+  /// Each computer's last `elsewhere` answer, by machine id, for as long as the app runs: the page
+  /// opened again shows Gmail through Claude Code where it was at once, not after the seconds the
+  /// computer takes to ask Claude Code and Codex again. Kept on the app's notifier, not in a static, so
+  /// two notifiers (two tests) never share one.
+  static final _viaSaid = Expando<Map<String, Map<String, dynamic>>>();
+
+  Future<void> _readVia() async {
     final machineId = _machineId;
     if (machineId == null) return;
+    if (_viaFrom != machineId) {
+      final said = _viaSaid[_app]?[machineId];
+      setState(() {
+        _forgetVia();
+        if (said != null) _applyVia(machineId, said);
+      });
+    }
     final reply = await _app.connectors(machineId, {
       'action': 'elsewhere',
     }, timeout: const Duration(seconds: 60));
-    // An older Harness there: the three services sign in through Harness alone, as before.
-    if (!mounted || machineId != _machineId || reply['error'] != null) return;
+    if (!mounted || machineId != _machineId) return;
+    // No answer this time (the computer restarting, a slow line): what it said last stands, or a
+    // connection through Claude Code would drop out of the list until the next read. Another computer
+    // was already forgotten above; an older Harness there never said anything.
+    if (reply['error'] != null) return;
+    (_viaSaid[_app] ??= {})[machineId] = reply;
+    setState(() => _applyVia(machineId, reply));
+  }
+
+  /// [reply], what [machineId] said its Claude Code and Codex hold, as the page's state. In a setState.
+  void _applyVia(String machineId, Map<String, dynamic> reply) {
     Map<String, Map<String, String>> table(Object? raw) => {
       if (raw is Map)
         for (final MapEntry(:key, :value) in raw.entries)
@@ -223,31 +300,30 @@ class _ConnectorsPageState extends State<ConnectorsPage>
             },
     };
     final said = reply['engines'];
-    setState(() {
-      _engines = {
-        if (said is Map)
-          for (final MapEntry(:key, :value) in said.entries)
-            if (value == true) '$key',
-      };
-      _via = table(reply['connections']);
-      _scopes = table(reply['scopes']);
-      // Services only an engine connects (Microsoft 365): a card of their own where the computer has
-      // an engine for them. Added once, after the computer's own list.
-      final cards = [...?_cards?.where((c) => c.auth != _viaOnly)];
-      for (final row in (reply['services'] as List? ?? const [])) {
-        if (row is! Map) continue;
-        final card = _Card({
-          ...row.cast<String, dynamic>(),
-          'auth': _viaOnly,
-          'state': 'not_connected',
-        });
-        if (_hasWays(card.code) && !cards.any((c) => c.code == card.code)) {
-          cards.add(card);
-        }
+    _engines = {
+      if (said is Map)
+        for (final MapEntry(:key, :value) in said.entries)
+          if (value == true) '$key',
+    };
+    _via = table(reply['connections']);
+    _scopes = table(reply['scopes']);
+    _viaFrom = machineId;
+    // Services only an engine connects (Microsoft 365): a card of their own where the computer has
+    // an engine for them. Added once, after the computer's own list.
+    final cards = [...?_cards?.where((c) => c.auth != _viaOnly)];
+    for (final row in (reply['services'] as List? ?? const [])) {
+      if (row is! Map) continue;
+      final card = _Card({
+        ...row.cast<String, dynamic>(),
+        'auth': _viaOnly,
+        'state': 'not_connected',
+      });
+      if (_hasWays(card.code) && !cards.any((c) => c.code == card.code)) {
+        cards.add(card);
       }
-      _cards = cards
-        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    });
+    }
+    _cards = cards
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
   /// The `auth` of a card the computer's Harness list does not have: only an engine connects it.
@@ -259,7 +335,7 @@ class _ConnectorsPageState extends State<ConnectorsPage>
       if (_engines.contains(engine))
         switch (_via[card.code]?[engine]) {
           'connected' => name,
-          'installed' => '$name (sign-in on first use)',
+          'installed' => '$name (accounts in ChatGPT)',
           'reconnect' => '$name: reconnect',
           _ => null,
         },
@@ -271,26 +347,38 @@ class _ConnectorsPageState extends State<ConnectorsPage>
   /// Harness's own sign-in, each with what it lets an agent do.
   void _chooseWay(_Card card) {
     final scope = _scopes[card.code] ?? const {};
+    // What a tap does, not what the state is: on a way already in, a tap takes it out.
     String status(String? state) => switch (state) {
-      'connected' => 'Connected',
-      'installed' => 'Installed',
+      'connected' || 'installed' => 'Remove',
       'reconnect' => 'Reconnect',
       _ => 'Connect',
     };
-    unawaited(
-      showPhoneSheet(
-        context,
-        title: 'Connect ${card.name}',
-        actions: [
+    final codexIn =
+        _engines.contains('codex') && _via[card.code]?['codex'] == 'installed';
+    const who = {
+      'claude': 'Only Claude Code on the same Claude account',
+      'codex': 'Only Codex on the same ChatGPT account',
+    };
+    final ways =
+        <
+          ({
+            String key,
+            String title,
+            String detail,
+            String value,
+            VoidCallback? act,
+          })
+        >[
           for (final MapEntry(key: engine, value: name) in _engineNames.entries)
             if (_engines.contains(engine))
-              PhoneSheetAction(
-                icon: LucideIcons.bot300,
-                label: '$name only: ${scope[engine] ?? ''}'.trim(),
+              (
+                key: engine,
+                title: name,
+                detail: [?scope[engine], who[engine]!].join('\n'),
                 value: _busy.contains('${card.code}:$engine')
-                    ? 'Working…'
+                    ? (engine == 'codex' ? 'Installing…' : 'Working…')
                     : status(_via[card.code]?[engine]),
-                onTap: switch (_via[card.code]?[engine]) {
+                act: switch (_via[card.code]?[engine]) {
                   'connected' ||
                   'installed' => () => unawaited(_disconnectVia(card, engine)),
                   _ => () => unawaited(_connectVia(card, engine)),
@@ -298,9 +386,10 @@ class _ConnectorsPageState extends State<ConnectorsPage>
               ),
           // Not for a service only an engine connects (Microsoft 365).
           if (scope.isEmpty || scope.containsKey('harness'))
-            PhoneSheetAction(
-              icon: LucideIcons.plug300,
-              label: 'All agents: ${scope['harness'] ?? card.description}',
+            (
+              key: 'harness',
+              title: 'Harness',
+              detail: '${scope['harness'] ?? card.description}\nAll agents',
               value: card.reason.isNotEmpty && !card.connected
                   ? card.reason
                   : card.needsAttention
@@ -308,15 +397,78 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                   : card.connected
                   ? 'Connected'
                   : 'Connect',
-              enabled:
-                  card.connected || card.needsAttention || card.reason.isEmpty,
-              onTap: card.connected
+              act:
+                  !(card.connected ||
+                      card.needsAttention ||
+                      card.reason.isEmpty)
+                  ? null
+                  : card.connected
                   ? () => unawaited(_disconnect(card))
                   : () => unawaited(_connect(card)),
             ),
-        ],
+        ];
+    final route = phoneSheetRoute<void>(
+      context,
+      builder: (sheet) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Connect ${card.name}',
+                style: TextStyle(
+                  color: AppPalette.textPrimary,
+                  fontSize: 18,
+                  fontWeight: AppFont.semibold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Pick who gets it. Each way has its own limits.',
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 14),
+              ),
+              const SizedBox(height: 14),
+              // One bordered card per way, apart from each other: in one card they read as a
+              // paragraph.
+              for (final way in ways) ...[
+                _WayCard(
+                  key: Key('connector-way-${way.key}'),
+                  icon: way.key == 'harness'
+                      ? LucideIcons.plug300
+                      : LucideIcons.bot300,
+                  title: way.title,
+                  detail: way.detail,
+                  value: way.value,
+                  onTap: way.act == null
+                      ? null
+                      : () {
+                          Navigator.of(sheet).pop();
+                          way.act!();
+                        },
+                  // Codex's plugin is in: the accounts it uses are ChatGPT's, more than one if the
+                  // person wants. Added there.
+                  onAddAccount: way.key == 'codex' && codexIn
+                      ? () {
+                          Navigator.of(sheet).pop();
+                          unawaited(_openEngine('codex', _chatGptConnectors));
+                        }
+                      : null,
+                ),
+                const SizedBox(height: 10),
+              ],
+              const SizedBox(height: 10),
+              Text(
+                'Company account? Your admin may need to allow it.',
+                style: TextStyle(color: AppPalette.textFaint, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
       ),
     );
+    unawaited(Navigator.of(context, rootNavigator: true).push(route));
   }
 
   /// Through [engine]'s own account: the computer installs Codex's plugin first, then the page to
@@ -328,8 +480,15 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     if (machineId == null || _busy.contains(key)) return;
     setState(() {
       _busy.add(key);
-      _say('');
+      _say(
+        engine == 'codex'
+            ? 'Installing the ${card.name} plugin in Codex on ${_machineName(machineId)}…'
+            : '',
+      );
     });
+    // ChatGPT's page opens once the plugin is installed, not before: the plugin is the ChatGPT account's
+    // (`codex plugin add` installs it there), so until then its page has nothing to sign in to. Meanwhile
+    // the row says "Installing…".
     final reply = await _app.connectors(machineId, {
       'action': 'connect_via',
       'connector': card.code,
@@ -344,13 +503,12 @@ class _ConnectorsPageState extends State<ConnectorsPage>
       });
       return;
     }
-    final opened = await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
+    final opened = await _openEngine(engine, url);
     if (!mounted) return;
     setState(() {
       _busy.remove(key);
+      // A running Claude Code or Codex reads a new connector only when it starts again.
+      _restartGlow = true;
       _say(
         !opened
             ? 'Open $url to connect ${card.name}.'
@@ -361,6 +519,28 @@ class _ConnectorsPageState extends State<ConnectorsPage>
       );
     });
     await _loadVia();
+  }
+
+  /// The computer is installing [card]'s Codex plugin ([_connectVia]): its row says so, the whole time.
+  bool _installing(_Card card) => _busy.contains('${card.code}:codex');
+
+  /// ChatGPT's connectors, where Codex's plugins are signed in (cli/src/lib/connectors/elsewhere.ts).
+  static const _chatGptConnectors = 'https://chatgpt.com/#settings/Connectors';
+
+  /// [url], where [engine]'s connectors are managed, in a browser tab of this app's own, as Harness's
+  /// sign-in opens. The web, not the engine's app: handed to the system, a claude.ai or chatgpt.com
+  /// address opens the Claude or ChatGPT app, and neither app takes an address for one service (the
+  /// Claude app's `claude://` links reach its Connectors list at most), where the web opens Gmail's own.
+  ///
+  /// A browser tab still hands the app an address it claims: the Claude Android app claims
+  /// `claude.ai/new`, the connectors' page there, so an older computer's `/new#…` is sent as `/new/#…`,
+  /// which it does not claim and the web sends on to `/new` (cli/src/lib/connectors/elsewhere.ts).
+  Future<bool> _openEngine(String engine, String url) {
+    var uri = Uri.parse(url);
+    if (uri.host == 'claude.ai' && uri.path == '/new') {
+      uri = uri.replace(path: '/new/');
+    }
+    return launchUrl(uri, mode: LaunchMode.inAppBrowserView);
   }
 
   /// Stop [engine] using [card]: the computer removes Codex's plugin, and the engine's account page
@@ -375,9 +555,7 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     }, timeout: const Duration(seconds: 90));
     if (!mounted) return;
     final url = reply['url'] as String?;
-    if (url != null) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    }
+    if (url != null) await _openEngine(engine, url);
     if (!mounted) return;
     setState(
       () => _say(
@@ -397,11 +575,18 @@ class _ConnectorsPageState extends State<ConnectorsPage>
     return machine?.machine.displayName ?? 'No computer';
   }
 
-  Future<void> _refresh() async {
+  /// [sync]: the reload button, or a pull. The computer exchanges the account's connections first, so one
+  /// made on another computer (or this computer only just added to the account) is listed.
+  Future<void> _refresh({bool sync = false}) async {
     final machineId = _machineId;
     if (machineId == null) return _pickReachable();
     setState(() => _loading = true);
-    final reply = await _app.connectors(machineId, {'action': 'list'});
+    // A Sync waits on the account's connections first (up to 15 s there).
+    final reply = await _app.connectors(
+      machineId,
+      {'action': 'list', if (sync) 'sync': true},
+      timeout: sync ? const Duration(minutes: 1) : const Duration(seconds: 30),
+    );
     if (!mounted || machineId != _machineId) return;
     // The computer went away: another that answers will do.
     if (reply['error'] == 'UNAVAILABLE') return _pickReachable();
@@ -414,6 +599,42 @@ class _ConnectorsPageState extends State<ConnectorsPage>
       return;
     }
     _show(reply);
+  }
+
+  /// Sync connections under way.
+  bool _syncing = false;
+
+  /// The Sync row: the computer gets the account's connections, gives its agents their entries, and
+  /// says what it now holds.
+  Future<void> _syncNow() async {
+    final machineId = _machineId;
+    if (machineId == null || _syncing) return;
+    setState(() {
+      _syncing = true;
+      _say('');
+    });
+    var done = false;
+    try {
+      await _refresh(sync: true);
+      done = true;
+    } finally {
+      // Whatever went wrong, the row stops spinning.
+      if (mounted) setState(() => _syncing = false);
+    }
+    if (!mounted || !done) return;
+    setState(() {
+      if (_notice.isNotEmpty || machineId != _machineId) return;
+      final held = _cards?.where((c) => c.connected).length ?? 0;
+      _say(
+        held == 0
+            ? 'Synced ${_machineName(machineId)}: no connections there yet.'
+            : 'Synced ${_machineName(machineId)}: $held '
+                  '${held == 1 ? 'connection' : 'connections'}, added to the '
+                  'agents installed there. Restart an agent '
+                  'already running to use them.',
+        fades: true,
+      );
+    });
   }
 
   String _failure(Map<String, dynamic> reply) {
@@ -585,6 +806,8 @@ class _ConnectorsPageState extends State<ConnectorsPage>
         // The desktop's words (`connectors_controller.dart`): no "on all your computers", which a
         // computer that keeps its connections to itself ([_shared] false) would not make true.
         case 'connected':
+          // An agent already running gets the new tools only on a restart: its row says so.
+          if (mounted) setState(() => _restartGlow = true);
           return '$name connected. Your agents can use it now.';
         case 'failed':
           return reply['reason'] as String? ??
@@ -624,7 +847,11 @@ class _ConnectorsPageState extends State<ConnectorsPage>
   /// Opens the harness, then restarts it there, so the person watches it come back with its new
   /// tools. The page closes on the way (the shell opens an agent at its root), so a failure is told
   /// in a snack bar rather than here.
+  /// A connection was just made: the Restart row pulses amber until it is used.
+  bool _restartGlow = false;
+
   void _restartThere((String, Agent) target) {
+    setState(() => _restartGlow = false);
     final (machineId, agent) = target;
     final key = phoneAgentId(machineId, agent.id);
     if (!_restarting.add(key)) return;
@@ -755,32 +982,77 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                       size: TtySize.display,
                       weight: FontWeight.w600,
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 4),
                     Text(
-                      'Services your agents can use. Sign in here once: every computer of your account '
-                      'gets the connection.',
+                      'Sign in once: every computer of your account gets it.',
                       style: tty.style(color: tty.dim),
                     ),
                     if (_notice.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       Text(_notice, style: tty.style(color: tty.dim)),
                     ],
-                    // Agents read their tools when they start: one already running gets a connection
-                    // made since only on a restart. Always here, for the harness last opened.
-                    if (lastOpened != null) ...[
+                    // One card for what acts on the page as a whole: which computer, Sync, and the
+                    // restart a running agent needs. Each row one line of detail, so the list starts
+                    // high on the screen.
+                    if (_machineId != null || lastOpened != null) ...[
                       const SizedBox(height: 12),
                       SettingsGroup(
                         children: [
-                          SettingsRow(
-                            key: const Key('connectors-restart'),
-                            leading: const Icon(
-                              LucideIcons.refreshCw300,
-                              size: 20,
+                          // Which computer signs in matters only when it cannot: any of them gets the
+                          // connection.
+                          if (_app.connectorMachines.length > 1 &&
+                              _machineId != null)
+                            SettingsRow(
+                              key: const Key('connectors-computer'),
+                              leading: const Icon(
+                                LucideIcons.monitor300,
+                                size: 20,
+                              ),
+                              title: _machineName(_machineId),
+                              detail: 'The machine this page signs in through',
+                              value: 'Change',
+                              onTap: _pickMachine,
                             ),
-                            title: 'Restart "${lastOpened.$2.displayName}"',
-                            detail: 'Restart to use the new tools from your connectors.',
-                            onTap: () => _restartThere(lastOpened),
-                          ),
+                          if (_machineId != null)
+                            SettingsRow(
+                              key: const Key('connectors-sync'),
+                              leading: _syncing
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      LucideIcons.cloudDownload300,
+                                      size: 20,
+                                    ),
+                              title: _syncing ? 'Syncing…' : 'Sync connections',
+                              detail: 'Get them from your other computers, add them to its agents',
+                              onTap: _syncing
+                                  ? null
+                                  : () => unawaited(_syncNow()),
+                            ),
+                          // Agents read their tools when they start: one already running gets a
+                          // connection made since only on a restart.
+                          if (lastOpened != null)
+                            _Pulse(
+                              active: _restartGlow,
+                              child: SettingsRow(
+                                key: const Key('connectors-restart'),
+                                leading: Icon(
+                                  LucideIcons.refreshCw300,
+                                  size: 20,
+                                  color: _restartGlow ? AppPalette.warn : null,
+                                ),
+                                title: 'Restart "${lastOpened.$2.displayName}"',
+                                detail: _restartGlow
+                                    ? 'New connection: restart to use it'
+                                    : 'To use new tools from connectors',
+                                onTap: () => _restartThere(lastOpened),
+                              ),
+                            ),
                         ],
                       ),
                     ],
@@ -795,29 +1067,6 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                         style: tty.style(color: tty.dim),
                       ),
                     ] else if (cards != null) ...[
-                      // At the top, not under the connected list: a long one pushed both off the screen.
-                      // Which computer signs in matters only when it cannot: any of them gets the connection.
-                      if (_app.connectorMachines.length > 1) ...[
-                        const SizedBox(height: 8),
-                        // A long host name gives way, never "Change".
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                'Through ${_machineName(_machineId)}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: tty.style(color: tty.dim),
-                              ),
-                            ),
-                            TtyTextButton(
-                              key: const Key('connectors-computer'),
-                              label: 'Change',
-                              onPressed: _pickMachine,
-                            ),
-                          ],
-                        ),
-                      ],
                       const SizedBox(height: 12),
                       TextField(
                         key: const Key('connectors-search'),
@@ -851,13 +1100,22 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                                     : card.needsAttention
                                     ? 'Connect again'
                                     : card.description,
-                                value: _hasWays(card.code)
+                                value: _installing(card)
+                                    ? 'Installing…'
+                                    : _hasWays(card.code)
                                     ? 'Manage'
                                     : card.needsAttention
                                     ? 'Reconnect'
                                     : 'Connected',
                                 onTap: _hasWays(card.code)
                                     ? () => _chooseWay(card)
+                                    : _checking(card)
+                                    ? () => unawaited(
+                                        _afterChecking(
+                                          card,
+                                          () => _manage(card),
+                                        ),
+                                      )
                                     : () => _manage(card),
                               ),
                           ],
@@ -872,11 +1130,21 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                                 name: card.name,
                               ),
                               title: card.name,
-                              detail: card.reason.isNotEmpty
+                              // A way begun but not finished (Codex's plugin, no account
+                              // signed in yet) says so here, under Available.
+                              detail:
+                                  _hasWays(card.code) &&
+                                      _waysDetail(card).isNotEmpty
+                                  ? _waysDetail(card)
+                                  : card.reason.isNotEmpty
                                   ? card.reason
                                   : card.description,
                               value: _busy.contains(card.code)
                                   ? 'Signing in…'
+                                  : _installing(card)
+                                  ? 'Installing…'
+                                  : _checking(card)
+                                  ? 'Checking…'
                                   : _hasWays(card.code)
                                   ? 'Add'
                                   : card.reason.isNotEmpty
@@ -885,6 +1153,15 @@ class _ConnectorsPageState extends State<ConnectorsPage>
                               // Through Claude Code or Codex, it needs no Harness sign-in.
                               onTap: _hasWays(card.code)
                                   ? () => _chooseWay(card)
+                                  : _checking(card)
+                                  ? () => unawaited(
+                                      _afterChecking(
+                                        card,
+                                        card.reason.isNotEmpty
+                                            ? null
+                                            : () => unawaited(_connect(card)),
+                                      ),
+                                    )
                                   : card.reason.isNotEmpty ||
                                         _busy.contains(card.code)
                                   ? null
@@ -906,6 +1183,71 @@ class _ConnectorsPageState extends State<ConnectorsPage>
 
 /// A service's icon, bundled with the app (assets/connector-icons), or its initial when it has none
 /// (a custom server).
+/// [child] under an amber wash that brightens and fades while [active]: the Restart row after a
+/// connection is made, which a running agent needs before it has the new tools. Still when not.
+class _Pulse extends StatefulWidget {
+  const _Pulse({required this.active, required this.child});
+
+  final bool active;
+  final Widget child;
+
+  @override
+  State<_Pulse> createState() => _PulseState();
+}
+
+class _PulseState extends State<_Pulse> with SingleTickerProviderStateMixin {
+  late final _beat = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) _beat.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(_Pulse old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !_beat.isAnimating) _beat.repeat(reverse: true);
+    if (!widget.active && _beat.isAnimating) {
+      _beat
+        ..stop()
+        ..value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _beat.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.active) return widget.child;
+    return AnimatedBuilder(
+      animation: _beat,
+      builder: (context, child) {
+        final t = Curves.easeInOut.transform(_beat.value);
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppPalette.warn.withValues(alpha: 0.08 + 0.22 * t),
+            border: Border.all(
+              color: AppPalette.warn.withValues(alpha: 0.35 + 0.65 * t),
+              width: 1.5,
+            ),
+            borderRadius: BorderRadius.circular(AppCard.radius),
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
 class _ConnectorMark extends StatelessWidget {
   const _ConnectorMark({required this.code, required this.name});
 
@@ -931,6 +1273,145 @@ class _ConnectorMark extends StatelessWidget {
               style: tty.style(weight: FontWeight.w700),
             )
           : Image.asset(path, fit: BoxFit.contain),
+    );
+  }
+}
+
+/// One way to connect a service, in the Connect sheet: who it is, what it can do and who gets it,
+/// and its state in a button-like pill at the right. Dimmed, and not tappable, when [onTap] is null.
+class _WayCard extends StatelessWidget {
+  const _WayCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.value,
+    required this.onTap,
+    this.onAddAccount,
+  });
+
+  final IconData icon;
+  final String title;
+
+  /// What it can do, then who gets it, on two lines.
+  final String detail;
+  final String value;
+  final VoidCallback? onTap;
+
+  /// "+ Add account" under [detail], a tap of its own: Codex's accounts, more than one if wanted.
+  final VoidCallback? onAddAccount;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final lines = detail.split('\n');
+    final live = onTap != null;
+    final edge = AppPalette.textFaint.withValues(alpha: 0.45);
+    return Opacity(
+      opacity: live ? 1 : 0.6,
+      child: Material(
+        color: AppGlass.rowFill,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: edge),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            child: Row(
+              children: [
+                Icon(icon, size: 22, color: AppPalette.textSecondary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          color: AppPalette.textPrimary,
+                          fontSize: 16,
+                          fontWeight: AppFont.semibold,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        lines.first,
+                        style: TextStyle(
+                          color: AppPalette.textSecondary,
+                          fontSize: 14,
+                          height: 1.3,
+                        ),
+                      ),
+                      if (lines.length > 1) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          lines.skip(1).join(' '),
+                          style: TextStyle(
+                            color: AppPalette.textFaint,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ],
+                      if (onAddAccount case final add?) ...[
+                        const SizedBox(height: 6),
+                        InkWell(
+                          key: const Key('connector-way-add-account'),
+                          onTap: add,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  LucideIcons.plus300,
+                                  size: 16,
+                                  color: AppPalette.accentOnSurface,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Add account',
+                                  style: TextStyle(
+                                    color: AppPalette.accentOnSurface,
+                                    fontSize: 14,
+                                    fontWeight: AppFont.semibold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: edge),
+                  ),
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      color: AppPalette.textPrimary,
+                      fontSize: 13,
+                      fontWeight: AppFont.semibold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
