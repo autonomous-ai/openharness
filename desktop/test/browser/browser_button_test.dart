@@ -9,14 +9,20 @@ import '../support/super_tab_fixture.dart';
 import '../support/swarm_v4_data.dart';
 import '../swarm_state_test.dart' show createApp;
 
-/// An agent chat's Browser button (Swarm v4, Mockup 3): after Terminal, only for a browser agent on one of the person's own
+/// An agent chat's Browser button (Swarm v4, Mockup 3): after Terminal, for every running agent on one of the person's own
 /// machines, and one pane at a time with Info, Instructions and Terminal.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
   var terminalOpen = false;
 
-  /// This computer's view of `host`, where lampOS's agents run, with `second`'s browser as [browser].
-  AppNotifier app({AgentBrowser? browser, bool shared = false}) {
+  /// This computer's view of `host`, where lampOS's agents run, with `second`'s browser as [browser], and `second` in
+  /// [status], or not listed at all.
+  AppNotifier app({
+    AgentBrowser? browser,
+    bool shared = false,
+    String status = 'active',
+    bool listed = true,
+  }) {
     final app = createApp(connected: true);
     final machine = Machine(
       machineId: 'host',
@@ -38,12 +44,14 @@ void main() {
       ..connectionStatus = ConnectionStatus.connected
       ..agentLoadStatus = AgentLoadStatus.loaded
       ..agents = [
-        Agent(
-          id: 'session-second',
-          name: 'second',
-          engine: 'claude',
-          browser: browser,
-        ),
+        if (listed)
+          Agent(
+            id: 'session-second',
+            name: 'second',
+            engine: 'claude',
+            status: status,
+            browser: browser,
+          ),
       ];
     return app;
   }
@@ -95,28 +103,54 @@ void main() {
     await settle(tester);
   }
 
-  testWidgets('only browser agents on the person\'s own machines show '
-      'swarm-browser-button; an agent on a machine shared with them does '
-      'not', (tester) async {
-    await show(tester, app(browser: const AgentBrowser(state: 'ready')));
-    expect(key('swarm-browser-button'), findsOneWidget);
-    expect(find.byTooltip('Browser'), findsOneWidget);
-    // After Terminal.
-    expect(
-      tester.getRect(key('swarm-browser-button')).left,
-      greaterThan(tester.getRect(key('swarm-terminal-button')).right),
-    );
+  // The web build and Windows Desktop draw none either: `browserOffered`, in browser_requests_test.dart.
+  testWidgets('every running agent on the person\'s own machines shows '
+      'Browser, with or without a browser; a machine shared with them, a '
+      'stopped agent and one the machine does not list show none', (
+    tester,
+  ) async {
+    for (final browser in [null, const AgentBrowser(state: 'ready')]) {
+      await show(tester, app(browser: browser));
+      expect(key('swarm-browser-button'), findsOneWidget);
+      expect(find.byTooltip('Browser'), findsOneWidget);
+      // After Terminal.
+      expect(
+        tester.getRect(key('swarm-browser-button')).left,
+        greaterThan(tester.getRect(key('swarm-terminal-button')).right),
+      );
+      await tester.pumpWidget(const SizedBox());
+    }
 
-    await tester.pumpWidget(const SizedBox());
-    await show(tester, app());
-    expect(key('swarm-browser-button'), findsNothing);
-
-    await tester.pumpWidget(const SizedBox());
-    await show(
-      tester,
+    for (final none in [
       app(browser: const AgentBrowser(state: 'ready'), shared: true),
-    );
-    expect(key('swarm-browser-button'), findsNothing);
+      app(status: 'stopped'),
+      app(listed: false),
+    ]) {
+      await show(tester, none);
+      expect(key('swarm-browser-button'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+
+  testWidgets('the button\'s label is Browser, running while it is ready', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    for (final (browser, label) in [
+      (null, 'Browser'),
+      (const AgentBrowser(state: 'starting'), 'Browser'),
+      (const AgentBrowser(state: 'failed', error: 'podman_down'), 'Browser'),
+      (const AgentBrowser(state: 'ready'), 'Browser, running'),
+    ]) {
+      await show(tester, app(browser: browser));
+      expect(
+        tester.getSemantics(key('swarm-browser-button')).label,
+        label,
+        reason: '${browser?.state}',
+      );
+      await tester.pumpWidget(const SizedBox());
+    }
+    semantics.dispose();
   });
 
   testWidgets('Browser, Terminal and Instructions close each other, and Info '
@@ -124,7 +158,9 @@ void main() {
     // A browser with nothing turning in its panel, so every step settles.
     await show(
       tester,
-      app(browser: const AgentBrowser(state: 'failed', error: 'podman_down')),
+      app(
+        browser: const AgentBrowser(state: 'failed', error: 'podman_down'),
+      ),
     );
     await tap(tester, 'swarm-browser-button');
     expect(

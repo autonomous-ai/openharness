@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -10,6 +11,7 @@ import 'package:harness/browser/browser_panel.dart';
 import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/browser/browser_settings_page.dart';
 import 'package:harness/browser/browser_setup_dialog.dart';
+import 'package:harness/browser/browser_stream.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
@@ -22,6 +24,7 @@ import 'package:harness/super_tabs/chat/composer_pill.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/web_pane_panel.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/channel_talk.dart';
@@ -45,6 +48,7 @@ import 'package:harness/super_tabs/project_sidebar.dart'
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
+import 'support/fake_browser_view.dart';
 import 'support/swarm_v4_data.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -228,9 +232,11 @@ Future<List<SuperTabController>> _show(
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
-  // Faye's Browser settings, as her computer keeps them.
+  // Faye's Browser settings, as her computer keeps them, and her running browser's screen.
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
+  WebPanePanel.webviewAvailableForTest = true;
+  addTearDown(() => WebPanePanel.webviewAvailableForTest = null);
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
   // section that grows needs no new height.
@@ -873,20 +879,23 @@ class _Gallery extends StatelessWidget {
           ),
           section(
             'browser-bar',
-            'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
+            'Browser in an agent\'s bar, plain, open and running; its panel off, running and failed',
             [
               Row(
                 children: [
-                  SizedBox(child: BrowserButton(open: false, onPressed: () {})),
+                  BrowserButton(open: false, onPressed: () {}),
                   gap(),
-                  SizedBox(child: BrowserButton(open: true, onPressed: () {})),
+                  BrowserButton(open: true, onPressed: () {}),
+                  gap(),
+                  BrowserButton(open: false, running: true, onPressed: () {}),
                 ],
               ),
               const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Wrap(
+                spacing: 16,
+                runSpacing: 8,
                 children: [
-                  for (final agent in ['faye-setup', 'faye-failed']) ...[
+                  for (final agent in ['faye-off', 'faye-ready', 'faye-failed'])
                     SizedBox(
                       width: 340,
                       height: 230,
@@ -896,10 +905,9 @@ class _Gallery extends StatelessWidget {
                         agentId: agent,
                         thisComputer: true,
                         onClose: () {},
+                        newView: _Screen.new,
                       ),
                     ),
-                    gap(),
-                  ],
                 ],
               ),
             ],
@@ -977,7 +985,7 @@ class _BrowserSettingsApp extends AppNotifier {
         authSession: AuthSession(),
         configStore: null,
       ) {
-    // Her computer, with one browser building and one whose Podman is down.
+    // Her computer, with one agent's browser off, one's running and one's whose Podman is down.
     const machine = Machine(
       machineId: 'm',
       authMode: MachineAuthMode.remote,
@@ -989,11 +997,12 @@ class _BrowserSettingsApp extends AppNotifier {
       ..connectionStatus = ConnectionStatus.connected
       ..agentLoadStatus = AgentLoadStatus.loaded
       ..agents = const [
+        Agent(id: 'faye-off', name: 'Faye', engine: 'claude'),
         Agent(
-          id: 'faye-setup',
+          id: 'faye-ready',
           name: 'Faye',
           engine: 'claude',
-          browser: AgentBrowser(state: 'setup', step: 'building'),
+          browser: AgentBrowser(state: 'ready'),
         ),
         Agent(
           id: 'faye-failed',
@@ -1002,6 +1011,29 @@ class _BrowserSettingsApp extends AppNotifier {
           browser: AgentBrowser(state: 'failed', error: 'podman_down'),
         ),
       ];
+  }
+
+  /// The running browser's stream, opened as soon as it is asked for.
+  @override
+  BrowserStream browserStream(String machineId, String agentId) {
+    late final BrowserStream stream;
+    stream = BrowserStream(
+      machineId: machineId,
+      agentId: agentId,
+      send: (type, payload) async {
+        if (type == 'agent_browser_open') {
+          scheduleMicrotask(
+            () => stream.handleFrame('agent_browser_open_result', {
+              'requestId': payload['requestId'],
+              'streamId': '0f8fad5b-d9cb-469f-a165-70867728950e',
+            }),
+          );
+        }
+        return true;
+      },
+      sendBinary: (_) async => true,
+    );
+    return stream;
   }
 
   @override
@@ -1017,6 +1049,23 @@ class _BrowserSettingsApp extends AppNotifier {
       passwordSet: true,
     ),
     languages: 'vi-VN, en-US',
+  );
+}
+
+/// A running browser's screen, as its page would draw a site: a page under an address bar.
+class _Screen extends FakeBrowserView {
+  _Screen() : super(ready: true);
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+    key: ValueKey('browser-screen'),
+    color: Color(0xFFFFFFFF),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ColoredBox(color: Color(0xFFDEE1E6), child: SizedBox(height: 28)),
+      ],
+    ),
   );
 }
 
