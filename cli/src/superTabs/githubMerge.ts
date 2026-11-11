@@ -583,7 +583,10 @@ export class GitHubMerge {
 
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
-    const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
+    // GitHub answers a repository renamed since its project was made under its new name: a pull request's own branch is in
+    // that one, and compared with the project's name every one read as a fork and no train as one (code review of #4056).
+    const about = await this.reads.one(repo, `/repos/${repo}`)
+    const base = String(about.default_branch ?? ''), current = String(about.full_name ?? repo).toLowerCase()
     // Every open pull request, drafts too, for what one may carry of another's (carriedPull); the ones that may merge.
     const listed = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
     const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
@@ -593,7 +596,7 @@ export class GitHubMerge {
     const open = new Set<string>()
     const conflicts = (pull: { number: number; head: string; author: string; comments: Json[] }) =>
       this.tellOnce(repo, pull.number, pull.head, pull.author, 'dirty', `${base}: rebase it on ${base} and push.`, pull.comments)
-    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, repo, base, listed, {
+    const train = new GitHubTrain<Ready>({ reads: this.reads, send: this.deps.send, now: this.now, log: this.log }, current, base, listed, {
       checks: (number, head) => this.checks(repo, this.see(open, `${repo}#${number}@${head}`), head),
       login: () => this.login(repo),
       conflicts,
@@ -668,7 +671,7 @@ export class GitHubMerge {
       // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
       if (this.said(comments, head, 'red')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== repo.toLowerCase(), checked: !checks.none, author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments })
     }
     for (const pull of await train.carry(ready, waiting)) {
       // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each

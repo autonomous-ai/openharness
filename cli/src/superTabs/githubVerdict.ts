@@ -118,10 +118,6 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
   return { url, head, posted }
 }
 
-/**
- * Records [comment] as the calling agent's and gives its address, or says what was [done] on GitHub and why it is not
- * recorded: a verdict's comment, a claim's (githubClaim.ts) and a cut's (githubSplit.ts).
- */
 /** The project repository [asked] names, by either of its names, or the refusal: a repository of no project of the agent's. */
 export function projectRepository(repositories: ProjectRepositories, asked: string): { project: string; github: string } {
   const found = repositories.get(asked.toLowerCase())
@@ -129,6 +125,10 @@ export function projectRepository(repositories: ProjectRepositories, asked: stri
   return found
 }
 
+/**
+ * Records [comment] as the calling agent's and gives its address, or says what was [done] on GitHub and why it is not
+ * recorded: a verdict's comment, a claim's (githubClaim.ts) and a cut's (githubSplit.ts).
+ */
 export async function recordOwn(record: VerdictDeps['record'], repository: string, comment: Record<string, unknown>, done: 'Posted' | 'Taken' | 'Split'): Promise<string> {
   const url = String(comment.html_url ?? '')
   try { await record(repository, String(comment.id)) } catch (error) {

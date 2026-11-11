@@ -45,20 +45,22 @@ export class GitHubStop extends Error {
 /** GitHub's page size: a page shorter than this is the last. */
 export const PAGE = 100
 
-/** How long what GitHub names a repository now is kept: a rename is rare, and every take, read and cut asks. */
-export const NAME_KEPT_MS = 60 * 60_000
+/** How long what GitHub names a repository now is kept, and how long that it did not say: a rename is rare, and every take,
+ *  read and cut asks; one that GitHub does not answer is not asked again at each. */
+export const NAME_KEPT_MS = 60 * 60_000, NAME_UNSAID_MS = 10 * 60_000
 
 /** What GitHub names a repository now, lower case, asked with [get]: for one renamed since its project was made, GitHub answers
- *  its old name with its new one. Its old name itself when GitHub does not say (it cannot be read now, or is gone), asked again
- *  the next time; one answer is kept [NAME_KEPT_MS]. */
-export function currentNames(get: GitHubGet, now: () => number = Date.now): (slug: string) => Promise<string> {
-  const known = new Map<string, { name: string; at: number }>()
+ *  its old name with its new one. The name asked when GitHub does not say (it cannot be read now, or is not there), which is
+ *  logged once and asked again after [NAME_UNSAID_MS]; a name it says is kept [NAME_KEPT_MS]. */
+export function currentNames(get: GitHubGet, now: () => number = Date.now, log: (line: string) => void = line => console.warn(line)): (slug: string) => Promise<string> {
+  const known = new Map<string, { name: string; at: number; said: boolean }>()
   return async slug => {
     const kept = known.get(slug)
-    if (kept && now() - kept.at < NAME_KEPT_MS) return kept.name
-    const read = await get(`/repos/${slug}`, null).catch(() => null)
-    const name = read?.status === 200 && typeof object(read.body).full_name === 'string' ? String(object(read.body).full_name).toLowerCase() : null
-    if (name) known.set(slug, { name, at: now() })
+    if (kept && now() - kept.at < (kept.said ? NAME_KEPT_MS : NAME_UNSAID_MS)) return kept.name
+    const read = await get(`/repos/${slug}`, null).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
+    const name = !(read instanceof Error) && read.status === 200 && typeof object(read.body).full_name === 'string' ? String(object(read.body).full_name).toLowerCase() : null
+    if (!name && kept?.said !== false) log(`[super-tab] GitHub did not say what ${slug} is called now: ${read instanceof Error ? read.message : `it answered ${read.status}`}`)
+    known.set(slug, { name: name ?? slug, at: now(), said: !!name })
     return name ?? slug
   }
 }
