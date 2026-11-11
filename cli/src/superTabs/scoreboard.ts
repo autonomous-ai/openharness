@@ -17,7 +17,7 @@
  */
 import { noteOf, verdictOf } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
-import { PAGE, type GitHubReads } from './githubRest.js'
+import { GitHubStop, PAGE, type GitHubReads } from './githubRest.js'
 import { trainEnd, type TrainEnd } from './githubTrain.js'
 import { landedOf, timeOf } from './pmNumbers.js'
 import { object } from './wire.js'
@@ -37,11 +37,15 @@ const AT_ONCE = 6
 /** A file is named when more than one in [HOT_ONE_IN] of the week's landings touched it, and [HOT_LANDINGS] at least: of five
  *  landings one alone is a fifth, and says nothing. The [HOT_MAX] most touched are named. */
 const HOT_ONE_IN = 10, HOT_LANDINGS = 3, HOT_MAX = 3
+/** The failures after which this login is not to ask again for a while: a rate limit, gh signed out or missing. One answer
+ *  GitHub failed on its own side, or that never came, is none: read on, the files were dropped for the day by one 500 on one
+ *  request for comments (its third review). */
+const STOPS: ReadonlySet<string> = new Set(['RATE_LIMITED', 'GH_SIGNED_OUT', 'GH_MISSING'])
 /** The most letters of a file's path a line says: its end, where its name is. */
 const PATH_MAX = 100
 
 /** A wait in minutes, as the median over the changes that show it, and how many those were. */
-export interface Wait { minutes: number; of: number }
+interface Wait { minutes: number; of: number }
 
 export interface Board {
   /** The day's landed changes that were read (the newest): how many; over them, the wait from opened to a first verdict and
@@ -86,7 +90,7 @@ function trainsOf(closed: readonly Json[], now: number): Board['trains'] {
 /**
  * The scoreboard of [repo] at [now], from the [closed] list the assigner's pass read (one page of the issues and pull requests
  * closed last) and the [team]'s labels (assign/crew.ts teamOf). [unread] is told the part GitHub did not give, and why: no more
- * of that part is asked, and the others are read all the same.
+ * of that part is asked, and the others are read all the same, unless GitHub said to stop asking ([STOPS]).
  */
 export async function boardOf(reads: GitHubReads, repo: string, input: { now: number; closed: readonly Json[]; team: ReadonlySet<string> },
   unread: (part: 'waits' | 'files', why: string) => void): Promise<Board> {
@@ -94,8 +98,12 @@ export async function boardOf(reads: GitHubReads, repo: string, input: { now: nu
   /** The team's pull requests that landed within [window], the last landed first. */
   const landed = (window: number) => landedOf(closed, team, now, window).filter(change => Number.isSafeInteger(change.pull.number) && now - change.at < window)
     .sort((a, b) => b.at - a.at)
-  const part = <T>(name: 'waits' | 'files', read: () => Promise<T>): Promise<T | null> => read().catch(error => {
-    unread(name, error instanceof Error ? error.message : String(error))
+  // What GitHub said when it told this login to stop asking: nothing more is asked after it.
+  let stopped: string | null = null
+  const part = <T>(name: 'waits' | 'files', read: () => Promise<T>): Promise<T | null> => (stopped === null ? read() : Promise.reject(new Error(stopped))).catch(error => {
+    const why = error instanceof Error ? error.message : String(error)
+    if (error instanceof GitHubStop && STOPS.has(error.code)) stopped = why
+    unread(name, why)
     return null
   })
   const day = landed(DAY_MS).slice(0, CHANGES_MAX), week = landed(WEEK_MS).slice(0, CHANGES_MAX)

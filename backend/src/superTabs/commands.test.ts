@@ -956,15 +956,17 @@ it('records the lead project once and accepts only Claude Code and Codex contrib
   }
 })
 it('says in the project chat when a Product Manager on its person\'s own Mac could not launch on the model its role asks for', () => {
+  // By its own name, as the start the Swarm makes says it (leadJoined), with its role beside it (review of #4095).
   const join = (extra: Record<string, unknown>, lead = true) => {
     const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
     const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead, project, ...extra } as Command, owner,
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-    return effects.messages.filter(m => m.conversationId === 'lead').map(m => m.text)
+    const name = f.state.agents.find(a => a.harnessId === 'pm')!.displayName!
+    return effects.messages.filter(m => m.conversationId === 'lead').map(m => m.text.replace(name, 'NAME'))
   }
   // Each after the row naming who added it (#2207).
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } })).toEqual(
-    ['Product Manager started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.', expect.stringMatching(/^owner added \S+\.$/)])
+    ['NAME, the Product Manager, started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.', expect.stringMatching(/^owner added \S+\.$/)])
   expect(join({})).toEqual([expect.stringMatching(/^owner added \S+\.$/)])
   // Only a Product Manager's start says it.
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } }, false)).not.toContainEqual(expect.stringContaining('could not launch'))
