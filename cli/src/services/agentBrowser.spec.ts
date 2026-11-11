@@ -6,12 +6,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { emptyPorts, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { emptyPorts, type AgentBrowserPort, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { browserAssetsHash } from './agentBrowser/assets.js'
 import { fakePodman, type FakePodman } from './agentBrowser/fakePodman.js'
 import { imageTag } from './agentBrowser/image.js'
+import { READY_LINE, STOPPED_LINE } from './agentBrowser/notices.js'
 import { createPodman } from './agentBrowser/podman.js'
 import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
 import { AGENT_BROWSER_REQUESTS, daemonIdOf, startAgentBrowser, type AgentBrowserOptions } from './agentBrowser.js'
@@ -89,7 +90,75 @@ function saveState(browsers: Record<string, BrowserSettings>, deleting: string[]
   writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers, deleting, setup: null }), { mode: 0o600 })
 }
 
-const savedState = () => JSON.parse(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')) as { browsers: Record<string, unknown>; deleting: string[] }
+const savedState = () => JSON.parse(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')) as { browsers: Record<string, unknown>; deleting: string[]; told?: Record<string, true> }
+
+/**
+ * The service on a core that turns an agent's Browser on and off as the core does (core/agents/lifecycle.ts `set`): the
+ * row's flag, then the port's `attached` or `stopped`, in the same turn; and an agent's own end and resume tell the port
+ * only while its flag is on. The lines it types are recorded, and the spec says what became of them.
+ */
+function startSwitching(rows: RegisteredSession[] = [session('a1', { browser: undefined })], over: { count?: (name: string) => void; options?: AgentBrowserOptions } = {}) {
+  const byId = new Map(rows.map(row => [row.agentId, { ...row }]))
+  const running = new Set<string>()
+  const typed: Array<{ agentId: string; text: string; deliveryId: string }> = []
+  const listeners = new Set<(event: TurnDelivery) => void>()
+  let port: AgentBrowserPort | null = null
+  const attach = (row: RegisteredSession) => {
+    if (row.browser) running.add(row.agentId)
+    port!.attached(row)
+  }
+  const setBrowser = vi.fn(async (agentId: string, on: boolean): Promise<BrowserSwitch> => {
+    const row = byId.get(agentId)
+    if (!on) {
+      if (!row?.browser) return { ok: true, changed: false }
+      row.browser = undefined
+      if (running.delete(agentId)) port!.stopped(agentId)
+      return { ok: true, changed: true }
+    }
+    if (!row) return { error: 'NOT_RUNNING' }
+    if (row.guest) return { error: 'NOT_ALLOWED' }
+    const changed = !row.browser
+    row.browser = true
+    attach(row)
+    return { ok: true, changed }
+  })
+  const core = fakeCore({
+    dataDir,
+    ...(over.count ? { count: over.count } : {}),
+    agents: { setBrowser, byAgent: (agentId: string) => byId.get(agentId) },
+    turns: {
+      // Only what a line is: its agent, its text and its id. A delivery's options are the core's to read.
+      deliver: vi.fn((agentId: string, text: string, deliveryId: string) => { typed.push({ agentId, text, deliveryId }) }),
+      cancelDelivery: vi.fn(() => false),
+      onDelivery: vi.fn((listener: (event: TurnDelivery) => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      }),
+    },
+  })
+  const started = start(core, over.options)
+  port = started.port
+  return {
+    ...started,
+    rows: byId,
+    setBrowser,
+    typed,
+    /** The agent runs (a create, a resume, a daemon start): the core attaches it. */
+    attach: (agentId: string) => attach(byId.get(agentId)!),
+    /** The agent's own end: the port hears it only while its Browser is on. */
+    end: (agentId: string) => { if (running.delete(agentId)) port!.stopped(agentId) },
+    hear: (deliveryId: string, state: TurnDelivery['state']) => {
+      for (const listener of [...listeners]) listener({ deliveryId, sessionId: deliveryId.split(':')[1]!, state })
+    },
+  }
+}
+
+/** A line typed into [agentId]: its text and its id's prefix, never the whole delivery. */
+const lineTo = (agentId: string, text: string, kind: 'ready' | 'stopped') =>
+  ({ agentId, text, deliveryId: expect.stringMatching(new RegExp(`^agent-browser:${agentId}:${kind}:`)) })
+
+/** The stop's removal has finished: the proxy secret is removed once at each start and once at each stop. */
+const secretsRemoved = (agentId: string) => asked().filter(call => call === `secret rm harness-proxy-${agentId}`).length
 
 /** An HTTP proxy on loopback that answers the exit lookup. */
 async function lookupProxy(answer: Record<string, unknown> = { status: 'success', timezone: 'Europe/Paris', query: '203.0.113.7' }): Promise<number> {
@@ -239,8 +308,11 @@ describe('the agent browser service', () => {
       expect(await requests.agent_browser_setup!({}, LOCAL)).toEqual({ ok: true })
       await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error }))
       const installs = run.mock.calls.length
-      for (const asker of [OTHER_DESKTOP, SHARE_GUEST]) {
-        expect(await requests.agent_browser_retry!({ agentId: 'a1' }, asker)).toEqual(asker === OTHER_DESKTOP ? { error: 'LOCAL_ONLY' } : { error: 'NOT_OWNER' })
+      // Start of a failed browser is its Retry, with the same rule.
+      for (const type of ['agent_browser_retry', 'agent_browser_start']) {
+        for (const asker of [OTHER_DESKTOP, SHARE_GUEST]) {
+          expect(await requests[type]!({ agentId: 'a1' }, asker), type).toEqual(asker === OTHER_DESKTOP ? { error: 'LOCAL_ONLY' } : { error: 'NOT_OWNER' })
+        }
       }
       // The refusal is decided before anything runs: setup was not asked again.
       expect(port.frameContext('a1')).toEqual({ state: 'failed', error })
@@ -272,10 +344,26 @@ describe('the agent browser service', () => {
   it('on win32 every other request answers UNSUPPORTED', async () => {
     const { requests } = start(undefined, { platform: 'win32' })
     expect(Object.keys(requests).sort()).toEqual([...AGENT_BROWSER_REQUESTS].sort())
-    for (const type of AGENT_BROWSER_REQUESTS.filter(type => type !== 'agent_browser_available')) {
+    const named = ['agent_browser_available', 'agent_browser_start', 'agent_browser_stop']
+    for (const type of AGENT_BROWSER_REQUESTS.filter(type => !named.includes(type))) {
       expect(await requests[type]!({ agentId: 'a1', pane: '%1' }, LOCAL), type).toEqual({ error: 'UNSUPPORTED' })
     }
     expect(fake.calls()).toEqual([])
+  })
+
+  // Desktop says Windows, not "update Harness", for the person's Start and Stop (spec § Desktop).
+  it('on win32 start and stop answer NOT_ON_WINDOWS and no process starts', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const { podman, spawn } = podmanHere()
+    const setBrowser = vi.fn(async () => ({ ok: true as const, changed: true }))
+    const { requests } = start(fakeCore({ dataDir, agents: { setBrowser } }), { platform: 'win32', podman, setup: { run } })
+    for (const type of ['agent_browser_start', 'agent_browser_stop']) {
+      expect(await requests[type]!({ agentId: 'a1' }, LOCAL), type).toEqual({ error: 'NOT_ON_WINDOWS' })
+    }
+    expect(setBrowser).not.toHaveBeenCalled()
+    expect(fake.calls()).toEqual([])
+    expect(spawn).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
   })
 
   it('available answers what Podman is, to any asker', async () => {
@@ -551,5 +639,222 @@ describe('the agent browser service', () => {
   it('with nothing handed in, reads the machine\'s zone and language and runs the real Podman finder', () => {
     const { requests } = start(fakeCore({ dataDir }), { podman: undefined, platform: undefined, host: undefined, now: undefined })
     expect(Object.keys(requests)).toHaveLength(AGENT_BROWSER_REQUESTS.length)
+  })
+})
+
+describe('the person\'s Start and Stop', () => {
+  it('start and stop are refused NOT_OWNER for a guest and a machine share, and allowed for the person\'s other Desktop', async () => {
+    const sw = startSwitching()
+    for (const type of ['agent_browser_start', 'agent_browser_stop']) {
+      for (const asker of [SHARE_GUEST, PLAIN_OWNER, { ...LOCAL, guest: 'kim@acme.io' }]) {
+        expect(await sw.requests[type]!({ agentId: 'a1' }, asker), type).toEqual({ error: 'NOT_OWNER' })
+      }
+    }
+    expect(sw.setBrowser).not.toHaveBeenCalled()
+    expect(await sw.requests.agent_browser_start!({ agentId: 'a1' }, OTHER_DESKTOP)).toEqual({ ok: true })
+    await ready(sw.port, 'a1')
+    expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, OTHER_DESKTOP)).toEqual({ ok: true })
+    expect(sw.setBrowser.mock.calls).toEqual([['a1', true], ['a1', false]])
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+  })
+
+  it('start sets the flag, starts the browser and counts agent_browser_started; a second start does nothing', async () => {
+    const count = vi.fn()
+    const sw = startSwitching(undefined, { count })
+    expect(await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    expect(sw.rows.get('a1')!.browser).toBe(true)
+    await ready(sw.port, 'a1')
+    expect(await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    expect(sw.setBrowser.mock.calls).toEqual([['a1', true]])
+    expect(asked().filter(call => call.startsWith('create '))).toHaveLength(1)
+    const counted = (name: string) => count.mock.calls.filter(([metric]) => metric === name).length
+    expect(counted('agent_browser_started')).toBe(1)
+    expect(counted('agent_browser_enabled')).toBe(1)
+  })
+
+  it('start of a failed browser tries again as Retry does', async () => {
+    // Another browser of this daemon runs, on a machine with room for one.
+    fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: 3 * GiB } }) })
+    fake.reply('ps', { stdout: JSON.stringify([{ Labels: { 'harness.agent': 'other', 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' }]) })
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await eventually(() => expect(sw.port.frameContext('a1')).toEqual({ state: 'failed', error: 'browser_limit' }))
+    fake.reply('ps', { stdout: '[]' })
+    expect(await sw.requests.agent_browser_start!({ agentId: 'a1' }, OTHER_DESKTOP)).toEqual({ ok: true })
+    await ready(sw.port, 'a1')
+    // The flag was on already: the core is not asked again.
+    expect(sw.setBrowser.mock.calls).toEqual([['a1', true]])
+  })
+
+  it('start for an agent that does not run is NOT_RUNNING, and for a guest\'s agent NOT_ALLOWED', async () => {
+    const count = vi.fn()
+    const sw = startSwitching([session('kim', { browser: undefined, guest: 'kim@acme.io' })], { count })
+    expect(await sw.requests.agent_browser_start!({ agentId: 'gone' }, LOCAL)).toEqual({ error: 'NOT_RUNNING' })
+    expect(await sw.requests.agent_browser_start!({}, LOCAL)).toEqual({ error: 'NOT_RUNNING' })
+    expect(await sw.requests.agent_browser_start!({ agentId: 'kim' }, LOCAL)).toEqual({ error: 'NOT_ALLOWED' })
+    expect(sw.rows.get('kim')!.browser).toBeUndefined()
+    expect(sw.port.frameContext('kim')).toBeUndefined()
+    expect(count).not.toHaveBeenCalled()
+    expect(fake.calls()).toEqual([])
+  })
+
+  it('stop clears the flag, removes the container, its network and its proxy secret, keeps the volume and the settings, and counts agent_browser_stopped; a stop of one that is off answers ok and does nothing', async () => {
+    const count = vi.fn()
+    const sw = startSwitching(undefined, { count })
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    expect(sw.rows.get('a1')!.browser).toBeUndefined()
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    await eventually(() => expect(secretsRemoved('a1')).toBe(2))
+    expect(asked()).toContain('rm --force --time 10 harness-browser-a1')
+    expect(asked()).toContain('network rm harness-browser-a1')
+    expect(asked()).not.toContain('volume rm harness-browser-a1')
+    expect(Object.keys(savedState().browsers)).toEqual(['a1'])
+    const before = asked().length
+    for (const agentId of ['a1', 'nobody']) expect(await sw.requests.agent_browser_stop!({ agentId }, LOCAL)).toEqual({ ok: true })
+    expect(asked()).toHaveLength(before)
+    expect(count.mock.calls.filter(([metric]) => metric === 'agent_browser_stopped')).toHaveLength(1)
+  })
+
+  it('stop while it starts ends the start without a container; start right after stop waits for it', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    // The stop runs after the start in the agent's queue: once it has, the start has ended.
+    await eventually(() => expect(asked()).toContain('network rm harness-browser-a1'))
+    expect(asked().filter(call => call.startsWith('create '))).toEqual([])
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    const calls = asked()
+    expect(calls.filter(call => call.startsWith('create '))).toHaveLength(1)
+    expect(calls.lastIndexOf('rm --force --time 10 harness-browser-a1')).toBeLessThan(calls.findIndex(call => call.startsWith('create ')))
+    // Only the start that became ready told the agent.
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
+  })
+
+  it('the ready line is typed once when the person\'s Start is ready, and the stop line at the person\'s Stop', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    expect(sw.typed).toEqual([])
+    await ready(sw.port, 'a1')
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
+    sw.hear(sw.typed[0]!.deliveryId, 'delivered')
+    expect(savedState().told).toEqual({ a1: true })
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    expect(sw.typed).toHaveLength(1)
+    await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready'), lineTo('a1', STOPPED_LINE, 'stopped')])
+    expect(savedState().told).toEqual({})
+    // Started again, it is told again.
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    expect(sw.typed.slice(2)).toEqual([lineTo('a1', READY_LINE, 'ready')])
+  })
+
+  // In its own process the service hears the core's `stopped` a round trip after it asked: a browser can become ready
+  // in between, and must not be told then.
+  it('a browser that turns ready while its person\'s Stop reaches the core is not told', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    const switched = sw.setBrowser.getMockImplementation()!
+    let answer!: () => void
+    const answered = new Promise<void>(done => { answer = done })
+    sw.setBrowser.mockImplementationOnce(async (agentId, on) => { await answered; return switched(agentId, on) })
+    const stopping = sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    answer()
+    expect(await stopping).toEqual({ ok: true })
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.typed).toEqual([])
+  })
+
+  it('the agent\'s own stop types nothing and keeps the mark; its resume types nothing', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    sw.hear(sw.typed[0]!.deliveryId, 'started')
+    sw.end('a1')
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    await eventually(() => expect(secretsRemoved('a1')).toBe(2))
+    expect(sw.rows.get('a1')!.browser).toBe(true)
+    expect(savedState().told).toEqual({ a1: true })
+    sw.attach('a1')
+    await ready(sw.port, 'a1')
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
+  })
+
+  it('the agent\'s end and its purge take back the line that waits for it, and its next ready is told', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    sw.end('a1')
+    expect(sw.core.turns.cancelDelivery).toHaveBeenLastCalledWith(sw.typed[0]!.deliveryId)
+    sw.attach('a1')
+    await ready(sw.port, 'a1')
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready'), lineTo('a1', READY_LINE, 'ready')])
+    sw.port.deleted('a1')
+    expect(sw.core.turns.cancelDelivery).toHaveBeenLastCalledWith(sw.typed[1]!.deliveryId)
+  })
+
+  it('a Stop the core had nothing to turn off leaves nothing marked: the agent\'s own end takes back what waits for it', async () => {
+    const sw = startSwitching()
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+    sw.hear(sw.typed[0]!.deliveryId, 'delivered')
+    // The core's flag is clear already, as after a Stop it took and this service never heard.
+    sw.rows.get('a1')!.browser = undefined
+    expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    expect(sw.typed.at(-1)).toEqual(lineTo('a1', STOPPED_LINE, 'stopped'))
+    sw.end('a1')
+    expect(sw.core.turns.cancelDelivery).toHaveBeenLastCalledWith(sw.typed.at(-1)!.deliveryId)
+  })
+
+  it('an agent created with browser:true by an older Desktop is started when it runs and told once', async () => {
+    const sw = startSwitching([session('a1')])
+    sw.attach('a1')
+    await ready(sw.port, 'a1')
+    expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
+    sw.hear(sw.typed[0]!.deliveryId, 'delivered')
+    // The daemon restarts: the same state file, and the agent attached again.
+    sw.port.stop()
+    const again = startSwitching([session('a1')])
+    again.attach('a1')
+    await ready(again.port, 'a1')
+    expect(again.typed).toEqual([])
+    expect(sw.typed).toHaveLength(1)
+  })
+
+  it('settings are read and saved for an agent whose browser is off, a save starts nothing, and an id of no agent here is NO_BROWSER', async () => {
+    const ids = vi.fn(async () => ({ live: ['a1'], stopped: ['a2'] }))
+    const { requests } = start(fakeCore({ dataDir, agents: { ids } }))
+    expect(await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)).toEqual(defaultSettings(HOST))
+    const settings = { ...defaultSettings(HOST), languages: 'vi-VN, en-US' }
+    expect(await requests.agent_browser_settings_save!({ agentId: 'a2', settings }, OTHER_DESKTOP)).toMatchObject({ languages: 'vi-VN, en-US' })
+    expect(savedState().browsers.a2).toMatchObject({ languages: 'vi-VN, en-US' })
+    expect(await requests.agent_browser_settings!({ agentId: 'a2' }, OTHER_DESKTOP)).toMatchObject({ languages: 'vi-VN, en-US' })
+    const proxy = { scheme: 'http', host: '127.0.0.1', port: await lookupProxy(), username: 'kim', password: 'pw-secret' }
+    expect(await requests.agent_browser_proxy_test!({ agentId: 'a1', proxy }, LOCAL)).toEqual({ ok: true, address: '203.0.113.7', timeZone: 'Europe/Paris' })
+    for (const type of ['agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+      expect(await requests[type]!({ agentId: 'nobody', settings, proxy }, LOCAL), type).toEqual({ error: 'NO_BROWSER' })
+    }
+    // Retry has no browser to try again.
+    expect(await requests.agent_browser_retry!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
+    // A core that cannot say which agents are here: none.
+    ids.mockRejectedValueOnce(new Error('no core'))
+    expect(await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
+    expect(asked().filter(call => call.startsWith('create ') || call.startsWith('network create'))).toEqual([])
+  })
+
+  it('a settings entry made while off goes with its agent', async () => {
+    const { port, requests } = start(fakeCore({ dataDir, agents: { ids: async () => ({ live: ['a1'], stopped: [] }) } }))
+    await requests.agent_browser_settings_save!({ agentId: 'a1', settings: defaultSettings(HOST) }, LOCAL)
+    expect(Object.keys(savedState().browsers)).toEqual(['a1'])
+    port.deleted('a1')
+    await eventually(() => expect(savedState().browsers).toEqual({}))
+    expect(asked()).toContain('volume rm harness-browser-a1')
   })
 })

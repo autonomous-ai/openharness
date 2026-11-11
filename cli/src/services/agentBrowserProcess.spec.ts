@@ -108,6 +108,58 @@ describe('the agent browser in its own process', () => {
     expect(await settled).toBe('the core did not answer within 10000 ms')
   })
 
+  // The person's Start and Stop: the core sets the row's flag and tells this process before it answers.
+  it('asks the core to set the flag, and answers what it said', async () => {
+    const { options, api } = setup()
+    let answer: Record<string, unknown> = { ok: true, changed: true }
+    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
+    options.onConnected!({ query } satisfies CoreConnection)
+    expect(await api.agents.setBrowser!('a1', true)).toEqual({ ok: true, changed: true })
+    expect(query).toHaveBeenLastCalledWith('set_browser', { agentId: 'a1', on: true })
+    answer = { ok: true, changed: false }
+    expect(await api.agents.setBrowser!('a1', false)).toEqual({ ok: true, changed: false })
+    expect(query).toHaveBeenLastCalledWith('set_browser', { agentId: 'a1', on: false })
+    for (const error of ['NOT_RUNNING', 'NOT_ALLOWED']) {
+      answer = { error }
+      expect(await api.agents.setBrowser!('a1', true)).toEqual({ error })
+    }
+  })
+
+  it('a core that does not answer the switch rejects', async () => {
+    const { options, api } = setup()
+    await expect(api.agents.setBrowser!('a1', true)).rejects.toThrow('no core')
+    let answer: Record<string, unknown> = { error: 'UNKNOWN_QUERY' }
+    options.onConnected!({ query: async () => answer } as CoreConnection)
+    await expect(api.agents.setBrowser!('a1', true)).rejects.toThrow('no answer')
+    answer = { ok: true }
+    await expect(api.agents.setBrowser!('a1', true)).rejects.toThrow('no answer')
+    vi.useFakeTimers()
+    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
+    const settled = api.agents.setBrowser!('a1', true).catch((error: Error) => error.message)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await settled).toBe('the core did not answer within 10000 ms')
+  })
+
+  // The ready and stop lines (agentBrowser/notices.ts): typed by the core, which tells this process what became of each.
+  it('delivers its lines through the core and hears what became of them', async () => {
+    const { options, api, port } = setup()
+    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
+    options.onConnected!({ query } satisfies CoreConnection)
+    const heard = vi.fn()
+    api.turns.onDelivery(heard)
+    api.turns.deliver('a1', 'Your browser is ready', 'agent-browser:a1:ready:1')
+    const [name, payload] = query.mock.calls.at(-1)!
+    expect(name).toBe('deliver')
+    expect(payload).toMatchObject({ agentId: 'a1', text: 'Your browser is ready' })
+    expect(String(payload!.deliveryId)).toMatch(/^agent-browser:a1:ready:/)
+    const event = { deliveryId: 'agent-browser:a1:ready:1', sessionId: 'a1', state: 'delivered' }
+    options.onEvent!({ kind: 'delivery', event })
+    expect(heard).toHaveBeenCalledWith(event)
+    expect(port.attached).not.toHaveBeenCalled()
+    expect(port.stopped).not.toHaveBeenCalled()
+    expect(port.deleted).not.toHaveBeenCalled()
+  })
+
   it('counts through the core, and loses a count it cannot hand over', async () => {
     const { options, api } = setup()
     api.count!('agent_browser_enabled')

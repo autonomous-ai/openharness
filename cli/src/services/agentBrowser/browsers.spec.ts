@@ -546,6 +546,17 @@ describe('Browsers', () => {
     expect(after.state.read()).toEqual({ browsers: {}, deleting: [], setup: null })
   })
 
+  // Its mark (notices.ts) says the agent was told its browser is ready: an agent that is gone has none.
+  it('a delete removes the agent\'s told mark with its settings', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.start('a2')
+    r.state.update(s => { s.told = { a1: true, a2: true } })
+    await r.browsers.delete('a1')
+    expect(Object.keys(r.state.read().browsers)).toEqual(['a2'])
+    expect(r.state.read().told).toEqual({ a2: true })
+  })
+
   it('browser of a gone agent is deleted at service start, and resume sweeps unlisted containers of this daemon', async () => {
     const settings = defaultSettings(host)
     writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }))
