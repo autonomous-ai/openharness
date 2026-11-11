@@ -108,17 +108,16 @@ const ABOVE_ROWS = 20
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-/** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
- *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
 
+/** The fields of a Swarm's row the store reads: every command and read loads this row. */
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
-/** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
+/** A Swarm still in one row (format 1, from before the parts of 2026-10-26) is never served: it answers as one that does not
+ *  exist, as a read does (read/service.ts), until the wipe deletes it (migration/wipeJob.ts). */
 function requireParts(row: SwarmRow): SwarmRow {
-  if (row.format !== 2) fail('SWARM_MIGRATING', 'This Swarm is being updated. Try again in a moment.', 503)
-  return row
+  return row.format === 2 ? row : fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
 }
 
 /** What a command or read works on: the index row, the parts it loaded, and the state reassembled from them. */
@@ -170,8 +169,8 @@ function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touc
   return delivery.authorKind === 'person' ? [{ kind: 'member', key: delivery.authorId }] : []
 }
 
-/** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt
- *  every group's link list from its history. The state shares the loaded records, frozen: a command changes its own copy
+/** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8): every group keeps its link
+ *  list as commands write it (appendPullRequestUrls). The state shares the loaded records, frozen: a command changes its own copy
  *  (commands.ts applyCommand), and the parts stay what the write is compared with (parts/commit.ts). */
 export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {}): Promise<Loaded> {
   return loadedFrom(row, await loadActive(tx, row.id, named))
@@ -2056,7 +2055,7 @@ export class SuperTabStore {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
-          conversationId: message.conversationId, messageId: message.id, inputPriority: 1, agentId: recipient, machineId: target.machineId,
+          conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
@@ -2081,15 +2080,16 @@ export class SuperTabStore {
 
   /** A project's Lead's first deliveries (leadStart.ts leadArrived): its person's messages sent in its chat while it had none,
    *  each written once (its id is the message's and the agent's, as writeMessages makes it), only for a stored main-chat message
-   *  of that conversation by that person. */
+   *  of that conversation by that person that they did not delete. Also a PM's first deliveries in its 1:1 chat (pmChat.ts). */
   private async writeLateDeliveries(tx: Transaction, tabId: string, state: SuperTabState, late: NonNullable<CommandEffects['lateDeliveries']>) {
     const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     // A few, each by its primary key (hotFilters.test.ts: no `in` filter on a hot collection).
     for (const l of late) {
-      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true } })
+      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true, deletedAt: true } })
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
-      if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !l.lead || author?.kind !== 'person' || author.id !== l.author.id
+      // A message its person deleted while it waited, kept only as a thread's root, is not theirs to type any more.
+      if (!row || row.deletedAt || row.tabId !== tabId || row.conversationId !== l.conversationId || !l.lead || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
       deliveries.push({ id: stableId(l.messageId, l.agentId), tabId, conversationId: l.conversationId, messageId: l.messageId, agentId: l.agentId,

@@ -347,6 +347,8 @@ export class BackendSocket {
   } | null = null
   tokenUsageProvider: ((session: RegisteredSession) => AgentTokenUsage | null) | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
+  /** The engine's own workspace, when its tools do not run in the pane's folder (OpenClaw's). */
+  workspaceProvider: ((session: RegisteredSession) => string | null) | null = null
   /** Backend-resolved machine id, persisted by the SSO login preflight. */
   readonly machineId: string
 
@@ -1206,6 +1208,8 @@ export class BackendSocket {
                 command: entry.command,
                 installable: entry.installable,
                 installCommand: (entry.installable && installRecipeLine(entry.engine)) || null,
+                // Installed but unable to run here (OpenClaw on a Node it cannot use): New shows it and blocks Start.
+                ...(entry.unavailable ? { unavailable: entry.unavailable } : {}),
                 ...(entry.signedIn !== undefined ? { signedIn: entry.signedIn, lastUsedAt: entry.lastUsedAt ?? null } : {}),
                 // Static per-CLI-version capability, not a probe result: its mere presence is what
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
@@ -1453,6 +1457,7 @@ export class BackendSocket {
     return agentFrame(s, {
       tokenUsage: this.tokenUsageProvider?.(s) ?? null,
       selectedModel: this.runtimeProfileProvider?.(s) ?? null,
+      workspace: this.workspaceProvider?.(s) ?? null,
       terminalAvailable: registry.terminalAvailable(s.agentId),
       dsh: this.dshFrameProvider?.(s) ?? null,
       activity: () => this.activityFrameProvider?.(s) ?? null,

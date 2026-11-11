@@ -5,10 +5,10 @@ import type { Changes } from '../../src/superTabs/read/contract.js'
 import { readDelta } from '../../src/superTabs/cachedReads.js'
 import { listGroupIndexes } from '../../src/superTabs/parts/indexed.js'
 import { parseArgs } from './config.js'
-import { partsDriver } from './drivers/parts.js'
+import { partsDriver, storeRoutes } from './drivers/parts.js'
 import type { Reader, Reply } from './driver.js'
 import { machineId, seedAccounts } from './fixtures.js'
-import { storeRoutes } from './legacyDriver.js'
+import { observation } from './load.js'
 import { localDatabase } from './mongo.js'
 import { plan } from './plan.js'
 import { PROFILE_STAGES, profileEntry, startProfiling, type ProfileEntry } from './profile.js'
@@ -75,12 +75,11 @@ async function main() {
         .filter(([, bytes]) => bytes > 200).sort((a, b) => b[1] - a[1]).map(([k, bytes]) => `${k} ${(bytes / 1024).toFixed(1)} KB`).join(', ')
     }
     let n = 0
-    const reading = (machine: number): Promise<unknown> => driver.observeMachine(swarm.tabId, people[machine]!, machineId(machine), {
-      generation: swarm.generations[machine]!, quotas: [], tools: {}, runningHarnessIds: machine === 0 ? ['bench-lead'] : [], stoppedHarnessIds: [],
-      resources: { cpuPercent: 10 + (n++ % 50), memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
-        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Bench', os: 'macOS', gpuPercent: null } })
-    const post = () => driver.execute(swarm.tabId, people[0]!, `cap-cost-${n++}`,
-      { type: 'message.send', conversationId: swarm.workers[0]!.group, text: 'One post.', replyTo: null, recipientIds: [] })
+    const reading = (machine: number): Promise<unknown> => driver.observeMachine(swarm.tabId, people[machine]!, machineId(machine),
+      observation(swarm.generations[machine]!, swarm.agents.filter(a => a.machine === machine).map(a => a.harnessId), 10 + (n++ % 50)))
+    const agent = swarm.agents[0]!
+    const post = () => driver.execute(swarm.tabId, people[agent.machine]!, `cap-cost-${n++}`,
+      { type: 'message.send', conversationId: agent.channel, text: 'One post.', replyTo: null, recipientIds: [] }, agent.id)
     for (const r of all) await r.poll()
     // A first reading after the seed changes more than the reading (its content): done before the quiet wait, so the rounds'
     // readings are readings only, as a running machine's are.
@@ -90,7 +89,7 @@ async function main() {
     for (const r of all) await r.poll()
 
     const machineBytes = await partBytes(database.db, swarm.tabId)
-    process.stdout.write(`${config.machines} machines (${people.length} people, one host each), ${config.groups} groups; ${READERS} old and ` +
+    process.stdout.write(`${config.machines} machines (${people.length} people, one host each), ${config.projects} projects; ${READERS} old and ` +
       `${READERS} light windows; whole machine parts ${(machineBytes.total / 1024).toFixed(1)} KB (${(machineBytes.total / machineBytes.n / 1024).toFixed(2)} KB each)\n\n`)
     process.stdout.write('| Before each round | Reader | Polls | SwarmMachine ops/poll | SwarmMachine KB/poll | All ops/poll | All DB KB/poll | Reply KB/poll |\n' +
       '|---|---|---|---|---|---|---|---|\n')

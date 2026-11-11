@@ -1,0 +1,45 @@
+│
+◇
+
+OpenClaw 2026.11.2 (b556fdf) — OpenClaw Support will never DM you first. I, on the other hand, absolutely will.
+
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session rewind
+ gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle
+ agent main | session rewind | unknown | deliver:off | tokens ?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

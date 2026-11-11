@@ -71,6 +71,8 @@ const EXECUTABLES = [
   'codex-x86_64-pc-windows-msvc', 'codex-arm64-apple-darwin', '/opt/homebrew/bin/codex', 'codexa',
   'node', 'bun', 'python3', 'bash', 'zsh', 'agent', 'cursor-agent', 'opencode', 'pi', 'hermes', 'cmd', 'muse', 'amp', 'kilo',
   'grok', 'agy', 'copilot', 'devin',
+  // OpenClaw's TUI renames itself to a bare `openclaw`; its Gateway is `openclaw-gateway`, cut to 15 bytes on Linux.
+  'openclaw', 'openclaw-gateway', 'openclaw-gatewa',
 ]
 const ARGS: Array<(exe: string) => string> = [
   (exe) => exe,

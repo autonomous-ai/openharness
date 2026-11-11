@@ -116,13 +116,13 @@ async function ownAgent(tab: string) {
 async function storedState(tab: string): Promise<SuperTabState> {
   return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
 }
-/** Replaces a Swarm's parts with `state`, as an older release or the migration would have left them. Versions keep rising. */
+/** Replaces a Swarm's parts with `state`, as an older release would have left them. Versions keep rising. */
 async function saveState(tab: string, state: SuperTabState) {
   await swarmTransaction(db, async tx => {
     const current = await parts.loadAll(tx, tab)
     const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
-      ...current.starts, ...current.progress].map(p => p.version)) + 1
-    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      ...current.starts].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart] as unknown as
       Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
     await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
       sequenceBase: current.sequenceBase })
@@ -196,7 +196,7 @@ describe('delivery authority dependencies', () => {
     const legacy = state.agents.find(a => a.id === sender)!
     delete legacy.projectId
     await saveState(tab, state)
-    // A stale cross-project delivery from before migration must not acquire the public receiver's project identity.
+    // A stale cross-project delivery from an older release must not acquire the public receiver's project identity.
     const sent = await (await crew(tab, lead)).say('Stale legacy delivery.')
     const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
     await db.superTabDelivery.update({ where: { id: delivery.id }, data: { authorKind: 'agent', authorId: sender,
@@ -3865,7 +3865,7 @@ describe('Swarm sweeps', () => {
       // Keys that sort before any generated id, so they come first in the store's natural order as well as by age.
       const key = `-idle-${String(i).padStart(3, '0')}`
       return { id: `${tab}:${key}`, tabId: tab, key, version: 1, changedAt: old, deleted: false, ordinal: 1000 + i, projectId: 'lead', kind: null,
-        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, reportSeq: 0, lastActivityAt: old,
+        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, lastActivityAt: old,
         data: { id: key, projectId: 'lead', title: key, leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 } }
     }) })
     await sweepSwarms(db, Date.now() + day + 60_000)
@@ -4057,51 +4057,6 @@ describe('Swarm parts under concurrent writes', () => {
     expect(archived.updatedAt.getTime()).toBeGreaterThan(open.updatedAt.getTime())
     // Archiving ends them too: 6 of 9 deliveries stuck for days in prod were in archived groups.
     expect(archived.status).toBe('cancelled')
-  })
-})
-
-describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
-  /** About the 1 MB a production Swarm kept from before its split into parts (design 6.1: `SuperTab.legacyState`). */
-  const OLD_STATE = { conversations: Array.from({ length: 2_000 }, (_, i) => ({ id: `old-${i}`, title: 'x'.repeat(480) })) }
-  /** Far below the old state: a read that fetched it would send at least 1 MB. */
-  const READ_LIMIT = 200_000
-  const bytesOut = async () => Number(((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut)
-
-  it('is never fetched by a command, a read, the owner\'s lists, an invitation list or a host\'s terminal pickup', async () => {
-    const { tab, lead } = await fixture()
-    const invited: AuthUser = { sub: '100000000000000000000009', email: 'invited@example.com', autonomousEnv: 'prod', role: 'user' }
-    await run(tab, { type: 'invite.create', email: invited.email, role: 'viewer', conversationId: 'lead' })
-    const group = (await run(tab, { type: 'conversation.create', title: 'Terminal', brief: 'Answer the prompt', checks: [] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Terminal Engineer', configuration: config, lead: false })).result.agentId as string
-    await db.superTab.update({ where: { id: tab }, data: { legacyState: OLD_STATE } })
-
-    const fetched: string[] = []
-    /** Runs `body`, and names it when MongoDB sent this backend enough for the old state while it ran (bench/probe.ts). */
-    async function measured<T>(name: string, body: () => Promise<T>): Promise<T> {
-      const before = await bytesOut(), ownReply = await bytesOut() - before
-      const start = await bytesOut()
-      const result = await body()
-      if (await bytesOut() - start - ownReply >= READ_LIMIT) fetched.push(name)
-      return result
-    }
-    const split = await toPm(tab, 'After the split')
-    expect((await measured('command', () => run(tab, split))).result.messageId).toBeTruthy()
-    expect((await measured('read', () => store.read(owner, tab))).state.agents.map(a => a.id).sort()).toEqual([lead, worker].sort())
-    expect(await measured('invitations', () => store.invitations(invited))).toEqual([expect.objectContaining({ tabId: tab, name: 'Pilot', role: 'viewer' })])
-    // The owner's lists read each of the owner's Swarms: an owner of this one alone, as the shared owner has many here.
-    const solo: AuthUser = { sub: '10000000000000000000000a', email: 'solo@example.com', autonomousEnv: 'prod', role: 'user' }
-    const own = (await store.create(solo, randomUUID(), 'Solo')).id
-    await db.superTab.update({ where: { id: own }, data: { legacyState: OLD_STATE } })
-    expect((await measured('list', () => store.list(solo))).tabs).toEqual([expect.objectContaining({ id: own, name: 'Solo', ownerId: solo.sub })])
-    expect(await measured('host grids', () => store.hostGrids(solo))).toEqual([expect.objectContaining({ tabId: own, enabled: true })])
-    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker, scrollback: 20 }, host, lead)).result.requestId as string
-    expect((await measured('terminal pickup', () => store.hostTerminal(host, 'test-host'))).filter(row => row.tabId === tab).map(row => row.request.id))
-      .toEqual([requestId])
-    expect(fetched).toEqual([])
-
-    // Reads and writes leave it in place: only the maintenance script removes it.
-    for (const id of [tab, own]) expect((await db.superTab.findUnique({ where: { id }, select: { legacyState: true } }))!.legacyState).toEqual(OLD_STATE)
   })
 })
 

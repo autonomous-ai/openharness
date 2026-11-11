@@ -313,6 +313,12 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo>
         ),
       if (known.folder case final folder?)
         _Fact('folder', 'Folder', Text(folder, style: grid.AppType.mono())),
+      if (known.workspace case final workspace?)
+        _Fact(
+          'workspace',
+          'Workspace',
+          Text(workspace, style: grid.AppType.mono()),
+        ),
     ];
   }
 }

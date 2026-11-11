@@ -244,10 +244,10 @@ const END_RETRY_MAX_MS = 10 * 60_000
 /** A stop failure that says "not yet" rather than "no" (Diego, 11-01): every failure used to count toward the five tries,
  *  so a few minutes of a busy Swarm, a timeout or a sign-in being renewed ended a stop for good, and the stopped worker ran
  *  on, holding its slot and memory, until the daemon restarted. These back off as an ended session does (END_RETRY_MS
- *  doubling to END_RETRY_MAX_MS) and are never given up: a sign-in (401), a timeout (408), throttling (429), a busy or
- *  moving Swarm, a stop request read before it changed (the next read names the new one), work not yet finished. */
+ *  doubling to END_RETRY_MAX_MS) and are never given up: a sign-in (401), a timeout (408), throttling (429), a busy
+ *  Swarm, a stop request read before it changed (the next read names the new one), work not yet finished. */
 const RELEASE_RETRY_STATUSES = [401, 408, 429]
-const RELEASE_RETRY_CODES = ['SWARM_BUSY', 'SWARM_MIGRATING', 'STALE_RELEASE', 'WORK_ACTIVE']
+const RELEASE_RETRY_CODES = ['SWARM_BUSY', 'STALE_RELEASE', 'WORK_ACTIVE']
 /** The core's close refusals no retry for the same runtime changes; any other (unavailable, an expired lease, data not
  *  deleted yet) is tried again. NOT_SWARM_STARTED and AGENT_CHANGED are refused for good where they are answered. */
 const RELEASE_FINAL_CLOSES = ['UNSUPPORTED', 'LEAD_PROTECTED']

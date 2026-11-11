@@ -30,6 +30,8 @@ export const REMOVED_COLLECTIONS = [
   'RoutingPolicy', 'SuperTabAttempt', 'SuperTabRouteDecision', 'SuperTabModelEvidence', 'SuperTabModelRecent',
   // Custom role texts (S18, #3916), project instructions with their history and PM notes (S7, #3893), and project rules (S8, #3908).
   'SuperTabRoleText', 'SuperTabInstructions', 'SuperTabInstructionsRevision', 'SuperTabPmNote', 'SuperTabProjectRules',
+  // Projects' report progress, which nothing wrote since Swarm v4 (S19).
+  'SwarmProgress',
 ] as const
 
 /** Rows removed by one write: a few megabytes at most. */

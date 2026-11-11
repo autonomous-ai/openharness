@@ -9,7 +9,7 @@
  * (B5). It publishes nothing.
  *
  *   node scripts/windows-install-manifest.mjs --out <dir> --cli-dir dist --pty-dir <dir> \
- *     --node-zip node-v22.23.2-win-arm64.zip --version 0.3.120 [--pty-version 0.3.120]
+ *     --node-zip node-v24.22.2-win-arm64.zip --version 0.3.120 [--pty-version 0.3.120]
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'

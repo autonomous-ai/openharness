@@ -1,0 +1,45 @@
+│
+◇
+
+OpenClaw 2026.11.2 (b556fdf) — No $999 stand required.
+
+Missing gateway auth token.
+Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass --token/--password,
+or resolve the configured secret provider for this credential.
+[exit 1]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

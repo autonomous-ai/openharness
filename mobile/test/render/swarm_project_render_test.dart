@@ -15,12 +15,9 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import '../swarm/swarm_fixture.dart';
 
-/// Renders a phone Swarm project as prototype B2 draws it — its name over its
-/// team in dots with Team at the top right, its tabs, its Chat tab and its
-/// Tasks tab with nothing or something waiting on the person, and the sheet
-/// Team opens on its Team and its Work — in light and dark, at iPhone 14 size
-/// in the system fonts, to PNGs a reviewer can look at without a phone. Made
-/// up data only.
+/// Renders a phone Swarm project — its channel under its #name — in light and
+/// dark, at iPhone 14 size in the system fonts, to PNGs a reviewer can look at
+/// without a phone. Made up data only.
 ///
 /// Skipped unless PHONE_RENDER_DIR names a directory to write into:
 ///
@@ -66,8 +63,8 @@ void main() {
   final skip = _outDir == null;
 
   /// A project of four agents: its Product Manager idle, two at work, one
-  /// down; and Fix login, waiting on the person when [waiting].
-  FakeSwarm backend({required bool waiting}) {
+  /// down.
+  FakeSwarm backend() {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -75,7 +72,7 @@ void main() {
       ],
       'next': null,
     };
-    final derived = {'decisionsWaiting': waiting ? 1 : 0};
+    const derived = {'decisionsWaiting': 0};
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
         derived: derived,
@@ -94,7 +91,7 @@ void main() {
             title: 'Fix login',
             number: 4,
             agentIds: ['agent-lead', 'agent-builder'],
-            status: waiting ? 'needs_human' : 'working',
+            status: 'working',
             workerId: 'agent-builder',
             lastMessageSequence: 12,
           ),
@@ -174,37 +171,6 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
         changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/groups?dormant=1&projectId=$project'] = (
-      _,
-    ) => {'groups': <Object>[], 'next': null};
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': [
-        if (waiting)
-          {
-            'id': 'd1',
-            'projectName': 'Mobile',
-            'conversationId': 'g1',
-            'conversationTitle': 'Fix login',
-            'askerName': 'Nova',
-            'question': 'Ship it behind a flag?',
-            'options': ['Yes', 'No'],
-          },
-      ],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': [
-        if (waiting)
-          {
-            'id': 'm1',
-            'projectName': 'Mobile',
-            'conversationId': 'g2',
-            'conversationTitle': 'Skeleton rows on Home',
-            'messageId': 'm3',
-            'leadName': 'River',
-            'text': 'Can you check the copy?',
-          },
-      ],
-    };
     Map<String, dynamic> message(
       int sequence,
       String text,
@@ -255,7 +221,7 @@ void main() {
   for (final brightness in Brightness.values) {
     final look = brightness.name;
 
-    Future<GlobalKey> page(WidgetTester tester, {bool waiting = false}) async {
+    Future<GlobalKey> page(WidgetTester tester) async {
       await tester.runAsync(_loadFonts);
       // A palette carries its brightness: a light one is how the app goes light.
       final palette = HarnessPalette.values.firstWhere(
@@ -286,7 +252,7 @@ void main() {
       final host = SwarmHost(
         accountId: () => account.value,
         account: account,
-        request: backend(waiting: waiting).request,
+        request: backend().request,
         notices: SilentSystemNotices(),
         features: features,
       )..foreground = false;
@@ -310,42 +276,9 @@ void main() {
       return key;
     }
 
-    Future<void> tap(WidgetTester tester, String key) async {
-      await tester.tap(find.byKey(ValueKey(key)));
-      await tester.pumpAndSettle();
-    }
-
     testWidgets('project chat ($look)', skip: skip, (tester) async {
       final key = await page(tester);
       await shoot(tester, key, 'swarm-project-chat-$look');
-    });
-
-    testWidgets('its tasks ($look)', skip: skip, (tester) async {
-      final key = await page(tester);
-      await tap(tester, 'swarm-project-tab-tasks');
-      await shoot(tester, key, 'swarm-project-tasks-$look');
-    });
-
-    testWidgets('its tasks, some waiting on you ($look)', skip: skip, (
-      tester,
-    ) async {
-      final key = await page(tester, waiting: true);
-      await tap(tester, 'swarm-project-tab-tasks');
-      await tap(tester, 'swarm-done-today');
-      await shoot(tester, key, 'swarm-project-tasks-waiting-$look');
-    });
-
-    testWidgets('the sheet on Team ($look)', skip: skip, (tester) async {
-      final key = await page(tester, waiting: true);
-      await tap(tester, 'swarm-project-team');
-      await shoot(tester, key, 'swarm-project-team-$look');
-    });
-
-    testWidgets('the sheet on Work ($look)', skip: skip, (tester) async {
-      final key = await page(tester, waiting: true);
-      await tap(tester, 'swarm-project-team');
-      await tap(tester, 'swarm-sheet-work');
-      await shoot(tester, key, 'swarm-project-work-$look');
     });
   }
 }

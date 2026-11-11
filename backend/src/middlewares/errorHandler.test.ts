@@ -27,13 +27,6 @@ describe('the shared error handler', () => {
     expect(res.json()).toEqual({ success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } })
   })
 
-  it('asks a migrating Swarm\'s caller to retry too', async () => {
-    thrown = new SuperTabError('SWARM_MIGRATING', 'This Swarm is being updated. Try again in a moment.', 503)
-    const res = await app.inject({ method: 'GET', url: '/fails' })
-    expect(res.statusCode).toBe(503)
-    expect(res.headers['retry-after']).toBe('2')
-  })
-
   it('sends no Retry-After with a 503 that waiting does not change', async () => {
     thrown = new SuperTabError('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
     const res = await app.inject({ method: 'GET', url: '/fails' })

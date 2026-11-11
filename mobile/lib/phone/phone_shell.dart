@@ -8,16 +8,15 @@ import 'package:harness_mobile/state/app_state.dart';
 import '../demo/sample_mode.dart' show SampleMode;
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
-import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_home_root.dart';
-import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
+import '../swarm/swarm_page.dart';
 import '../swarm/swarm_project_page.dart' show swarmChatRoute;
 import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
+import '../swarm/swarm_you_page.dart';
 import '../swarm/swarm_session.dart';
-import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
@@ -390,20 +389,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
-    // A decision opens in Activity, where it is answered, as Desktop opens
-    // it in Notifications: no chat shows decisions. Activity says so when it
-    // is no longer open, whoever's it was.
-    if (target.decisionId case final decisionId?) {
-      unawaited(
-        navigator.push(
-          swarmActivityRoute(
-            focus: SwarmDecisionNeed.keyOf(decisionId),
-            swarmId: target.swarmId,
-          ),
-        ),
-      );
-      return;
-    }
     // A project's own chat opens as its project, on Swarm Home C's tabs.
     unawaited(
       navigator.push(
@@ -598,7 +583,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               openMachineId: _linkedMachineId,
               openAgent: _openAgentRequest,
             ),
-            swarm: (_) => SwarmTabsPage(
+            swarm: (_) => SwarmYouScope(
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier, swarm: true),
               // You's Notifications, not in the sample, as Settings leaves
@@ -606,6 +591,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               notices: SampleMode.ofNotifier(widget.notifier) == null
                   ? widget.notifier.agentNotices.system
                   : null,
+              child: const SwarmPage(),
             ),
           ),
         ),

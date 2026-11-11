@@ -155,7 +155,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('Attach a stopped session
     expect(member?.harnessId).toBe(harnessId)
   }, 6 * 60_000)
 
-  it('+ New agent: its chat opens first, the session Desktop starts with its Swarm role joins it, and answers there', async () => {
+  it('+ New agent: its chat opens first, the session Desktop starts with its launch line joins it, its first answer is in its chat, and it answers there', async () => {
     const me = await signIn(backend, person, { ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
       HARNESS_SWARM: '' })
     onTestFailed(() => {
@@ -174,13 +174,20 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('Attach a stopped session
     // Desktop's order (new_agent.dart swarmNewAgent): the chat, then the session on this computer, then agent.add.
     const chat = await command('chat', { type: 'agent.new', kind: 'regular', machineId: me.machineId, engine: 'claude', name: 'Orion', local: true })
     const cwd = join(me.daemon.projectsDir, 'orion'); mkdirSync(cwd, { recursive: true })
-    const created = await me.client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, swarmRole: 'dev' }, 90_000)
+    // Its launch line as Desktop writes it (launch_prompt.dart): its name, then its person's request, which the join records as
+    // their first words in its chat (initialMessage).
+    const request = 'Tidy the docs.'
+    const created = await me.client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, swarmRole: 'dev',
+      prompt: `You are Orion.\n\n${request}` }, 90_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const added = await command('join', { type: 'agent.add', conversationId: chat.conversationId, machineId: me.machineId,
       harnessId: created.agent.id, name: 'Orion', lead: false,
-      configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null } })
+      configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }, initialMessage: request })
     expect((await me.client.request('super_tabs', { action: 'wake' }))).toMatchObject({ ok: true })
 
+    // Its person writes at once, as anh Dee did (2026-11-10: "in the terminal i can see that arlo has the first message but i didn't
+    // see it in the chat. my "hi" was the first message in the chat"): by the time anything reads the transcript, its last turn is
+    // theirs, and the answer to its launch line is still posted, once, as the agent.
     const typed = 'Add a line to the README saying hello.'
     await api(`/api/super-tabs/${tab}/commands`, 'POST', { operationId: randomUUID(), command: { type: 'message.send',
       conversationId: chat.conversationId, text: typed, replyTo: null, recipientIds: [added.agentId] } })
@@ -188,5 +195,11 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('Attach a stopped session
     const answer = await until('its answer in the chat', async () =>
       (await messages()).find(m => m.author?.kind === 'agent' && String(m.text).includes(typed) && !m.agentOnly) ?? null, 90_000, 500)
     expect(answer.author.id).toBe(added.agentId)
+    const first = await until('its answer to its launch line in the chat', async () =>
+      (await messages()).find(m => m.author?.kind === 'agent' && String(m.text).includes('You are Orion.') && !m.agentOnly) ?? null, 90_000, 500)
+    expect(first.author.id).toBe(added.agentId)
+    const all = await messages()
+    expect(all.filter(m => m.author?.kind === 'agent' && String(m.text).includes('You are Orion.'))).toHaveLength(1)
+    expect(all.filter(m => m.author?.kind === 'person').map(m => m.text)).toEqual(expect.arrayContaining([request, typed]))
   }, 6 * 60_000)
 })

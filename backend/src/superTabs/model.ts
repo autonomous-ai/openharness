@@ -323,8 +323,6 @@ export interface Conversation {
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
   messageSeq?: number
-  /** The sequence of its last message that counted toward its project's reports before Swarm v4. */
-  reportSeq?: number
   /** Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it. */
   dormant?: boolean
   /** When its last message was written (ISO). */
@@ -422,8 +420,6 @@ export interface SuperTabState {
   projects?: SwarmProject[]
   /** The removed Leads conversation of an older Swarm, still stored (leadsRemoved); no read sends it. */
   leadsConversationId?: string
-  /** Pairs of tasks ("a:b", sorted ids) whose Leads were told their owned code overlaps, so each pair is told once. */
-  overlapAlerts?: string[]
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
   /** Read-only, for a project agent's reads (visibleState): the account every project's PM runs on, for the route's notes. */
@@ -765,10 +761,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   author(state, actor)
   // The copy leaves out what no reader gets and no step below reads: the owner-only sharing, the hosts' slot claims, released
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
-  // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
-  // (spec, Archive); a command may still load one.
-  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
-    removedSessions: _removed, ...kept } = state
+  // not every member's). Nor a dormant conversation: it is read on demand, never in a whole-Swarm read (spec, Archive); a
+  // command may still load one. Nor `overlapAlerts`, which backends up to 1.4.68 (before S18) still wrote into the heads of
+  // Swarms made after the wipe's cut-off; goes on or after 2026-12-12.
+  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, closingSessions: _closing,
+    removedSessions: _removed, overlapAlerts: _alerts, ...kept } = state as SuperTabState & { overlapAlerts?: string[] }
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
   // ordinary people and agent syncs must never receive the note or its correlation fields.
@@ -822,9 +819,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
     // loaded, by nobody.
-    visible.projects = visible.projects.map(({ status, ...p }) => {
+    visible.projects = visible.projects.map(({ status, pmChat, ...p }) => {
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
-      return chat && canReadGroup(state, actor, chat) && status ? { ...p, status } : p
+      // Its PM's chat and what waits there, read by those who read that chat: its person (pmChat.ts).
+      const own = pmChat && state.conversations.find(c => c.id === pmChat.id)
+      return { ...p, ...chat && canReadGroup(state, actor, chat) && status ? { status } : {}, ...own && canReadGroup(state, actor, own) ? { pmChat } : {} }
     })
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))

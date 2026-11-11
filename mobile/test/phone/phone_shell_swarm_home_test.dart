@@ -54,7 +54,6 @@ void main() {
 
   /// You, from the avatar at the top of Home.
   Future<void> openYou(WidgetTester tester) async {
-    expect(key('swarm-tab-you'), findsNothing, reason: 'no You tab');
     await tester.tap(key('swarm-you-button'));
     await frames(tester);
   }

@@ -1,4 +1,5 @@
-import { cleanUsageContext, type ProductUsageContext } from '../lib/productHealthContract.js'
+import { cleanUsageContext, type NODE_HELD_REASONS, type ProductUsageContext } from '../lib/productHealthContract.js'
+import type { NodeStatus } from '../lib/nodeStatus.js'
 import { cleanHealthState, createProductHealth, type HealthState } from './productHealth.js'
 import { reportFailure } from './reportFailure.js'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -51,6 +52,7 @@ const requestActions = new Map<string, Reach>([
   ...PRODUCT_USAGE_USER_OPENED_ACTIONS.map(action => [`${action}_user_requests`, `${action}_user`] as const),
 ])
 const isTuiMetric = (metric: string): boolean => metric.startsWith('ui_tui_') || metric.startsWith('health_tui_')
+const isNodeMetric = (metric: string): boolean => metric.startsWith('health_cli_node_')
 const key = (now: number) => new Date(now).toISOString().slice(0, 10)
 const week = (now: number) => { const d = new Date(now); return key(now - ((d.getUTCDay() + 6) % 7) * DAY) }
 type Counters = Partial<Record<ProductUsageMetric, number>>
@@ -84,6 +86,8 @@ export interface ProductUsageDeps {
   file: string
   context?: ProductUsageContext
   sample?: () => { rss: number; cpuPercent?: number }
+  /** The daemon's Node (lib/nodeStatus.ts), counted once a collector day. */
+  node?: () => NodeStatus
   /** `retryAfterMs`: the answer's Retry-After, when it had one (gateway/accountHttp.ts). */
   request(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown>; retryAfterMs?: number }>
   now?(): number
@@ -251,6 +255,12 @@ export function createProductUsage(deps: ProductUsageDeps) {
   function dirty(): void {
     if (!persistTimer) { persistTimer = setTimeout(() => { void persist() }, 1000); persistTimer.unref() }
   }
+  /** Enums only: the major's bucket, and the reason's name. No version, path or machine. */
+  function countNode(node: NodeStatus): void {
+    const major = node.version.replace(/^v/, '').split('.')[0]
+    add(`health_cli_node_${major === '22' || major === '24' ? major : 'other'}`)
+    if (node.migration) add(`health_cli_node_held_${node.migration.replaceAll('-', '_') as typeof NODE_HELD_REASONS[number]}`)
+  }
   function add(metric: ProductUsageMetric, day = key(now())): void {
     if (state.measurementDay !== key(now())) {
       state.measurementDay = key(now())
@@ -325,7 +335,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       if (!enabled) return
       if (context) {
         health.start(context.release); health.checkpoint(); health.sample(deps.sample)
-        if (state.healthDay !== key(now())) { state.healthDay = key(now()); add('health_cli_collector_days') }
+        if (state.healthDay !== key(now())) { state.healthDay = key(now()); add('health_cli_collector_days'); if (deps.node) countNode(deps.node()) }
       }
       for (const turn of running.values()) if (!turn.response && !turn.waited && now() - turn.started >= 60_000) {
         turn.waited = true; add('turns_waiting_over_1m')
@@ -345,11 +355,13 @@ export function createProductUsage(deps: ProductUsageDeps) {
       if (!state.pending) {
         const day = Object.keys(state.days).sort().find(d => validDay(d) && Object.keys(state.days[d]).length)
         if (!day) return
-        // hn's counters travel alone: a backend from before `tui` refuses its whole report (400), and
-        // that refusal drops the report, so it must never carry the daemon's or the Desktop's counts.
+        // hn's counters and the Node counters each travel alone: a backend from before their names refuses
+        // the whole report (400), and that refusal drops the report, so it must never carry the other counts.
         const entries = Object.entries(state.days[day])
-        const own = entries.filter(([metric]) => !isTuiMetric(metric))
-        const counters = Object.fromEntries((own.length ? own : entries).slice(0, MAX_REPORT_METRICS)) as Counters
+        const own = entries.filter(([metric]) => !isTuiMetric(metric) && !isNodeMetric(metric))
+        const node = entries.filter(([metric]) => isNodeMetric(metric))
+        const group = own.length ? own : node.length ? node : entries
+        const counters = Object.fromEntries(group.slice(0, MAX_REPORT_METRICS)) as Counters
         const reportContext = state.dayContexts[day] ?? context
         state.pending = { schemaVersion: 1, revision: state.revision, id: uuid(), day, counters, ...(reportContext ? { context: reportContext } : {}) }
         for (const metric of Object.keys(counters)) delete state.days[day][metric as ProductUsageMetric]
@@ -375,6 +387,10 @@ export function createProductUsage(deps: ProductUsageDeps) {
         // A backend from before `tui` knows none of hn's names. That is not a failed delivery, so it
         // is not counted as one: the report goes, and hn's counts with it until the next UTC day.
         state.pending = null; tuiRefusedDay = key(now()); await persist()
+      }
+      else if (answer.status === 400 && Object.keys(report.counters).length && Object.keys(report.counters).every(isNodeMetric)) {
+        // A backend from before the Node names: the same, for that day's Node counters, which come once a day.
+        state.pending = null; await persist()
       }
       else {
         add('health_cli_report_rejected')

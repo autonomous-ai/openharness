@@ -1,9 +1,7 @@
 {
   "src/superTabs/confidential.ts swarmAgent.findMany": 1,
-  "src/superTabs/migration/links.ts superTabMessage.findMany": 1,
   "src/superTabs/read/host.ts swarmGroup.findMany": 1,
   "src/superTabs/read/host.ts swarmMachine.findMany": 1,
-  "src/superTabs/read/service.ts superTab.findMany": 1,
   "src/superTabs/sessionScope.ts superTabSessionScope.findMany": 1,
   "src/superTabs/sessionScope.ts superTabSessionScope.updateMany": 1,
   "src/superTabs/store.ts superTabAttachment.findMany": 1,

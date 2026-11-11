@@ -23,6 +23,8 @@
 import { env } from '../config/env.js'
 import { SERVICE_EXIT_RESTART, type StagedUpdate, type UpdaterMessage } from '../harnessd/protocol.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
+import { baseNode } from '../harnessd/baseNode.js'
+import { ensureNodeMeetsMinimum } from '../lib/runtimeInstall.js'
 import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
 import { currentCli } from '../lib/windows/installLayout.js'
 import { processRetireDeps } from '../lib/windows/cliVersions.js'
@@ -152,6 +154,9 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
       return handOver({ version, ...(ptyVersion ? { ptyVersion } : {}) })
     },
     limits,
+    // The build comes up on Node 24 once it is installed here; the pending note names the Node this daemon runs on,
+    // for a rollback to go back to.
+    node: { ensure: () => ensureNodeMeetsMinimum((line) => deps.log(`[update] ${line.trim()}`)), running: baseNode(process.execPath) },
     // Under any master: a build that needs a host this machine does not have would open no pane, whoever judged it.
     ...(deps.installedPtyProtocol ? { installedPtyProtocol: deps.installedPtyProtocol } : {}),
     // A master judges a build staged while the one before is on probation (#807). Beside a core, under a

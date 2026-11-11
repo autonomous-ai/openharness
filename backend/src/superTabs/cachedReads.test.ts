@@ -58,7 +58,7 @@ describe('finished starts are read only by the reads that name them (spec 2026-1
     const view = new CacheView(null, null), names: string[] = []
     vi.spyOn(view, 'get').mockImplementation(async (_tabId, name) => {
       names.push(name)
-      if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: hot, progress: [] }
+      if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: hot }
       if (name === 'finished-starts') return finished
       return []
     })
@@ -88,7 +88,7 @@ describe('which entries a refresh patches (spec 2026-11-02, Phase 1)', () => {
     const rules = new Map<string, unknown>()
     vi.spyOn(view, 'get').mockImplementation(async (_tabId, name, _scope, _load, patch) => {
       rules.set(name.startsWith('light:') ? 'light:' : name, patch)
-      if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
+      if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: [] }
       if (name === 'feed' || name === 'machine-feed') return { from: 0, parts: [] }
       if (name === 'lastChangedAt') return null
       if (name.startsWith('light:')) return { groups: [], starts: [] }
@@ -132,7 +132,7 @@ describe('dormant groups by the selection a read names (spec 2026-11-02, Phase 2
     const view = new CacheView(null, null), names: string[] = []
     vi.spyOn(view, 'get').mockImplementation(async (_tabId, name, _scope, load) => {
       names.push(name)
-      if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] }
+      if (name === 'parts') return { tabId: 't', head: {}, members: [], agents: [], groups: [], machines: [], starts: [] }
       if (name === 'machines') return []
       return load()
     })
@@ -172,7 +172,7 @@ describe('dormant groups by the selection a read names (spec 2026-11-02, Phase 2
 describe('the delta a refresh reads', () => {
   it('is one snapshot: read in a transaction', async () => {
     const aggregateRaw = vi.fn(async () => [])
-    const tx = Object.fromEntries(['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart', 'swarmProgress'].map(m => [m, { aggregateRaw }]))
+    const tx = Object.fromEntries(['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart'].map(m => [m, { aggregateRaw }]))
     const db = { $transaction: vi.fn(async (body: (tx: unknown) => Promise<unknown>) => body(tx)) }
     expect(await readDelta(db as never)('t', 5, ['group', 'start'])).toEqual({ parts: [], head: null, hostDigests: new Map() })
     expect(db.$transaction).toHaveBeenCalledTimes(1)
@@ -206,7 +206,7 @@ describe('light and host state derived from held entries (spec 2026-11-02 poll c
       { kind: 'agent', key: 'a2', version: 1, changedAt: 1, ordinal: 1, data: { id: 'a2', machineId: 'm2', projectId: 'p1', workDecision: 'stop' } }],
     groups: [g('run', { agentIds: ['a2'], assignment: { id: 'w', agentId: 'a2', status: 'working', execution: { machineId: 'm2', harnessId: 'h', machineOwnerId: 'o' } } }),
       g('idle', { agentIds: ['a1'] })],
-    machines: [], starts: [], progress: [], sequenceBase: 0, visibilityEpoch: 0, groupCounter: 0 }
+    machines: [], starts: [], sequenceBase: 0, visibilityEpoch: 0, groupCounter: 0 }
   // Any touch of the database fails the test: a derived read must come from what the cache holds.
   const db = new Proxy({}, { get: (_t, key) => { throw new Error(`read the database: ${String(key)}`) } }) as never
   function stub(extra: Record<string, unknown> = {}, patching = true) {
