@@ -100,3 +100,94 @@ describe('one completed-result decision for desktop and device', () => {
     expect(desktop[0].payload.notification.kind).toBe('done')
   })
 })
+
+describe('a quiet turn', () => {
+  const quietLine: LiveEvent[] = [
+    { type: 'turn_started', payload: { userMessage: 'Your browser is ready: run `harness browser --help`' } },
+    { type: 'text_delta', payload: { content: 'Noted.' } },
+    { type: 'turn_ended', payload: {} },
+  ]
+  const spawning: LiveEvent[] = [
+    quietLine[0],
+    { type: 'tool_start', payload: { id: 'a1', tool: 'Agent', input: { description: 'look around' } } },
+    { type: 'turn_ended', payload: {} },
+  ]
+  const silentTier = { type: 'turn_summary', agentId: 'agent', dbSessionId: 's', payload: { sessionId: 's', tier: 'silent' } }
+
+  it('ends with no recap and no notification: the card goes done, the apps hear a silent tier and nothing else, and nothing is read or cut', async () => {
+    const readLastTurn = vi.fn(async () => ({ userMessage: 'x', assistantText: 'Noted.' }))
+    const { mirror, device, desktop, summarize } = setup({ readLastTurn })
+    mirror.ingest(quietLine, 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(device.map(f => f.payload.kind).at(-1)).toBe('done')
+    expect(device.some(f => f.payload.kind === 'summary')).toBe(false)
+    expect(desktop).toEqual([silentTier])
+    expect(summarize).not.toHaveBeenCalled()
+    expect(readLastTurn).not.toHaveBeenCalled()
+    expect(mirror.busy('s')).toBe(false)
+  })
+
+  it("leaves the agent's last recap as it was", async () => {
+    const { mirror } = setup()
+    mirror.ingest(turn, 's')
+    await vi.runAllTimersAsync()
+    const recent = structuredClone(mirror.recent('s'))
+    const snapshot = structuredClone(mirror.snapshot('s'))
+    mirror.ingest(quietLine, 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(mirror.recent('s')).toEqual(recent)
+    expect(mirror.snapshot('s')).toEqual(snapshot)
+  })
+
+  it('the turn after it tells as any turn does', async () => {
+    const { mirror, desktop } = setup()
+    for (const [events, quiet] of [[turn, false], [quietLine, true], [turn, false]] as const) {
+      mirror.ingest(events, 's', { quiet })
+      await vi.runAllTimersAsync()
+    }
+    expect(desktop.map(f => f.payload.notification?.kind ?? null)).toEqual(['done', null, 'done'])
+  })
+
+  it('an end held for sub-agents stays quiet when it is let go', async () => {
+    const { mirror, device, desktop, summarize } = setup()
+    mirror.ingest(spawning, 's', { quiet: true })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(desktop).toEqual([])
+    mirror.ingest([
+      { type: 'subagent_finished', payload: { id: 'a1', status: 'completed' } },
+      { type: 'text_delta', payload: { content: 'It is done.' } },
+    ] as LiveEvent[], 's')
+    await vi.runAllTimersAsync()
+    expect(desktop).toEqual([silentTier])
+    expect(device.some(f => f.payload.kind === 'summary')).toBe(false)
+    expect(summarize).not.toHaveBeenCalled()
+  })
+
+  it('a quiet mark does not reach a turn that began after a held end', async () => {
+    const { mirror, desktop, summarize } = setup()
+    mirror.ingest(spawning, 's', { quiet: true })
+    mirror.ingest(turn, 's')
+    await vi.runAllTimersAsync()
+    expect(summarize).toHaveBeenCalledTimes(1)
+    expect(desktop).toHaveLength(1)
+    expect(desktop[0].payload.notification.kind).toBe('done')
+  })
+
+  it('a quiet end heard twice is told once', async () => {
+    const { mirror, device, desktop } = setup()
+    mirror.ingest(quietLine, 's', { quiet: true })
+    mirror.ingest([quietLine[2]], 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(desktop).toEqual([silentTier])
+    expect(device.filter(f => f.payload.kind === 'done')).toHaveLength(1)
+  })
+
+  it('an interrupted quiet turn is cancelled as any', async () => {
+    const { mirror, device, desktop, summarize } = setup()
+    mirror.ingest([quietLine[0], quietLine[1], { type: 'turn_ended', payload: { aborted: true } }], 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(device.at(-1)?.payload).toEqual({ kind: 'done', text: 'done' })
+    expect(desktop).toEqual([])
+    expect(summarize).not.toHaveBeenCalled()
+  })
+})
