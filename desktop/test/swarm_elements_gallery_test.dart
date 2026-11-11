@@ -674,6 +674,19 @@ class _Gallery extends StatelessWidget {
                         detail: 'Mac Studio',
                         onTap: () {},
                       ),
+                      // Its computer off: it says so, as an agent's row does, and does nothing.
+                      SuperTabQuietRow(
+                        leading: SuperTabAvatar(
+                          identity: 'agent:${swarmAgentId('laptop', 'notes')}',
+                          name: 'Release notes',
+                          size: SuperTabQuietRow.faceSize,
+                          face: true,
+                          offline: true,
+                        ),
+                        name: 'Release notes',
+                        detail: 'offline',
+                        onTap: null,
+                      ),
                       // While a click joins it: it waits.
                       SuperTabQuietRow(
                         leading: SuperTabAvatar(
