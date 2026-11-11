@@ -17,6 +17,7 @@ import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { FirstAnswers } from './firstAnswers.js'
+import { NextThing } from './nextThing.js'
 import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
 import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
@@ -115,7 +116,7 @@ export interface SuperTabServiceOptions {
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
 
   /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
-  githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop'>
+  githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop' | 'owed'>
   /** What merges by rule the pull requests of the projects whose PM runs here (superTabs/githubMerge.ts), for a spec. */
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
@@ -126,6 +127,8 @@ export interface SuperTabServiceOptions {
   shipping?: (core: CoreApi) => Pick<ShippingReporter, 'start' | 'stop'>
   /** What posts an agent's answer to its launch line in its chat (superTabs/firstAnswers.ts), for a spec. */
   firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
+  /** What types an agent its next thing as its turn ends (superTabs/nextThing.ts), for a spec. */
+  nextThings?: (core: CoreApi, sources: () => SwarmSources) => Pick<NextThing, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -219,6 +222,24 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       command: { type: 'message.send', conversationId: agent.chat, text, replyTo: null, recipientIds: [] } }),
     file: join(api.dataDir, 'super-tab-first-answers.json'),
   })))(core, sources)
+  // An agent's next thing, typed as its turn ends (nextThing.ts): its next task while it holds none of its own, read from its
+  // project's repository with this person's gh, typed as Harness tells it GitHub news, and said to its person once it was given
+  // the same three times.
+  const nextThings = (options.nextThings ?? ((api, held) => new NextThing({
+    onEnd: listener => api.turns.onEnd(listener),
+    watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
+      roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    // The asks to read GitHub news keeps for each agent as it hands on what GitHub says (githubMentions.ts).
+    owed: (agent, repo) => mentions.owed(agent.agentId, repo),
+    working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
+    get: github.get, send: github.send,
+    tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
+      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
+    // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
+    say: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
+      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } }),
+    file: join(api.dataDir, 'super-tab-next-things.json'),
+  })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
@@ -230,6 +251,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     assigns.start()
     shipping.start()
     firstAnswers.start()
+    nextThings.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -248,7 +270,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()

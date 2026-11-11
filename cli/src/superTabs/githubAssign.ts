@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { ASKED, DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -46,10 +46,6 @@ const ISSUE_PAGES = 10
 const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
-/** Harness's ask of a reader, as `ask` writes it: who was asked, and for which head. An ask from before the verdict was a
- *  command named the head after "READ-OK", and is on open pull requests still: that form can go after 2026-12-10. */
-const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/
-
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
@@ -202,25 +198,11 @@ export class GitHubAssign {
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
       // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
       // tried again next pass.
-      let refused = 0, off = false
-      const remove = (label: string) => this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
-      for (const label of [...back.taken ? ['status:taken'] : [], back.label]) {
-        const reply = await remove(label)
-        if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
-        off = label === back.label && reply.status === 200
-      }
-      if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
-      // And status:taken once more, after the builder's label: a claim made meanwhile (githubClaim.ts) marks the task taken,
-      // and takes its own mark off only when it lands after the label went. Only where this pass took the label off: one
-      // already gone was moved by hand, and its next builder's claim is not this pass's to undo. Refused, it is said: the
-      // task is taken back all the same, and is left taken only if a claim did land.
-      if (off) {
-        const cleared = await remove('status:taken')
-        if (cleared.status !== 200 && cleared.status !== 404) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${cleared.status}`)
-      }
+      const given = await giveBack(this.deps.send, repo, back.number, back.label, back.taken)
+      if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
+      if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
-        { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
+      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
     }
   }
@@ -544,5 +526,33 @@ function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
   return pattern.exec(String(comment.body ?? '').slice(0, 500))
 }
 
-const labelNames = (issue: Json): string[] =>
+/** What taking a task back answered: GitHub refused it (its status), or it is done, with the status GitHub answered when it kept
+ *  status:taken after the builder's label went (null when it did not). */
+export type GivenBack = { refused: number } | { takenKept: number | null }
+
+/**
+ * Takes task [number] of [repo] back from the builder [label] names (anh Dee's plan, 2026-11-09: "when a builder stops, stalls
+ * or runs out of quota, Harness takes the task back and gives it to the next best builder"), for the assigner and for an agent's
+ * own computer when it sat idle holding it (nextThing.ts). status:taken first, when it is [taken]: a task left taken with no builder
+ * is one nobody plans (readProblem), while one left queued for its builder is taken back again next pass. A label already gone
+ * is off; anything else GitHub refuses stops it. Then status:taken once more, after the builder's label: a claim made meanwhile
+ * (githubClaim.ts) marks the task taken, and takes its own mark off only when it lands after the label went. Only where this took
+ * the label off: one already gone was moved by hand, and its next builder's claim is not this one's to undo.
+ */
+export async function giveBack(send: GitHubSend, repo: string, number: number, label: string, taken: boolean): Promise<GivenBack> {
+  const remove = (name: string) => send('DELETE', `/repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`)
+  let off = false
+  for (const name of [...taken ? ['status:taken'] : [], label]) {
+    const reply = await remove(name)
+    if (reply.status !== 200 && reply.status !== 404) return { refused: reply.status }
+    off = name === label && reply.status === 200
+  }
+  const cleared = off ? await remove('status:taken') : null
+  return { takenKept: cleared && cleared.status !== 200 && cleared.status !== 404 ? cleared.status : null }
+}
+
+/** The line a task taken back says on it, as Harness at [at] (HH:MM): [why], and where it goes. */
+export const backLine = (why: string, at: string): string => `${SELF}, ${at}: ${why}, so this task goes to the builder who can start it next.`
+
+export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))

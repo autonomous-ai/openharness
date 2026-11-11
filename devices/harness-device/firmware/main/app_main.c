@@ -217,16 +217,23 @@ void app_main(void)
     ui_perf_run();  // synthetic, local-only, before the cable can affect a live harness
 #endif
 
-    if (!cable_client_start()) {
+    bool linked = cable_client_start();
+    if (!linked) {
+        // A failed start cleans up after itself, so one retry is safe; a transient shortage often clears.
+        ESP_LOGW(TAG, "cable link did not start — retrying once");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        linked = cable_client_start();
+    }
+    if (!linked) {
         // A dial with no link still runs, still lights up, and still says so on screen. A device stuck in a
         // boot loop is not diagnosable from across the room; one showing "Not connected" is.
         ESP_LOGE(TAG, "cable link did not start — the dial will show no machine");
     }
 
-    // If this boot is a freshly installed image, confirm it HERE and nowhere earlier — see fw_mark_valid.
-    // Both things that make the dial fixable have now happened: it can draw, and the port is open so a
-    // daemon can reach it to offer another image.
-    fw_mark_valid();
+    // If this boot is a freshly installed image, decide it HERE and nowhere earlier — see fw_confirm_boot.
+    // Confirmed only if the port opened, so a daemon can reach it to offer another image; a fresh image
+    // that cannot reach the host is rolled back, because the cable is the only way to replace it.
+    fw_confirm_boot(linked);
 
     // Create the refresh task BEFORE the first tiles exist: tile creation fragments the remaining internal
     // heap enough that a contiguous stack allocation can fail afterwards, which would leave the carousel on

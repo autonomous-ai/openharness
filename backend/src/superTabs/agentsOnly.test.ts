@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, postable, type Command, type CommandContext } from './commands.js'
+import { applyCommand, CHANNEL_EXEMPTIONS_END, postable, type Command, type CommandContext } from './commands.js'
 import { PERSONAL_SWARM_OPERATION } from './deletion.js'
 import { createSuperTab, stableId, SuperTabError, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
@@ -89,10 +89,10 @@ describe('a project\'s channel and its tasks\' chats', () => {
   it('refuse a person\'s upload to them, and take it to the person\'s own chat with their agent', () => {
     const f = swarm()
     const ada = f.newAgent(owner, 'Ada')
-    expect(refusal(() => postable(f.state, owner, 'lead'))).toMatchObject({ code: 'AGENTS_ONLY' })
-    expect(refusal(() => postable(f.state, owner, f.task))).toMatchObject({ code: 'AGENTS_ONLY' })
-    expect(refusal(() => postable(f.state, owner, ada.chat))).toBeNull()
-    expect(refusal(() => postable(f.state, f.asPm, 'lead'))).toBeNull()
+    expect(refusal(() => postable(f.state, owner, 'lead', 1_000))).toMatchObject({ code: 'AGENTS_ONLY' })
+    expect(refusal(() => postable(f.state, owner, f.task, 1_000))).toMatchObject({ code: 'AGENTS_ONLY' })
+    expect(refusal(() => postable(f.state, owner, ada.chat, 1_000))).toBeNull()
+    expect(refusal(() => postable(f.state, f.asPm, 'lead', 1_000))).toBeNull()
   })
 })
 
@@ -116,16 +116,16 @@ describe('a person\'s words there by another way', () => {
   })
 })
 
-// Exempt for now: a Personal Swarm. Its Desktop still starts a project's PM on the person's first message in the project's chat:
-// the message waits for the PM (leadWaiting) and the first lead.claim starts it on the person's machine (leadWaiting.test.ts).
-// The exemption goes when the Personal Swarm v4 (every pane an agent under Your Team) lands; then these two cases become one refusal.
-describe('a project\'s chat in a Personal Swarm, until the Personal Swarm v4', () => {
-  function project(personal: boolean) {
+// Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: a Personal Swarm. That Desktop starts a project's PM on the
+// person's first message in the project's chat: the message waits for the PM (leadWaiting) and the first lead.claim starts it on
+// the person's machine (leadWaiting.test.ts). The Desktop of #3965 sends it to the PM's own chat (pmChat.ts).
+describe('a project\'s chat in a Personal Swarm, until CHANNEL_EXEMPTIONS_END', () => {
+  function project(personal: boolean, now = 1_000) {
     let state: SuperTabState = createSuperTab(personal ? stableId('super-tab', 'prod', 'owner', PERSONAL_SWARM_OPERATION) : 'team',
       personal ? 'Personal' : 'Team', { id: 'owner', email: owner.email }, 'prod')
     let sequence = 0
     const run = (command: Command) => {
-      const effects = applyCommand(state, owner, command, { now: 1_000, operationId: `op-${++sequence}` })
+      const effects = applyCommand(state, owner, command, { now, operationId: `op-${++sequence}` })
       state = effects.state
       return effects
     }
@@ -149,13 +149,29 @@ describe('a project\'s chat in a Personal Swarm, until the Personal Swarm v4', (
     expect(refusal(() => f.run(post(f.conversationId, 'and the buttons round')))).toMatchObject({ code: 'AGENTS_ONLY', status: 403, message: SENTENCE })
     expect(f.project.leadWaiting).toBeUndefined()
   })
+
+  it('refuses the person\'s message from CHANNEL_EXEMPTIONS_END, and nothing waits', () => {
+    const f = project(true, CHANNEL_EXEMPTIONS_END)
+    expect(refusal(() => f.run(post(f.conversationId, 'make the landing page dark')))).toMatchObject({ code: 'AGENTS_ONLY', message: SENTENCE })
+    expect(f.project.leadWaiting).toBeUndefined()
+    const before = project(true, CHANNEL_EXEMPTIONS_END - 1)
+    expect(refusal(() => before.run(post(before.conversationId, 'make the landing page dark')))).toBeNull()
+  })
 })
 
-// Exempt for now: New project's opening request. When the Swarm starts the PM, Desktop posts its person's request, with its files,
-// in the new project's channel right before lead.start (launch.dart startInSwarm), and the PM reads it there when it joins. Kept
-// only from the project's creator, only while the channel holds no message and no PM was asked for or holds it. It goes when
-// New project hands its request to the PM's own 1:1 chat, which needs lead.start to create that chat and return its id.
-describe('New project\'s opening request, until lead.start makes the PM\'s own chat', () => {
+// A Desktop before #3965 keeps both exemptions for 30 days after the release of #3965's Desktop (2026-11-11), which sends a new
+// PM's first words to its own chat; this pins that day, so moving it is a decision a pull request shows.
+describe('CHANNEL_EXEMPTIONS_END', () => {
+  it('is 2026-12-11, 00:00 UTC', () => {
+    expect(new Date(CHANNEL_EXEMPTIONS_END).toISOString()).toBe('2026-12-11T00:00:00.000Z')
+  })
+})
+
+// Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: New project's opening request. When the Swarm starts the PM,
+// that Desktop posts its person's request, with its files, in the new project's channel right before lead.start (launch.dart
+// startInSwarm), and the PM reads it there when it joins. Kept only from the project's creator, only while the channel holds no
+// message and no PM was asked for or holds it. The Desktop of #3965 sends it to the PM's own chat, which lead.start opens.
+describe('New project\'s opening request, until CHANNEL_EXEMPTIONS_END', () => {
   function fresh() {
     const f = swarm()
     const created = f.run({ type: 'project.create', name: 'Games', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
@@ -166,7 +182,7 @@ describe('New project\'s opening request, until lead.start makes the PM\'s own c
 
   it('is kept from the project\'s creator, with its files, and the PM that joins the channel reads it', () => {
     const f = fresh()
-    expect(refusal(() => postable(f.state, owner, f.conversationId))).toBeNull()
+    expect(refusal(() => postable(f.state, owner, f.conversationId, 1_000))).toBeNull()
     const sent = f.run(post(f.conversationId, 'Build the landing page.')).messages.find(m => m.text === 'Build the landing page.')!
     expect(sent).toMatchObject({ conversationId: f.conversationId, author: { kind: 'person', id: 'owner' } })
     const pm = f.run({ type: 'agent.add', conversationId: f.conversationId, machineId: 'owner-mac', harnessId: 'h-games-pm', name: 'Pia', lead: true,
@@ -197,5 +213,13 @@ describe('New project\'s opening request, until lead.start makes the PM\'s own c
     expect(refusal(() => f.run(post(f.conversationId, 'Build the landing page.'), mate))).toMatchObject({ code: 'AGENTS_ONLY' })
     const task = storedTask(f.state, { projectId: f.projectId, title: 'Landing' })
     expect(refusal(() => f.run(post(task, 'Build the landing page.')))).toMatchObject({ code: 'AGENTS_ONLY' })
+  })
+
+  it('is refused from CHANNEL_EXEMPTIONS_END', () => {
+    const f = fresh()
+    expect(refusal(() => postable(f.state, owner, f.conversationId, CHANNEL_EXEMPTIONS_END - 1))).toBeNull()
+    expect(refusal(() => postable(f.state, owner, f.conversationId, CHANNEL_EXEMPTIONS_END))).toMatchObject({ code: 'AGENTS_ONLY', message: SENTENCE })
+    expect(refusal(() => f.run(post(f.conversationId, 'Build the landing page.'), owner, { now: CHANNEL_EXEMPTIONS_END })))
+      .toMatchObject({ code: 'AGENTS_ONLY' })
   })
 })
