@@ -11,6 +11,7 @@ import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart' show stableId;
+import 'package:harness/super_tabs/personal_agents.dart' show swarmAgentId;
 import 'package:harness/super_tabs/personal_projects.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/workspace.dart';
@@ -274,6 +275,81 @@ void main() {
       expect(key('swarm-tasks-no-repository'), findsNothing);
       final read = gh.firstWhere((call) => call.contains('name=site'));
       expect(read, contains('owner=acme'));
+      await close(tester, f, c);
+    },
+  );
+
+  // Choose PM listed only the agents already in the Swarm: a person whose agents were all panes not opened yet met an empty
+  // dialog whose Choose never woke, and nothing said why (PSQA, 2026-11-12).
+  testWidgets(
+    'Choose PM offers the person\'s panes too: choosing one joins it and makes it the PM, and one whose computer is off waits',
+    (tester) async {
+      final (:f, :c, gh: _) = await open(tester);
+      f.app.machineStates['laptop']!.nodeOnline = false;
+      f.app.notifyListeners();
+      await tester.pump();
+      final api = c.snapshot!.projects.firstWhere((p) => p.name == 'api');
+      await tester.tap(find.widgetWithText(FilledButton, 'Choose PM'));
+      await tester.pumpAndSettle();
+      final here = key('choose-pm-${swarmAgentId('m', 'api')}');
+      final off = key('choose-pm-${swarmAgentId('laptop', 'api2')}');
+      expect(
+        find.descendant(of: here, matching: find.text('Api builder')),
+        findsOneWidget,
+      );
+      expect(tester.widget<ListTile>(off).enabled, isFalse);
+      expect(
+        find.descendant(of: off, matching: find.textContaining('offline')),
+        findsOneWidget,
+      );
+      // Choose, then wait until the dialog says why or closes: at most 5 s.
+      Future<void> choose() async {
+        await tester.tap(key('choose-pm-confirm'));
+        for (var i = 0; i < 100; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump(const Duration(milliseconds: 50));
+          if (find.byType(AlertDialog).evaluate().isEmpty ||
+              find.text('Choose your own computer.').evaluate().isNotEmpty) {
+            return;
+          }
+        }
+      }
+
+      await tester.tap(here);
+      await tester.pump();
+      // A join its Swarm refuses is said in the dialog, and Choose again finishes it.
+      f.connection.failJoin = const SuperTabFailure(
+        'HOST_REQUIRED',
+        'Choose your own computer.',
+        statusCode: 403,
+      );
+      await choose();
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('Choose your own computer.'),
+        ),
+        findsOneWidget,
+      );
+      expect(sent(f, 'project.pm'), isEmpty);
+      await choose();
+      // It joined as a click on its row joins it, then became the PM: nothing else was started.
+      expect(
+        [for (final join in f.connection.joins) join['command']['harnessId']],
+        ['api', 'api'],
+      );
+      expect(
+        f.connection.joins[0]['operationId'],
+        f.connection.joins[1]['operationId'],
+      );
+      expect(sent(f, 'project.pm').single, {
+        'type': 'project.pm',
+        'projectId': api.id,
+        'agentId': 'lead-agent',
+      });
+      expect(sent(f, 'lead.start'), isEmpty);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(c.snapshot!.leadOf(api.id)?.id, 'lead-agent');
       await close(tester, f, c);
     },
   );

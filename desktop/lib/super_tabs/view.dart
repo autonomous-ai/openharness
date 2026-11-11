@@ -1692,7 +1692,9 @@ class _SuperTabViewState extends State<SuperTabView>
     final c = this.c;
     if (action == 'choose-pm') {
       final project = c.snapshot?.projectFor(group.id);
-      if (project != null) await showChoosePm(context, c, project.id);
+      if (project != null) {
+        await showChoosePm(context, c, project.id, app: widget.app);
+      }
       return;
     }
     if (c.snapshot?.isProjectLead(group.id) == true) {
@@ -2701,7 +2703,9 @@ class _SuperTabViewState extends State<SuperTabView>
                   : () {
                       final project = c.snapshot?.projectFor(group.id);
                       if (project != null) {
-                        unawaited(showChoosePm(context, c, project.id));
+                        unawaited(
+                          showChoosePm(context, c, project.id, app: widget.app),
+                        );
                       }
                     },
             ),
@@ -3699,7 +3703,9 @@ class _SuperTabViewState extends State<SuperTabView>
               if (c.snapshot?.isProjectLead(group.id) == true) {
                 final project = c.snapshot!.projectFor(group.id);
                 if (project != null) {
-                  unawaited(showChoosePm(context, c, project.id));
+                  unawaited(
+                    showChoosePm(context, c, project.id, app: widget.app),
+                  );
                 }
                 return;
               }
