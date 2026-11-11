@@ -694,7 +694,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   a failing check or a conflict, or still a draft: its builder) and Merging
   (read, its checks running or green: Harness merges it). A card holds its chip
   (`#5770 Merging`), its title on up to three lines, and its agent's face with
-  its branch and last activity. They are the newest 50 the board reads for its
+  its branch and last activity. Harness's train (`Train: #5770`, on a
+  `harness-train/` branch) carries pull requests already read: it is under
+  Merging with no face, and its chip says Checks, Merging or Failing. They are the newest 50 the board reads for its
   chips, those that are no task's included: of lampOS's last 197 builder pull
   requests, one was linked to an issue. A card opens the pull request's own
   chat in the list's place, the task's panel reading its pull request:
