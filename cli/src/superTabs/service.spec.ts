@@ -183,6 +183,17 @@ it('starts the first answers with the host and stops them with the service', asy
   service.port.disconnected()
   expect(firstAnswers.stop).toHaveBeenCalledOnce()
 })
+// Swarm plan, step 1, item 1: an agent's next thing, typed as its turn ends (nextThing.ts), with the host.
+it('starts the next things with the host and stops them with the service', async () => {
+  const nextThings = { start: vi.fn(), stop: vi.fn() }
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
+    shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => ({ start: vi.fn(), stop: vi.fn() }), nextThings: () => nextThings })
+  expect(nextThings.start).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(nextThings.start).toHaveBeenCalledOnce()
+  service.port.disconnected()
+  expect(nextThings.stop).toHaveBeenCalledOnce()
+})
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
   for (const path of ['/api/auth/me', '/api/super-tabs/../auth/me', '/api/super-tabs%2F..', 'https://elsewhere.invalid', '/api/super-tabs#other']) {
