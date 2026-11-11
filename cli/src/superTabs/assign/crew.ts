@@ -111,6 +111,9 @@ const labelsOf = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(label => String(label.name ?? '')).filter(Boolean)
 const valueOf = (labels: string[], prefix: string): string | undefined =>
   labels.find(label => label.startsWith(prefix) && label.length > prefix.length)?.slice(prefix.length)
+/** The area a task's `part:` label names ([areaOf]), however the label spells it: `part:Backend` is the backend an agent
+ *  "Works on". Compared as written, it was no area of that agent's (the allocator's design, package 5). */
+const partOf = (labels: string[]): string | undefined => { const part = valueOf(labels, 'part:'); return part === undefined ? part : areaOf(part) }
 
 /** The issues an issue's text says must end first: "after #12", "depends on #12", "blocked by #12". */
 export function dependsOn(body: unknown): number[] {
@@ -158,7 +161,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
   const done = new Map<string, Map<string, number>>()
   for (const issue of input.closed) {
     if (issue.pull_request) continue
-    const labels = labelsOf(issue), part = valueOf(labels, 'part:')
+    const labels = labelsOf(issue), part = partOf(labels)
     const builder = labels.map(label => byLabel.get(label)).find(Boolean)
     if (!builder || !part) continue
     const parts = done.get(builder.id) ?? new Map<string, number>()
@@ -205,7 +208,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     tasks.push({
       id, minutes: shape.minutes, needs: { cpu: shape.cpu, ram: shape.ram, disk: shape.disk },
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
-      floor: 0, kind: 'build', part: valueOf(labels, 'part:'), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
+      floor: 0, kind: 'build', part: partOf(labels), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
       independentOf: [], notBuilders: unable, ...unable.length ? { notWhy: `its builder's machine lacks one of: ${needs.join(', ')}` } : {}, files: [],
       ...(holder ? { pinned: holder.id, queuedOn: holder.id } : {}),

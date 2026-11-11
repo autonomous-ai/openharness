@@ -394,6 +394,21 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toHaveLength(1)
   })
 
+  // The allocator's design, package 5: the label's side was compared as written, so a task labelled `part:Backend` was no task
+  // of the area of an agent that "Works on: backend", and Harness made a second label beside the repository's own.
+  it('gives a task to the builder that works on its area however the label spells it, and makes no second label for that area', async () => {
+    const f = setup([issue(1, ['size:s', 'part:Backend']), issue(2, ['size:s', 'part:Mobile App'])])
+    f.github.state.files.set('agents/Pip.md', 'Works on: mobile app')
+    f.github.state.files.set('agents/Juno.md', 'Works on: backend')
+    f.github.state.labels.push({ name: 'part:Mobile App' }, { name: 'part:Backend' })
+    await f.assigner.tick()
+    expect(f.labelled().sort()).toEqual([[1, 'builder:juno'], [2, 'builder:pip']])
+    const why = new Map(f.said() as Array<[number, string]>)
+    expect(why.get(1)).toMatch(/for \*\*Juno\*\*: it can start now, and it works on backend\.$/)
+    expect(why.get(2)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile-app\.$/)
+    expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toEqual([])
+  })
+
   describe('readers', () => {
     const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
     const pull = (extra: Json = {}): Json => ({ number: 30, draft: false, base: { ref: 'main' }, head: { sha: HEAD, ref: 'pip/14' },
