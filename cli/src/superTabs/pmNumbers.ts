@@ -34,7 +34,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { DEEP, labelOf, openPieces, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
+import { hasRoom, labelOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import { refusedForGood } from './githubMentions.js'
 import { GOAL_FILE, type Score } from './goal.js'
 import type { LedProject } from './githubMerge.js'
@@ -95,28 +95,19 @@ export function landedOf(closed: readonly Json[], team: { has: (label: string) =
 }
 
 /**
- * The counts of a pass: the open [issues], [read] and [crew] as the assigner read them, the tasks whose pull request waits for
- * its readers or its merge ([withReaders]), the builders out of quota ([short]), the tasks given this pass ([picks]), the
- * repository's issues and pull requests closed last ([closed], one page), and the project's [pm]. A builder is free when it
- * would be given a task were one open: its list is not full (DEEP), every task in it waits on its pull request, it has room in
- * its subscription and it was given nothing this pass. One with a full list all in review is given nothing whatever is open,
- * so it is not counted: its PM cannot end that wait by opening tasks (third review). A task that waits on its pieces is not
- * in a list.
+ * The counts of a pass: the open [issues], [read] and [crew] as the assigner read them, the builders out of quota ([short]),
+ * the tasks given this pass ([picks]), the repository's issues and pull requests closed last ([closed], one page), and the
+ * project's [pm]. A builder is free when it would be given a task were one open, by the assigner's own rule (assign/crew.ts
+ * hasRoom: it builds nothing, whatever it has in review, and holds fewer than four open), with room in its subscription and
+ * nothing given this pass. One that holds four, all in review, is given nothing whatever is open, so it is not counted: its
+ * PM cannot end that wait by opening tasks (third review).
  */
-export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: readonly Json[]; read: Read; withReaders: ReadonlySet<number>
+export function numbersOf(input: { now: number; crew: Crew; pm: string; issues: readonly Json[]; read: Read
   short: readonly AwayBuilder[]; picks: readonly Pick[]; closed: readonly Json[] }): Numbers {
   const { now, crew, read, picks } = input
   const tasks = input.issues.filter(issue => !issue.pull_request)
   const given = new Set(picks.map(pick => pick.builder)), out = new Set(input.short.map(away => away.label))
-  const lists = new Map<string, number[]>()
-  // A task its builder took that waits on pieces cut off it holds no place in its list, as the assigner counts it (readProblem).
-  for (const task of tasks) {
-    const labels = labelsOf(task)
-    if (labels.includes('status:taken') && openPieces(task)) continue
-    for (const label of labels) lists.set(label, [...lists.get(label) ?? [], Number(task.number)])
-  }
-  const idle = (label: string) => { const list = lists.get(label) ?? []; return list.length < DEEP && list.every(number => input.withReaders.has(number)) }
-  const free = crew.builders.filter(b => idle(b.label) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
+  const free = crew.builders.filter(b => hasRoom(read, b.id) && !given.has(b.id) && !out.has(b.label)).map(b => ({ id: b.id, name: plainName(b.name) }))
     .sort((a, b) => a.name.localeCompare(b.name))
   // The team's own, as the merger lands only those (assign/crew.ts teamOf): a person's pull request, or an issue anyone
   // opened and closed, is theirs.
@@ -153,8 +144,8 @@ const nothing = (names: readonly string[]): string => `${listed(names)} ${names.
 const landedWords = (n: Numbers): string => `${counted(n.landed, 'pull request')}${n.more ? ' or more' : ''} landed`
 
 /** What is open, for [builders] that have nothing: a sized task still open is one Harness did not give them (what their machines
- *  lack, the areas they work on, a label GitHub refused, or a place it keeps on another builder's full list). Said as that and
- *  no more: "cannot go to them" was untrue of the last (fifth review). */
+ *  lack, the areas they work on, a label GitHub refused, or a place the plan keeps for a builder still building). Said as that
+ *  and no more: "cannot go to them" was untrue of the last (fifth review). */
 const noTask = (n: Numbers, builders: number): string => n.open > 0 ? `the ${counted(n.open, 'sized task')} open ${n.open === 1 ? 'was' : 'were'} not given to ${builders === 1 ? 'it' : 'them'}`
   : `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`
 

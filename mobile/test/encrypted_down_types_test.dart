@@ -14,7 +14,7 @@ import 'package:harness_mobile/e2ee/envelope.dart';
 /// `ENCRYPTED_DOWN_TYPES` plus the harness-only extensions declared beside it. Both halves are read.
 void main() {
   String cli(String path) {
-    final file = File('../cli/src/$path');
+    final file = File(path);
     if (!file.existsSync()) {
       throw StateError(
         '${file.path} missing — run from mobile/ in the monorepo',
@@ -50,12 +50,12 @@ void main() {
 
   late Set<String> core, machineRequests, pairRequests, unwrapped;
   setUpAll(() {
-    core = namesIn(cli('lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
-    final frames = cli('lib/e2ee/applicationFrames.ts');
-    final relay = cli('lib/relayFrames.ts');
+    core = namesIn(cli('../cli/src/lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
+    final frames = cli('../cli/src/lib/e2ee/applicationFrames.ts');
+    final relay = cli('../cli/src/lib/relayFrames.ts');
     machineRequests = {
       ...namesIn(frames, 'MACHINE_REQUESTS'),
-      ...namesIn(cli('lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
+      ...namesIn(cli('../cli/src/lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
       ...namesIn(relay, 'ROUTE_COMMAND_TYPES'),
     };
     pairRequests = namesIn(relay, 'PAIR_REQUESTS');
@@ -64,9 +64,12 @@ void main() {
       ...core,
       ...machineRequests,
       ...namesIn(frames, 'FLEET_REQUESTS'),
-      ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
-      ...namesIn(cli('messages/wire.ts'), 'AGENT_MESSAGES_REQUEST_TYPES'),
-      ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
+      ...namesIn(cli('../cli/src/sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
+      ...namesIn(
+        cli('../cli/src/messages/wire.ts'),
+        'AGENT_MESSAGES_REQUEST_TYPES',
+      ),
+      ...namesIn(cli('../cli/src/lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
     };
   });
 
