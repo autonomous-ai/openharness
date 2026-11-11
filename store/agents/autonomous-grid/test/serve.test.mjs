@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { recordedPid, runFiles, serve, stop } from '../lib/serve.mjs';
+import { recordedPid, runFiles, serve, servedPids, stop } from '../lib/serve.mjs';
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -13,6 +13,7 @@ test('an engine started with serve leads its own process group, logs, records it
   const started = await serve(workspace, 'probe', [process.execPath, '-e', 'console.log(process.env.PROBE); setTimeout(() => {}, 60000)'], { env: { PROBE: 'ready' } });
   try {
     assert.equal(await recordedPid(workspace, 'probe'), started.pid);
+    assert.deepEqual(await servedPids(workspace), [started.pid], 'the model scan asks the ports it holds');
     assert.ok(alive(started.pid));
     const group = Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(started.pid)], { encoding: 'utf8' }).trim());
     assert.equal(group, started.pid, 'its own process group, so the starting shell cannot take it down');
@@ -25,6 +26,7 @@ test('an engine started with serve leads its own process group, logs, records it
   }
   assert.equal(alive(started.pid), false);
   assert.equal(await recordedPid(workspace, 'probe'), null);
+  assert.deepEqual(await servedPids(workspace), []);
   assert.equal((await stop(workspace, 'probe')).stopped, false, 'nothing recorded, nothing killed');
 });
 

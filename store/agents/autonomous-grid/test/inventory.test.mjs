@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { constants, copyFile, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  defaultRoots, joinedGrids, startWith, modelFamily, parseListDevices, parseListeningPorts, parseMeminfo, parseNetstatListening,
-  parseProcNetTcp, parseSwapUsage, parseVmStat,
+  defaultRoots, inventory, isEngineListener, joinedGrids, startWith, modelFamily, parseListDevices, parseLsof, parseMeminfo,
+  parseNetstatListening, parseProcNetTcp, parseProcStat, parseSwapUsage, parseTasklist, parseVmStat,
   probeEngines, readGguf, scanModels, summarize, summarizeGguf,
 } from '../lib/inventory.mjs';
 
@@ -194,7 +195,10 @@ test('system readings parse the exact text macOS, Linux, lsof and llama-server p
   assert.deepEqual(parseMeminfo('MemTotal:  1000 kB\nMemAvailable:  600 kB\nSwapTotal:  200 kB\nSwapFree:  50 kB\n'), { total: 1000 * 1024, available: 600 * 1024, swapUsed: 150 * 1024 });
   assert.deepEqual(parseListDevices('Available devices:\n  MTL0: Apple M1 Pro (25559 MiB, 25558 MiB free)\n  BLAS: Accelerate (0 MiB, 0 MiB free)\n'),
     [{ id: 'MTL0', name: 'Apple M1 Pro', totalBytes: 25559 * 1024 ** 2, freeBytes: 25558 * 1024 ** 2 }]);
-  assert.deepEqual(parseListeningPorts('p123\nf4\nn*:8082\nf5\nn127.0.0.1:8130\np9\nf3\nn[::1]:631\n'), [631, 8082, 8130]);
+  assert.deepEqual(parseLsof('p123\ng120\ncllama-server\nf4\nn*:8082\nf5\nn127.0.0.1:8130\np9\ng9\ncControlCenter\nf3\nn[::1]:7000\n'), [
+    { port: 8082, pid: 123, group: 120, command: 'llama-server' }, { port: 8130, pid: 123, group: 120, command: 'llama-server' },
+    { port: 7000, pid: 9, group: 9, command: 'ControlCenter' },
+  ]);
 });
 
 test('listening ports are read on Linux without lsof, and on Windows from netstat', () => {
@@ -204,7 +208,9 @@ test('listening ports are read on Linux without lsof, and on Windows from netsta
     '   1: 0100007F:2328 0100007F:A1B2 01 00000000:00000000 00:00000000 00000000     0        0 12346 1 0 20 4 30 10 -1',
     '   0: 00000000000000000000000000000000:2CAA 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1 1 0 100 0 0 10 0',
   ].join('\n');
-  assert.deepEqual(parseProcNetTcp(proc), [8080, 11434], 'only LISTEN (0A) rows, IPv4 and IPv6');
+  assert.deepEqual(parseProcNetTcp(proc), [{ port: 8080, inode: '12345' }, { port: 11434, inode: '1' }], 'only LISTEN (0A) rows, IPv4 and IPv6');
+  assert.deepEqual(parseProcStat('4812 (llama-server) S 1 4800 4800 0 -1 4194560'), { command: 'llama-server', group: 4800 });
+  assert.deepEqual(parseProcStat('77 (a (b) c) R 1 70 70 0'), { command: 'a (b) c', group: 70 });
   const netstat = [
     'Active Connections', '', '  Proto  Local Address          Foreign Address        State           PID',
     '  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1016',
@@ -213,7 +219,20 @@ test('listening ports are read on Linux without lsof, and on Windows from netsta
     '  TCP    [::]:1234              [::]:0                 LISTENING       5000',
     '  UDP    0.0.0.0:5353           *:*                                    2100',
   ].join('\r\n');
-  assert.deepEqual(parseNetstatListening(netstat), [135, 1234, 11434]);
+  assert.deepEqual(parseNetstatListening(netstat), [{ port: 135, pid: 1016 }, { port: 11434, pid: 4812 }, { port: 1234, pid: 5000 }]);
+  const tasklist = '"System Idle Process","0","Services","0","8 K"\r\n"ollama.exe","4812","Console","1","10,240 K"\r\n"LM Studio.exe","5000","Console","1","90,000 K"\r\n';
+  assert.deepEqual([...parseTasklist(tasklist)], [[0, 'System Idle Process'], [4812, 'ollama.exe'], [5000, 'LM Studio.exe']]);
+});
+
+test('an engine is named by its program on every platform, or by the PID fleet serve recorded; nothing else is', () => {
+  for (const command of ['ollama', 'llama-server', 'llama-server.exe', 'ollama.exe', 'LM Studio', 'LM Studio.exe', 'llmster', 'vllm', 'sglang', 'mlx_lm.server']) {
+    assert.ok(isEngineListener({ port: 1, pid: 2, command }), command);
+  }
+  for (const command of ['node', 'Python', 'python3', 'flutter_tester', 'ControlCenter', 'Code Helper', null]) {
+    assert.equal(isEngineListener({ port: 1, pid: 2, command }), false, String(command));
+  }
+  assert.ok(isEngineListener({ port: 1, pid: 2, command: 'Python' }, new Set([2])), 'the PID serve recorded');
+  assert.ok(isEngineListener({ port: 1, pid: 3, group: 2, command: 'Python' }, new Set([2])), 'a process in its group');
 });
 
 test('one model in two formats is one model, and on a Mac with mlx-lm the GGUF row points at the MLX copy', () => {
@@ -291,4 +310,59 @@ test('the table names the engine each model starts with, and whether it must be 
   assert.match(text, /START WITH/);
   assert.match(text, /ollama \(start it\)\s+llama3\.2:3b \(ollama\)/);
   assert.match(text, /Grid's llama\.cpp\s+Widget-Q4_K_M \(grid\)/);
+});
+
+const ENGINE_SCRIPT = `const routes = JSON.parse(process.argv[1]);
+const server = require('node:http').createServer((req, res) => {
+  const body = routes[req.url];
+  if (!body) { res.statusCode = 404; res.end(); return; }
+  res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body));
+});
+server.listen(0, '127.0.0.1', () => console.log(server.address().port));`;
+
+/**
+ * A loopback server in a process of its own, run by this Node or, given [name], by a copy of it under that name:
+ * the scan reads which program holds a port, and a symlink would still read as node on macOS.
+ */
+async function server(routes, name) {
+  let file = process.execPath;
+  if (name) {
+    const node = await realpath(process.execPath), dir = await mkdtemp(join(tmpdir(), 'engine-'));
+    file = join(dir, 'bin', process.platform === 'win32' ? `${name}.exe` : name);
+    await mkdir(dirname(file), { recursive: true });
+    await copyFile(node, file, constants.COPYFILE_FICLONE);
+    await symlink(join(dirname(node), '..', 'lib'), join(dir, 'lib')).catch(() => {}); // Homebrew's Node loads ../lib/libnode
+  }
+  const child = spawn(file, ['-e', ENGINE_SCRIPT, JSON.stringify(routes)], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const port = await new Promise((resolve, reject) => {
+    child.stdout.once('data', data => resolve(Number(String(data).trim())));
+    child.once('exit', code => reject(new Error(`${name ?? 'node'} exited with ${code}`)));
+  });
+  return { port, pid: child.pid, close: () => child.kill() };
+}
+
+const KNOWN = [11434, 1234, 8000, 8080, 8081, 30000];
+
+test('the scan asks only engines: their known ports, a port given, and ports an engine holds; never another server', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'home-'));
+  const llama = { '/v1/models': { models: [{ name: 'lfm' }], data: [{ id: 'lfm', owned_by: 'llamacpp' }] } };
+  const local = () => new Promise(resolve => { const s = createServer((req, res) => { res.statusCode = 404; res.end(); }); s.listen(0, '127.0.0.1', () => resolve(s)); });
+  // Not an engine: a server this test holds (node), the way a dev server, a debugger or Flutter's test runner listens.
+  const [stranger, given] = await Promise.all([local(), local()]);
+  // An engine by its program's name, and one `fleet serve` started (its PID recorded) whatever its program is called.
+  const [named, served] = await Promise.all([server(llama, 'llama-server'), server(llama)]);
+  const asked = new Set(), realFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => { asked.add(Number(new URL(url).port)); return realFetch(url, init); };
+  try {
+    const found = await inventory({ home, env: {}, extraPorts: [given.address().port], served: [served.pid] });
+    assert.equal(asked.has(stranger.address().port), false, 'a server that is not an engine is never sent a request');
+    assert.ok(found.machine.listeningPorts.includes(stranger.address().port), 'its port is still listed as in use');
+    for (const port of KNOWN) assert.ok(asked.has(port), `known engine port ${port} is asked`);
+    assert.ok(asked.has(given.address().port), 'a port given with --port is asked');
+    assert.deepEqual(found.engines.filter(e => [named.port, served.port].includes(e.port)).map(e => [e.port, e.kind]).sort(),
+      [[named.port, 'llama.cpp'], [served.port, 'llama.cpp']].sort());
+  } finally {
+    globalThis.fetch = realFetch;
+    stranger.close(); given.close(); named.close(); served.close();
+  }
 });

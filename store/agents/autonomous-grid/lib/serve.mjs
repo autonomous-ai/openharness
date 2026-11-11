@@ -3,7 +3,7 @@
 // empty log — so the engine runs as the leader of its own session, logging to run/NAME.log, with its PID
 // in run/NAME.pid. Stop kills only a PID this file recorded.
 import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -19,6 +19,13 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) 
 export async function recordedPid(workspace, name) {
   const pid = Number((await readFile(runFiles(workspace, name).pid, 'utf8').catch(() => '')).trim());
   return Number.isInteger(pid) && pid > 1 ? pid : null;
+}
+
+/** The live PIDs of every engine `serve` started in this workspace: the model scan asks the ports they hold. */
+export async function servedPids(workspace) {
+  const names = (await readdir(join(workspace, 'run')).catch(() => [])).filter(file => file.endsWith('.pid')).slice(0, 256);
+  const pids = await Promise.all(names.map(file => recordedPid(workspace, file.slice(0, -'.pid'.length)).catch(() => null)));
+  return pids.filter(pid => pid && alive(pid));
 }
 
 /** Start `argv` detached: own session and process group, stdio to the log, PID recorded. */
