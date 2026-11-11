@@ -217,15 +217,15 @@ describe('what Harness says of the counts', () => {
       + '\n\nTrains: 4 landed.')
   })
 
-  // Through what is counted: four builders out of their subscriptions are neither waiting nor busy.
-  // A sized task open is one Harness did not give: perhaps one no builder's machine can take ("needs: robot-arm"), which is no
-  // task ready (review of #4081).
+  // Through what is counted. A sized task open is one Harness did not give: perhaps one no builder's machine can take
+  // (needs:robot-arm), which is no task ready (review of #4081).
   it('says a sized task Harness did not give is open, not ready', () => {
     const n = counts({ read: read({}, ['9']) })
     expect(dayLine({ ...n, landed: 1, landedBy: [['Pip', 1]] }, undefined, ''))
       .toMatch(/ Now 4 of 4 builders are waiting for a task, 1 sized task is open and none is in hand\.$/)
   })
 
+  // Four builders out of their subscriptions are neither waiting nor busy.
   it('says of builders out of their subscriptions only that none is waiting', () => {
     const n = counts({ short: crew().builders.map(builder => ({ name: builder.name, label: builder.label, why: 'quota' as const })) })
     expect(n.free).toEqual([])
