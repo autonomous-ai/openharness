@@ -45,9 +45,14 @@ parentPort.on('message', ({ id, dbPath, sql, params, busyTimeoutMs, maxBuffer })
     parentPort.postMessage({ id, ok: false, message: String((read.error && read.error.message) || read.error) })
     return
   }
-  // An idle poll finds no rows: nothing to measure.
+  // What the rows carry: a text's UTF-8 bytes, a blob's own length (a zstd row, as OpenClaw keeps them), 8 for a number.
   let bytes = 0
-  if (read.rows.length) try { bytes = Buffer.byteLength(JSON.stringify(read.rows)) } catch { bytes = Infinity }
+  for (const row of read.rows) {
+    for (const column in row) {
+      const value = row[column]
+      bytes += column.length + (typeof value === 'string' ? Buffer.byteLength(value) : value && value.byteLength !== undefined ? value.byteLength : 8)
+    }
+  }
   parentPort.postMessage(bytes > maxBuffer
     ? { id, ok: false, message: 'the rows exceed the reply limit of ' + maxBuffer + ' bytes' }
     : { id, ok: true, rows: read.rows })

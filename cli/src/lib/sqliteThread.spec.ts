@@ -70,6 +70,16 @@ withBuiltin('SQLite reads off the core\'s thread', () => {
     expect((read as { error: Error }).error.message).toMatch(/limit/)
   })
 
+  // A blob counts its own bytes: as JSON, a zstd row's Uint8Array is an object with a key per byte, five times its size.
+  it('measures a blob by its bytes', async () => {
+    const Database = builtinSqlite()!
+    const store = new Database(db, { readOnly: false })
+    store.exec("CREATE TABLE blob (data BLOB); INSERT INTO blob VALUES (zeroblob(1000))")
+    store.close()
+    const read = await sqliteReadAll(db, 'SELECT data FROM blob', [], { maxBuffer: 2_000 })
+    expect(read.ok && (read.rows[0].data as Uint8Array).byteLength).toBe(1000)
+  })
+
   it('reads a store that is not there as transient, and binds parameters as the thread does', async () => {
     expect(await sqliteReadAll(join(dir, 'absent.db'), 'SELECT 1')).toMatchObject({ ok: false, reason: 'transient' })
     expect(await sqliteReadAll(db, 'SELECT data FROM message WHERE id = ?', ['m2'])).toEqual({ ok: true, rows: [{ data: 'two' }], via: 'builtin' })
