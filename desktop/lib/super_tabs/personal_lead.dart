@@ -36,15 +36,17 @@ class PersonalLeadStatus {
   bool get failed => reason != null;
 }
 
-/// A Personal Swarm project chat's Lead, started by this Desktop on the
-/// person's message there (task #2633, Huy 11-04: "Not sent, this chat has no
-/// Lead" was the first thing a new person met). Only Desktop knows a Personal
-/// project's folder (personal_projects.dart), so the Lead starts here, as Add
-/// a Lead's own-machine start does, without its form: on this computer, or
-/// the person's computer whose pane holds the project's repo, in that repo's
-/// folder, else in a new folder of the Harness projects folder. The server
-/// keeps the message for it, and one claim (lead.claim) keeps two of the
-/// person's Desktops from starting two. A Team Swarm starts nothing.
+/// A Personal Swarm project's PM, started by this Desktop from the project's
+/// channel (task #2633, Huy 11-04: "Not sent, this chat has no Lead" was the
+/// first thing a new person met). Only Desktop knows a Personal project's
+/// folder (personal_projects.dart), so the PM starts here, as Add a Lead's
+/// own-machine start does, without its form: on this computer, or the
+/// person's computer whose pane holds the project's repo, in that repo's
+/// folder, else in a new folder of the Harness projects folder. One claim
+/// (lead.claim) keeps two of the person's Desktops from starting two, and
+/// answers the PM's own 1:1 chat (backend pmChat.ts), which opens at once:
+/// the person talks to it there while it starts, and the server keeps what
+/// they send for it. A Team Swarm starts nothing.
 class PersonalLeadStarter extends ChangeNotifier {
   PersonalLeadStarter._(this.app);
   static final _of = Expando<PersonalLeadStarter>();
@@ -90,9 +92,9 @@ class PersonalLeadStarter extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Whether a message sent in [conversationId] of [c] starts its project's
-  /// Lead: the signed-in person's own Personal Swarm, a project's chat, and no
-  /// Lead there.
+  /// Whether [conversationId] of [c] offers to start its project's PM: the
+  /// signed-in person's own Personal Swarm, a project's channel, and no PM
+  /// there.
   bool wants(SuperTabController c, String conversationId) {
     if (!PersonalProjects.of(app).eligible(c)) return false;
     final snapshot = c.snapshot!;
@@ -103,16 +105,11 @@ class PersonalLeadStarter extends ChangeNotifier {
     return project != null && snapshot.leadOf(project.id) == null;
   }
 
-  /// Starts [conversationId]'s Lead after a message there, or from the empty
-  /// chat's card on [machineId] with [engine] (task #2815), once: a start
-  /// already running here, or one another of the person's machines claimed,
-  /// is the one.
-  Future<void> start(
-    SuperTabController c,
-    String conversationId, {
-    String? machineId,
-    String? engine,
-  }) async {
+  /// Starts [conversationId]'s PM from its channel's card (task #2815), once:
+  /// a start already running here, or one another of the person's machines
+  /// claimed, is the one. The PM's own chat opens as soon as the claim
+  /// answers it, before the PM is up.
+  Future<void> start(SuperTabController c, String conversationId) async {
     final key = _key(c, conversationId);
     if (statusOf(c, conversationId) case final status? when !status.failed) {
       return;
@@ -126,12 +123,7 @@ class PersonalLeadStarter extends ChangeNotifier {
           'this project is no longer available',
         );
       }
-      final plan = planFor(
-        c,
-        conversationId,
-        machineId: machineId,
-        engine: engine,
-      );
+      final plan = planFor(c, conversationId);
       final claim = await c.request(
         'POST',
         '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
@@ -144,10 +136,19 @@ class PersonalLeadStarter extends ChangeNotifier {
           },
         },
       );
+      final answer = superTabMap(claim['result']);
+      final chatId =
+          answer['chatId'] as String? ??
+          (throw const SuperTabFailure(
+            'UPDATE_REQUIRED',
+            'this Swarm’s server needs an update',
+          ));
+      await c.refresh();
+      await c.select(chatId);
       // Another of the person's machines starts it: its join ends the note.
-      if (superTabMap(claim['result'])['leadStart'] == 'waiting') return;
+      if (answer['leadStart'] == 'waiting') return;
       await (launchForTest ?? _launch)(c, conversationId, plan);
-      // Starting until the chat reads its Lead and the message's delivery.
+      // Starting until the chat reads its PM.
       unawaited(c.refresh().catchError((Object _) {}));
     } on SuperTabFailure catch (failure) {
       _set(key, PersonalLeadStatus.failed(_reason(failure)));
@@ -162,24 +163,16 @@ class PersonalLeadStarter extends ChangeNotifier {
       !m.machine.isTeamAccount &&
       !m.isOffline;
 
-  /// The person's own computers a Lead can start on: connected, this one
-  /// first.
-  List<MachineState> machinesFor(SuperTabController c) => [
+  /// The person's own computers a PM can start on: connected, this one first.
+  List<MachineState> _machinesFor() => [
     ...app.machineStates.values.where((m) => _usable(m) && m.isLocalMachine),
     ...app.machineStates.values.where((m) => _usable(m) && !m.isLocalMachine),
   ];
 
-  /// Where [conversationId]'s Lead starts, or throws why it cannot: the repo's
+  /// Where [conversationId]'s PM starts, or throws why it cannot: the repo's
   /// folder on this computer, else on the person's computer whose pane holds
-  /// it; with no repo, this computer, else another of theirs connected. A
-  /// [machineId] the card picked is that computer, in the repo's folder when
-  /// a pane there holds it; an [engine] it picked is that engine.
-  PersonalLeadPlan planFor(
-    SuperTabController c,
-    String conversationId, {
-    String? machineId,
-    String? engine,
-  }) {
+  /// it; with no repo, this computer, else another of theirs connected.
+  PersonalLeadPlan planFor(SuperTabController c, String conversationId) {
     final project = c.snapshot!.projectFor(conversationId)!;
     String? repoFolder(String machineId, String? agentId) {
       final agent = app
@@ -197,7 +190,7 @@ class PersonalLeadStarter extends ChangeNotifier {
       return where.root ?? where.cwd;
     }
 
-    final machines = machinesFor(c);
+    final machines = _machinesFor();
     final local = machines.where((m) => m.isLocalMachine).firstOrNull;
     final repos = [
       for (final pane in PersonalProjects.of(app).panesFor(c, conversationId))
@@ -205,30 +198,21 @@ class PersonalLeadStarter extends ChangeNotifier {
           if (repoFolder(pane.machineId, pane.agentId) case final folder?)
             (machineId: pane.machineId, folder: folder),
     ];
-    final picked = machineId == null
-        ? null
-        : machines.where((m) => m.machine.machineId == machineId).firstOrNull;
-    if (machineId != null && picked == null) {
-      throw const SuperTabFailure('NO_MACHINE', 'that computer isn’t online');
-    }
-    final repo = picked != null
-        ? repos.where((r) => r.machineId == machineId).firstOrNull
-        : repos
-                  .where((r) => r.machineId == local?.machine.machineId)
-                  .firstOrNull ??
-              repos.firstOrNull;
-    final machine =
-        picked ??
-        (repo != null
-            ? app.stateOf(repo.machineId)!
-            : local ?? machines.firstOrNull);
+    final repo =
+        repos
+            .where((r) => r.machineId == local?.machine.machineId)
+            .firstOrNull ??
+        repos.firstOrNull;
+    final machine = repo != null
+        ? app.stateOf(repo.machineId)!
+        : local ?? machines.firstOrNull;
     if (machine == null) {
       throw const SuperTabFailure(
         'NO_MACHINE',
         'none of your computers is online',
       );
     }
-    final chosen = engine ?? _engineOn(machine);
+    final chosen = _engineOn(machine);
     if (chosen == null) {
       throw SuperTabFailure(
         'NO_ENGINE',

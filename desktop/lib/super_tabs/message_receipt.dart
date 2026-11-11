@@ -192,6 +192,9 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     bool sending = false, quiet = false;
     final actions = <(String, VoidCallback?)>[];
     final canResolve = c.canWrite && !c.saving && delivery?.id != null;
+    final waitingFor = delivery == null
+        ? c.snapshot?.projectWaitingIn(message.conversationId)
+        : null;
 
     if (delivery?.status == 'uncertain') {
       title = "Couldn't confirm delivery";
@@ -208,6 +211,21 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               ? () => widget.onResolve(delivery!, resolution)
               : null,
         ));
+      }
+    } else if (waitingFor case final project?) {
+      // Its PM's own chat while the PM starts (backend pmChat.ts): the server
+      // keeps the message for it. A Personal Swarm's start that failed here
+      // says why.
+      final app = widget.app;
+      final start = app == null
+          ? null
+          : PersonalLeadStarter.of(app).statusOf(c, project.leadConversationId);
+      if (start?.reason case final reason?) {
+        title = 'Couldn’t start the PM: $reason';
+      } else {
+        color = DesktopChrome.muted;
+        icon = AppIcons.clock;
+        title = 'Waiting for the PM';
       }
     } else if (delivery == null &&
         c.selected?.leadId == null &&

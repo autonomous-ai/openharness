@@ -3,20 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'personal_lead.dart';
 
-/// The engines a Lead starts with, in the Naming System's words.
-const _leadEngines = {'claude': 'Claude Code', 'codex': 'Codex'};
-
-/// A Personal project chat with no Lead, empty: one click starts its Lead,
-/// on the person's own computer, with Claude Code and in the repo's folder
-/// unless they pick otherwise (Huy 11-04, task #2815). It is #2633's start
-/// (personal_lead.dart), which a first message also runs.
-class PersonalLeadStartCard extends StatefulWidget {
+/// A Personal project's channel with no PM: one line and Start PM (Huy 11-04, task #2815; Swarm v4). The click starts it
+/// on the person's own computer, with Claude Code and in the repo's folder (personal_lead.dart), and opens the PM's own
+/// chat at once, where the person tells it what to do while it starts: only agents post in the channel.
+class PersonalLeadStartCard extends StatelessWidget {
   const PersonalLeadStartCard({
     super.key = const ValueKey('super-lead-start'),
     required this.controller,
@@ -29,141 +24,80 @@ class PersonalLeadStartCard extends StatefulWidget {
   final AppNotifier app;
 
   @override
-  State<PersonalLeadStartCard> createState() => _PersonalLeadStartCardState();
+  Widget build(BuildContext context) {
+    final starter = PersonalLeadStarter.of(app);
+    return ListenableBuilder(
+      listenable: starter,
+      builder: (context, _) {
+        final status = starter.statusOf(controller, conversationId);
+        final starting = status != null && !status.failed;
+        String? unavailable;
+        try {
+          starter.planFor(controller, conversationId);
+        } on SuperTabFailure catch (failure) {
+          unavailable = failure.message;
+        }
+        final line = switch ((unavailable, status?.reason)) {
+          (final why?, _) => 'Can’t start a PM: $why',
+          (_, final reason?) => 'Couldn’t start the PM: $reason',
+          _ => 'This project has no PM.',
+        };
+        return SwarmPmStart(
+          line: line,
+          button: unavailable == null,
+          starting: starting,
+          onStart: starting || controller.saving
+              ? null
+              : () => unawaited(starter.start(controller, conversationId)),
+        );
+      },
+    );
+  }
 }
 
-class _PersonalLeadStartCardState extends State<PersonalLeadStartCard> {
-  SuperTabController get c => widget.controller;
-  PersonalLeadStarter get starter => PersonalLeadStarter.of(widget.app);
+/// What a Personal project's channel with no PM shows (design doc, Swarm elements): [line], then Start PM, or
+/// `Starting…` while [starting]; no [button] when none of the person's computers can start it. No [onStart]: the button
+/// waits.
+class SwarmPmStart extends StatelessWidget {
+  const SwarmPmStart({
+    super.key,
+    required this.line,
+    this.button = true,
+    this.starting = false,
+    this.onStart,
+  });
 
-  /// What the person picked; null keeps the starter's own choice.
-  String? _machine, _engine;
+  final String line;
+  final bool button, starting;
+  final VoidCallback? onStart;
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: starter,
-    builder: (context, _) {
-      final status = starter.statusOf(c, widget.conversationId);
-      final starting = status != null && !status.failed;
-      PersonalLeadPlan? plan;
-      String? unavailable;
-      try {
-        plan = starter.planFor(
-          c,
-          widget.conversationId,
-          machineId: _machine,
-          engine: _engine,
-        );
-      } on SuperTabFailure catch (failure) {
-        unavailable = failure.message;
-      }
-      final machines = starter.machinesFor(c);
-      final busy = starting || c.saving;
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          color: DesktopChrome.surface,
-          borderRadius: BorderRadius.circular(grid.AppCard.radius),
-          border: Border.all(color: DesktopChrome.rim),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'This project has no Lead yet',
-                style: DesktopChrome.control(medium: true),
-              ),
-              const SizedBox(height: grid.AppDesktop.controlGap),
-              if (plan case final plan?) ...[
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: AppSelectField<String>(
-                        key: const ValueKey('super-lead-start-machine'),
-                        value: plan.machineId,
-                        semanticLabel: 'Computer',
-                        textStyle: DesktopChrome.control(),
-                        options: [
-                          for (final m in machines)
-                            SelectOption(
-                              value: m.machine.machineId,
-                              label: m.machine.displayName,
-                            ),
-                        ],
-                        onChanged: (value) {
-                          if (!busy) setState(() => _machine = value);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: grid.AppDesktop.controlGap),
-                    Expanded(
-                      flex: 2,
-                      child: AppSelectField<String>(
-                        key: const ValueKey('super-lead-start-engine'),
-                        value: plan.engine,
-                        semanticLabel: 'Agent',
-                        textStyle: DesktopChrome.control(),
-                        options: [
-                          for (final MapEntry(:key, :value)
-                              in _leadEngines.entries)
-                            SelectOption(value: key, label: value),
-                        ],
-                        onChanged: (value) {
-                          if (!busy) setState(() => _engine = value);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: grid.AppDesktop.controlGap),
-                    FilledButton(
-                      onPressed: busy
-                          ? null
-                          : () => unawaited(
-                              starter.start(
-                                c,
-                                widget.conversationId,
-                                machineId: plan.machineId,
-                                engine: plan.engine,
-                              ),
-                            ),
-                      child: Text(starting ? 'Starting…' : 'Start Lead'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: grid.AppDesktop.controlGap),
-                Text(
-                  switch (plan.folder) {
-                    final folder? => 'Folder: $folder',
-                    null => 'A new folder in your Harness projects folder',
-                  },
-                  key: const ValueKey('super-lead-start-folder'),
-                  style: DesktopChrome.metadata(),
-                ),
-              ] else
-                Text(
-                  'Can’t start a Lead: $unavailable',
-                  key: const ValueKey('super-lead-start-unavailable'),
-                  style: DesktopChrome.control(),
-                ),
-              if (status?.reason case final reason?) ...[
-                const SizedBox(height: grid.AppDesktop.controlGap),
-                Text(
-                  'Couldn’t start a Lead: $reason',
-                  key: const ValueKey('super-lead-start-error'),
-                  style: DesktopChrome.control(),
-                ),
-              ],
-              const SizedBox(height: grid.AppDesktop.controlGap),
-              Text(
-                'Or send a message below: that starts the Lead too.',
-                style: DesktopChrome.metadata(),
-              ),
-            ],
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: DesktopChrome.surface,
+      borderRadius: BorderRadius.circular(grid.AppCard.radius),
+      border: Border.all(color: DesktopChrome.rim),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              line,
+              key: const ValueKey('super-lead-start-line'),
+              style: DesktopChrome.control(),
+            ),
           ),
-        ),
-      );
-    },
+          if (button) ...[
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            FilledButton(
+              onPressed: onStart,
+              child: Text(starting ? 'Starting…' : 'Start PM'),
+            ),
+          ],
+        ],
+      ),
+    ),
   );
 }
