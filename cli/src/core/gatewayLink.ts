@@ -352,6 +352,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       },
       open: async (envelope) => {
         const answer = await deps.call(GATEWAY_CALLS.connectorVault, { op: 'open', envelope }, LANE_WAIT_MS)
+        if (answer.stranded === true) return { stranded: true }
         return typeof answer.plaintext === 'string' ? { plaintext: answer.plaintext, complete: answer.complete === true } : null
       },
     },

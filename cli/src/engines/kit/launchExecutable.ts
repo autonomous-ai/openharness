@@ -1,12 +1,13 @@
 /** A launch resolves once, then keeps that executable through probes and dispatch. */
 import { execFile } from 'node:child_process'
-import { accessSync, closeSync, constants, lstatSync, openSync, readlinkSync, readSync, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, lstatSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallPaths, engineInstallRecipe, type EngineInstallRecipe } from '../../lib/engineInstall.js'
 import { engineShellArgv, interactiveEngineShell, npmEngineBins } from '../../lib/engineLaunch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { storeAppAlias } from '../../lib/windows/storeAppAlias.js'
 import { probeExecFile } from '../../lib/offThreadExec.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { LAUNCH_LOCATION_VARIABLES } from './nativeLocations.js'
@@ -101,21 +102,9 @@ export function launchSearchNames(command: string, recipeNames: readonly string[
   return [...new Set([command, ...recipeNames])].filter((name) => platform !== 'win32' || name.toLowerCase() !== 'cmd')
 }
 
-/**
- * The program a Windows app execution alias at [path] starts, when it is one: the 0-byte link a Microsoft Store app
- * puts in %LOCALAPPDATA%\Microsoft\WindowsApps, which Node reads as a link into the app's package folder under
- * WindowsApps. Node can neither stat nor run one (EACCES, in the person's session and in session 0 alike: measured on
- * Windows 11 with Node 24, 2026-11-11), so it is never an engine Harness can start. Older Claude desktop apps registered
- * `claude.exe`, and a computer with only that app held every Claude Code launch at "Waiting to confirm access" for good,
- * where one with nothing installed has Claude Code installed for it (a customer, 2026-11-10). Null for anything else.
- */
-export function storeAppAlias(path: string): string | null {
-  try {
-    if (!lstatSync(path).isSymbolicLink()) return null
-    const target = readlinkSync(path)
-    return target.toLowerCase().includes('\\windowsapps\\') ? target : null
-  } catch { return null }
-}
+/** A Store app's alias (lib/windows/storeAppAlias.ts) is no engine: with only an older Claude desktop app's `claude.exe`,
+ * every Claude Code launch held at "Waiting to confirm access" for good, where a computer with nothing installed has
+ * Claude Code installed for it (a customer, 2026-11-10). Each one looked past is logged once. */
 const reportedAliases = new Set<string>()
 
 /** A complete absence can authorize installation. Unreadable routes and failed

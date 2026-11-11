@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/state/swarm.dart';
@@ -13,8 +14,9 @@ import 'support/super_tab_fixture.dart';
 
 // Huy, 11-04 (task #2633): in his Personal Swarm, a message in # Games, which
 // had no Lead, said "Not sent, this chat has no Lead". Now Desktop starts the
-// project's Lead on his own computer, in the repo's folder when the project has
-// a repo, and the message waits for it on the server.
+// project's PM on his own computer, in the repo's folder when the project has
+// a repo, and opens the PM's own chat at once (Swarm v4: only agents post in
+// the channel), where what he sends waits for it on the server.
 
 Agent _agent(String id, {String? remote, required String cwd}) => Agent(
   id: id,
@@ -99,9 +101,19 @@ List<Map> _commands(SuperTabLaunchFixture f, String type) => [
 Map<String, dynamic> _create(SuperTabLaunchFixture f) =>
     f.connection.calls.singleWhere((c) => c.$1 == 'agent_create').$2;
 
+/// The PM's own chat its start opened (backend pmChat.ts), as the fake server keeps it.
+String _pmChat(SuperTabLaunchFixture f) =>
+    (f.connection.server.state['conversations'] as List)
+            .cast<Map>()
+            .singleWhere(
+              (g) =>
+                  g['kind'] == 'agent-chat' && g['title'] == 'Product Manager',
+            )['id']
+        as String;
+
 void main() {
-  test('a message in a repo project with no Lead starts one in the repo\'s '
-      'folder on this Mac and joins it as Lead', () async {
+  test('Start PM in a repo project starts one in the repo\'s folder on this '
+      'Mac, joins it as Lead and opens its own chat', () async {
     final f = SuperTabLaunchFixture();
     _desk(f, remote: 'git@github.com:huy/games.git', cwd: '/Users/huy/games');
     final c = await _swarm(f);
@@ -110,6 +122,11 @@ void main() {
     expect(starter.wants(c, games), isTrue);
     await starter.start(c, games);
     expect(_commands(f, 'lead.claim').single['machineId'], 'm');
+    // The PM's own chat, which the claim answered, is open; nothing went to
+    // the channel.
+    final chat = _pmChat(f);
+    expect(c.selectedId, chat);
+    expect(_commands(f, 'message.send'), isEmpty);
     final create = _create(f);
     expect(create['cwd'], '/Users/huy/games');
     expect(create['swarmRole'], 'lead');
@@ -121,13 +138,14 @@ void main() {
     final join = f.connection.joins.single['command'] as Map;
     expect(join['lead'], isTrue);
     expect(join['conversationId'], games);
-    // The message is the server's to deliver: the join carries none.
+    // What the person sends in the chat is the server's to deliver: the join
+    // carries none.
     expect(join.containsKey('initialMessage'), isFalse);
     expect(starter.statusOf(c, games)?.failed, isFalse);
   });
 
-  test('a message in a project with no repo starts its Lead in a new folder '
-      'of the Harness projects folder', () async {
+  test('Start PM in a project with no repo starts it in a new folder of the '
+      'Harness projects folder', () async {
     // This computer makes the folder itself: a fixture one, never the disk's.
     final asked = <ProjectFolderRequest>[];
     final f = SuperTabLaunchFixture(
@@ -148,29 +166,26 @@ void main() {
     expect((f.connection.joins.single['command'] as Map)['lead'], isTrue);
   });
 
-  test(
-    'a failed start says why, and starts again on the next message',
-    () async {
-      final f = SuperTabLaunchFixture();
-      _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
-      final c = await _swarm(f);
-      final games = _games(c);
-      final starter = PersonalLeadStarter.of(f.app);
-      f.connection
-        ..failCreation = true
-        ..failCreationCode = 'ENGINE_LAUNCH_REFUSED';
-      await starter.start(c, games);
-      final status = starter.statusOf(c, games)!;
-      expect(status.failed, isTrue);
-      expect(status.reason, 'Fixture engine unavailable');
-      expect(f.connection.joins, isEmpty);
-      f.connection.failCreation = false;
-      await starter.start(c, games);
-      expect((f.connection.joins.single['command'] as Map)['lead'], isTrue);
-    },
-  );
+  test('a failed start says why, and starts again on the next press', () async {
+    final f = SuperTabLaunchFixture();
+    _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
+    final c = await _swarm(f);
+    final games = _games(c);
+    final starter = PersonalLeadStarter.of(f.app);
+    f.connection
+      ..failCreation = true
+      ..failCreationCode = 'ENGINE_LAUNCH_REFUSED';
+    await starter.start(c, games);
+    final status = starter.statusOf(c, games)!;
+    expect(status.failed, isTrue);
+    expect(status.reason, 'Fixture engine unavailable');
+    expect(f.connection.joins, isEmpty);
+    f.connection.failCreation = false;
+    await starter.start(c, games);
+    expect((f.connection.joins.single['command'] as Map)['lead'], isTrue);
+  });
 
-  test('two quick messages start one Lead', () async {
+  test('two quick presses start one Lead', () async {
     final f = SuperTabLaunchFixture();
     _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
     final c = await _swarm(f);
@@ -203,22 +218,6 @@ void main() {
     expect(starter.statusOf(c, games)?.failed, isFalse);
   });
 
-  // Task #2815: the empty chat's Start a Lead card picks them.
-  test('a start the card asked for uses its machine and engine', () async {
-    final f = SuperTabLaunchFixture();
-    _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
-    final c = await _swarm(f);
-    final games = _games(c);
-    final starter = PersonalLeadStarter.of(f.app);
-    expect(
-      [for (final m in starter.machinesFor(c)) m.machine.machineId],
-      ['m'],
-    );
-    await starter.start(c, games, machineId: 'm', engine: 'codex');
-    expect(_create(f)['engine'], 'codex');
-    expect(_create(f)['cwd'], '/Users/huy/games');
-  });
-
   // Task #3449 (anh Dee, 11-05): a PM was seen on Sonnet medium. A Personal
   // project's Lead, started on this Mac, runs Claude on Opus at xhigh as flags
   // of its launch; a Codex Lead takes no Claude flags.
@@ -241,8 +240,11 @@ void main() {
         cwd: '/Users/huy/games',
       );
       final other = await _swarm(codex);
-      await PersonalLeadStarter.of(codex.app)
-          .start(other, _games(other), machineId: 'm', engine: 'codex');
+      // Claude Code isn't on this Mac, so the PM is a Codex one.
+      codex.app.stateOf('m')!.engines.replace(const [
+        EngineAvailability(engine: 'codex', installed: true),
+      ]);
+      await PersonalLeadStarter.of(codex.app).start(other, _games(other));
       expect(_create(codex)['engine'], 'codex');
       expect(_create(codex).containsKey('model'), isFalse);
       expect(_create(codex).containsKey('effort'), isFalse);

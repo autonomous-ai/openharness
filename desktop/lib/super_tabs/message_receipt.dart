@@ -137,6 +137,17 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         ? DateTime.fromMillisecondsSinceEpoch(receivedAt.toInt())
         : null;
     final native = agent == null ? null : widget.app?.stateOf(agent.machineId);
+    // In a person's own agent's 1:1 chat, that agent while Your Team shows it offline (its `downSince`), and what it has
+    // not been typed yet: said at once, delivery or none (Swarm v4).
+    final chat = c.snapshot?.conversation(message.conversationId);
+    final chatAgent =
+        chat != null && chat.isAgentChat && chat.agentIds.isNotEmpty
+        ? c.snapshot?.agent(chat.agentIds.first)
+        : null;
+    final down =
+        chatAgent?.downSince != null &&
+        delivery?.delivered != true &&
+        delivery?.status != 'cancelled';
     final direct = native?.isLocalMachine == true;
     // A computer this Desktop reads itself is known by its own connection, not by a Swarm reading it may not have.
     final offline =
@@ -192,6 +203,11 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     bool sending = false, quiet = false;
     final actions = <(String, VoidCallback?)>[];
     final canResolve = c.canWrite && !c.saving && delivery?.id != null;
+    // Only the person's own words wait: a row the server wrote under their
+    // name (a start that failed) says what happened itself.
+    final waitingFor = delivery == null && message.source['kind'] is! String
+        ? c.snapshot?.projectWaitingIn(message.conversationId)
+        : null;
 
     if (delivery?.status == 'uncertain') {
       title = "Couldn't confirm delivery";
@@ -209,27 +225,29 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               : null,
         ));
       }
+    } else if (waitingFor case final project?) {
+      // Its PM's own chat while the PM starts (backend pmChat.ts): the server
+      // keeps the message for it. A Personal Swarm's start that failed here
+      // says why.
+      final app = widget.app;
+      final start = app == null
+          ? null
+          : PersonalLeadStarter.of(app).statusOf(c, project.leadConversationId);
+      if (start?.reason case final reason?) {
+        title = 'Couldn’t start the Product Manager: $reason';
+      } else {
+        color = DesktopChrome.muted;
+        icon = AppIcons.clock;
+        title = 'Waiting for the Product Manager';
+      }
     } else if (delivery == null &&
         c.selected?.leadId == null &&
         // An agent's own chat has no Lead: its agent takes the message.
         c.selected?.isAgentChat != true) {
-      // In a Personal Swarm this Desktop starts the project's Lead, which the
-      // server keeps the message for (task #2633); else, or when it could
-      // not start, Add a Lead.
-      final app = widget.app;
-      final start = app == null
-          ? null
-          : PersonalLeadStarter.of(app).statusOf(c, message.conversationId);
-      if (start != null && !start.failed) {
-        color = DesktopChrome.muted;
-        title = 'Starting a Lead…';
-        sending = true;
-      } else {
-        title = start == null
-            ? 'Not sent · this chat has no Lead'
-            : 'Couldn’t start a Lead: ${start.reason}';
-        actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
-      }
+      // A Personal project's PM starts from its channel's card, and its
+      // person talks to it in its own chat (personal_lead.dart).
+      title = 'Not sent · this chat has no Lead';
+      actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
     } else if (delivery?.status == 'cancelled') {
       title = 'Not sent';
     } else if (delivery?.pending == true && offline) {
@@ -241,6 +259,10 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
+    } else if (down) {
+      color = DesktopChrome.muted;
+      title = '${chatAgent!.displayName ?? chatAgent.name} is offline';
+      quiet = true;
     } else if (late) {
       // Send again would wait behind the same thing: the line says what it is,
       // and offers the terminal when its person can see to it there.

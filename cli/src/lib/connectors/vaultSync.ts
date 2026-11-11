@@ -36,7 +36,7 @@ export interface VaultPort {
   write(base: number, envelope: Record<string, unknown>): Promise<{ written: boolean, revision: number, envelope: unknown } | null>
   seal(plaintext: string): Promise<Record<string, unknown>>
   /** Null when no machine of the account sealed it for this one; `complete`: sealed for every one. */
-  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | null>
+  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
 }
 
 type Payload = Record<string, unknown>
@@ -44,7 +44,7 @@ type Payload = Record<string, unknown>
 /** The account as the core holds it: the backend, signed in, and the gateway's sealing. */
 export interface VaultAccount {
   backend(method: string, path: string, body?: unknown): Promise<{ status: number, body: Record<string, unknown> }>
-  connectorVault: { seal(plaintext: string): Promise<Record<string, unknown>>, open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | null> }
+  connectorVault: { seal(plaintext: string): Promise<Record<string, unknown>>, open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null> }
 }
 
 /** One `connector_vault` op answered with the core's account (core/connectorsQueries.ts, and the
@@ -89,6 +89,7 @@ export function vaultPortOf(call: (op: string, payload?: Payload) => Promise<Pay
     },
     open: async (envelope) => {
       const answer = await call('open', { envelope })
+      if (answer.stranded === true) return { stranded: true }
       return typeof answer.plaintext === 'string' ? { plaintext: answer.plaintext, complete: answer.complete === true } : null
     },
   }
@@ -263,8 +264,16 @@ export class VaultSync {
           return
         }
         this.unreadable = false
-        theirs = parseSnapshot(opened.plaintext) ?? theirs
-        complete = opened.complete
+        if ('stranded' in opened) {
+          // Sealed only by or for computers the account no longer has: nobody will open it, and waiting for
+          // one left every computer of the account without the others' connections. This one's are written
+          // in its place, for the account's machines as they are now.
+          this.deps.log?.('[connectors] the account\'s saved connections were sealed for computers no longer in the account: replacing them with this computer\'s')
+          complete = false
+        } else {
+          theirs = parseSnapshot(opened.plaintext) ?? theirs
+          complete = opened.complete
+        }
       }
       const mine = snapshotOf(vault)
       const merged = merge(mine, theirs)

@@ -22,7 +22,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
-import { readerKey, tasksOf } from './assign/crew.js'
+import { openPieces, readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
 import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
@@ -56,10 +56,11 @@ type Waiting = { key: string; typed: string; did: string } | { held: Record<stri
 
 /** The task an agent's open labelled tasks and pull requests ([items]) show it holding with no pull request of its yet, the oldest
  *  such: one it took that no pull request of its closes, past as many as its pull requests that name no task may be for. With two
- *  taken and one pull request, the oldest was watched as idle while its pull request was open (review of #4003). */
+ *  taken and one pull request, the oldest was watched as idle while its pull request was open (review of #4003). Not a task that
+ *  waits on pieces cut off it (githubSplit.ts): its builder is asked nothing about it, and is typed its next task meanwhile. */
 function heldTask(items: Record<string, unknown>[]): Record<string, unknown> | null {
   const named = items.filter(it => it.pull_request).map(tasksOf), closed = new Set(named.flat())
-  const open = items.filter(it => !it.pull_request && labelNames(it).includes('status:taken') && !closed.has(Number(it.number)))
+  const open = items.filter(it => !it.pull_request && labelNames(it).includes('status:taken') && !closed.has(Number(it.number)) && !openPieces(it))
     .sort((a, b) => Number(a.number) - Number(b.number))
   return open.length > named.filter(tasks => !tasks.length).length ? open[0]! : null
 }

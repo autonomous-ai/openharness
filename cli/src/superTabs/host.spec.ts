@@ -1762,6 +1762,15 @@ describe('Super Tab attachments in delivered input', () => {
   const settle = () => new Promise(resolve => setTimeout(resolve, 50))
   /** A pass, given half a second: an old host waited on the download for the whole of it. */
   const pass = (host: SuperTabHost) => Promise.race([host.tick(), new Promise(resolve => setTimeout(resolve, 500))])
+  /** Turns the event loop until [done], without a timer: with setTimeout faked, a pass waiting on one never ends, and fails
+   *  here after 4 s of real time with what it waits for, rather than at the case's timeout. */
+  const until = async (done: () => boolean) => {
+    const giveUp = performance.now() + 4_000
+    while (!done()) {
+      if (performance.now() > giveUp) throw new Error('the pass is still waiting on a timer')
+      await new Promise(resolve => setImmediate(resolve))
+    }
+  }
   it('keeps delivering to other agents while one delivery\'s file downloads, claims it again meanwhile, then delivers it', async () => {
     const t = setup()
     const second = { id: 'agent-2', harnessId: 'harness-2', machineId: 'machine-1' }
@@ -1894,18 +1903,27 @@ describe('Super Tab attachments in delivered input', () => {
     const waiting = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, deliveries: [{ id: `big-${id}`, text: 'The model.', attachments: [BIG] }] }))
     const { delivered } = swarmOf(t, [...waiting, { id: 'z', deliveries: [{ id: 'plain', text: 'Hello.' }] }])
     const { attachedFiles } = slowFiles()
-    const host = t.open({ attachedFiles, downloadWaitMs: 200 })
-    const started = Date.now()
-    await host.tick()
-    // One wait of 200 ms; one per waiting delivery would take 5 x 200 = 1,000 ms. (Under 600 failed on a busy CI runner, at 600.)
-    expect(Date.now() - started).toBeLessThan(1_000)
-    expect(delivered()).toEqual(['harness-z: Hello.'])
-    expect(attachedFiles).toHaveBeenCalledTimes(6)
-    // Known to be slow, they hold no later pass at all.
-    t.wait(30_000)
-    const again = Date.now()
-    await host.tick()
-    expect(Date.now() - again).toBeLessThan(150)
+    // Counted in waits, not wall time: only the timers are faked, so a pass that waited again would never end.
+    // (Measured in wall time, the bound failed on a busy CI runner at 600 ms and on a busy Mac at 1,000.)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const host = t.open({ attachedFiles, downloadWaitMs: 200 })
+      let passed = false
+      const first = host.tick().then(() => { passed = true })
+      // The pass's wait is set as its first download starts. One wait of 200 ms; one per waiting delivery would be 5 x 200.
+      await until(() => attachedFiles.mock.calls.length > 0)
+      await vi.advanceTimersByTimeAsync(200)
+      await until(() => passed)
+      await first
+      expect(delivered()).toEqual(['harness-z: Hello.'])
+      expect(attachedFiles).toHaveBeenCalledTimes(6)
+      // Known to be slow, they hold no later pass at all: it ends without the clock moving.
+      t.wait(30_000)
+      let again = false
+      const later = host.tick().then(() => { again = true })
+      await until(() => again)
+      await later
+    } finally { vi.useRealTimers() }
   })
   it('delivers a message of files alone', async () => {
     const t = setup({ text: '', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })

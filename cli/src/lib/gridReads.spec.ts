@@ -15,11 +15,6 @@ import { join } from 'node:path'
 import { installFakeGrid, type FakeGrid, type FakeGridPlan, type FakeGridTurn } from './__fixtures__/fakeGrid.js'
 import { forgetGridModels, gridInventory, gridServingNodes, listAllGridModels, listGridModels, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 
-// Every look starts the fake `grid`, a node process, for its list and each grid's info: the seam under test is
-// that subprocess. The longest test here looks 13 times, about 26 starts: 2.7 s under 12 busy loops on a
-// 12-core Mac (load 85), and past vitest's 5 s at load 110. Room for a loaded machine, not for a hang.
-vi.setConfig({ testTimeout: 30_000 })
-
 const OWN = 'mine', OWN_ID = 'net-own', TEAM = 'team', TEAM_ID = 'net-team'
 const EMAIL = 'me@example.com'
 const OVERVIEW = '/relay/v1/grid/overview', DISCOVER = '/nodes/discover'

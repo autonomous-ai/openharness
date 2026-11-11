@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, supportsLaunchResume } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, supportsLaunchResume, typedFirstPrompt } from '../../lib/engineLaunch.js'
 import { OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, openclawRuntimeState, readOpenclawScreen } from './contract.js'
 
 /**
@@ -21,9 +21,23 @@ describe('OpenClaw launch', () => {
     expect(argv.slice(-5)).toEqual([CWD, 'openclaw', 'tui', '--session', `harness-${AGENT}`])
   })
 
-  it('a first task goes in --message', () => {
+  it('a first task is typed, never given in argv', () => {
     expect(buildEngineCommandArgv('openclaw', { agentId: AGENT, firstPrompt: 'Fix the parser' }))
-      .toEqual(['openclaw', 'tui', '--session', `harness-${AGENT}`, '--message', 'Fix the parser'])
+      .toEqual(['openclaw', 'tui', '--session', `harness-${AGENT}`])
+    expect(supportsFirstPrompt('openclaw')).toBe(true)
+    expect(typedFirstPrompt('openclaw', 'Fix the parser')).toBe('Fix the parser')
+    expect(typedFirstPrompt('openclaw', undefined)).toBeUndefined()
+    expect(typedFirstPrompt('claude', 'Fix the parser')).toBeUndefined()
+  })
+
+  it('a launched TUI gets the daemon\'s OPENCLAW_STATE_DIR and OPENCLAW_HOME', () => {
+    const daemon = { OPENCLAW_STATE_DIR: '/gw/state', OPENCLAW_HOME: '/gw', PATH: '/bin' }
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      expect(engineLaunchEnv('openclaw', undefined, platform, daemon)).toEqual({ OPENCLAW_STATE_DIR: '/gw/state', OPENCLAW_HOME: '/gw' })
+    }
+    expect(engineLaunchEnv('openclaw', undefined, 'linux', { OPENCLAW_STATE_DIR: '' })).toBeUndefined()
+    expect(engineLaunchEnv('claude', undefined, 'linux', daemon)).toBeUndefined()
+    expect(engineLaunchEnv('openclaw', { token: 't' }, 'win32', { OPENCLAW_HOME: '/gw' })).toEqual({ OPENCLAW_HOME: '/gw', HARNESS_NATIVE_LAUNCH_TOKEN: 't' })
   })
 
   it('resume reopens the same key, also after a reset', () => {

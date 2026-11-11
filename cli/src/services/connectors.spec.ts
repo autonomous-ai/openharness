@@ -14,11 +14,18 @@ import * as gateway from '../lib/connectors/gateway.js'
 import { FakeGateway } from '../testing/connectorServers.js'
 import { serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { LSOF_MS } from '../lib/peerAccount.js'
+import { keepAlive } from '../lib/connectors/renew.js'
 
 // The real socket, but for a failure with no Error to say why, which nothing here can provoke.
 vi.mock('../lib/connectors/bridge.js', async (original) => {
   const real = await original<typeof import('../lib/connectors/bridge.js')>()
   return { ...real, serveBridgeSocket: vi.fn(real.serveBridgeSocket) }
+})
+
+// The real renewal, but for a round that fails outright, which nothing here can provoke.
+vi.mock('../lib/connectors/renew.js', async (original) => {
+  const real = await original<typeof import('../lib/connectors/renew.js')>()
+  return { ...real, keepAlive: vi.fn(real.keepAlive) }
 })
 
 const OWNER = { local: true, owner: true }
@@ -81,6 +88,45 @@ describe('the connectors service', () => {
   const shortHomes: string[] = []
   const shortHome = () => { const made = mkdtempSync('/tmp/hc-'); shortHomes.push(made); return made }
 
+  it('keeps connections signed in from soon after it starts, then hourly, and says which could not be', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const vault = new Store(join(home, 'connections'), env)
+      const stale = Math.floor(Date.now() / 1000) - 10
+      // Signed in by this computer, but its OAuth client is gone: the renewal is refused.
+      vault.save('linear', { access_token: 'a', refresh_token: 'r', source: 'dcr', issuer: 'https://gone.example',
+        obtained_at: stale, expires_at: stale + 3600, mcp_entry: { url: 'https://gone.example/mcp', headers: {} } })
+      startConnectors(fakeCore(), { env, vault, keepAliveAfter: 5 })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(vi.mocked(keepAlive)).toHaveBeenCalledWith(vault, 5)
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] could not keep linear signed in: This account needs to be connected again in Connections.'))
+      vi.mocked(keepAlive).mockRejectedValueOnce(new Error('disk gone'))
+      await vi.advanceTimersByTimeAsync(3_600_000)
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] keeping connections signed in failed: Error: disk gone'))
+    } finally { warn.mockRestore(); vi.useRealTimers() }
+  })
+
+  it('connects Gmail, Calendar and Drive through this computer\'s Claude Code or Codex, and says what each holds', async () => {
+    const asked: string[] = []
+    const requests = startConnectors(fakeCore(), {
+      env,
+      elsewhere: {
+        binary: (name) => (name === 'codex' ? '/bin/codex' : null),
+        run: async (_command, args) => { asked.push(args.join(' ')); return '{"installed": []}' },
+      },
+    })
+    const status = await requests.connectors({ action: 'elsewhere' }, OWNER)
+    expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'not_connected' } } })
+    expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'codex' }, OWNER))
+      .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    expect(await requests.connectors({ action: 'disconnect_via', connector: 'gmail', via: 'codex' }, OWNER))
+      .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    expect(asked).toEqual(['plugin list --json --marketplace openai-curated-remote', 'plugin add gmail@openai-curated-remote', 'plugin remove gmail@openai-curated-remote'])
+    expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'claude' }, OWNER))
+      .toEqual({ error: 'CONNECTORS_FAILED', detail: 'Claude Code is not installed on this computer.' })
+  })
+
   it('answers exactly the request it declares, and only for the owner', async () => {
     const requests = startConnectors(fakeCore(), { env })
     expect(Object.keys(requests)).toEqual([...CONNECTORS_REQUESTS])
@@ -107,6 +153,21 @@ describe('the connectors service', () => {
     hear({ type: 'desk_changed', revision: 1 })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(reads()).toBe(before + 2)
+  })
+
+  it('exchanges the account\'s connections before a Refresh lists them, and lists at once without one', async () => {
+    const backend = vi.fn(async (_method: string, _path: string) => ({ status: 200, body: { success: true, data: { revision: 0, envelope: null } } }))
+    const requests = startConnectors(fakeCore({ account: { backend } as never }), { env, port: 0 })
+    await vi.waitFor(() => expect(backend).toHaveBeenCalledWith('GET', '/api/connector-vault'))
+    const reads = () => backend.mock.calls.filter(([, path]) => path === '/api/connector-vault').length
+    const before = reads()
+    await requests.connectors!({ action: 'list' }, OWNER)
+    expect(reads()).toBe(before)
+    expect(await requests.connectors!({ action: 'list', sync: true }, OWNER)).toMatchObject({ shared: true })
+    expect(reads()).toBe(before + 1)
+    // Kept to this computer: nothing to exchange, the list all the same.
+    expect(await startConnectors(fakeCore(), { env, vaultPort: null }).connectors!({ action: 'list', sync: true }, OWNER))
+      .toMatchObject({ shared: false })
   })
 
   it('keeps them on this computer alone while signed out', async () => {

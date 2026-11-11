@@ -120,6 +120,31 @@ String windowsPowerShellPath(Map<String, String> environment) {
   return '$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 }
 
+/// What is wrong with the signatures [stdout] reports, one
+/// `name<TAB>status<TAB>signer` line per file (the provisioner's PowerShell
+/// check): each of [files] that is not Valid, or not signed by
+/// [EnvironmentProvisioner.windowsPublisher], as "name is NotSigned" or
+/// "name is signed by …". A file the output does not list is left out: what
+/// could not be read is no reason to reinstall.
+List<String> windowsSignatureProblems(String stdout, List<String> files) {
+  final rows = <String, List<String>>{};
+  for (final line in const LineSplitter().convert(stdout)) {
+    final fields = line.split('\t');
+    if (fields.length == 3) rows[fields[0]] = fields;
+  }
+  final problems = <String>[];
+  for (final name in files) {
+    final row = rows[name];
+    if (row == null) continue;
+    if (row[1] != 'Valid') {
+      problems.add('$name is ${row[1]}');
+    } else if (row[2] != EnvironmentProvisioner.windowsPublisher) {
+      problems.add('$name is signed by ${row[2]}');
+    }
+  }
+  return problems;
+}
+
 const int _linuxAptInstallFailureExitCode = 33;
 const String _linuxClockRepairCommand =
     'if command -v chronyc >/dev/null 2>&1; then '
@@ -497,6 +522,11 @@ class EnvironmentProvisioner {
   final String _windowsInstallScriptUrl;
   final Duration probeTimeout;
 
+  /// Windows: read the signatures of the CLI's `bin` programs
+  /// ([_windowsProgramsSigned]). Off in a debug build, whose CLI is a
+  /// developer's own and unsigned; a test turns it on.
+  final bool checkWindowsSignatures;
+
   EnvironmentProvisioner({
     Directory? harnessHome,
     ProcessRunner? run,
@@ -508,6 +538,7 @@ class EnvironmentProvisioner {
     Map<String, String>? platformEnvironment,
     String? windowsInstallScriptUrl,
     this.probeTimeout = const Duration(seconds: 10),
+    this.checkWindowsSignatures = !kDebugMode,
   }) : harnessHome = harnessHome ?? Directory(_defaultHarnessHome()),
        _run = run ?? _defaultRun,
        _start = start ?? (run == null ? _defaultStart : null),
@@ -632,11 +663,16 @@ class EnvironmentProvisioner {
             : _harnessOutdated != null
             ? 'Harness CLI $_harnessOutdated is out of date; this app needs '
                   '$_minimumCliVersion or newer.'
+            : _harnessUnsigned != null
+            ? 'Harness CLI is not signed, so Windows can block it; it is '
+                  'installed again, keeping your harnesses.'
             : 'Harness CLI or its managed Node runtime is missing.',
         output: probe.harnessRuns
             ? '✓ managed Node >= 22 · harness version'
             : _harnessOutdated != null
             ? '✗ harness $_harnessOutdated < $_minimumCliVersion'
+            : _harnessUnsigned != null
+            ? '✗ ${_harnessUnsigned!.join(' · ')}'
             : '✗ managed Node >= 22 · harness version',
         plan: probe.plan,
       );
@@ -1435,12 +1471,17 @@ fi''';
   /// than [kMinimumHarnessCliVersion]; null otherwise.
   String? _harnessOutdated;
 
+  /// Windows: the `bin` programs whose signature is not the release's, as
+  /// "name is Status" lines, when [_windowsProgramsSigned] found any.
+  List<String>? _harnessUnsigned;
+
   /// [kMinimumHarnessCliVersion], or [kMinimumWindowsHarnessCliVersion] on Windows.
   String get _minimumCliVersion =>
       _isWindows ? kMinimumWindowsHarnessCliVersion : kMinimumHarnessCliVersion;
 
   Future<bool> _hasHarness() async {
     _harnessOutdated = null;
+    _harnessUnsigned = null;
     if (_isWindows) return _hasWindowsHarness();
     final currentNode = File('${harnessHome.path}/runtime/current-node');
     if (!await currentNode.exists()) return false;
@@ -1481,13 +1522,94 @@ fi''';
         step: EnvironmentStep.harness,
       );
       if (!_nodeRuns(node)) return false;
-      return _versionAccepted(
+      if (!_versionAccepted(
         await _probeHarnessCommand(cli.node, [cli.cliJs, 'version']),
-      );
+      )) {
+        return false;
+      }
+      return await _windowsProgramsSigned();
     } on ProcessException {
       return false;
     }
   }
+
+  /// The programs the CLI is reached through on Windows: `harness`, and the
+  /// launcher every daemon start goes through.
+  static const _windowsBinPrograms = ['harness.exe', 'harness-launch.exe'];
+
+  /// The certificate name Harness's Windows programs are signed with
+  /// (docs/windows-code-signing.md; install.ps1 `$HarnessPublisher`).
+  static const windowsPublisher = 'AUTONOMOUS INC.';
+
+  /// Whether `bin\harness.exe` and `bin\harness-launch.exe` carry the release
+  /// signature, by Windows' own check. Smart App Control blocks a program
+  /// without one. From 2026-11-04 to 11-09 production installed an unsigned
+  /// terminal host, whose launcher every daemon start goes through: blocked,
+  /// Harness could neither start nor update itself, while the CLI under Node
+  /// still answered, so this app took the install for good (a customer, Code
+  /// Integrity event 3077). Not signed reads as needing setup: install.ps1
+  /// -Desktop lays the signed programs over them and keeps everything else.
+  /// Whether Smart App Control blocks a given unsigned file depends on its
+  /// reputation, so it is the signature that is read, not a trial run.
+  /// Signatures that cannot be read are no reason to reinstall. A debug build
+  /// ([checkWindowsSignatures]), or HARNESS_ALLOW_UNSIGNED=1 (a developer's own
+  /// CLI), skips it.
+  Future<bool> _windowsProgramsSigned() async {
+    if (!checkWindowsSignatures ||
+        _platformEnvironment['HARNESS_ALLOW_UNSIGNED'] == '1') {
+      return true;
+    }
+    final bin = p.join(harnessHome.path, 'bin');
+    final ProcessResult result;
+    try {
+      result = await _runProbe(
+        windowsPowerShellPath(_platformEnvironment),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          windowsSignatureScript,
+        ],
+        environment: {
+          'HARNESS_SIGNATURE_DIR': bin,
+          'HARNESS_SIGNATURE_FILES': _windowsBinPrograms.join('\n'),
+        },
+        label: 'the Harness programs’ signatures',
+        step: EnvironmentStep.harness,
+      );
+    } on ProcessException {
+      return true;
+    }
+    if (result.exitCode != 0) return true;
+    final problems = windowsSignatureProblems(
+      '${result.stdout}',
+      _windowsBinPrograms,
+    );
+    if (problems.isEmpty) return true;
+    _harnessUnsigned = problems;
+    return false;
+  }
+
+  /// One tab-separated line per file: name, status, signer. The module is
+  /// imported by its path: a PowerShell 7 PSModulePath would have 5.1 autoload
+  /// 7's (install.ps1 Get-HarnessPtySignatureProblems). A missing file reads
+  /// as NotFound, so an install without it is set up again too. No double
+  /// quote anywhere: a `-Command` argument loses them on some routes into
+  /// powershell.exe (Windows PowerShell 5.1's own native-argument passing).
+  static const windowsSignatureScript = r'''
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')
+$tab = [string][char]9
+foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
+  $path = Join-Path $env:HARNESS_SIGNATURE_DIR $name
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { [Console]::Out.WriteLine($name + $tab + 'NotFound' + $tab); continue }
+  $s = Get-AuthenticodeSignature -LiteralPath $path
+  $signer = if ($s.SignerCertificate) { $s.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+  [Console]::Out.WriteLine($name + $tab + [string]$s.Status + $tab + $signer)
+}
+''';
 
   /// Node 22 or newer answered `--version`: what the CLI runs on until the move to 24 is done (the CLI's updater
   /// moves a managed Node 22 to 24 itself).

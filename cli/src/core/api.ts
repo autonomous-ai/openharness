@@ -535,7 +535,7 @@ export const TAB_RELAY_OFF: TabRelay = { open: async () => {}, send: async () =>
  */
 export interface ConnectorVault {
   seal(plaintext: string): Promise<Record<string, unknown>>
-  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | null>
+  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
 }
 /** A process with no key of the core's: it seals and opens nothing. */
 export const CONNECTOR_VAULT_OFF: ConnectorVault = {

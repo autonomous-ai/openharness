@@ -6,10 +6,12 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createExternalPreflight } from './externalPreflight.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 vi.mock('../../engines/inProcess.js', () => ({ loadEngine: vi.fn(async () => ({})) }))
 vi.mock('../../engines/hooks.js', () => ({ engineHooks: { codex: { installIn: vi.fn(async () => true) } } }))
 vi.mock('../../lib/engineLaunch.js', () => ({ buildEngineCommandArgv: vi.fn(() => []), refusePermissionFlagIfUnsupported: vi.fn(async () => null) }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
+vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 afterEach(() => { vi.clearAllMocks(); vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null) })
 const session = { sessionId: 'conversation', cwd: '/fixture/work', launchArgs: ['-p', 'work'] } as never
 const row = (engine = 'claude', extra = {}) => ({ engine, permissionMode: 'ask', bypassPermission: false, ...extra }) as never
@@ -104,4 +106,19 @@ it.each(['inspection', 'permission', 'hooks', 'disabled hooks'] as const)('retai
     expect(result).toHaveProperty('current')
     expect(launch.prepareHooks).toHaveBeenCalledWith(0, expect.any(Function))
   } else expect(result).toMatchObject({ detail: expect.stringContaining('authority') })
+})
+
+// Review of #3954: an external resume held by a missing notify.mjs said "Waiting to confirm…", which waiting never changes.
+it('names a missing notify.mjs, and what to do, where a held takeover says why, before any owner is stopped', async () => {
+  vi.mocked(missingHookScript).mockReturnValue('/opt/harness/hook/notify.mjs')
+  try {
+    const named = { detail: 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.' }
+    const launch = { current: () => true, prepareHooks: vi.fn(async () => false) } as unknown as NativeLaunch
+    expect(await setup({ native: async () => ({ ok: true, launch }) }).prepare(row(), session)).toEqual(named)
+    expect(missingHookScript).toHaveBeenLastCalledWith('claude')
+    vi.mocked(engineHooks.codex.installIn).mockResolvedValueOnce(false)
+    expect(await setup().prepare(row('codex', { codexHome: '/fixture/profile' }), session)).toEqual(named)
+    expect(missingHookScript).toHaveBeenLastCalledWith('codex')
+    expect(buildEngineCommandArgv).not.toHaveBeenCalled()
+  } finally { vi.mocked(missingHookScript).mockReturnValue(null) }
 })

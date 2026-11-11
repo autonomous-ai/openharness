@@ -128,6 +128,14 @@ void main() {
       await tester.tap(add);
       await tester.pumpAndSettle();
       expect(form, findsOneWidget);
+      // Its button says what it makes, in sentence case as + New agent's does (Naming System: New project).
+      expect(
+        find.descendant(
+          of: key('new-harness-field-start'),
+          matching: find.text('New project'),
+        ),
+        findsOneWidget,
+      );
       await tester.enterText(key('new-harness-task'), 'A home for the docs.');
       await tester.pump();
       await tester.tap(key('new-harness-field-start'));
