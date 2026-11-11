@@ -10,6 +10,7 @@ import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createHomeAdoptions } from './homeAdoptions.js'
 import * as nativeHooks from '../../engines/nativeHooks.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { sid } from '../../lib/log.js'
@@ -298,11 +299,14 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     const failed = (error: unknown) => {
       console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
     }
+    // An installer stopped by a missing notify.mjs has said so in its own line (kit/notifyHooks.ts hooksNotInstalled); a
+    // generic second line for the same failure only buried it (#3954 review).
+    const unavailable = () => { if (!missingHookScript(vendor)) failed('native hook preparation is unavailable') }
     try {
       const result = install()
-      if (result === false) failed('native hook preparation is unavailable')
+      if (result === false) unavailable()
       else if (result && typeof result !== 'boolean') pending.push(result.then(answer => {
-        if (answer === false) failed('native hook preparation is unavailable')
+        if (answer === false) unavailable()
       }, failed))
     } catch (error) { failed(error) }
   }

@@ -1,8 +1,3 @@
-/// Engines whose interactive launch accepts an initial message. Keep aligned
-/// with FIRST_PROMPT_ARGS in cli/src/lib/engineLaunch.ts.
-bool supportsAgentHandoff(String engine) =>
-    const {'opencode', 'codex', 'claude', 'hermes'}.contains(engine);
-
 /// A bounded handoff of user requests and visible answers, never reasoning or
 /// tool output. The wire accepts at most 2,000 UTF-16 code units for a prompt.
 /// Requests and summaries are independent lists and must not be paired.

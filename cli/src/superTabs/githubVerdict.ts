@@ -117,9 +117,9 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
 
 /**
  * Records [comment] as the calling agent's and gives its address, or says what was [done] on GitHub and why it is not
- * recorded: a verdict's comment, and a claim's (githubClaim.ts).
+ * recorded: a verdict's comment, a claim's (githubClaim.ts) and a cut's (githubSplit.ts).
  */
-export async function recordOwn(record: VerdictDeps['record'], repository: string, comment: Record<string, unknown>, done: 'Posted' | 'Taken'): Promise<string> {
+export async function recordOwn(record: VerdictDeps['record'], repository: string, comment: Record<string, unknown>, done: 'Posted' | 'Taken' | 'Split'): Promise<string> {
   const url = String(comment.html_url ?? '')
   try { await record(repository, String(comment.id)) } catch (error) {
     const said = error instanceof Error ? error.message : 'the server did not answer.'

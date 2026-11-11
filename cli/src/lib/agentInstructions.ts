@@ -30,7 +30,7 @@
  * inside the project to a file inside it.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type Stats } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join, parse, relative, sep } from 'node:path'
 
@@ -127,6 +127,33 @@ async function takingTurns<T>(file: string, save: () => Promise<T>): Promise<T> 
   const tail = turn.then(() => {}, () => {})
   saves.set(file, tail)
   try { return await turn } finally { if (saves.get(file) === tail) saves.delete(file) }
+}
+
+/**
+ * The file's text as its agent starts (superTabs/inCore/launch.ts puts it in the engine's instructions), or `TOO_LARGE` past
+ * [max] bytes, or null when there is none to read: no file, a bad name, or one that is not a plain UTF-8 file in a plain
+ * `agents` folder. A launch waits on it, so it is read at once and at most [max] bytes and one, and as the apps read it: never
+ * through a link (`lstat`, then O_NOFOLLOW and the same file again), and never a named pipe, which would hold the read for ever.
+ */
+export function readInstructionsAtLaunch(cwd: string, name: unknown, max: number): string | 'TOO_LARGE' | null {
+  let fd: number | null = null
+  try {
+    const dir = join(cwd, 'agents'), file = join(dir, fileNameOf(name))
+    if (!lstatSync(dir).isDirectory()) return null
+    const looked = lstatSync(file)
+    if (!looked.isFile()) return null
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    const found = fstatSync(fd)
+    if (!found.isFile() || found.ino !== looked.ino || found.dev !== looked.dev) return null
+    const bytes = Buffer.alloc(max + 1)
+    let length = 0
+    for (let read = -1; read !== 0 && length < bytes.length; length += read) read = readSync(fd, bytes, length, bytes.length - length, length)
+    return length > max ? 'TOO_LARGE' : utf8.decode(bytes.subarray(0, length))
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
 }
 
 /** The file's text and version, or `{ text: null, version: '' }` when there is no file. */

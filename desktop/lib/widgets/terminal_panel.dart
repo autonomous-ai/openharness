@@ -3538,40 +3538,8 @@ class _TerminalHeader extends StatelessWidget {
   }
 
   /// [strip], carried by this pane's drag when it has one.
-  Widget _carried(Widget strip) {
-    final handle = paneDrag;
-    if (handle == null) return strip;
-
-    return Draggable<PaneDragRef>(
-      data: handle.ref,
-      // The grip is kept where the hand took it, so the ghost stays under the
-      // cursor at the same spot on the header it was picked up by.
-      dragAnchorStrategy: childDragAnchorStrategy,
-      onDragStarted: () => paneDragging.value = handle.ref,
-      onDragUpdate: (details) => paneDragPointer.value = details.globalPosition,
-      onDragEnd: (_) {
-        paneDragging.value = null;
-        paneDragPointer.value = null;
-      },
-      onDraggableCanceled: (_, _) {
-        paneDragging.value = null;
-        paneDragPointer.value = null;
-      },
-      feedback: _PaneGhost(session: session, size: handle.size, header: strip),
-
-      // The header itself does NOT change — the whole tile fades instead, in
-      // _PaneCell, so what dims is the thing that is moving rather than one
-      // strip of it.
-      //
-      // OPAQUE TO THE POINTER across its whole width. The strip is a SizedBox
-      // of a Row, so only its words and icons hit-test; a press on the empty
-      // space between them — most of the strip, and where a hand reaches to
-      // carry a pane — never reached this Draggable, and dragging a pane by its
-      // title did nothing (owner, 2026-10-01). The buttons on it still take
-      // their own clicks first.
-      child: ColoredBox(color: Colors.transparent, child: strip),
-    );
-  }
+  Widget _carried(Widget strip) =>
+      PaneCarry(handle: paneDrag, label: session.agentName, child: strip);
 }
 
 /// A pane's state as a chip: its icon and its word, the detail in the tooltip,
@@ -4288,86 +4256,6 @@ class _TransferProgressBadge extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// The whole tile, carried under the cursor.
-///
-/// ⚠️ THIS IS DRAWN, NOT PHOTOGRAPHED, AND THE PHOTOGRAPH IS WHY. The obvious
-/// way to carry "the whole pane" is RepaintBoundary.toImage() on press — and it
-/// FROZE THE APP. That call is a GPU readback on the raster thread, and the
-/// raster thread in this app is never idle: every pane holds a terminal that
-/// repaints on its own, so asking it to stop and hand a surface back on every
-/// pointer-down deadlocked the window. It is not a tuning problem; there is
-/// nothing to tune down to.
-///
-/// So the ghost is built from what is already known — the pane's measured size
-/// and its own header — and the body is a plain surface rather than a copy of
-/// the scrollback. It reads as the tile because it is tile-SHAPED and carries
-/// the tile's name, which is what the eye is following.
-///
-/// See-through on purpose: a full-size opaque copy sits exactly over the tile
-/// being aimed at and hides the "Swap with this pane" highlight that says the
-/// drop will land.
-class _PaneGhost extends StatelessWidget {
-  const _PaneGhost({
-    required this.session,
-    required this.size,
-    required this.header,
-  });
-
-  final TerminalSession session;
-
-  /// The tile's size, handed down from the grid's LayoutBuilder.
-  final Size size;
-
-  final Widget header;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final tile = size;
-    return Material(
-      color: Colors.transparent,
-      child: Opacity(
-        opacity: 0.75,
-        child: Container(
-          width: tile.width,
-          height: tile.height,
-          decoration: BoxDecoration(
-            color: grid.AppPalette.windowBg,
-            border: Border.all(color: AppColors.accent, width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                // A lifted tile: the dark shadow would smudge a light ground.
-                color: Colors.black.withValues(
-                  alpha: grid.AppTheme.pick(0.18, 0.45),
-                ),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              header,
-              Divider(height: 1, color: AppColors.border),
-              Expanded(
-                child: Center(
-                  child: Text(
-                    session.agentName,
-                    style: grid.AppType.monoLabel(
-                      color: AppColors.mutedStrong,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

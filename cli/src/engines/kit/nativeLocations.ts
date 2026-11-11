@@ -10,7 +10,7 @@ export const LAUNCH_LOCATION_VARIABLES = [
   'HERMES_HOME', 'CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR', 'GROK_HOME', 'AGY_HOME', 'COPILOT_HOME',
   'SHELL', 'ZDOTDIR', 'CLAUDE_PROJECTS_DIR', 'CURSOR_HOME', 'AGY_CONFIG_DIR', 'COMMANDCODE_HOME',
   'DEVIN_HOME', 'DEVIN_CONFIG_PATH', 'OPENCODE_PLUGIN_DIR', 'KILO_PLUGIN_DIR', 'PI_HOME',
-  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR', 'OPENCLAW_STATE_DIR',
+  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR', 'OPENCLAW_STATE_DIR', 'OPENCLAW_HOME',
 ] as const
 
 /** The shell can unset an inherited location. Absence is part of its snapshot. */
@@ -55,8 +55,9 @@ export function nativeHookLocations(vars: Readonly<Record<string, string>>) {
     DEVIN_HOME: vars.DEVIN_HOME || join(data, 'devin', 'cli'),
     DEVIN_CONFIG_PATH: vars.DEVIN_CONFIG_PATH || join(config, 'devin', 'config.json'),
     AMP_PLUGIN_DIR: vars.AMP_PLUGIN_DIR || join(config, 'amp', 'plugins'),
-    // Where OpenClaw finds its state when the TUI's open files cannot say (Windows): its own variable, else ~/.openclaw.
-    OPENCLAW_STATE_DIR: vars.OPENCLAW_STATE_DIR || join(home, '.openclaw'),
+    // Where OpenClaw finds its state when the TUI's open files cannot say (Windows): its own variable, else
+    // <OPENCLAW_HOME or home>/.openclaw, as OpenClaw resolves it.
+    OPENCLAW_STATE_DIR: vars.OPENCLAW_STATE_DIR || join(vars.OPENCLAW_HOME || home, '.openclaw'),
   }
   if (Object.values(locations).some(path => !isAbsolute(path) || path.includes('\0') || path.length > 4096)) {
     throw Error('Unconfirmed native location')

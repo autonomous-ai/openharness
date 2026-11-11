@@ -6,9 +6,10 @@
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { liveFor } from '../../engines/live.js'
+import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -47,15 +48,16 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** A store from the schema and one scenario, with a writer handle the test changes it through, as the Gateway would. */
-function store(scenario: string): { path: string; db: DatabaseLike } {
+/** A store from the schema and one scenario (with none, the schema alone, as before the Gateway wrote any session), with a
+ *  writer handle the test changes it through, as the Gateway would. */
+function store(scenario?: string): { path: string; db: DatabaseLike } {
   const Database = builtinSqlite()
   if (!Database) throw new Error('these specs need node:sqlite')
   const path = join(dir, 'openclaw-agent.sqlite')
   const db = new Database(path, { readOnly: false })
   open.push(db)
   db.exec(fixture('schema'))
-  db.exec(fixture(scenario))
+  if (scenario) db.exec(fixture(scenario))
   return { path, db }
 }
 
@@ -69,6 +71,9 @@ function holdBack(db: DatabaseLike, key: string): () => void {
   return () => db.exec(`BEGIN; INSERT INTO transcript_events SELECT * FROM held_events;
     INSERT INTO session_transcript_active_events SELECT * FROM held_active; COMMIT;`)
 }
+
+/** A bind pass's reading of a pane that shows a run in progress. */
+const RUNNING = { ready: false, gatewayLost: false, running: true }
 
 const pane = (key: string): RegisteredSession => ({
   agentId: 'claw-agent', sessionId: key, engine: 'openclaw', cwd: '/work/proj', active: true,
@@ -167,6 +172,54 @@ describe('an OpenClaw pane, through the core', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(row.identityHold).toBe(other)
     expect(run.announceSession).toHaveBeenCalledTimes(1)
+    run.normalizers.forget('agent:main:plain')
+  })
+
+  it('a pane working for 30 s on a store with no session says so on the agent, and clears once the session shows', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    await run.attach.attachSession(row)
+    const stream = run.normalizers.openclawReaders.get('agent:main:plain')!
+    stream.paneRead(RUNNING)
+    await vi.advanceTimersByTimeAsync(30_000)
+    stream.paneRead(RUNNING)
+    expect(run.setIdentityHold).toHaveBeenCalledWith('claw-agent', OPENCLAW_STATES.noSessions)
+    expect(run.announceSession).toHaveBeenCalledWith(row)
+    const said = warn.mock.calls.filter(([line]) => String(line).includes(OPENCLAW_STATES.noSessions))
+    expect(said).toHaveLength(1)
+    expect(said[0][0]).toContain(dirname(path))
+    // The Gateway writes the session after all: the next poll finds it, and the next pass clears the state.
+    db.exec(fixture('plain'))
+    await vi.advanceTimersByTimeAsync(1_500)
+    stream.paneRead(RUNNING)
+    expect(run.setIdentityHold).toHaveBeenLastCalledWith('claw-agent', undefined)
+    expect(row).not.toHaveProperty('identityHold')
+    run.normalizers.forget('agent:main:plain')
+  })
+
+  it('a store with no session never replaces or clears a state another reason said', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    await run.attach.attachSession(row)
+    // The bind pass could not read the pane: its own reason is on the agent before the store's.
+    const other = 'the pane could not be read'
+    row.identityHold = other
+    const stream = run.normalizers.openclawReaders.get('agent:main:plain')!
+    stream.paneRead(RUNNING)
+    await vi.advanceTimersByTimeAsync(30_000)
+    stream.paneRead(RUNNING)
+    expect(row.identityHold).toBe(other)
+    db.exec(fixture('plain'))
+    await vi.advanceTimersByTimeAsync(1_500)
+    stream.paneRead(RUNNING)
+    expect(row.identityHold).toBe(other)
+    expect(run.announceSession).not.toHaveBeenCalled()
     run.normalizers.forget('agent:main:plain')
   })
 

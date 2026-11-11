@@ -535,7 +535,7 @@ export const TAB_RELAY_OFF: TabRelay = { open: async () => {}, send: async () =>
  */
 export interface ConnectorVault {
   seal(plaintext: string): Promise<Record<string, unknown>>
-  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | null>
+  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
 }
 /** A process with no key of the core's: it seals and opens nothing. */
 export const CONNECTOR_VAULT_OFF: ConnectorVault = {
@@ -1297,8 +1297,9 @@ type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
-   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics). */
-  basics(lead: boolean): string
+   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics), then the agent's own `agents/<name>.md` in its folder ([own]: the
+   *  folder it starts in and the name it was started under). */
+  basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
