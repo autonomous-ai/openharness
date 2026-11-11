@@ -281,28 +281,28 @@ it.each(['ignore guard', 'exclusion guard', 'final confirmation'])('holds a requ
   const yieldLoop = timers.setImmediate, document = join(cwd, ctx.prepared.result.file!)
   let clock = 0, fired = false, checkpoint = 0, lateWrites = 0, guarded = 0
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
-  ctx.permit.current = () => clock < 5_000
+  ctx.permit.current = () => clock < 1_000
   vi.spyOn(timers, 'setImmediate').mockImplementation(async () => { await yieldLoop(); checkpoint++ })
   const staged = (folder: string) => fs.readdirSync(folder).filter(name => name.endsWith('.stage')).length
   const folder = dirname(document)
-  // A guard reads what it guards, then confirms it is durable: the clock runs out as it opens the file to confirm (its
-  // second open). A file this publication flushed already is not flushed again, so the time a guard spends is in that
-  // evidence, and running out there holds as IDENTITY_UNAVAILABLE. The ignore guard is the one in the exclusion step (its
-  // stage is there); the exclusion guard the one just before the first document goes in (its stage is there beside the
-  // ignore's); the final confirmation the last pass.
+  // A guard reads what it guards, then confirms it is durable: the request runs out as it opens the file to confirm (its
+  // second open), whether or not that file still needs a flush. Its 1 s permit runs out well inside the 3 s the native
+  // evidence it is reading has, as a request does: the hold is the request's. The ignore guard is the one in the
+  // exclusion step (its stage is there); the exclusion guard the one just before the first document goes in (its stage
+  // is there beside the ignore's); the final confirmation the last pass.
   vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
     const path = String(args[0])
     if (!fired && (fault === 'ignore guard' && path.endsWith('/.gitignore') && staged(dirname(ctx.exclusion)) === 1
       || fault === 'exclusion guard' && path === ctx.exclusion && fs.existsSync(folder) && staged(folder) === 2
       || fault === 'final confirmation' && path === document && checkpoint === 7) && ++guarded === 2) {
-      fired = true; clock = 5_001
+      fired = true; clock = 1_001
     }
     return open(...args)
   })
   const visible = (path: fs.PathLike) => String(path) === ctx.exclusion || String(path).endsWith('.md') || String(path).endsWith('/.gitignore')
   vi.spyOn(fs, 'linkSync').mockImplementation((from, to) => { if (clock && visible(to)) lateWrites++; link(from, to) })
   vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => { if (clock && visible(to)) lateWrites++; rename(from, to) })
-  await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
   expect(fired).toBe(true); expect(lateWrites).toBe(0)
   clock = 0
   expect(await ctx.create()(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)

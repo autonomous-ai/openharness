@@ -1,7 +1,7 @@
 /** Hook preparation owns only a verified file version. Unknown contents are
  * never an empty configuration, and a completed write includes its directory. */
 import { randomUUID } from 'node:crypto'
-import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
@@ -41,8 +41,9 @@ export function directoryChanged(attempt: HookPreparationAttempt, directory: str
   const state = directoryFlushes.get(attempt)
   if (!state) return
   state.changes++
-  // A directory no longer there to name forgets every flush: nothing else says which one it was.
-  try { state.flushed.delete(fileIdentity(lstatSync(directory, { bigint: true }))) } catch { state.flushed.clear() }
+  // Followed, as the flush opened it resolved: an alias names the directory it leads to. One no longer there to name
+  // forgets every flush, as nothing else says which one it was.
+  try { state.flushed.delete(fileIdentity(statSync(directory, { bigint: true }))) } catch { state.flushed.clear() }
 }
 
 /** Flush the directory open as [fd], unless [attempt] flushed it and has changed none of its names since. */

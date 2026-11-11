@@ -1,6 +1,6 @@
 /** Recoverable publication of a bounded preparation. Receipts never authorize guessed completion. */
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, statSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { setImmediate as yieldLoop } from 'node:timers/promises'
 import { NativeFiles } from '../engines/kit/nativeFiles.js'
@@ -39,10 +39,12 @@ class Flushes {
     fsyncSync(fd)
     this.done.add(state)
   }
-  /** This publication created, linked or renamed a name in [directory]. */
+  /** A name in [directory] this publication relies on is new since its flush: one it created, linked or renamed, or one it
+   *  found made by another process (a folder, a peer's .gitignore or exclusion line). */
   changed(directory: string): void {
-    // A directory no longer there to name forgets every flush: nothing else says which one it was.
-    try { this.done.delete(flushedState(lstatSync(directory, { bigint: true }))) } catch { this.done.clear() }
+    // Followed, as the flush opened it resolved. One no longer there to name forgets every flush, as nothing else says
+    // which one it was.
+    try { this.done.delete(flushedState(statSync(directory, { bigint: true }))) } catch { this.done.clear() }
   }
 }
 /** Files here are written once and never in place, so a file's bytes are its identity, size and modification time. */
@@ -79,7 +81,9 @@ function createFile(flushes: Flushes, path: string, text: string): Stage {
   finally { closeSync(fd) }
 }
 function directory(flushes: Flushes, path: string): void {
-  try { mkdirSync(path, { mode: 0o700 }); flushes.changed(dirname(path)) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  try { mkdirSync(path, { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  // Made here or by another process since this publication flushed the parent: its name is confirmed either way.
+  flushes.changed(dirname(path))
   const info = lstatSync(path)
   if (!info.isDirectory() || (info.mode & 0o022) !== 0 || typeof process.getuid === 'function' && info.uid !== process.getuid()) held()
   // Repeat on recovery: an earlier mkdir may have succeeded while its parent fsync failed.
@@ -262,7 +266,8 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
     verifyNativePathFacts(receipt.ignore.route)
     const observedIgnore = readHandoffFile(ignore, 64 * 1024, true)
     if (observedIgnore.key !== receipt.ignore.key || observedIgnore.text !== '*\n') return held()
-    sync(flushes, ignore); sync(flushes, folder, true)
+    // Linked here, or by a peer since the folder was flushed: its name is confirmed either way.
+    flushes.changed(folder); sync(flushes, ignore); sync(flushes, folder, true)
     await checkpoint()
     if (prepared.exclude) {
       const exclusion = prepared.exclude, parent = dirname(exclusion.path)
@@ -270,8 +275,8 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
       excludeFence()
       const current = readHandoffFile(exclusion.path, 129 * 1024)
       if (receipt.exclude && current.key === receipt.exclude.key && current.text === exclusion.after) {
-        // This transaction completed the rename before a later write/fsync/reply failed.
-        sync(flushes, exclusion.path); sync(flushes, parent, true)
+        // This transaction, or a peer, completed the rename before a later write/fsync/reply failed.
+        flushes.changed(parent); sync(flushes, exclusion.path); sync(flushes, parent, true)
       } else {
         verifyNativePathFacts(exclusion.route)
         if (current.text !== exclusion.before || current.version !== exclusion.version) return held()

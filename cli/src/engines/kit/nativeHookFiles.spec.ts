@@ -211,7 +211,8 @@ it('holds a plugin alias without deleting its shared target or the alias', async
 
 // On macOS every fsync is a full drive flush: each write flushed its folder's whole chain to the root again, and the
 // grid config golden spent 4.5 s of 6.6 s in them.
-it('flushes each ancestor once per attempt, and the folder again after each name it publishes there', async () => {
+// Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`): there is no directory flush to count.
+it.skipIf(process.platform === 'win32')('flushes each ancestor once per attempt, and the folder again after each name it publishes there', async () => {
   const { root } = fixture(), folder = join(root, 'a'), one = join(folder, 'one.json'), two = join(folder, 'two.json')
   mkdirSync(folder)
   const flushes = new Map<bigint, number>(), names: string[][] = []
@@ -232,7 +233,7 @@ it('flushes each ancestor once per attempt, and the folder again after each name
   }
 })
 
-it('flushes a directory again when the attempt changed it while its flush was in flight', async () => {
+it.skipIf(process.platform === 'win32')('flushes a directory again when the attempt changed it while its flush was in flight', async () => {
   const { root } = fixture()
   let flushed = 0
   fault.onSync = fd => { if (fstatSync(fd).isDirectory()) flushed++ }

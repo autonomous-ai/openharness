@@ -419,7 +419,8 @@ describe('prepareAgentHandoff: a repository', () => {
 
   // On macOS every fsync is a full drive flush: a publication made 73, 2.5 s of a 3.3 s preparation on an Intel Mac at
   // load 8, under its 5 s deadline. Most flushed a state again that nothing had changed since.
-  it('makes every name and every byte it publishes durable, and flushes no state twice', async () => {
+  // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`): its names are not flushed here.
+  it.skipIf(process.platform === 'win32')('makes every name and every byte it publishes durable, and flushes no state twice', async () => {
     disk.on = true
     try { await prepareAgentHandoff(depsFor([session()]), request()) } finally { disk.on = false }
     const { flushes, names } = disk
