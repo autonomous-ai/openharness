@@ -11,6 +11,7 @@ import '../core/home_dir.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
 import 'github_pulls.dart';
+import 'goal.dart';
 
 /// A Swarm project's tasks are its repository's GitHub issues (Swarm v4, anh Dee 2026-11-09), read with the GitHub CLI
 /// on this computer, signed in as its person: each person sees exactly what github.com shows them, and nothing goes
@@ -233,11 +234,19 @@ class SwarmGitHub {
   /// At most this many taken tasks are read ([taken]): a crew is a handful, and each holds one or two.
   static const takenMax = 100;
 
+  /// How many repositories' goals are kept to show again at once: the project on screen and the few a person moves between.
+  static const goalsKept = 8;
+
+  /// Pages of a hundred of a commit's checks read for its goal: a hundred milestones beside two hundred checks of the
+  /// project's own, as the daemon reads them.
+  static const goalCheckPages = 3;
+
   final _lists = <String, List<SwarmIssue>>{};
   final _pulls = <String, Map<int, SwarmPull>>{};
   final _pullLists = <String, List<SwarmPull>>{};
   final _threads = <String, SwarmIssueThread>{};
   final _reading = <String>{};
+  final _goals = <String, ({SwarmGoal? goal, DateTime readAt})>{};
 
   /// [repository]'s issues as they were last read, to show at once while [issues] reads them again. Null before the first.
   List<SwarmIssue>? kept(String repository) => _lists[repository];
@@ -251,6 +260,105 @@ class SwarmGitHub {
   /// Issue [number]'s thread as it was last read, to show at once while [thread] reads it again. Null before the first.
   SwarmIssueThread? keptThread(String repository, int number) =>
       _threads['$repository#$number'];
+
+  /// [repository]'s goal as it was last read, null in it for a project that states none, and when: its bar shows it at once
+  /// and asks again only once that is old. Null before the first read.
+  ({SwarmGoal? goal, DateTime readAt})? keptGoal(String repository) =>
+      _goals[repository];
+
+  /// [repository]'s goal as its default branch's checks score it now ([SwarmGoal]), or null when it states none: the score
+  /// the daemon tells its PM (cli/src/superTabs/goal.ts `goalOf`). Scored on the newest of the branch's last landings on
+  /// which no milestone's check is still to run, or, when there is none, on the one with the fewest still to run, the
+  /// newest of those: the tip has no run yet in the minutes after each landing.
+  ///
+  /// One GraphQL read brings the file, the landings and each one's first hundred checks, where the daemon makes three REST
+  /// reads: this one is asked while a person looks. A landing with more checks is asked for the rest only when it is looked
+  /// at.
+  Future<SwarmGoal?> goal(String repository) async {
+    final (owner, name) = _split(repository);
+    final answer = await _call([
+      'api',
+      'graphql',
+      '-f',
+      'query=$_goalQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+    ], repository);
+    final map = _data(answer, ['repository']);
+    final file = map['goal'];
+    final rows = goalRows(
+      file is Map && file['text'] is String ? file['text'] as String : null,
+    );
+    SwarmGoal? goal;
+    if (rows.isNotEmpty) {
+      final branch = map['defaultBranchRef'];
+      final branchName = branch is Map && branch['name'] is String
+          ? branch['name'] as String
+          : '';
+      for (final landing in goalLandingsOf(branch)) {
+        final scored = SwarmGoal.on(
+          rows,
+          await _goalRuns(repository, landing),
+          branch: branchName,
+        );
+        if (goal == null || scored.notRun < goal.notRun) goal = scored;
+        if (scored.notRun == 0) break;
+      }
+      goal ??= SwarmGoal.on(rows, const [], branch: branchName);
+    }
+    _goals.remove(repository);
+    _goals[repository] = (goal: goal, readAt: clock.now());
+    while (_goals.length > goalsKept) {
+      _goals.remove(_goals.keys.first);
+    }
+    return goal;
+  }
+
+  /// The check runs of [landing], a commit of [repository] as [goal]'s read describes it: its first hundred, which that
+  /// read brought, and its next pages while GitHub says there are more, as far as [goalCheckPages].
+  Future<List<Object?>> _goalRuns(
+    String repository,
+    Map<Object?, Object?> landing,
+  ) async {
+    final (owner, name) = _split(repository);
+    final rollup = landing['statusCheckRollup'];
+    var contexts = rollup is Map ? rollup['contexts'] : null;
+    final runs = [..._nodes(contexts)];
+    for (var page = 1; page < goalCheckPages; page++) {
+      final info = contexts is Map ? contexts['pageInfo'] : null;
+      final oid = landing['oid'];
+      if (info is! Map ||
+          info['hasNextPage'] != true ||
+          info['endCursor'] is! String ||
+          oid is! String) {
+        break;
+      }
+      final answer = await _call([
+        'api',
+        'graphql',
+        '-f',
+        'query=$_goalChecksQuery',
+        '-f',
+        'owner=$owner',
+        '-f',
+        'name=$name',
+        '-f',
+        'oid=$oid',
+        '-f',
+        'after=${info['endCursor']}',
+      ], repository);
+      contexts = _data(answer, [
+        'repository',
+        'object',
+        'statusCheckRollup',
+        'contexts',
+      ]);
+      runs.addAll(_nodes(contexts));
+    }
+    return runs;
+  }
 
   /// [repository]'s open issues, newest activity first, each with its labels in their colours, who opened it and when, and how
   /// many comments it has: one GraphQL read of up to 100 a page, [onPage] told the issues so far after each, so the newest show
@@ -676,6 +784,28 @@ class SwarmGitHub {
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!,$before:String){'
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       'comments(last:\$last,before:\$before){$_commentFields}}}}';
+
+  /// What a goal's score reads of a commit's check runs, and each one's page. A commit status is among a commit's checks
+  /// too, and has none of these.
+  static const _goalRunFields =
+      'pageInfo{hasNextPage endCursor} nodes{...on CheckRun{databaseId name status conclusion url}}';
+
+  /// A project's goal ([goal]): its file on the default branch, the ids of that branch's last [goalCommits] commits, and
+  /// its tip with the four commits before it on its first-parent line ([goalLandings] in all), each with its first hundred
+  /// checks.
+  static const _goalQuery =
+      r'query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
+      'goal:object(expression:"HEAD:$goalFile"){...on Blob{text}} '
+      'defaultBranchRef{name target{...on Commit{history(first:$goalCommits){nodes{oid}} '
+      '...c parents(first:1){nodes{...c parents(first:1){nodes{...c parents(first:1){nodes{'
+      '...c parents(first:1){nodes{...c}}}}}}}}}}}}} '
+      'fragment c on Commit{oid statusCheckRollup{contexts(first:100){$_goalRunFields}}}';
+
+  /// The checks of one commit after its first hundred ([_goalRuns]).
+  static const _goalChecksQuery =
+      r'query($owner:String!,$name:String!,$oid:GitObjectID!,$after:String!){'
+      r'repository(owner:$owner,name:$name){object(oid:$oid){...on Commit{'
+      'statusCheckRollup{contexts(first:100,after:\$after){$_goalRunFields}}}}}}';
 
   /// What a read says while GitHub limits this person's requests.
   static const limitedWords =

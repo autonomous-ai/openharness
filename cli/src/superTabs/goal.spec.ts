@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { GOAL_MAX, goalOf, goalRows, LINE_MAX, scoreOf } from './goal.js'
 import { GitHubReads, type GitHubGet } from './githubRest.js'
 
@@ -35,6 +37,13 @@ describe('a project\'s goal file', () => {
     const many = goalRows(Array.from({ length: GOAL_MAX + 5 }, (_, n) => `| Milestone ${n} | \`check ${n}\` |`).join('\n'))
     expect(many).toHaveLength(GOAL_MAX)
     expect(many.at(-1)).toEqual({ milestone: `Milestone ${GOAL_MAX - 1}`, check: `check ${GOAL_MAX - 1}` })
+  })
+
+  // The same file Desktop's swarm_goal_test.dart reads: the bar must list the milestones the daemon scores.
+  it('reads every case of the fixture Desktop reads too', () => {
+    const { cases } = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'goal-rows.json'), 'utf8')) as { cases: { name: string; text: string | null; rows: unknown[] }[] }
+    expect(cases.length).toBeGreaterThan(0)
+    for (const { name, text, rows } of cases) expect(goalRows(text), name).toEqual(rows)
   })
 
   // The row's pattern takes time by the square of a line's length, and the file is the repository's text.
