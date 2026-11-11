@@ -592,13 +592,15 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       }
 
       it('waits for what git left running to end before it looks at the checkout, and says taskkill failed', async () => {
-        // What git left ends once the start has given up on stopping it, however long git took under load: a fixed
-        // 2 s left 1 s between it and the start's own wait, and a slow checkout on a loaded Mac used that up.
+        // What git left ends 0.3 s after the start has given up on stopping it, however long git took under load: a
+        // fixed 2 s from the hook left 1 s between it and the start's own wait, and a slow checkout on a loaded Mac used
+        // that up. Still after the timeout, so a start that stopped waiting for git's stderr would read it unfinished.
+        // Bounded (30 s), so a test that fails first leaves nothing running.
         const stopped = join(root, 'stop-failed')
         const said = vi.spyOn(console, 'error').mockImplementation((...line: unknown[]) => {
           if (String(line[0]).startsWith('[worktree] could not stop git')) writeFileSync(stopped, '')
         })
-        await leftBehind(`while [ ! -e '${stopped}' ]; do sleep 0.05; done`)
+        await leftBehind(`n=0; while [ ! -e '${stopped}' ] && [ $n -lt 600 ]; do sleep 0.05; n=$((n + 1)); done; sleep 0.3`)
         const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
         expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
         expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
