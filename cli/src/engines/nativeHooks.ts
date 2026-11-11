@@ -13,7 +13,7 @@ import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
 import { opencodeMajorVersion, type OpencodeLaunchSnapshot } from './launchControl.js'
 import { installNativePlugin, prepareNativePlugin, prepareNativePluginRemoval } from './kit/nativePlugin.js'
 import { installNativeYamlHooks } from './kit/nativeHookYaml.js'
-import { command } from './kit/notifyHooks.js'
+import { command, hooksNotInstalled, requireHookScript } from './kit/notifyHooks.js'
 import { hostPlatform } from './kit/windowsFiles.js'
 import { GROK_HOOK_SETTINGS } from './grok/contract.js'
 import { AGY_HOOK_SETTINGS } from './agy/contract.js'
@@ -41,9 +41,12 @@ export const installPiExtension = (port: number, options?: NativeHookOptions): P
 export const installAmpPlugin = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...AMP_PLUGIN, file: join(nativeHookLocations(options.environment).AMP_PLUGIN_DIR, 'launcher-register.ts') } : AMP_PLUGIN, pluginValues(port), options)
 // Windows: Hermes splits the line itself and starts the program with no shell (agent/shell_hooks.py `_spawn`, Hermes 0.22.7). It
 // keeps double quotes as one word and backslashes as they are, which is the line `cmd` takes (`shlex.split(posix=False)`).
-export const installHermesHooks = (port: number, selectedHome?: string, options?: NativeHookOptions, platform: NodeJS.Platform = hostPlatform()): Promise<boolean> =>
-  installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,
+export const installHermesHooks = (port: number, selectedHome?: string, options?: NativeHookOptions, platform: NodeJS.Platform = hostPlatform()): Promise<boolean> => {
+  // Once for every home, before the pool: a missing notify.mjs is a failed install said in one line, never a rejection.
+  try { requireHookScript() } catch (error) { console.error(hooksNotInstalled('hermes', error, platform)); return Promise.resolve(false) }
+  return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,
     { ...options, createMissing: !!selectedHome && !!options?.environment })
+}
 
 /** Install both discovery surfaces for v1; v2 must not load our incompatible v1 export. */
 interface OpencodeInstallation { port: number; executable?: string; major?: number | null; settling?: boolean; done: Promise<boolean>; proofs: HookPreparationProof[] }
