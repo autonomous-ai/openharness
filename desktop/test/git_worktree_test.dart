@@ -219,6 +219,54 @@ void main() {
     expect(await git(['branch', '--show-current']), 'main');
   });
 
+  test('many concurrent starts on one repository all start, one checkout at a time', () async {
+    // Git reads every worktree's files while it adds one, and fails on one
+    // another add has half written ("failed to read .git/worktrees/…").
+    // A checkout as long as a real project's, so two would overlap.
+    await git(['switch', 'feature']);
+    Directory(p.join(repo, 'many')).createSync();
+    for (var i = 0; i < 1000; i++) {
+      File(p.join(repo, 'many', '$i')).writeAsStringSync('$i');
+    }
+    await git(['add', '.']);
+    await git(['commit', '-qm', 'many files']);
+    await git(['switch', 'main']);
+    var adding = 0, mostAtOnce = 0;
+    Future<Process> start(List<String> argv, Map<String, String> env) async {
+      final add = argv.contains('worktree') && argv.contains('add');
+      final process = await Process.start(
+        'git',
+        argv,
+        environment: env,
+        includeParentEnvironment: false,
+      );
+      if (add) {
+        mostAtOnce = max(mostAtOnce, ++adding);
+        unawaited(process.exitCode.whenComplete(() => adding--));
+      }
+      return process;
+    }
+
+    final paths = await Future.wait([
+      for (var i = 0; i < 6; i++)
+        prepareGitProject(
+          repo,
+          p.join(root.path, 'harnesses'),
+          worktree: true,
+          branchRef: 'refs/heads/feature',
+          startProcess: start,
+        ),
+    ]);
+    expect(paths.toSet(), hasLength(6));
+    for (final path in paths) {
+      expect(
+        await File(p.join(path, 'src', 'value')).readAsString(),
+        'feature',
+      );
+    }
+    expect(mostAtOnce, 1);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
   test('concurrent starts that draw the same name both start, each marked as Harness made it', () async {
     Future<String> start() => prepareGitProject(
       repo,
