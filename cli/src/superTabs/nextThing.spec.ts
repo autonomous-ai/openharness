@@ -111,6 +111,25 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // A task whose pieces others build (githubSplit.ts) is not one its builder sits idle on: the first review of the split found it
+  // asked about the task at 20 minutes, the task taken from it at the hour, and its next task never typed.
+  it('types its next task while the one it took waits on pieces cut off it, and watches that one again once they are done', async () => {
+    const f = setup({ items: [{ ...item(12, 'Sync the settings', ['status:taken']), sub_issues_summary: { total: 3, completed: 1, percent_completed: 33 } }, item(14, 'Add the export')] })
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([`Next: acme/app#14 Add the export. It is given to you and nobody has taken it: ${TAKE} acme/app#14`])
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    expect(f.written).toEqual([])
+    // Its pieces done, it is its builder's own work again: nothing else is typed, and it is asked about it at 20 minutes.
+    f.state.items[0] = { ...item(12, 'Sync the settings', ['status:taken']), sub_issues_summary: { total: 3, completed: 3, percent_completed: 100 } }
+    await f.end()
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told().at(-1)).toMatch(/^You hold acme\/app#12 \(Sync the settings\) and have done nothing on it for 20 minutes/)
+    f.next.stop()
+  })
+
   it('types nothing when nothing waits for it, when it is busy again, or when its person stopped its turn', async () => {
     const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(30, 'Fix the login bug', [], true)] })
     f.next.start()
