@@ -23,7 +23,7 @@ import { label } from './catalog.js'
 import { bearer, locked, needsRefresh, refreshable, writePrivate, type Store, type Token } from './store.js'
 import { refresh } from './renew.js'
 import { answer as answerRest, transport } from './rest.js'
-import { peerIsThisAccount, type PeerAccount } from '../peerAccount.js'
+import { PEER_LOOKUP_UNANSWERED_MESSAGE, peerIsThisAccount, type PeerAccount } from '../peerAccount.js'
 import { newPipePath } from '../windows/pipeAuth.js'
 
 /** Headers an MCP client sends that the service must see. Authorization never comes from the agent. */
@@ -215,9 +215,12 @@ function bridgeHandler(vault: Store, options: BridgeOptions): RequestListener {
     // and another account that took it during a restart hears the key (audit H1). A key heard must open nothing. Answered
     // as an unknown key is, so the answer does not say the key was right.
     // On the 0600 socket the filesystem has already said who the caller is, and a socket's peer has no port to look up.
-    if (!address || (!options.socket && !await (options.peerAccount ?? peerIsThisAccount)(request.socket))) {
+    const caller = !address || options.socket ? true : await (options.peerAccount ?? peerIsThisAccount)(request.socket)
+    if (!address || caller === false) {
       fail(response, 404, 'Unknown connection address. Restart this agent, or run harness connections sync.'); return
     }
+    // No answer in time is not a no: only a caller with the right key gets here, and it is told to ask again.
+    if (caller === 'unanswered') { response.setHeader('Retry-After', '1'); fail(response, 503, PEER_LOOKUP_UNANSWERED_MESSAGE); return }
     if (address.kind === 'list') { list(response); return }
     const code = address.code
     if (request.headers['transfer-encoding'] && !request.headers['content-length']) { fail(response, 411, 'Send the request with a Content-Length.'); return }

@@ -385,7 +385,25 @@ function hookRoute(port) {
   return socketPath ? tokenRoute({ socketPath }, readHookCredential()) : null
 }
 
-function post(port, path, body, onResponse) {
+/**
+ * The daemon answered, but could not check in time who is calling (PEER_LOOKUP_UNANSWERED, a 503 from a slow lsof or a busy
+ * Windows): asked again, backed off, within the hook's budget. It is up, so nothing is written behind its back: past the
+ * tries it is 'held', said once on stderr, where the engine shows a hook's output.
+ */
+async function post(port, path, body, onResponse) {
+  for (let attempt = 0; ; attempt++) {
+    const result = await postOnce(port, path, body, onResponse)
+    if (result !== 'unanswered') return result
+    const wait = 250 * 2 ** attempt
+    if (attempt >= 2 || remainingBudget() < wait + 500) {
+      process.stderr.write('[harness] The Harness daemon could not check in time that this hook runs as your account, so this event was not delivered. The daemon log says why.\n')
+      return 'held'
+    }
+    await new Promise(resolve => setTimeout(resolve, wait))
+  }
+}
+
+function postOnce(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const route = hookRoute(port)
@@ -418,6 +436,7 @@ function post(port, path, body, onResponse) {
           const ok = (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300
           let reply
           try { if (response.length <= 16_384) reply = JSON.parse(response) } catch { /* no structured reply */ }
+          if (res.statusCode === 503 && reply?.error === 'PEER_LOOKUP_UNANSWERED') { resolve('unanswered'); return }
           if (res.statusCode === 429 || (res.statusCode === 202 && reply?.retry === true)) { resolve('held'); return }
           if (path === '/api/hook/turn-stop' && ok && reply?.pending === true) { resolve('held'); return }
           if (path === '/api/hook/turn-stop' && ok && reply?.duplicate === true) { resolve('duplicate'); return }
