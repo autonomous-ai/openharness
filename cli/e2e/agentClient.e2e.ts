@@ -493,8 +493,9 @@ describe('Harness for agents, end to end', () => {
     await d.start()
     await until('Harness to allow its commands in Claude Code and Codex', () => existsSync(rules)
       && readFileSync(settings, 'utf8').includes('mcp__plugin_harness_harness__harness_send'), 30_000)
-    const tools = { whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send', tell: 'harness_tell' }
-    const verbs = Object.keys(tools) as Array<keyof typeof tools>, launcher = join(d.env.HOME!, '.local', 'bin', 'harness')
+    const tools: Record<string, string> = { whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send', tell: 'harness_tell' }
+    // `browser` is a shell command only: its two `Bash` rules and no MCP tool.
+    const verbs = [...Object.keys(tools), 'browser'], launcher = join(d.env.HOME!, '.local', 'bin', 'harness')
     // The person's deny of `harness close` is theirs: no allow for it in either spelling (Claude Code does not count the
     // launcher's path as the same command). Its MCP tool is another tool, and is allowed by name. `harness --help`,
     // which every harness reads as it starts, comes first: it names no verb (#1239, which left this list as it was,
@@ -502,7 +503,7 @@ describe('Harness for agents, end to end', () => {
     expect(JSON.parse(readFileSync(settings, 'utf8')).permissions).toEqual({
       allow: ['Bash(npm test:*)', 'Bash(harness --help)', 'Bash(harness -h)', `Bash(${launcher} --help)`, ...verbs.flatMap((verb) => [
         ...(verb === 'close' ? [] : [`Bash(harness ${verb}:*)`, `Bash(${launcher} ${verb}:*)`]),
-        `mcp__harness__${tools[verb]}`, `mcp__plugin_harness_harness__${tools[verb]}`,
+        ...(tools[verb] ? [`mcp__harness__${tools[verb]}`, `mcp__plugin_harness_harness__${tools[verb]}`] : []),
       ])],
       deny: ['Bash(harness close:*)'],
     })
