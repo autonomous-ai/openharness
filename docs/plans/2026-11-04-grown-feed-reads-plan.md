@@ -8,7 +8,7 @@ over four hours at flat traffic; SwarmStart getMore on `{tabId, changedAt}` 239 
 `{tabId, agentIds}` 28 → 42).
 
 **Architecture:** measured on a grown bench Swarm (3,000 finished starts, 1,500 quiet Lead conversations,
-`backend/integration/bench/grownFeedOps.ts`):
+`backend/integration/bench/grownFeedOps.ts`; that tool went in Swarm v4 S19c with the Tasks feed, retired 2026-11-10):
 
 1. A host's poll after any change rebuilds the host signature (`read/hostInputs.ts hostInputs`, the `host:inputs` entry,
    no patch rule) by reading the key and change time of **every live start**, member and agent: 3,279 rows, a command and
@@ -80,5 +80,6 @@ that PR fixes the delta and feed reads of `GET changes`; this one touches neithe
 
 ## Task 3: measure and hand over
 
-- [ ] `grownFeedOps.ts` before (main) and after; numbers and red/green in the PR.
+- [ ] `grownFeedOps.ts` before (main) and after; numbers and red/green in the PR. (The tool went in Swarm v4 S19c with the
+  Tasks feed, retired 2026-11-10.)
 - [ ] `npm test`, typecheck; ready; review step.

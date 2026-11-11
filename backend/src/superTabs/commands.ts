@@ -90,6 +90,8 @@ export const startRequestSchema = z.object({
 }).strict()
 /** The machines a Swarm remembers its people took out. */
 const MAX_REMOVED_MACHINES = 64
+/** The most projects a Swarm holds. */
+export const MAX_PROJECTS = 100
 
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
@@ -767,7 +769,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** A new project of [ownerId]'s named [name], with its Lead chat: project.create's, and + New agent's for a PM (task #4116). */
   const createProject = (ownerId: string, name: string, visibility: 'public' | 'private', brief: string, process: ProjectProcess): SwarmProject => {
     const projects = mutableProjects(state)
-    if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
+    if (projects.length >= MAX_PROJECTS) fail('PROJECTS_FULL', `A swarm can have up to ${MAX_PROJECTS} projects.`)
     const leadConversationId = `project-${operationId}`
     const project: SwarmProject = { id: operationId, name, ownerId, ownerGeneration: person(state, ownerId).generation, leadConversationId,
       visibility, members: [], updateMinutes: 5, skillMode: 'default', process }

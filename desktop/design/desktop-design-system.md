@@ -770,6 +770,17 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Chat times.** No time in a bubble's row. A time sits centered between
   messages only after a pause of more than five minutes (`SwarmChatTime`);
   a bubble's full date and time are on its tooltip.
+- **Message states.** Under your newest message, at the bubble's side as
+  iMessage's Delivered (Swarm plan, step 1, item 2, 2026-11-11;
+  `SuperTabMessageReceipt`, in the gallery): `Sending…`, `Sent` once the
+  server has it, `Typed` once it is in its agent's session, in 12-point muted
+  ink with no mark; once its agent answers, the line goes, the answer being
+  the third state. Two minutes after it was sent and still not typed, the line
+  turns amber, `Not typed yet`, with why in a note under it: its agent is
+  working, waits on your answer in its terminal, has unsent text or a menu
+  open there (each of these three with Open terminal), is not running, or its
+  computer has not taken it. Not sent, offline and an unconfirmed delivery
+  keep their own lines.
 - **Chat cards.** A compact card (`SwarmChatCard`) is an icon and a small
   label, one title line, and one blue action that shows the rest in place.
   What GitHub said to your agent (a comment, review or line comment that names it or is on
