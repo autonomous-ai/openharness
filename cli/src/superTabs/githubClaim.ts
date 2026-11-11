@@ -74,7 +74,7 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
   const issue = object(read.body), labels = labelsOf(issue.labels), mine = labelOf(name)
   // GitHub answers for a moved issue where it is now, which may be no project of the builder's.
   if (typeof issue.repository_url === 'string' && !issue.repository_url.toLowerCase().endsWith(`/repos/${repository}`)) {
-    throw new SuperTabHostError('TASK_NOT_FOUND', `${at} was moved to another repository.`, 404)
+    throw new SuperTabHostError('TASK_NOT_FOUND', `${at} is now in another repository: moved, or renamed while GitHub did not say its new name (try again in a few minutes).`, 404)
   }
   if (issue.pull_request) throw new SuperTabHostError('NOT_A_TASK', `${at} is a pull request. A task is an issue.`, 409)
   if (issue.state !== 'open') throw new SuperTabHostError('TASK_CLOSED', `${at} is closed.`, 409)
