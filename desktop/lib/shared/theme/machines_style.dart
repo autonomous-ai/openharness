@@ -9,8 +9,6 @@ abstract final class MachinesStyle {
       grid.AppTheme.pick(const Color(0xfff6f6f7), const Color(0xff1b1b1e));
   static Color get line =>
       grid.AppTheme.pick(const Color(0xffe6e6e9), const Color(0xff2b2b30));
-  static Color get ink =>
-      grid.AppTheme.pick(const Color(0xff17171a), const Color(0xfff2f2f4));
   static Color get metadata =>
       grid.AppTheme.pick(const Color(0xff6b6b73), const Color(0xffa3a3ac));
   static Color get label =>

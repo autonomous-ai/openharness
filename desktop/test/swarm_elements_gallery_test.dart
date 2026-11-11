@@ -719,6 +719,7 @@ class _Gallery extends StatelessWidget {
                   controller: swarm,
                   onAddAgent: (_) {},
                   ticks: false,
+                  now: () => DateTime.utc(2026, 11, 9, 9),
                 ),
               ),
             ],

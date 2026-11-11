@@ -24,9 +24,10 @@ Object _machineLayout(List<_MachineView> views) {
 
 extension _ManageMachines on _SuperTabMachinesState {
   bool _matchesMachine(_MachineView view) =>
-      '${view.name} ${view.owner?.shownName ?? ''} ${view.id}'
-          .toLowerCase()
-          .contains(_machineSearch.trim().toLowerCase());
+      // What a row shows: its name and its owner.
+      '${view.name} ${view.owner?.shownName ?? ''}'.toLowerCase().contains(
+        _machineSearch.trim().toLowerCase(),
+      );
 
   Widget _manageScreen(VoidCallback? add) {
     grid.AppTheme.watch(context);
@@ -50,8 +51,13 @@ extension _ManageMachines on _SuperTabMachinesState {
         views.where((v) => _machineStatusGroup(v) == group).length;
     // The counts a person acts on; a count at 0 is left out.
     final summary = [
-      for (final group in ['online', 'asleep', 'offline'])
-        if (count(group) case final n when n > 0) '$n $group',
+      for (final (group, word) in [
+        ('online', 'online'),
+        ('asleep', 'asleep'),
+        ('unknown', 'status unknown'),
+        ('offline', 'offline'),
+      ])
+        if (count(group) case final n when n > 0) '$n $word',
     ].join(' · ');
     final machines = _machines(views);
     return ColoredBox(
@@ -73,7 +79,7 @@ extension _ManageMachines on _SuperTabMachinesState {
                       padding: MachinesStyle.toolbarInset,
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          // A larger text size needs the room sooner: search and Add machine go under the title.
+                          // A larger text size needs the room sooner: search and Add machine go under the counts.
                           final narrow =
                               constraints.maxWidth <
                               MediaQuery.textScalerOf(context).scale(760);
@@ -95,7 +101,7 @@ extension _ManageMachines on _SuperTabMachinesState {
                                       _changed();
                                     },
                                     style: MachinesStyle.body(
-                                      color: MachinesStyle.ink,
+                                      color: grid.AppPalette.textPrimary,
                                     ),
                                     decoration: InputDecoration(
                                       hintText: 'Search machines',
@@ -147,8 +153,10 @@ extension _ManageMachines on _SuperTabMachinesState {
                               ? Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    title,
-                                    const SizedBox(height: 16),
+                                    if (summary.isNotEmpty) ...[
+                                      title,
+                                      const SizedBox(height: 16),
+                                    ],
                                     actions,
                                   ],
                                 )
@@ -249,9 +257,7 @@ class _ManageMachineLine extends StatelessWidget {
       height: MediaQuery.textScalerOf(context).scale(56),
       padding: MachinesStyle.rowInset,
       decoration: BoxDecoration(
-        border: own
-            ? null
-            : Border(bottom: BorderSide(color: MachinesStyle.line)),
+        border: Border(bottom: BorderSide(color: MachinesStyle.line)),
         borderRadius: MachinesStyle.radius,
       ),
       child: LayoutBuilder(
@@ -288,21 +294,15 @@ class _ManageMachineLine extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Tooltip(
-                            message: view.name,
-                            child: Text(
-                              name,
-                              key: ValueKey('super-machine-name-${view.id}'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: MachinesStyle.name(),
-                            ),
-                          ),
-                        ),
-                      ],
+                    Tooltip(
+                      message: view.name,
+                      child: Text(
+                        name,
+                        key: ValueKey('super-machine-name-${view.id}'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: MachinesStyle.name(),
+                      ),
                     ),
                     Text(
                       metadata,

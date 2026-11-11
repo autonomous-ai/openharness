@@ -51,7 +51,7 @@ const _agentSlotsMax = 1024;
 int _clampAgentSlots(num value) =>
     value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
 
-/// Manage › Machines: one line per machine with its owner and status, search and filters, and Add machine.
+/// Manage › Machines: one line per machine with its owner and status, the counts, search and Add machine.
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -1101,18 +1101,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 children: [
                   if (view.agents.isNotEmpty) _agentCount(view),
                   _MachineReadings(view: view),
+                  // No agents is said by nothing; why none can be read is said.
                   if (view.agents.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
-                      child: Text(
-                        view.status == SuperTabMachineStatus.offline
-                            ? 'Offline'
-                            : view.status == SuperTabMachineStatus.unknown
-                            ? "Can't reach Harness"
-                            : 'Refreshing…',
-                        style: DesktopChrome.metadata(),
+                    if (switch (view.status) {
+                          SuperTabMachineStatus.offline => 'Offline',
+                          SuperTabMachineStatus.unknown =>
+                            "Can't reach Harness",
+                          SuperTabMachineStatus.refreshing => 'Refreshing…',
+                          _ => null,
+                        }
+                        case final why?)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
+                        child: Text(why, style: DesktopChrome.metadata()),
                       ),
-                    ),
                 ],
               ),
             ),

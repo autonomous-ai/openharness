@@ -377,6 +377,8 @@ void main() {
         expect(line, findsNothing);
         // An empty list shows nothing (design system, Swarm rule 7).
         expect(find.text('No agents yet'), findsNothing);
+        // Nothing in their place either.
+        expect(find.text('Refreshing…'), findsNothing);
         expect(
           find.byKey(const ValueKey('super-machine-readings-m')),
           findsOneWidget,
