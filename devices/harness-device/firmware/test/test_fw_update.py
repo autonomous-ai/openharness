@@ -28,16 +28,17 @@ typedef int esp_ota_img_states_t;
 typedef struct { uint32_t size; const char *label; } esp_partition_t;
 typedef struct { char version[32]; } esp_app_desc_t;
 typedef struct { uint32_t hash; size_t bytes; } mbedtls_sha256_context;
-enum { ESP_OK=0, ESP_OTA_IMG_PENDING_VERIFY=1 };
+enum { ESP_OK=0, ESP_OTA_IMG_PENDING_VERIFY=1, ESP_OTA_IMG_VALID=2, ESP_OTA_IMG_INVALID=3 };
 #define pdMS_TO_TICKS(ms) (ms)
 static const esp_partition_t slot={8192,"inactive"}, running={8192,"running"};
 static uint8_t flash[8192], image[8192];
 static int fault, hash_fault, image_state;
 static bool voice, missing_slot, handle_live, corrupt_read, confirmed_log;
-static unsigned erases, writes, reads, aborts, accepts, progress, errors, done, reboots, boots, ui_closed, marks;
+static unsigned erases, writes, reads, aborts, accepts, progress, errors, done, reboots, boots, ui_closed, marks, rollbacks;
 static uint32_t write_offset, ack;
 static int64_t clock_us;
-static char offered_version[32], error_text[96], hash_hex[65];
+static char offered_version[32], error_text[96], hash_hex[65], slot_version[32];
+static int slot_state;
 static void log_message(const char *tag,const char *fmt,...) {
     (void)tag; if(strstr(fmt,"image confirmed")) confirmed_log=true;
 }
@@ -49,9 +50,11 @@ static int64_t esp_timer_get_time(void) { return clock_us; }
 static bool audio_client_active(void) { return voice; }
 static const esp_partition_t *esp_ota_get_running_partition(void) { return &running; }
 static int esp_ota_get_state_partition(const esp_partition_t *p,int *state) {
-    assert(p==&running); *state=image_state; return fault==8;
+    assert(p==&running || p==&slot); *state=p==&slot ? slot_state : image_state; return fault==8;
 }
 static int esp_ota_mark_app_valid_cancel_rollback(void) { marks++; return fault==9; }
+// Reboots on success, so it returns only when it failed (no other valid image).
+static int esp_ota_mark_app_invalid_rollback_and_reboot(void) { rollbacks++; return fault==11 ? 1 : 0; }
 static const esp_app_desc_t *esp_app_get_description(void) {
     static const esp_app_desc_t desc={"current"}; return &desc;
 }
@@ -77,7 +80,9 @@ static int esp_partition_read(const esp_partition_t *p,uint32_t offset,void *out
     memcpy(out,flash+offset,n); if(corrupt_read && n)((uint8_t *)out)[0]^=1; return 0;
 }
 static int esp_ota_get_partition_description(const esp_partition_t *p,esp_app_desc_t *desc) {
-    assert(p==&slot); snprintf(desc->version,sizeof desc->version,"%s",fault==6 ? "wrong-image" : offered_version);
+    assert(p==&slot);
+    // slot_version: what an earlier image left in the slot (a test sets it); otherwise the image just written.
+    snprintf(desc->version,sizeof desc->version,"%s",fault==6 ? "wrong-image" : slot_version[0] ? slot_version : offered_version);
     return fault==5;
 }
 static int esp_ota_set_boot_partition(const esp_partition_t *p) { assert(p==&slot); if(fault==7)return 1; boots++;return 0; }
@@ -113,9 +118,9 @@ static void reset(void) {
     assert(!s_active && !handle_live);
     reset_state(); fault=hash_fault=image_state=0;
     voice=missing_slot=corrupt_read=confirmed_log=false;
-    erases=writes=reads=aborts=accepts=progress=errors=done=reboots=boots=ui_closed=marks=0;
+    erases=writes=reads=aborts=accepts=progress=errors=done=reboots=boots=ui_closed=marks=rollbacks=0;
     ack=write_offset=0; clock_us=123456;
-    error_text[0]=0;
+    error_text[0]=0; slot_version[0]=0; slot_state=0;
 }
 static void hash_image(size_t n) {
     mbedtls_sha256_context ctx;mbedtls_sha256_init(&ctx);
@@ -143,6 +148,15 @@ int main(void) {
     char invalid[65];memset(invalid,'x',64);invalid[64]=0;
     assert(!fw_update_offer("valid",1500,invalid) && !erases);
     voice=true;assert(!fw_update_offer("valid",1500,hash_hex) && !erases);voice=false;
+    // The version that just rolled back sits in the slot, marked invalid: its re-offer is declined, no erase.
+    reset();hash_image(1500);slot_state=ESP_OTA_IMG_INVALID;snprintf(slot_version,sizeof slot_version,"0.1.1");
+    assert(!fw_update_offer("0.1.1",1500,hash_hex) && !erases && !accepts);
+    // A newer version is accepted over it.
+    assert(fw_update_offer("0.1.2",1500,hash_hex) && erases==1 && accepts==1);fw_update_abort("test");
+    // Only a slot marked invalid blocks: the same version in a valid slot is accepted.
+    reset();hash_image(1500);slot_state=ESP_OTA_IMG_VALID;snprintf(slot_version,sizeof slot_version,"0.1.1");
+    assert(fw_update_offer("0.1.1",1500,hash_hex) && accepts==1);fw_update_abort("test");
+    reset();hash_image(1500);
     missing_slot=true;assert(!fw_update_offer("valid",1500,hash_hex) && !erases);missing_slot=false;
     for(int f=1;f<=10;f+=9) {
         reset();hash_image(1500);fault=f;
@@ -186,10 +200,19 @@ int main(void) {
         assert(done==1 && reboots==1 && boots==1 && !errors && !s_active && !handle_live);
         assert(reads==(n+1023)/1024);
     }
-    reset();fw_mark_valid();assert(!marks && !confirmed_log);
-    image_state=ESP_OTA_IMG_PENDING_VERIFY;fault=8;fw_mark_valid();assert(!marks);
-    fault=9;fw_mark_valid();assert(marks==1 && !confirmed_log);
-    fault=0;fw_mark_valid();assert(marks==2 && confirmed_log);
+    // Not a fresh install: nothing to confirm and nothing to roll back, link or not.
+    reset();fw_confirm_boot(false);assert(!marks && !rollbacks && !confirmed_log);
+    fw_confirm_boot(true);assert(!marks && !rollbacks);
+    // A fresh install whose state cannot be read is left alone.
+    image_state=ESP_OTA_IMG_PENDING_VERIFY;fault=8;fw_confirm_boot(true);assert(!marks && !rollbacks);
+    fw_confirm_boot(false);assert(!marks && !rollbacks);
+    // A fresh install whose link started is confirmed (a failed confirm is logged, not retried here).
+    fault=9;fw_confirm_boot(true);assert(marks==1 && !confirmed_log && !rollbacks);
+    fault=0;fw_confirm_boot(true);assert(marks==2 && confirmed_log && !rollbacks);
+    // A fresh install that cannot open the cable rolls back instead of being confirmed.
+    reset();image_state=ESP_OTA_IMG_PENDING_VERIFY;fw_confirm_boot(false);assert(rollbacks==1 && !marks);
+    // A rollback that returns (no other valid image) leaves the dial running, still unconfirmed.
+    fault=11;fw_confirm_boot(false);assert(rollbacks==2 && !marks);
     puts("OTA: malformed offers, overflow, stalled transfers, disconnect, 10 SDK failure paths, hash/version checks and 482 chunked images PASS (fake flash)");
 }
 '''
