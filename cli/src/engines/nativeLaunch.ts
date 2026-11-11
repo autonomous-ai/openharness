@@ -109,8 +109,31 @@ async function read(executable: string, args: readonly string[], environment: Re
   })
 }
 
-/** The answer of a launch's help probe that confirms no flag (`permission`): the engine ran and printed its help. */
-const RUNS = ''
+/** Each engine executable's help, by the file's identity (its path, inode, size and times: kit/nativeVersion.ts) and the
+ *  PATH it runs under. Its help, and that it runs at all, are facts about the installed file, not one launch: launches that
+ *  ask together share one probe, and a held pass of many agents (a restore, a Swarm's agents) never meets the probes' cap,
+ *  nor does a relaunch or fork ask twice. Not keyed on the homes: help does not read them, and a Swarm agent's own home
+ *  would bring the cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
+ *  file (its Node uninstalled), and a launch after that is refused with its reason again. No answer or a failure is asked
+ *  again. A new install, an upgrade or a finished download is a new identity, asked afresh. */
+const helps = new Map<string, { help: Promise<ProbeOutput | null>; at: number }>()
+const HELP_LIFE_MS = 60_000
+/** At most this many installs, each under the PATH it runs with; beyond it the oldest goes. */
+const HELP_LIMIT = 32
+function helpOf(executable: NativeExecutableSnapshot, environment: Readonly<Record<string, string>>): Promise<ProbeOutput | null> {
+  const key = `${executable.identity}\0${environment.PATH ?? ''}`, at = performance.now()
+  const known = helps.get(key)
+  if (known && at - known.at < HELP_LIFE_MS) return known.help
+  helps.delete(key)
+  const help = read(executable.command, ['--help'], environment)
+  if (helps.size >= HELP_LIMIT) helps.delete(helps.keys().next().value!)
+  helps.set(key, { help, at })
+  void help.then(output => {
+    const printed = output?.code === 0 && `${output.stdout}${output.stderr}`.trim() && executable.current()
+    if (!printed && helps.get(key)?.help === help) helps.delete(key)
+  })
+  return help
+}
 
 /** The location variables every engine's homes derive from. */
 const SHARED_LOCATIONS: ReadonlySet<string> = new Set(['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'])
@@ -185,7 +208,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const owned = process.platform === 'win32' ? startupOwnedFlag(launchContract(engine)) : null
   let startupArgs: readonly string[] | undefined
   if (owned) {
-    const help = await read(executable.command, ['--help'], environment)
+    const help = await helpOf(executable, environment)
     if (help && help.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${help.stderr}\n${help.stdout}`, `it exited with status ${help.code}`))
     if (!help || help.code !== 0 || !`${help.stdout}${help.stderr}`.trim()) return waiting('Waiting to confirm the selected executable’s startup options.')
     startupArgs = Object.freeze(helpLists(`${help.stdout}\n${help.stderr}`, owned.flag) ? [owned.flag] : [])
@@ -195,9 +218,6 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const dependenciesCurrent = () => dependencies.every(proof => proof.current())
   let preparing = false, valid = true, prepared = false, revision = 0
   const current = () => valid && !preparing && executable.current() && [...dependencies, ...proofs].every(proof => proof.current())
-  const permissions = new Map<string, 'supported' | 'unsupported'>()
-  // Windows read this executable's help for its startup options just now: it runs.
-  if (startupArgs) permissions.set(RUNS, 'supported')
   /** Why the latest help probe's executable failed, when it ran and exited non-zero. */
   let failed: string | null = null
   const launch: NativeLaunch = {
@@ -212,7 +232,6 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     async prepareHooks(port, owner, overrides = {}, clear = []) {
       if (preparing || !executable.current() || !owner() || !dependenciesCurrent()) return false
       preparing = true; valid = false; const attemptRevision = ++revision
-      permissions.clear()
       try {
         const chosen = { ...selectedEnvironment }
         for (const key of clear) if (LAUNCH_LOCATION_VARIABLES.includes(key as typeof LAUNCH_LOCATION_VARIABLES[number])) delete chosen[key]
@@ -250,16 +269,13 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     async permission(choice) {
       // A launch that names no mode (#3466: the owner's own) has no flag to confirm, and is still probed as auto mode's flag
       // would be: the engine's help is what tells one that cannot run, or that the Desktop is still downloading, from one
-      // that can. Any help it prints will do. The same one probe a launch made before, by default in auto.
+      // that can. Any help it prints will do. Asked once per install (helpOf), as auto mode's own flag is.
       const flag = permissionFlagToVerify(engine, choice)
       if (!flag && !permissionFlagToVerify(engine, { permissionMode: 'auto' })) return 'supported'
       if (!current()) return 'unknown'
-      const key = flag ?? RUNS
-      const known = permissions.get(key)
-      if (known) return known
       const observedRevision = revision
       failed = null
-      const probe = await read(executable.command, ['--help'], selectedEnvironment)
+      const probe = await helpOf(executable, selectedEnvironment)
       if (!probe || !current() || observedRevision !== revision) return 'unknown'
       if (probe.code !== 0) { failed = failureReason(`${probe.stderr}\n${probe.stdout}`, `it exited with status ${probe.code}`); return 'unknown' }
       // Help on either stream, as the shell probe reads it (`2>&1`, lib/engineLaunch.ts). OpenCode
@@ -268,9 +284,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       // for good, waiting to confirm its permission flags.
       const help = `${probe.stdout}\n${probe.stderr}`
       if (!help.trim()) return 'unknown'
-      const answer = !flag || helpLists(help, flag) ? 'supported' : 'unsupported'
-      permissions.set(key, answer)
-      return answer
+      return !flag || helpLists(help, flag) ? 'supported' : 'unsupported'
     },
   }
   if (await launch.permission(source) === 'unknown') {
