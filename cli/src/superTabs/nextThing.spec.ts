@@ -253,7 +253,11 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }]
     await f.end()
     expect(f.told()).toEqual([])
+    // Run again and passed: read again once ten minutes are up (a failing head is not read at each turn's end).
     f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'success' }]
+    await f.end()
+    expect(f.told()).toEqual([])
+    vi.setSystemTime(Date.now() + 10 * 60_000)
     await f.end()
     expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
     f.next.stop()

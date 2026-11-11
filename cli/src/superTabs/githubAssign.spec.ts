@@ -27,12 +27,14 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
-    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
+    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), checksDown: false, labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     state.asked.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     const url = new URL(`https://api.github.com${path}`)
+    // A token that cannot read checks (a fine-grained one without Checks), as GitHub answers it.
+    if (state.checksDown && /\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname)) return { status: 403, etag: null, body: { message: 'Resource not accessible by integration' }, resetAt: null }
     const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
     const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
@@ -101,13 +103,12 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: 
   /** What each pass counted (pmNumbers.ts). */
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
-  const running = vi.fn((_agentId: string) => true)
-  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, running,
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
     now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock, numbers, running }
+  return { github, assigner, make, log, labelled, said, clock, numbers }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -590,18 +591,36 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([])
     })
 
-    // Code review of #4060: a stopped PM asked never hears it, and is not asked again; while nobody else can read, that is said once.
-    it('asks its PM to read only while its session runs here, and says once that nobody can read it', async () => {
+    // Code review of #4060: a push is a change to read. The reader asked about the head before, with no verdict on it, is asked
+    // about the new one once, half an hour after its last ask at the soonest, and then not again.
+    it('asks a reader asked about an earlier head about the new one, once, half an hour after its last ask', async () => {
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
-      f.running.mockReturnValue(false)
-      await f.assigner.tick()
-      await f.assigner.tick()
+      f.github.state.comments.set(30, [comment('Harness, 05:00, to **Faye**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: new Date(f.clock.now - 10 * 60_000).toISOString() })])
+      await f.make().tick()
       expect(asks(f)).toEqual([])
-      expect(f.log.mock.calls.filter(([line]) => /NO_READER acme\/app#30@/.test(String(line)))).toHaveLength(1)
-      f.running.mockReturnValue(true)
+      // Each pass a fresh process, which knows what it asked only as GitHub keeps it.
+      let kept = 0
+      for (const later of [20, 0, 60, 240]) {
+        f.clock.now += later * 60_000
+        await f.make().tick()
+        for (const body of asks(f).slice(kept)) f.github.state.comments.get(30)!.push(comment(body, { created_at: new Date(f.clock.now).toISOString() }))
+        kept = asks(f).length
+      }
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: the head is now f6edb44: please read this pull request/)])
+      // Said in the daemon's log, once a process.
+      expect(f.log.mock.calls.some(([line]) => /NO_READER acme\/app#30@f6edb44: its readers asked have not read it/.test(String(line)))).toBe(true)
+    })
+
+    it('asks readers as before when the checks cannot be read, and says so once', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.checksDown = true
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
+      expect(f.log.mock.calls.filter(([line]) => /CHECKS_UNREAD acme\/app/.test(String(line)))).toHaveLength(1)
     })
 
     it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {

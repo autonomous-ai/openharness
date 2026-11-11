@@ -817,9 +817,10 @@ describe('the rule\'s parts', () => {
     expect(checksOf([], {}).state).toBe('passed')
     expect(checksOf([{ status: 'completed', conclusion: 'skipped' }], { statuses: [{ state: 'success' }] }).state).toBe('passed')
     expect(checksOf([{ status: 'queued' }], {}).state).toBe('running')
-    // A check run again on the same head: its latest run decides, and it is named once (#4055 listed ci/required twice).
-    expect(checksOf([{ id: 2, name: 'ci/required', status: 'completed', conclusion: 'success' }, { id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], {}).state)
-      .toBe('passed')
+    // GitHub lists each check's latest run, so two of one name are two checks (two workflows' jobs): either failing fails the
+    // head, and a failed name is said once (#4055 listed ci/required twice).
+    expect(checksOf([{ id: 2, name: 'test', status: 'completed', conclusion: 'success' }, { id: 1, name: 'test', status: 'completed', conclusion: 'failure' }], {}).state)
+      .toBe('failed')
     expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }, { id: 2, name: 'ci/required', status: 'completed', conclusion: 'failure' }], {}).failed)
       .toEqual(['ci/required'])
     expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'failure', context: 'ci/required' }] }).failed)

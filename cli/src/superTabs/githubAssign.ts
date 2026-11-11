@@ -14,7 +14,7 @@ import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { object } from './wire.js'
-import { authorOf, headChecks, isHeld, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
+import { authorOf, FailingHeads, isHeld, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 import { goalOf, type Score } from './goal.js'
 import { numbersOf, type Numbers } from './pmNumbers.js'
@@ -51,8 +51,6 @@ const ISSUE_PAGES = 10
  *  how many asks one reader gets for one head. Thirty minutes (Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is
  *  asked"; lampOS's first verdict came at 6 minutes at the median and 37 at p90): two hours until 11-11, and v4's sandbox #27
  *  waited four on two readers who never answered. A reader's turn that ends without its read is typed it too (nextThing.ts). */
-/** How long a head found failing its checks is taken as failing without reading them again, and the most heads kept so. */
-const FAILED_KEPT_MS = 10 * 60_000, MAX_FAILED = 500
 const READ_WAIT_MS = 30 * 60_000, READ_ASKS = 3
 /** How far back a word to a builder that its task's pieces are closed is looked for after a restart. */
 const PIECES_SAID_MS = 24 * 60 * 60_000
@@ -93,12 +91,9 @@ export class GitHubAssign {
   private readonly now: () => number
   private readonly log: (line: string) => void
 
-  /** When each head was found failing its checks (checksFailed), the ones found longest ago going first past MAX_FAILED. */
-  private readonly failedAt = new Map<string, number>()
+  private readonly failing: FailingHeads
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
-    /** Whether an agent's session runs on this computer, where its PM's does: a stopped PM is asked to read nothing. */
-    running: (agentId: string) => boolean
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
     records: VerdictRecords
     /** Takes what a pass counted of a project, for its PM and its people, and how to read its goal when a line says it
@@ -107,6 +102,7 @@ export class GitHubAssign {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
+    this.failing = new FailingHeads(this.reads, this.now)
   }
 
   start(): void {
@@ -317,6 +313,8 @@ export class GitHubAssign {
       // Who Harness asked, for which heads, and when.
       const now = this.now()
       const asked = new Map<string, Map<string, number>>()
+      // Each asked as its ask wrote it: GitHub news brings an ask to the name as written, in its case (the swarm-sandbox, 2026-11-10).
+      const written = new Map<string, string>()
       // How often each was asked for this head.
       const onThisHead = new Map<string, number>()
       for (const c of comments) {
@@ -324,6 +322,7 @@ export class GitHubAssign {
         if (!found) continue
         // Keyed as the readers are (verdicts): the one asked as "Kai Lee" is the one that answered as "kai-lee".
         const name = readerKey(found[1]!)
+        written.set(name, found[1]!)
         if (head.startsWith(found[2]!)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
         const heads = asked.get(name) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
@@ -378,17 +377,20 @@ export class GitHubAssign {
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
         const pm = readerKey(project.pm)
-        // The PM reads only while its session runs here: one asked while stopped never hears it (GitHub news reads what is said
-        // from when its agent runs again), and it is not asked twice (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader).
-        const reader = builder ?? (!own(pm) && !skip.has(pm) && this.deps.running(project.pmAgentId) ? { id: pm, name: project.pm } : null)
+        const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
-          // Nobody new can read it. The reader asked is not asked again: its own turn's end types it the read it owes
-          // (nextThing.ts), and asked again on GitHub each silent half hour, the pull request had one more comment each time
-          // (#4055, anh Dee, 2026-11-11: "never spam github as user accounts could be banned"). Said, once for its head.
-          const silent = [...asked.keys()].filter(name => !own(name) && !(readers.has(name) && onHead(readers.get(name)!.sha)))
-          this.once(silent.length ? `[super-tab] Task assignment: READER_SILENT ${repo}#${number}@${head.slice(0, 7)}: ${silent.join(', ')} asked, `
-            + 'and nobody else can read it'
-            : `[super-tab] Task assignment: NO_READER ${repo}#${number}@${head.slice(0, 7)}: nobody but its author can read it now`)
+          // Nobody new can read it. A reader asked about an earlier head, with no verdict on this one, is asked about this one: once,
+          // and half an hour after its last ask at the soonest, so a run of pushes is one ask. One asked about this head is not asked
+          // again: its own turn's end types it the read it owes (nextThing.ts). Asked again each silent half hour, a pull request had
+          // one more comment in its person's name each time (#4055; anh Dee, 2026-11-11: "never spam github as user accounts could
+          // be banned").
+          const again = [...asked.keys()].filter(name => !own(name) && !lastAsk(name, true)
+            && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
+            .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
+          if (again) await askNow(written.get(again)!, `the head is now ${head.slice(0, 7)}: please read this pull request`)
+          // Said once for its head, unless its checks failed: its builder fixes those first.
+          else if (!(failed ??= await this.checksFailed(repo, head))) this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}@${head.slice(0, 7)}: `
+            + (asked.size ? 'its readers asked have not read it, and nobody else can' : 'nobody but its author can read it'))
           break
         }
         skip.add(reader.id)
@@ -399,16 +401,13 @@ export class GitHubAssign {
     return withReaders
   }
 
-  /** Whether [head]'s checks failed, as the merger reads them (githubMerge.ts headChecks). A head found failing is not read again
-   *  for [FAILED_KEPT_MS]: each pass would read it while nobody is asked to read it, and only a check run again changes it. */
+  /** Whether [head]'s checks failed (githubMerge.ts FailingHeads). Checks that cannot be read hold no reader back, as before
+   *  Harness read them here, nor the pull requests after it in the pass: the merger reads them again before it merges. */
   private async checksFailed(repo: string, head: string): Promise<boolean> {
-    const key = `${repo}@${head}`, at = this.failedAt.get(key)
-    if (at !== undefined && this.now() - at < FAILED_KEPT_MS) return true
-    const failed = (await headChecks(this.reads, repo, head)).state === 'failed'
-    this.failedAt.delete(key)
-    if (failed) this.failedAt.set(key, this.now())
-    if (this.failedAt.size > MAX_FAILED) this.failedAt.delete(this.failedAt.keys().next().value!)
-    return failed
+    return this.failing.failing(repo, head).catch((error: unknown) => {
+      this.once(`[super-tab] Task assignment: CHECKS_UNREAD ${repo}: ${error instanceof GitHubStop ? error.code : 'unreadable'}`)
+      return false
+    })
   }
 
   /** Learns how long finished tasks took: for a few closed sized issues a pass not measured yet, from its builder's

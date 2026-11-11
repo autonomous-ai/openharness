@@ -25,7 +25,7 @@ import { named } from './agentReplies.js'
 import { openPieces, readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
-import { headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
+import { FailingHeads, headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
@@ -89,6 +89,7 @@ export class NextThing {
   private readonly idle = new Map<string, { timer: NodeJS.Timeout; agent: WatchedAgent; repo: string; task: Record<string, unknown> }>()
   private readonly looking = new Set<string>()
   private readonly reads: GitHubReads
+  private readonly failing: FailingHeads
   private memory: Record<string, Kept> | null = null
   /** The asks to read found made, gone or moved on (`agent:repo#N@sha`), so they are not read again while they are owed: each
    *  goes once GitHub news no longer keeps its ask, so it holds no more than those do. */
@@ -121,6 +122,7 @@ export class NextThing {
     log?: (line: string) => void
   }) {
     this.reads = new GitHubReads(deps.get)
+    this.failing = new FailingHeads(this.reads, Date.now)
     this.log = deps.log ?? (line => console.warn(line))
   }
 
@@ -351,15 +353,16 @@ export class NextThing {
     if (this.answered.has(key)) return null
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${ask.number}`)
     const head = String(object(pull.head).sha ?? '')
-    // On hold, or failing its checks: it waits, and so does its read (Harness asks no reader for it either, githubAssign.ts).
-    if (pull.state === 'open' && (isHeld(pull) || (head.startsWith(ask.sha) && (await headChecks(this.reads, repo, head)).state === 'failed'))) return null
     if (pull.state === 'open' && head.startsWith(ask.sha)) {
+      // On hold, it waits for a person, and so does its read (Harness asks no reader for it either, githubAssign.ts).
+      if (isHeld(pull)) return null
       // Whether it read is not known while the records cannot be read: it is not asked now, nor taken as answered.
       const talk = await this.deps.named(agent, repo, await pullTalk(this.reads, repo, ask.number))
       if (!talk) return null
       const { readers } = verdicts(talk, String(pull.body ?? ''), pullPeople(pull, await this.deps.team(agent)))
       const read = agent.names.some(name => head.startsWith(readers.get(readerKey(name))?.sha ?? '\n'))
-      if (!read) return head.slice(0, 7)
+      // Failing its checks, it waits for its builder's fix, a new head, read again.
+      if (!read) return await this.failing.failing(repo, head) ? null : head.slice(0, 7)
     }
     this.answered.add(key)
     return null

@@ -492,13 +492,9 @@ export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? nul
 export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
   const failed: string[] = [], seen: string[] = []
   let running = false
-  // A check run again on the same head is listed again: its latest run decides, so one that failed and then passed has passed.
-  const latest = new Map<string, Json>()
+  // GitHub lists each check's latest run (check-runs' filter=latest): two of one name are two checks, two workflows' jobs, and
+  // either failing fails the head (code review of #4060).
   for (const run of runs) {
-    const kept = latest.get(String(run.name ?? ''))
-    if (!kept || !(Number(kept.id) > Number(run.id))) latest.set(String(run.name ?? ''), run)
-  }
-  for (const run of latest.values()) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
@@ -518,6 +514,28 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
 export async function headChecks(reads: GitHubReads, repo: string, head: string): Promise<ReturnType<typeof checksOf>> {
   const runs = object(await reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
   return checksOf(Array.isArray(runs) ? runs.map(object) : [], await reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+}
+
+/** How long a head found failing its checks is taken as failing without reading them again, and the most heads kept so. */
+const FAILING_KEPT_MS = 10 * 60_000, FAILING_MAX = 500
+
+/** The heads found failing their checks (headChecks), each taken as failing for [FAILING_KEPT_MS] without reading them again: only
+ *  a check run again changes one, and each pass, or each turn's end, would read it again meanwhile. */
+export class FailingHeads {
+  private readonly at = new Map<string, number>()
+
+  constructor(private readonly reads: GitHubReads, private readonly now: () => number) {}
+
+  async failing(repo: string, head: string): Promise<boolean> {
+    const key = `${repo}@${head}`, at = this.at.get(key)
+    if (at !== undefined && this.now() - at < FAILING_KEPT_MS) return true
+    const failed = (await headChecks(this.reads, repo, head)).state === 'failed'
+    this.at.delete(key)
+    if (failed) this.at.set(key, this.now())
+    // The one found longest ago goes first.
+    if (this.at.size > FAILING_MAX) this.at.delete(this.at.keys().next().value!)
+    return failed
+  }
 }
 
 export class GitHubMerge {
