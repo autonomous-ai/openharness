@@ -441,3 +441,71 @@ describe('the machine lines of a change read', () => {
   })
 })
 
+
+// Swarm allocator, package 12: what an agent's conversation used on a task (superTabs/taskTokens.ts). A row is counts and ids
+// only, and only a well-formed one reaches the store.
+describe('a task\'s tokens over HTTP', () => {
+  let app: FastifyInstance
+  const recordTaskTokens = vi.fn(async (..._args: unknown[]) => ({ recorded: true })), taskTokens = vi.fn(async (..._args: unknown[]) => ({ rows: [] }))
+  beforeEach(async () => {
+    recordTaskTokens.mockClear(); taskTokens.mockClear()
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    await app.register(superTabRoutes, { store: { recordTaskTokens, taskTokens } as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+  const model = (name: string) => ({ model: name, input: 1, output: 2, cacheRead: 3, cacheWrite: 4 })
+  const row = { repository: 'Acme/App', number: 14, kind: 'build', tokens: [model('claude-sonnet-5-5'), model('gpt-5.5')], rounds: 0, startedAt: 1_800_000_000_000, endedAt: 1_800_000_060_000 }
+  const post = (payload: unknown, query = '?asAgentId=agent1') => app.inject({ method: 'POST', url: `/api/super-tabs/tab1/task-tokens${query}`, payload: payload as never })
+
+  it('hands a well-formed row to the store, as the agent that wrote it', async () => {
+    const res = await post(row)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toEqual({ recorded: true })
+    expect(recordTaskTokens.mock.calls[0]!.slice(1)).toEqual(['tab1', 'agent1', row])
+  })
+
+  it('refuses a row that is not counts and ids, before it reaches the store', async () => {
+    const bad: Array<[string, unknown, string?]> = [
+      ['no agent', row, ''],
+      ['a repository that is no owner/name', { ...row, repository: 'acme' }],
+      ['an issue numbered zero', { ...row, number: 0 }],
+      ['a number that is no whole number', { ...row, number: 1.5 }],
+      ['a kind of work it does not know', { ...row, kind: 'review' }],
+      ['no model', { ...row, tokens: [] }],
+      ['seventeen models', { ...row, tokens: Array.from({ length: 17 }, (_, i) => model(`m${i}`)) }],
+      ['a model named twice', { ...row, tokens: [model('gpt-5.5'), model('gpt-5.5')] }],
+      ['a model\'s name with words in it', { ...row, tokens: [model('the task is to add a search field')] }],
+      ['a count below zero', { ...row, tokens: [{ ...model('gpt-5.5'), output: -1 }] }],
+      ['a count that is no whole number', { ...row, tokens: [{ ...model('gpt-5.5'), input: 0.5 }] }],
+      ['a count missing', { ...row, tokens: [{ model: 'gpt-5.5', input: 1, output: 2, cacheRead: 3 }] }],
+      ['a field it does not know', { ...row, title: 'Add a search field' }],
+      ['a field it does not know on a model', { ...row, tokens: [{ ...model('gpt-5.5'), prompt: 'words' }] }],
+      ['rounds below zero', { ...row, rounds: -1 }],
+      ['an end before its start', { ...row, endedAt: row.startedAt - 1 }],
+      ['a time that is no date', { ...row, endedAt: 9e15 }],
+    ]
+    for (const [what, payload, query] of bad) {
+      const res = await post(payload, query)
+      expect(res.statusCode, what).toBe(400)
+      expect(res.json().error.code, what).toBe('VALIDATION_ERROR')
+    }
+    expect(recordTaskTokens).not.toHaveBeenCalled()
+  })
+
+  it('reads the rows of up to twenty numbers of a repository, for a person or as an agent', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/super-tabs/tab1/task-tokens?repository=Acme/App&numbers=14,20' })).statusCode).toBe(200)
+    expect(taskTokens.mock.calls[0]!.slice(1)).toEqual(['tab1', 'Acme/App', [14, 20], undefined])
+    const twenty = Array.from({ length: 20 }, (_, i) => i + 1)
+    expect((await app.inject({ method: 'GET', url: `/api/super-tabs/tab1/task-tokens?repository=acme/app&numbers=${twenty.join(',')}&asAgentId=agent1` })).statusCode).toBe(200)
+    expect(taskTokens.mock.calls[1]!.slice(1)).toEqual(['tab1', 'acme/app', twenty, 'agent1'])
+    for (const query of ['repository=acme/app', 'numbers=14', 'repository=acme&numbers=14', 'repository=acme/app&numbers=', 'repository=acme/app&numbers=0',
+      'repository=acme/app&numbers=1.5', 'repository=acme/app&numbers=14,x', `repository=acme/app&numbers=${[...twenty, 21].join(',')}`, 'repository=acme/app&numbers=14&all=1']) {
+      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/tab1/task-tokens?${query}` })
+      expect(res.statusCode, query).toBe(400)
+    }
+    expect(taskTokens).toHaveBeenCalledTimes(2)
+  })
+})
