@@ -73,13 +73,13 @@ export interface RepliesDeps {
 
 class Late extends Error { override readonly name = 'TIMEOUT' }
 /** [work] or a failure after [ms]. */
-function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
+export function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Late()), ms); timer.unref?.() })
   return Promise.race([work, late]).finally(() => clearTimeout(timer))
 }
 /** A failure's name, for a log line: the server's own code, else the error's kind. Never its message, which may hold text. */
-const named = (error: unknown): string => error instanceof SuperTabHostError ? error.code : error instanceof Error ? error.name : 'ERROR'
+export const named = (error: unknown): string => error instanceof SuperTabHostError ? error.code : error instanceof Error ? error.name : 'ERROR'
 
 /** The replies a journal holds, as a host that starts from it owes them: each must be one this host could have written, and
  *  the newest of each terminal and of all are kept. Said once, by how many were not. */
