@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -214,6 +215,31 @@ Future<void> showText(
 
 Finder notificationsEntry() => find.byKey(const ValueKey('super-mentions'));
 
+/// A Swarm's agent names that count how often they are read.
+class WalkedNames extends ListBase<String> {
+  WalkedNames(this._names);
+  final List<String> _names;
+  int walks = 0;
+
+  @override
+  int get length => _names.length;
+  @override
+  set length(int _) => throw UnsupportedError('fixed');
+  @override
+  String operator [](int at) {
+    walks++;
+    return _names[at];
+  }
+
+  @override
+  void operator []=(int at, String name) => throw UnsupportedError('fixed');
+  @override
+  Iterator<String> get iterator {
+    walks++;
+    return _names.iterator;
+  }
+}
+
 /// A Swarm whose reader is the peer, with the Lead and the peer's chat with
 /// their own agent in the first project.
 ConversationServer swarm() {
@@ -347,6 +373,40 @@ void main() {
         expect(
           find.text('@(qa) bot @(qa) bot can you look?', findRichText: true),
           findsOneWidget,
+        );
+      },
+    );
+
+    // Review of #3904: each row read every agent's name each time it was drawn, tagged or not: with a thousand agents,
+    // forty plain rows took 60 ms where they had taken 10. Rendering is a hot path (AGENTS.md standard 4).
+    testWidgets(
+      'rows that tag nobody read the Swarm\'s agent names once between them, not once a row',
+      (tester) async {
+        final agents = WalkedNames([
+          for (var at = 0; at < 1000; at++) 'builder $at',
+          'first builder',
+        ]);
+        for (final text in ['Plain words.', 'More of them.', 'And a third.']) {
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: grid.buildAppTheme(brightness: Brightness.dark),
+              home: Scaffold(body: SuperTabMessageText(text, agents: agents)),
+            ),
+          );
+        }
+        expect(agents.walks, 1);
+        // The names are still known: a row that tags one draws it whole.
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: SuperTabMessageText('@first builder ready', agents: agents),
+            ),
+          ),
+        );
+        expect(
+          runsOf(tester, '@first builder').single?.backgroundColor,
+          isNotNull,
         );
       },
     );
