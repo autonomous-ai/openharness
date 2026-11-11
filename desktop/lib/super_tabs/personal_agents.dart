@@ -63,8 +63,9 @@ class PersonalAgent {
 
   String get computer => machine.machine.displayName;
 
-  /// Where it runs, and that its computer is asleep or off when it is.
-  String get place => machine.isOffline ? '$computer · offline' : computer;
+  /// Where it runs, or `offline` while its computer is asleep or off, as an agent's row says it: the one word saying why a
+  /// click does nothing, which a long computer name cut off (PSQA, 2026-11-12).
+  String get place => machine.isOffline ? 'offline' : computer;
 
   /// What it is once it joins ([swarmAgentId]).
   late final String swarmId = swarmAgentId(machineId, agent.id);

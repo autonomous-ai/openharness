@@ -356,7 +356,7 @@ void main() {
     f.app.machineStates['laptop']!.nodeOnline = false;
     await changed(tester, f);
     expect(
-      inRow('super-pane-laptop-notes', find.text('Mac laptop · offline')),
+      inRow('super-pane-laptop-notes', find.text('offline')),
       findsOneWidget,
     );
     f.app.machineStates['laptop']!.nodeOnline = true;
@@ -746,7 +746,7 @@ void main() {
         expect(find.text('Choose your own computer.'), findsOneWidget);
         await changed(tester, f);
         expect(
-          inRow('super-pane-laptop-notes', find.text('Mac laptop · offline')),
+          inRow('super-pane-laptop-notes', find.text('offline')),
           findsOneWidget,
         );
         final sentBefore = sent(f).length;
@@ -780,6 +780,42 @@ void main() {
       expect((c.selectedId, sent(f).length), before);
       expect(find.byType(SnackBar), findsNothing);
     });
+
+    // PSQA, 2026-11-12: a computer's long name cut "offline" off its rows, the one word saying why a click did nothing.
+    scene(
+      'a row of a computer that is off says offline, as an agent\'s row does, its face grey, however long the computer\'s name',
+      (tester, f, c) async {
+        f.app.machineStates['laptop']!.nodeOnline = false;
+        await changed(tester, f);
+        expect(
+          inRow('super-pane-laptop-notes', find.text('offline')),
+          findsOneWidget,
+        );
+        expect(
+          inRow(
+            'super-pane-laptop-notes',
+            find.byKey(const ValueKey('super-face-offline')),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          inRow(
+            'super-pane-m-docs',
+            find.byKey(const ValueKey('super-face-offline')),
+          ),
+          findsNothing,
+        );
+      },
+      desk: (f) {
+        f.app.machineStates['m']!.agents = [session('docs', 'Docs bot')];
+        computer(f.app, 'laptop', 'Dee’s MacBook Pro (16-inch, 2024)');
+        f.app.machineStates['laptop']!.agents = [
+          session('notes', 'Release notes', engine: 'codex'),
+        ];
+        deskTab(f.app, 'one', [pane('m', 'docs'), pane('laptop', 'notes')]);
+      },
+      joined: const [],
+    );
 
     scene(
       'a session two tabs show joins once, and a name of emoji and one the person never '
