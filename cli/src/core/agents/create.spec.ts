@@ -724,6 +724,35 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ bypassPermission: true, permissionMode: null })
     })
 
+    // The argv the pane really gets, so the task's absence from it is the launch's, not this spec's mock's (without
+    // the install step, whose recipe this spec stubs).
+    const launchedFor = async (over: Record<string, unknown>) => {
+      const real = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+      expect(await setup().create(request(over))).toMatchObject({ ok: true })
+      return vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    }
+
+    it('an OpenClaw first task is kept for typing, not launched with', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('--message')
+    })
+
+    it('a Swarm launch takes the same path', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser', swarmRole: 'agent' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('--message')
+    })
+
+    it('an engine that takes its first prompt in argv keeps none', async () => {
+      const pane = await launchedFor({ engine: 'claude', prompt: 'Fix the parser' })
+      expect(pane).not.toHaveProperty('firstTask')
+      expect(pane.argv.join(' ')).toContain('Fix the parser')
+    })
+
     it('opens a terminal ready at once, with nothing to watch', async () => {
       vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
       const { deps, create } = setup()
