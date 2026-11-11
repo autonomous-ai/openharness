@@ -297,6 +297,24 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.say).not.toHaveBeenCalled()
   })
 
+  // A pull request says which task it closes (lib/swarmSkills.ts: "its pull request says Closes #N"): with two taken and one
+  // pull request, the one it holds with nothing open for it is the one no pull request closes, not the oldest.
+  it('watches the task it holds that no pull request of its closes', async () => {
+    const f = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(14, 'Add the export', ['status:taken']),
+      { ...item(30, 'Fix the login bug', [], true), body: 'Fixes the redirect.\n\nCloses #12' }] })
+    f.next.start()
+    await f.end()
+    await vi.advanceTimersByTimeAsync(IDLE_ASK_MS)
+    expect(f.told()).toEqual([expect.stringMatching(/^You hold acme\/app#14 \(Add the export\) and have done nothing/)])
+    // A pull request that names no task may be for either: nothing is asked.
+    const g = setup({ items: [item(12, 'Fix the login bug', ['status:taken']), item(30, 'Fix the login bug', [], true)] })
+    g.next.start()
+    await g.end()
+    await vi.advanceTimersByTimeAsync(IDLE_BACK_MS)
+    expect(g.tell).not.toHaveBeenCalled()
+    f.next.stop(); g.next.stop()
+  })
+
   it('watches the oldest of the tasks it holds, and says an ask that could not be typed by its code', async () => {
     const f = setup({ items: [item(16, 'Later', ['status:taken']), { number: 14, labels: [{ name: 'builder:pip' }, { name: 'status:taken' }] }] })
     f.tell.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'No answer.', 503))
