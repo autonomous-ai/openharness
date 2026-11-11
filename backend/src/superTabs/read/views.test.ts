@@ -21,7 +21,6 @@ function scene() {
     worker.limitedUntil = new Date(NOW - MINUTE).toISOString()
     worker.downSince = new Date(NOW - 5 * MINUTE).toISOString()
     state.sharing = { revision: 1 } as never
-    state.overlapAlerts = ['a:b']
     state.machines![0]!.observation = { generation: 'g', receivedAt: NOW, resources: {} as never, tools: {}, quotas: [],
       runningHarnessIds: ['lead-harness', 'stranger'], stoppedHarnessIds: [] }
   })
@@ -32,15 +31,14 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('reader view of the parts (design 4.1, 4.3)', () => {
-  it('sends the head without owner-only and internal fields, and projects without their progress', () => {
+  it('sends the head without owner-only and internal fields', () => {
     const { parts } = scene()
     const { head } = readerView(parts, peer, NOW, {}).parts
     expect(head).toMatchObject({ key: 'head', version: R, changedAt: NOW })
-    for (const hidden of ['sharing', 'overlapAlerts', 'retiredConversationNumber', 'parkedConversations', 'groupCounter', 'sequenceBase']) {
+    for (const hidden of ['sharing', 'retiredConversationNumber', 'parkedConversations', 'groupCounter', 'sequenceBase']) {
       expect(head.data).not.toHaveProperty(hidden)
     }
     expect(head.data.projects!.map(p => p.name)).toEqual(['Pilot'])
-    expect(head.data.projects!.every(p => !('progress' in p))).toBe(true)
     expect(head.data.invitations).toEqual([])
   })
 
@@ -75,7 +73,7 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const { s, parts } = scene()
     const web = readerView(parts, peer, NOW, {}).parts.groups.find(g => g.key === s.web)!
     expect(web).toMatchObject({ version: R, changedAt: NOW, data: { id: s.web, messageSeq: R, number: 1 } })
-    for (const hidden of ['reportSeq', 'lastActivityAt', 'dormant', 'audience']) expect(web.data).not.toHaveProperty(hidden)
+    for (const hidden of ['lastActivityAt', 'dormant', 'audience']) expect(web.data).not.toHaveProperty(hidden)
   })
 
   it('tells readers when a group shipped, and nothing else of its ledger', () => {

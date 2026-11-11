@@ -16,7 +16,7 @@ export interface Written { kind: PartKind; key: string; version: number }
 /** MongoDB limits a document to 16 MiB. A part leaves room for its columns and indexes (design section 1.4). */
 export const PART_LIMIT_BYTES = 4 * 1024 * 1024
 
-const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts', progress: 'progress' } as const
+const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts' } as const
 type ListKind = keyof typeof LISTS
 
 /** JSON with sorted keys, so two equal records compare equal whatever order a command built them in. */
@@ -258,7 +258,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       const prior = before.get(key)
       if (!prior) {
         writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first, ...host(kind, undefined, part.data) })
-        if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+        if (kind !== 'group' && kind !== 'start') referencesChanged = true
       } else if (!sameData(prior.data, part.data)) {
         writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data),
           ...kind === 'machine' && machineContentChanged(prior.data, part.data) ? { content: true as const } : {} })
@@ -267,7 +267,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     for (const [key, prior] of before) {
       if (now.has(key)) continue
       writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data, ...host(kind, prior.data, undefined) })
-      if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+      if (kind !== 'group' && kind !== 'start') referencesChanged = true
     }
   }
   const agentsWritten = new Set(writes.filter(w => w.kind === 'agent').map(w => w.key))
@@ -297,7 +297,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     versions.set(`${write.kind}:${write.key}`, version)
     written.push({ kind: write.kind, key: write.key, version })
   }
-  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts, ...parts.progress]
+  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts]
   for (const touch of opts.touches ?? []) {
     const key = `${touch.kind}:${touch.key}`
     if (versions.has(key)) continue

@@ -109,8 +109,8 @@ describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
     expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} })])).toEqual([])
   })
 
-  it('tells nobody for touches or progress', () => {
-    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }, update('progress', 'p', {})])).toEqual([])
+  it('tells nobody for touches', () => {
+    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }])).toEqual([])
   })
 
   it('tells a machine the commit removed from the Swarm', () => {

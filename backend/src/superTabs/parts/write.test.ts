@@ -5,7 +5,7 @@ import type { GroupData } from './types.js'
 
 describe('the host-fields digest a conversation write stores (group 3b)', () => {
   const group = (change: Partial<GroupData> = {}): GroupData => ({ id: 'g', projectId: 'p', title: 'Work', leadId: 'lead', agentIds: ['lead', 'worker'],
-    archived: false, brief: 'Do it', checks: [], lastMessageSequence: 10, messageSeq: 10, reportSeq: 10, lastActivityAt: '2026-10-26T10:00:00.000Z',
+    archived: false, brief: 'Do it', checks: [], lastMessageSequence: 10, messageSeq: 10, lastActivityAt: '2026-10-26T10:00:00.000Z',
     assignment: { id: 'w', agentId: 'worker', status: 'working', configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
       execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null }, ...change })
   const digest = (data: GroupData) => extracted('group', data, 1).hostDigest
@@ -13,7 +13,7 @@ describe('the host-fields digest a conversation write stores (group 3b)', () => 
   it('stays the same for a post, a rename or a new brief, which no host row shows', () => {
     const before = digest(group())
     expect(before).toMatch(/^[A-Za-z0-9_-]{16,}$/)
-    expect(digest(group({ lastMessageSequence: 11, messageSeq: 11, reportSeq: 11, lastActivityAt: '2026-10-26T11:00:00.000Z', pullRequestUrls: ['x'] }))).toBe(before)
+    expect(digest(group({ lastMessageSequence: 11, messageSeq: 11, lastActivityAt: '2026-10-26T11:00:00.000Z', pullRequestUrls: ['x'] }))).toBe(before)
     expect(digest(group({ title: 'Renamed', brief: 'Something else', checks: [{ id: 'c', description: 'd', independent: false, evidence: 'e', passedBy: null }] }))).toBe(before)
   })
 
@@ -25,26 +25,6 @@ describe('the host-fields digest a conversation write stores (group 3b)', () => 
       { assignment: { ...work, execution: { ...work.execution, machineId: 'n' } } }, { assignment: null }]) {
       expect(digest(group(change))).not.toBe(before)
     }
-  })
-})
-
-describe('the finished-work mark a conversation write stores', () => {
-  const group = (status: string | null): GroupData => ({ id: 'g', projectId: 'p', title: 'Work', leadId: 'lead', agentIds: ['lead'], archived: false,
-    brief: '', checks: [], lastMessageSequence: 0, assignment: status === null ? null : { id: 'w', agentId: 'worker', status: status as never,
-      configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
-      execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null } })
-
-  it('is set only while its task is done or cancelled: the archive pass reads only those (archive.ts)', () => {
-    expect(extracted('group', group('done'), 1).workFinished).toBe(true)
-    expect(extracted('group', group('cancelled'), 1).workFinished).toBe(true)
-    for (const status of ['working', 'review', 'lost', 'stopped', null]) expect(extracted('group', group(status), 1).workFinished).toBe(false)
-  })
-
-  // Every linked group is a step, which closes with its task, never on its own clock (task steps design; Ken, 2026-11-02).
-  // A row written before keeps the mark it had until it is written again, and the pass still closes those as before.
-  it('is never set on a linked group: it closes with its task', () => {
-    const linked = (status: string | null) => ({ ...group(status), reviewOf: 'built' })
-    for (const status of [null, 'lost', 'stopped', 'done', 'cancelled', 'working', 'review']) expect(extracted('group', linked(status), 1).workFinished).toBe(false)
   })
 })
 
@@ -72,9 +52,8 @@ describe('which hosts a write concerns', () => {
     expect(writeHosts({ op: 'insert', kind: 'start', key: 'k', ordinal: 1, data: { request: { machineId: 'B' } } })).toEqual(['B'])
   })
 
-  it('is none for a machine\'s own reading, a touch, or project progress', () => {
+  it('is none for a machine\'s own reading or a touch', () => {
     expect(update('machine', {})).toEqual([])
     expect(writeHosts({ op: 'touch', kind: 'head', key: 'head', seen: 1 })).toEqual([])
-    expect(update('progress', {})).toEqual([])
   })
 })

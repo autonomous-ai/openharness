@@ -325,7 +325,7 @@ describe('while a Swarm is deleted', () => {
     // Written as the records of work finished weeks ago would be.
     const old = new Date(w.clock.now - 30 * 24 * 60 * 60 * 1000)
     const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: prGroup } } })
-    await db.swarmGroup.update({ where: { id: row.id }, data: { workFinished: true, lastActivityAt: old,
+    await db.swarmGroup.update({ where: { id: row.id }, data: { lastActivityAt: old,
       data: { ...(row.data as object), assignment: { id: 'a1', agentId: 'gone', status: 'done', assignedAt: new Date(0).toISOString() },
         pullRequestUrls: [`https://github.com/example/${name}/pull/1`] } } })
     await db.swarmStart.create({ data: { id: `${f.tab}:start-old`, tabId: f.tab, key: 'start-old', version: 1, changedAt: old, ordinal: 0,
