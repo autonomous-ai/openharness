@@ -155,7 +155,8 @@ chip with no remembered project). Test: `test/super_tab_new_agent_names_test.dar
 
 - [ ] Failing tests: a long Swarm name has a tooltip with the whole name; a PM's project reads `Orion · web-project`;
   the crown is at least 12 px on a 20 px avatar; an agent with no chat shows no hover fill or click cursor; open
-  Projects with none shows `No projects yet.`
+  Projects with none shows `No projects yet.` (Superseded: an empty list shows nothing, Swarm rule 7; the line went in
+  #3962.)
 - [ ] Code: the smallest change for each.
 
 ## Group D — Tasks pane, Buddy dialogs, join dialog (`super_tabs/tasks/`, `super_tabs/buddy_*.dart`, `super_tabs/buddies.dart`, `super_tabs/join_dialog.dart`, and the other "Check pending action" sites)

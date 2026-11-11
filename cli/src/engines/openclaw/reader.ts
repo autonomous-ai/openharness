@@ -343,6 +343,12 @@ export class OpenclawReader {
   private stamp: string | null = null
   /** How many times a poll found the store's files changed: live.ts asks whether the pane can show anything new. */
   changes = 0
+  /**
+   * Whether the last read that reached the store found the key's node; false until one does, so also for a store
+   * that cannot be opened. live.ts asks it while the pane reads a run: a store that never gets the key is not the
+   * Gateway's.
+   */
+  keyFound = false
 
   constructor(private readonly deps: OpenclawReaderDeps) {}
 
@@ -404,6 +410,7 @@ export class OpenclawReader {
         recovered = true
       }
       const node = this.node()
+      this.keyFound = node !== null
       if (recovered) {
         console.error(`[openclaw] ${sid(this.deps.key)} store readable again`)
         this.deps.onRecovered?.()

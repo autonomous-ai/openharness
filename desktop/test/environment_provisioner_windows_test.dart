@@ -72,6 +72,16 @@ class _NoDeleteShareHandle {
 ProcessResult _result(int code, {String stdout = '', String stderr = ''}) =>
     ProcessResult(1, code, stdout, stderr);
 
+/// The signature check's answer for the two bin programs, both signed or both not.
+ProcessResult _signed() => _result(
+  0,
+  stdout: 'harness.exe\tValid\tAUTONOMOUS INC.\r\nharness-launch.exe\tValid\tAUTONOMOUS INC.\r\n',
+);
+ProcessResult _unsigned() => _result(
+  0,
+  stdout: 'harness.exe\tNotSigned\t\r\nharness-launch.exe\tNotSigned\t\r\n',
+);
+
 /// A profile whose name a shell would re-parse (Review Focus 1).
 const _profileName = "Nguyễn Văn A'&%!";
 
@@ -181,10 +191,16 @@ void main() {
     List<Map<String, String>?>? installEnvironments,
     String Function()? version,
     ProcessResult Function()? install,
+    ProcessResult Function()? signatures,
     bool lays = true,
   }) {
     return (executable, arguments, {environment}) async {
       calls.add([executable, ...arguments]);
+      // The bin programs' signature check (_windowsProgramsSigned), not an install.
+      if (executable.endsWith(r'\powershell.exe') &&
+          arguments.last.contains('Get-AuthenticodeSignature')) {
+        return signatures?.call() ?? _signed();
+      }
       if (executable.endsWith(r'\powershell.exe')) {
         installEnvironments?.add(environment);
         final answer =
@@ -208,16 +224,153 @@ void main() {
   EnvironmentProvisioner provisioner(
     ProcessRunner run, {
     String? installScriptUrl,
+    bool checkSignatures = false,
+    Map<String, String> environment = const {},
   }) => EnvironmentProvisioner(
     harnessHome: harnessHome,
     isMacOS: false,
     isLinux: false,
     isWindows: true,
-    platformEnvironment: windowsEnvironment(),
+    platformEnvironment: {...windowsEnvironment(), ...environment},
     windowsInstallScriptUrl: installScriptUrl,
     run: run,
     openTerminal: (_) async => fail('Windows setup never opens a terminal'),
+    checkWindowsSignatures: checkSignatures,
   );
+
+  // 2026-11-04 to 11-09 production installed an unsigned terminal host. Smart App Control blocked harness-launch.exe,
+  // through which every daemon start goes; the CLI under Node still answered, so the app took the install for good.
+  group('the bin programs’ signatures', () {
+    test('an install whose programs are not signed is set up again, by the same install.ps1, keeping the rest', () async {
+      installLayout();
+      var signed = false;
+      final calls = <List<String>>[];
+      ProcessRunner run() => windows(
+        calls: calls,
+        signatures: () => signed ? _signed() : _unsigned(),
+        install: () {
+          signed = true;
+          return _result(0, stdout: 'Harness 0.4.20 is installed.');
+        },
+      );
+      final probed = await provisioner(
+        run(),
+        checkSignatures: true,
+      ).ensureReady(onProgress: (_) {}, install: false);
+      expect(
+        probed.steps[EnvironmentStep.harness],
+        EnvironmentStepStatus.failed,
+      );
+      expect(
+        probed.output,
+        contains(
+          '✗ harness.exe is NotSigned · harness-launch.exe is NotSigned',
+        ),
+      );
+      expect(probed.plan.map((item) => item.step), [EnvironmentStep.harness]);
+      final ready = await provisioner(run(), checkSignatures: true).ensureReady(
+        onProgress: (_) {},
+        resumeFrom: probed,
+        install: true,
+        mode: EnvironmentSetupMode.automatic,
+      );
+      expect(ready.isReady, isTrue, reason: '${ready.failure?.detail}');
+      expect(
+        calls.where(
+          (call) =>
+              call.first.endsWith('powershell.exe') &&
+              !call.last.contains('Get-AuthenticodeSignature'),
+        ),
+        hasLength(1),
+      );
+    });
+
+    test('signed programs are ready, and signatures that cannot be read are no reason to reinstall', () async {
+      installLayout();
+      final calls = <List<String>>[];
+      expect(
+        (await provisioner(
+          windows(calls: calls),
+          checkSignatures: true,
+        ).ensureReady(onProgress: (_) {}, install: false)).isReady,
+        isTrue,
+      );
+      expect(
+        calls.where((call) => call.last.contains('Get-AuthenticodeSignature')),
+        hasLength(1),
+      );
+      final unread = await provisioner(
+        windows(
+          calls: calls,
+          signatures: () => _result(1, stderr: 'Import-Module failed'),
+        ),
+        checkSignatures: true,
+      ).ensureReady(onProgress: (_) {}, install: false);
+      expect(unread.isReady, isTrue);
+    });
+
+    test('a developer’s own CLI is not asked: HARNESS_ALLOW_UNSIGNED=1, or a debug build', () async {
+      installLayout();
+      final calls = <List<String>>[];
+      expect(
+        (await provisioner(
+          windows(calls: calls, signatures: _unsigned),
+          checkSignatures: true,
+          environment: {'HARNESS_ALLOW_UNSIGNED': '1'},
+        ).ensureReady(onProgress: (_) {}, install: false)).isReady,
+        isTrue,
+      );
+      expect(
+        (await provisioner(
+          windows(calls: calls, signatures: _unsigned),
+        ).ensureReady(onProgress: (_) {}, install: false)).isReady,
+        isTrue,
+      );
+      expect(
+        calls.where((call) => call.last.contains('Get-AuthenticodeSignature')),
+        isEmpty,
+      );
+    });
+
+    test('the check holds no double quote, which a -Command argument can lose on its way into powershell.exe', () {
+      expect(
+        EnvironmentProvisioner.windowsSignatureScript,
+        isNot(contains('"')),
+      );
+      expect(
+        EnvironmentProvisioner.windowsSignatureScript,
+        contains(r"Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security"),
+      );
+    });
+
+    test('reads each program’s status and signer, and leaves out what it could not read', () {
+      const files = ['harness.exe', 'harness-launch.exe'];
+      expect(
+        windowsSignatureProblems(
+          'harness.exe\tValid\tAUTONOMOUS INC.\r\nharness-launch.exe\tValid\tAUTONOMOUS INC.\r\n',
+          files,
+        ),
+        isEmpty,
+      );
+      expect(
+        windowsSignatureProblems(
+          'harness.exe\tValid\tOpenJS Foundation\nharness-launch.exe\tNotFound\t\n',
+          files,
+        ),
+        [
+          'harness.exe is signed by OpenJS Foundation',
+          'harness-launch.exe is NotFound',
+        ],
+      );
+      expect(
+        windowsSignatureProblems(
+          'harness.exe\tHashMismatch\tAUTONOMOUS INC.\nnoise\n',
+          files,
+        ),
+        ['harness.exe is HashMismatch'],
+      );
+    });
+  });
 
   test('a PC with the CLI and the terminal host is ready, with no shell, tmux or clipboard step', () async {
     installLayout();

@@ -192,6 +192,17 @@ describe('creating an agent', () => {
     }
   })
 
+  // anh Dee, 2026-11-11: Alba never read the rules its person wrote in agents/Alba.md; its launch line carries them now.
+  it('starts a Swarm agent with its own agents/<name>.md after the basics, by the name it is started under', async () => {
+    const cwd = folder()
+    mkdirSync(join(cwd, 'agents'))
+    writeFileSync(join(cwd, 'agents', 'Faye.md'), 'Never push to main.\n')
+    await setup().create(request({ cwd, engine: 'claude', swarmRole: 'agent', name: 'Faye' }))
+    const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
+    expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(false, { cwd, name: 'Faye' }))
+    expect(place.swarmInstructions).toMatch(/\nYour own instructions, from agents\/Faye\.md, [^\n]*:\nNever push to main\.$/)
+  })
+
   // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its kind, and a launch an older CLI
   // saved to finish later (a pending intent) names its role in the wire's values.
   it('registers a Reviewer as an agent that keeps its Reviewer kind, from this CLI\'s launch or an older one\'s saved intent', async () => {
@@ -722,6 +733,35 @@ describe('creating an agent', () => {
     it('starts an approving session in the default harness permission when no mode was named', async () => {
       expect(await setup().create(request({ bypassPermission: true }))).toMatchObject({ ok: true })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ bypassPermission: true, permissionMode: null })
+    })
+
+    // The argv the pane really gets, so the task's absence from it is the launch's, not this spec's mock's (without
+    // the install step, whose recipe this spec stubs).
+    const launchedFor = async (over: Record<string, unknown>) => {
+      const real = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+      expect(await setup().create(request(over))).toMatchObject({ ok: true })
+      return vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    }
+
+    it('an OpenClaw first task is kept for typing, not launched with', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('--message')
+    })
+
+    it('a Swarm launch takes the same path', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser', swarmRole: 'agent' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv.join(' ')).not.toContain('--message')
+    })
+
+    it('an engine that takes its first prompt in argv keeps none', async () => {
+      const pane = await launchedFor({ engine: 'claude', prompt: 'Fix the parser' })
+      expect(pane).not.toHaveProperty('firstTask')
+      expect(pane.argv.join(' ')).toContain('Fix the parser')
     })
 
     it('opens a terminal ready at once, with nothing to watch', async () => {

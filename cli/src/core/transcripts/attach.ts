@@ -7,6 +7,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
  */
+import { dirname } from 'node:path'
 import type { LiveFor } from '../../engines/facets/live.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
 import { isOtherEngine, type InProcessModules } from '../../engines/inProcess.js'
@@ -32,8 +33,9 @@ import type { LiveSessions, PreparedLive } from '../engines/liveSessions.js'
 import { createReaderLoads } from './readerLoads.js'
 import { createTurnReplacements } from './turnReplacement.js'
 
-/** What an OpenClaw store that cannot be read says on its agent: the holds the stream sets, and the only ones it clears. */
-const OPENCLAW_STORE_HOLDS = new Set<string>([OPENCLAW_STATES.unsupported, OPENCLAW_STATES.harnessNode])
+/** What an OpenClaw store that cannot be read, or holds no session for a pane that is working, says on its agent: the
+ *  holds the stream sets, and the only ones it clears. */
+const OPENCLAW_STORE_HOLDS = new Set<string>([OPENCLAW_STATES.unsupported, OPENCLAW_STATES.harnessNode, OPENCLAW_STATES.noSessions])
 
 export interface AttachDeps {
   liveFor: LiveFor
@@ -451,8 +453,9 @@ export function createAttach({
         console.warn(`[openclaw] ${sid(session.sessionId)} not an OpenClaw session key · not read`)
         return true
       }
-      // A store this OpenClaw cannot be read from is said on the agent, as the screen's named states are (bind.ts), and
-      // cleared once it reads again. A hold another reason set is that reason's to clear.
+      // A store this OpenClaw cannot be read from, or one the Gateway does not write, is said on the agent, as the
+      // screen's named states are (bind.ts), and cleared once it reads again or shows the session. A hold another reason
+      // set is that reason's to clear.
       const say = (hold: string | undefined): void => {
         const latest = resolve(session.agentId)
         if (latest?.sessionId !== session.sessionId) return
@@ -471,6 +474,12 @@ export function createAttach({
           say(hold)
         },
         onRecovered: () => say(undefined),
+        onSessionMissing: () => {
+          // The folder looked in is the person's to compare with the Gateway's: the local log, never the agent's row.
+          console.warn(`[openclaw] ${sid(session.agentId)} ${OPENCLAW_STATES.noSessions} · looked in ${dirname(db)}`)
+          say(OPENCLAW_STATES.noSessions)
+        },
+        onSessionFound: () => say(undefined),
       })
       openclawReaders.set(session.sessionId, live)
       await live.start()

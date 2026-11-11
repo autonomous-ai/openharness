@@ -109,7 +109,11 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **An unsigned program can be blocked outright.** Smart App Control (Windows 11) blocks an `.exe` or `.dll` without a valid
   signature, and a blocked `harness-launch.exe` means Harness cannot start, so cannot update itself either (2026-11-09,
   Code Integrity event 3077 at a customer). Nothing installs, updates to or promotes a terminal host unless every file is
-  signed ([Windows code signing](windows-code-signing.md#only-signed-terminal-hosts-reach-a-computer)).
+  signed ([Windows code signing](windows-code-signing.md#only-signed-terminal-hosts-reach-a-computer)). The Desktop app
+  reads the signatures of `bin\harness.exe` and `bin\harness-launch.exe` at start and sets the CLI up again when they
+  are not the release's (`_windowsProgramsSigned` in `desktop/lib/bootstrap/environment_provisioner.dart`). Whether Smart
+  App Control blocks a given unsigned file depends on its reputation (a fresh unsigned program ran on DESKTOP-0TFH0OJ
+  with it on, 2026-11-11), so read the signature; a trial run proves nothing.
 - **`Get-AuthenticodeSignature` needs its module imported by path** (`$PSHOME\Modules\Microsoft.PowerShell.Security`): a
   PowerShell 7 `PSModulePath` makes 5.1 autoload 7's module, as with `Get-FileHash`. A file that is no program at all
   reads `UnknownError`, not `NotSigned`.
