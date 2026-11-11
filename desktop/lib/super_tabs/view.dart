@@ -2857,6 +2857,12 @@ class _SuperTabViewState extends State<SuperTabView>
       ? superTabPostTo(c.snapshot, message)
       : const [];
 
+  /// The names they are stored under, where those differ: a tag of either is theirs.
+  Map<String, String> _postStoredNames(SuperTabMessage message) =>
+      _agentTalk(message.conversationId)
+      ? superTabPostStoredNames(c.snapshot, message)
+      : const {};
+
   /// An agent chat's header (Swarm v4): the agent, where it runs, then its instructions and its terminal, each opening
   /// beside the chat. The name takes two thirds of the room the buttons leave at most and is cut with an ellipsis, where the
   /// agent runs the rest, so a long name never pushes the buttons off the bar; under 720 the list of conversations is behind
@@ -3556,6 +3562,7 @@ class _SuperTabViewState extends State<SuperTabView>
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
       to: _postTo(message),
+      storedNames: _postStoredNames(message),
       author: _shownAuthor(c, message),
       // A person is found by their username, as they are tagged, and reads
       // as the name they set.

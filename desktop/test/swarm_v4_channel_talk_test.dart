@@ -456,6 +456,19 @@ void main() {
           'recipientIds': to,
         });
 
+    // A tag of either of its names is its tag, as the backend routes one; the row reads the post's text once, where it is
+    // drawn (the review of #4075 measured 2.2 ms a row at 2,300 characters while each recipient read it again).
+    test('a post\'s agents are named as people know them, with the names they are stored under beside', () {
+      final server = swarmV4Channel();
+      (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+        (a) => a['id'] == 'faye',
+      )['name'] = 'Product Manager';
+      final swarm = SuperTabSnapshot.fromJson(server.state);
+      final post = ask(['faye', 'juno'], author: 'pip');
+      expect(superTabPostTo(swarm, post), ['Faye', 'Juno']);
+      expect(superTabPostStoredNames(swarm, post), {'Faye': 'Product Manager'});
+    });
+
     test('an agent named twice is named once, and an author never', () {
       final swarm = team({'juno', 'pip'});
       expect(
@@ -508,6 +521,7 @@ void main() {
         });
         expect(superTabPostOfflineLine(team({'juno'}), person), isNull);
         expect(superTabPostTo(team({'juno'}), person), isEmpty);
+        expect(superTabPostStoredNames(team({'juno'}), person), isEmpty);
       },
     );
   });

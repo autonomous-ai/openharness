@@ -1,10 +1,8 @@
-
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/swarm_layout.dart';
 import '../widgets/desktop_chrome.dart';
-import 'message_text.dart';
 import 'model.dart';
 
 /// What a project's channel says while nobody has posted in it (anh Dee, 2026-11-09: a blank page under the project's name
@@ -63,18 +61,28 @@ List<SuperTabAgent> superTabPostRecipients(
   ];
 }
 
-/// The names of [superTabPostRecipients] as their tags read them: those a post's words do not tag open its bubble (`@Juno`),
-/// as a group chat addresses a post (anh Dee, 2026-11-10: "why not use tag? like in a group chat").
+/// The names of [superTabPostRecipients] as their tags read them, the names people know them by: a PM is stored under its
+/// role's name, "Product Manager" (anh Dee, 2026-11-11: "the tag Product Manager is also weird just tag the agent"). Those a
+/// post's words do not tag open its bubble (`@Juno`), as a group chat addresses a post (anh Dee, 2026-11-10: "why not use
+/// tag? like in a group chat").
 List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) =>
     [
-      // By the name people know it by: a PM is stored under its role's name, "Product Manager" (anh Dee, 2026-11-11:
-      // "the tag Product Manager is also weird just tag the agent"). One its text tags by that stored name, which the backend
-      // routes too, is tagged already (review of #4075).
       for (final agent in superTabPostRecipients(swarm, message))
-        if (agent.displayName == null ||
-            !SuperTabMessageText.tags(message.text, agent.name))
-          agent.displayName ?? agent.name,
+        agent.displayName ?? agent.name,
     ];
+
+/// The name each of [superTabPostTo]'s agents is stored under, by the name it shows as, where the two differ. A tag of either
+/// is its tag, as the backend routes one, so a post that tags its PM "@Product Manager" is not tagged "@Ray" besides. The
+/// post's text is read where it is drawn, once ([SuperTabMessageText.storedNames]): each recipient read it again, 2.2 ms a
+/// row at 2,300 characters (review of #4075).
+Map<String, String> superTabPostStoredNames(
+  SuperTabSnapshot? swarm,
+  SuperTabMessage message,
+) => {
+  for (final agent in superTabPostRecipients(swarm, message))
+    if (agent.displayName case final shown? when shown != agent.name)
+      shown: agent.name,
+};
 
 /// What waits under a post that names an agent that was offline when it was posted and still is (`downSince`: its machine has
 /// reported its session gone): "Juno is offline", "Juno and Kai are offline". An agent that was up when it was named has
