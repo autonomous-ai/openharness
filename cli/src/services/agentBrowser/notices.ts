@@ -9,7 +9,6 @@
  * ready tries again.
  */
 import { randomUUID } from 'node:crypto'
-import type { CoreApi, TurnDelivery } from '../../core/api.js'
 import type { StateFile } from './stateFile.js'
 
 export const READY_LINE = 'Your browser is ready: run `harness browser --help`'
@@ -19,6 +18,21 @@ export const NOTICE_TRIES = 3
 export const NOTICE_RETRY_MS = 30_000
 
 type Kind = 'ready' | 'stopped'
+
+/** What became of a line handed to the core: the core's `TurnDelivery` (core/api.ts), typed here as a service's file
+ *  reaches the core only through its top-level service file. */
+export interface Delivery {
+  deliveryId: string
+  state: 'queued' | 'delivered' | 'started' | 'rejected' | 'unknown'
+  reason?: string
+}
+
+/** The core's `turns` members the lines use, handed in by agentBrowser.ts. */
+export interface Turns {
+  deliver(agentId: string, text: string, deliveryId: string): void
+  cancelDelivery(deliveryId: string): boolean
+  onDelivery(listener: (event: Delivery) => void): () => void
+}
 
 interface Line {
   agentId: string
@@ -45,7 +59,7 @@ export class Notices {
 
   constructor(private readonly deps: {
     state: StateFile
-    turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'>
+    turns: Turns
     measure: (name: string) => void
     log: (line: string) => void
   }) {
@@ -124,7 +138,7 @@ export class Notices {
     for (const line of this.byId.values()) if (line.agentId === agentId) line.stopAfter = false
   }
 
-  private heard(event: TurnDelivery): void {
+  private heard(event: Delivery): void {
     const line = this.byId.get(event.deliveryId)
     if (!line || event.state === 'queued') return
     this.byId.delete(event.deliveryId)
@@ -157,7 +171,7 @@ export class Notices {
     }, NOTICE_RETRY_MS * line.tries)
   }
 
-  private mark(agentId: string, state: TurnDelivery['state']): void {
+  private mark(agentId: string, state: Delivery['state']): void {
     if (state === 'unknown') this.deps.log(`agent browser ${agentId}: the ready line may have been typed; it is counted as typed`)
     try {
       this.deps.state.update(s => { (s.told ??= {})[agentId] = true })
