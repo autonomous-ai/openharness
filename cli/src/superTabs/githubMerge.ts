@@ -14,13 +14,16 @@
  *   counts for nothing (verdicts);
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
- * - and GitHub says it can merge.
- * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
- * each head, so the GitHub news brings it to its author (githubMentions.ts).
+ * - and GitHub says it can merge, or only that it is behind the base.
+ * One that cannot, being in conflict, or whose checks failed, is told so on itself, to its author by name, once for each head,
+ * so the GitHub news brings it to its author (githubMentions.ts). One only behind the base is told nothing
+ * (docs/design/2026-11-11-swarm-allocator, package 4): the train merges it onto the base's tip and runs the checks there. Told
+ * to update, every open change was pushed and checked again after each landing, and this repository's main took up to ten
+ * landings in an hour (2026-11-11).
  *
  * The ready ones land on a train (githubTrain.ts): one branch, one run of the checks on the combined change. Only one that is
  * alone and holds the base's tip, or a fork's whose head GitHub does not take into a train, is merged on its own, squashed, as
- * every one was until 2026-11-10.
+ * every one was until 2026-11-10; and never one GitHub calls behind.
  */
 import { createHash } from 'node:crypto'
 import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
@@ -91,8 +94,11 @@ const SELF = 'Harness'
  *  request, kind and head, as lampOS's train bot keys what it told (`<PR> <kind> <head>`, train-bot.sh), never by its words:
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
-const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
-  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ' } as const
+const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', dirty: 'it conflicts with ',
+  blocked: 'GitHub\'s rules for ', stacked: 'it carries open ', red: 'its train failed: ',
+  // Said until 2026-11-11, when one only behind the base became ready, and never since. Still read (noteOf): the day's
+  // scoreboard counts the changes told so before that land after. It can go, with that count, on 2026-12-11.
+  behind: 'it is behind ' } as const
 export type NoteKind = keyof typeof NOTES
 const noteStart = (head: string, kind: NoteKind): string => `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
 /** Which of these notes a comment of the team's is, on whatever head, or null: the day's scoreboard counts the pull requests
@@ -115,8 +121,9 @@ export const RECORD_SETTLE_MS = 2 * 60_000
  *  the server refused it) and an agent's new name are read within it, with no restart. */
 const RECORD_AGAIN_MS = 10 * 60_000
 
-/** A ready pull request, with what a note to its author takes (tellOnce). */
-interface Ready extends TrainPull { author: string; comments: Json[] }
+/** A ready pull request, with what a note to its author takes (tellOnce), and whether GitHub calls it behind the base: it lands
+ *  on a train, never on its own. */
+interface Ready extends TrainPull { author: string; comments: Json[]; behind: boolean }
 /** The label a person puts on a pull request to keep Harness from landing it (AGENTS.md). */
 const HOLD_LABEL = 'hold'
 
@@ -676,10 +683,11 @@ export class GitHubMerge {
       if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
-      if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
       if (state === 'dirty') { await conflicts({ number, head, author, comments }); continue }
       if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
-      if (!['clean', 'has_hooks', 'unstable'].includes(state)) { waiting.add(`${number}@${head}`); continue }
+      // Behind, which GitHub says where the base asks branches to be up to date, is ready as it is: the train merges it onto the
+      // base's tip, so its author is asked for nothing.
+      if (!['clean', 'has_hooks', 'unstable', 'behind'].includes(state)) { waiting.add(`${number}@${head}`); continue }
       const carried = await this.carriedPull(repo, number, head, listed)
       if (carried) {
         await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}'s commits (its head ${carried.head.slice(0, 7)}), so merging it would `
@@ -690,12 +698,16 @@ export class GitHubMerge {
       // GitHub lists a red train only among the hundred pull requests closed last (githubTrain.ts landed).
       if (this.said(comments, head, 'red')) continue
       ready.push({ number, head, title: String(pull.title ?? ''), body: String(pull.body ?? ''), readers: [...reads.values()].map(r => r.name),
-        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments })
+        fork: String(object(object(pull.head).repo).full_name ?? '').toLowerCase() !== current, checked: !checks.none, author, comments,
+        behind: state === 'behind' })
     }
     for (const pull of await train.carry(ready, waiting)) {
+      // One GitHub calls behind is never asked for on its own, whatever GitHub would answer: its checks ran on an older base.
+      // The train hands back a fork's whose head GitHub does not take without asking where it stands on the base.
+      const merged = !pull.behind && await this.mergeAlone(repo, pull)
       // A fork GitHub took neither into a train nor on its own: tried again with the merger's waits, not every pass (each
       // try makes and deletes a branch).
-      if (!await this.mergeAlone(repo, pull) && pull.fork) {
+      if (!merged && pull.fork) {
         throw new GitHubStop('FORK_REFUSED', `GitHub takes #${pull.number} neither into a train nor on its own.`, false, this.now())
       }
     }

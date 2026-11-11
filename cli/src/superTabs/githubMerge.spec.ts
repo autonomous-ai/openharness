@@ -697,7 +697,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect([...f.merges(), ...running.merges(), ...running.comments()]).toEqual([])
   })
 
-  it('tells the author by name once for each head when its checks failed, it is behind, or it conflicts', async () => {
+  it('tells the author by name once for each head when its checks failed, it conflicts, or GitHub\'s rules block it', async () => {
     const f = setup()
     f.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
     await f.merger.tick()
@@ -710,13 +710,30 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     restarted.github.repo.comments.set(4, f.github.repo.comments.get(4)!)
     await restarted.merger.tick()
     expect(restarted.comments()).toEqual([])
-    for (const [state, words] of [['behind', 'it is behind main'], ['dirty', 'it conflicts with main'], ['blocked', 'GitHub\'s rules for main block the merge']]) {
+    for (const [state, words] of [['dirty', 'it conflicts with main'], ['blocked', 'GitHub\'s rules for main block the merge']]) {
       const g = setup()
       g.github.repo.state = state
       await settle(g)
       expect(g.merges()).toEqual([])
       expect(g.comments()).toEqual([expect.stringContaining(words)])
     }
+  })
+
+  // The allocator's design (docs/design/2026-11-11-swarm-allocator), package 4: one only behind main rides a train as it is
+  // (githubTrain.spec.ts), so its author is told nothing. And it never merges on its own: here the compare reads it as holding
+  // main's tip while GitHub calls it behind, and its checks may have run on an older main.
+  it('says nothing to the author of a pull request GitHub calls behind main, and never merges it on its own', async () => {
+    const f = setup()
+    f.github.repo.state = 'behind'
+    await settle(f)
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect([...f.merges(), ...f.comments()]).toEqual([])
+    // GitHub calls it up to date: it merges as any other that is alone on main's tip.
+    f.github.repo.state = 'clean'
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
   })
 
   it('reads a refused merge again next pass and says nothing on the pull request', async () => {
@@ -769,9 +786,9 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
 
   it('tells the author again when its pass failed before the comment went', async () => {
     const f = setup()
-    f.github.repo.state = 'behind'
+    f.github.repo.state = 'dirty'
     f.github.repo.sendFails = 1
-    // The head settles first (CHECKS_SETTLE_MS); then the pass that would say it is behind fails before its comment goes.
+    // The head settles first (CHECKS_SETTLE_MS); then the pass that would say it conflicts fails before its comment goes.
     await f.merger.tick()
     f.clock.now += 3 * 60_000
     await f.merger.tick()
@@ -779,7 +796,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.log).toHaveBeenCalledWith(expect.stringContaining('MERGE_FAILED acme/app'))
     f.clock.now += 30_000
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringContaining('it is behind main')])
+    expect(f.comments()).toEqual([expect.stringContaining('it conflicts with main')])
     f.clock.now += 30_000
     await f.merger.tick()
     expect(f.comments()).toHaveLength(1)
@@ -817,6 +834,7 @@ describe('the rule\'s parts', () => {
     expect(verdictOf(said(`Kai, 14:20: READ-OK ${HEAD}`, 'NONE'))).toBeNull()
     expect(verdictOf({})).toBeNull()
     const note = (words: string) => said(`Harness, 14:20, to **Pip**: not merged yet at ${HEAD.slice(0, 7)}: ${words}`)
+    // Said no more, and still read: the scoreboard counts the ones said before on changes that land later.
     expect(noteOf(note('it is behind main: update the branch and push.'))).toBe('behind')
     expect(noteOf(note('it conflicts with main: rebase it on main and push.'))).toBe('dirty')
     expect(noteOf(note('checks failed: unit. Fix them and push.'))).toBe('checks')

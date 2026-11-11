@@ -537,7 +537,7 @@ it('sends answer as the answer to a message, placed by the server', () => {
 it('lists what waits for the agent in its pane, a line each, and says when nothing does', async () => {
   expect(parseSuperTabArgs(['inbox'], where).payload).toEqual({ action: 'inbox', tabId: '', agentId: '' })
   expect(() => parseSuperTabArgs(['inbox', 'extra'], where)).toThrow('harness super-tab')
-  const answers = [{ ok: true, value: { waiting: ['Your acme/app#30 is behind main: …', 'Next: acme/app#12 …'] } }, { ok: true, value: { waiting: [] } },
+  const answers = [{ ok: true, value: { waiting: ['Your acme/app#30 conflicts with main: …', 'Next: acme/app#12 …'] } }, { ok: true, value: { waiting: [] } },
     { error: 'RATE_LIMITED', detail: 'GitHub asks to wait.' }]
   const request = vi.fn(async (type: string) => type === 'agents_list'
     ? { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : answers.shift()!)
@@ -545,7 +545,7 @@ it('lists what waits for the agent in its pane, a line each, and says when nothi
   const deps = { where: () => where, pane: '%42', open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print }
   expect(await superTabCommand(['inbox'], deps)).toBe(0)
   expect(request).toHaveBeenLastCalledWith('super_tabs', { action: 'inbox', tabId: '', agentId: '', harnessId: 'native' }, 30_000)
-  expect(print).toHaveBeenLastCalledWith('Your acme/app#30 is behind main: …\nNext: acme/app#12 …')
+  expect(print).toHaveBeenLastCalledWith('Your acme/app#30 conflicts with main: …\nNext: acme/app#12 …')
   expect(await superTabCommand(['inbox'], deps)).toBe(0)
   expect(print).toHaveBeenLastCalledWith('Nothing waits for you.')
   expect(await superTabCommand(['inbox'], deps)).toBe(1)

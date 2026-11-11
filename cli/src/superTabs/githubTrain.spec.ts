@@ -250,6 +250,38 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(pull.state).toBe('closed')
   })
 
+  // The allocator's design (docs/design/2026-11-11-swarm-allocator), package 4, "Behind is not a reason to rework". Where main
+  // asks branches to be up to date, GitHub calls every open pull request behind after each landing. Each was told to update, and
+  // was then pushed and checked again, though the train merges it onto main's tip and runs the checks there.
+  it('carries pull requests GitHub calls behind main on a train as it finds them, and tells their builder nothing', async () => {
+    const f = setup()
+    const alone = f.add(4)
+    f.moveMain(['cli/src/other.ts'])
+    alone.mergeable_state = 'behind'
+    await f.settle()
+    // Alone and behind: never merged on its own, where its checks ran on an older main; a train of one carries it.
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.carried()).toEqual([[4]])
+    await f.ends(PASSED)
+    expect(alone.state).toBe('closed')
+    expect(f.said(4)).toEqual([expect.stringContaining('landed in #900 as ')])
+    // Two more, one behind the main that train moved and one on its tip, ride the next train together.
+    const behind = f.add(5)
+    f.moveMain(['cli/src/another.ts'])
+    behind.mergeable_state = 'behind'
+    const current = f.add(6)
+    await f.settle()
+    expect(f.carried()).toEqual([[4], [5, 6]])
+    // Ten minutes of passes while that train runs: nothing is written, to the one behind or anywhere.
+    const built = f.state.sent.length
+    for (let pass = 0; pass < 20; pass++) await f.tick()
+    expect(f.writes(built)).toEqual([])
+    await f.ends(PASSED)
+    expect([behind.state, current.state]).toEqual(['closed', 'closed'])
+    expect(f.said(5)).toEqual([expect.stringContaining('landed in #901 as ')])
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge', 'PUT /pulls/901/merge'])
+  })
+
   // Code review of #4056: autonomous-harness, renamed openharness, keeps its old name in its project, and GitHub answers for it under
   // the new one: compared with the old name, every pull request read as a fork and no train as one.
   it('lands a pull request of a repository renamed since its project was made, as it does by the name GitHub has now', async () => {
@@ -408,6 +440,8 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.trains()).toEqual([])
     expect(f.state.branches.size).toBe(0)
     expect(f.writes().filter(w => !w.startsWith('POST /merges') && !w.includes('/git/refs'))).toEqual(['PUT /pulls/5/merge', 'POST /issues/5/comments'])
+    // Merged, it is no fork GitHub refused: the repository is not left alone for it.
+    expect(f.logged().filter(line => line.includes('merging by rule stopped'))).toEqual([])
     await f.tick()
     expect(f.carried()).toEqual([[4, 6]])
   })
@@ -473,6 +507,25 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     const before = f.writes().filter(w => w === 'POST /git/refs').length
     for (let pass = 0; pass < 20; pass++) await f.tick()
     expect(f.writes().filter(w => w === 'POST /git/refs').length - before).toBeLessThan(6)
+  })
+
+  // A fork's pull request GitHub does not take into a train merges on its own checks, as before the train. Not one GitHub calls
+  // behind main (the allocator's design, package 4): those checks ran on an older main, so that merge is never asked for,
+  // whatever GitHub would answer. This fake would merge it.
+  it('merges on its own no fork\'s pull request GitHub calls behind main, though GitHub takes its head into no train', async () => {
+    const f = setup()
+    const fork = f.add(4, { fork: true })
+    f.moveMain(['cli/src/other.ts'])
+    fork.mergeable_state = 'behind'
+    f.state.untaken.add(fork.head.sha)
+    await f.settle()
+    expect(f.logged()).toContainEqual(expect.stringContaining('FORK_REFUSED acme/app: GitHub takes #4 neither into a train nor on its own'))
+    // Tried again with the merger's waits, as any fork GitHub takes neither way.
+    const before = f.writes().filter(w => w === 'POST /git/refs').length
+    for (let pass = 0; pass < 20; pass++) await f.tick()
+    expect(f.writes().filter(w => w === 'POST /git/refs').length - before).toBeLessThan(6)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(fork.state).toBe('open')
   })
 
   it('stops, and merges nothing on its own, when GitHub does not take the head of a pull request of this repository', async () => {
@@ -581,6 +634,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
   it.each([
     ['got a HOLD', (f: ReturnType<typeof setup>) => f.say(5, `Kai, 15:00: HOLD ${f.state.pulls.get(5)!.head.sha.slice(0, 7)} the day count is off by one`)],
     ['has a new head', (f: ReturnType<typeof setup>) => { f.push(5); f.state.comments.get(5)!.pop() }],
+    // Behind is ready only with all the rest: its head read, no HOLD, its checks passed.
+    ['has a new head nobody read, which GitHub calls behind', (f: ReturnType<typeof setup>) => { f.push(5); f.state.comments.get(5)!.pop(); f.state.pulls.get(5)!.mergeable_state = 'behind' }],
     ['was closed', (f: ReturnType<typeof setup>) => { f.state.pulls.get(5)!.state = 'closed' }],
   ])('closes a green train when a member %s since, and builds the next without it', async (_case, change) => {
     const f = setup()

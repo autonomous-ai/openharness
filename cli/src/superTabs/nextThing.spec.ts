@@ -165,7 +165,9 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
-  it('says its checks failed at its head, then its branch behind or conflicting with its base, each with the command that helps', async () => {
+  // The allocator's design (docs/design/2026-11-11-swarm-allocator), package 4: a branch only behind its base rides the train as
+  // it is (githubMerge.ts), so its builder is typed nothing of it.
+  it('says its checks failed at its head, then its branch conflicting with its base, each with the command that helps, and nothing of one only behind', async () => {
     const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
     f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }, { name: 'lint', status: 'completed', conclusion: 'success' }]
     f.next.start()
@@ -177,7 +179,6 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     }
     expect(f.told()).toEqual([
       `Your acme/app#30 failed its checks at ${HEAD.slice(0, 7)}: ci/required. Fix them and push: gh pr checks 30 --repo acme/app`,
-      'Your acme/app#30 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push',
       'Your acme/app#30 conflicts with main: merge main into it, fix the conflicts and push: git fetch origin main && git merge origin/main'])
     f.next.stop()
   })
@@ -553,7 +554,7 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('lists its own pull requests\' HOLD and branch behind, the reads it owes and the task it holds, and types nothing', async () => {
+  it('lists its own pull requests\' HOLD and not a branch only behind, the reads it owes and the task it holds, and types nothing', async () => {
     const f = setup({ items: [item(14, 'Tidy the docs', ['status:taken']), item(15, 'Next one'),
       { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' }, item(12, 'Fix the login bug', ['status:taken']),
       { ...item(31, 'Add the export', [], true), body: 'Closes #13' }, item(13, 'Add the export', ['status:taken'])] })
@@ -562,7 +563,6 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
     f.state.owed = [{ number: 40, sha: HEAD.slice(0, 7) }]
     expect(await f.next.inbox('h-pip')).toEqual([
       `Your acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)}: fix what it asks and push, and it is read again. Read it: gh pr view 30 --repo acme/app --comments`,
-      'Your acme/app#31 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push',
       `Read acme/app#40 at ${HEAD.slice(0, 7)}, as Harness asked you: harness super-tab read ok acme/app#40 ${HEAD.slice(0, 7)} 'what you found' (or read hold, with the file, line and fix)`,
       'You hold acme/app#14 (Tidy the docs): go on with it: gh issue view 14 --repo acme/app',
     ])
@@ -586,12 +586,12 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
 
   // "Harness types it once after a compaction": what it was told before is a summary now (core/turns/ends.ts TurnEnd.compacted).
   it('types an agent whose context was compacted all that waits for it, once it is idle, then its next thing as before', async () => {
-    const BEHIND = 'Your acme/app#30 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push'
+    const CONFLICT = 'Your acme/app#30 conflicts with main: merge main into it, fix the conflicts and push: git fetch origin main && git merge origin/main'
     const NEXT = `Next: acme/app#15 Next one. It is given to you and nobody has taken it: ${TAKE} acme/app#15`
     const ALL = 'Your context was compacted. What waits for you, as Harness reads it now (harness super-tab inbox lists it again):\n'
     const f = setup({ working: true, items: [item(15, 'Next one'), { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' },
       item(12, 'Fix the login bug', ['status:taken'])] })
-    f.state.pulls[30] = { mergeable_state: 'behind' }
+    f.state.pulls[30] = { mergeable_state: 'dirty' }
     f.next.start()
     // Compacted in a turn that ended busy, or that its person stopped: typed at the end that finds it idle.
     await f.end({ compacted: true })
@@ -599,9 +599,9 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
     expect(f.tell).not.toHaveBeenCalled()
     f.state.working = false
     await f.end()
-    expect(f.told()).toEqual([`${ALL}- ${BEHIND}\n- ${NEXT}`])
+    expect(f.told()).toEqual([`${ALL}- ${CONFLICT}\n- ${NEXT}`])
     await f.end()
-    expect(f.told()).toEqual([`${ALL}- ${BEHIND}\n- ${NEXT}`, BEHIND])
+    expect(f.told()).toEqual([`${ALL}- ${CONFLICT}\n- ${NEXT}`, CONFLICT])
     // Nothing waits: nothing is typed, and its next end types nothing either.
     f.state.items = []
     await f.end({ compacted: true, aborted: true })

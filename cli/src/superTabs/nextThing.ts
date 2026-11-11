@@ -10,7 +10,7 @@
  * typed the moment it ended comes first), its project's repository is read as GitHub has it now: its open tasks and pull
  * requests labelled builder:<its name>, one read, a 304 when nothing changed. Its own work comes first, as lampOS's order has it:
  * for each pull request of its that is not a draft, a reader's HOLD on its head, then its checks failed at its head, then its
- * branch behind or conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
+ * branch conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
  * which the merger has said on the pull request once and GitHub news brought it, and it slept on. Then a task it took
  * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
  * given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness types does. The same
@@ -268,8 +268,10 @@ export class NextThing {
   }
 
   /** What stands in the way of [number], a pull request of the agent's, that it fixes itself, the first of: a reader's HOLD on its
-   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch behind or
-   *  conflicting with its base. Null for a draft, which is work going on, and for one with none of them, or none known yet. */
+   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch conflicting
+   *  with its base. Not its branch only behind its base, which the train carries as it is (githubMerge.ts): typed to merge the
+   *  base in, a builder pushed a new head after every landing, for its checks to run again. Null for a draft, which is work
+   *  going on, and for one with none of them, or none known yet. */
   private async ownWork(agent: WatchedAgent, repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
     const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
@@ -289,10 +291,6 @@ export class NextThing {
         typed: `Your ${repo}#${number} failed its checks at ${short}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
     }
     const state = String(pull.mergeable_state ?? '')
-    if (state === 'behind') {
-      return { kind: 'behind', head: short, what: `is behind ${base}`,
-        typed: `Your ${repo}#${number} is behind ${base}: merge ${base} into it and push: git fetch origin ${base} && git merge origin/${base} && git push` }
-    }
     if (state === 'dirty') {
       return { kind: 'dirty', head: short, what: `conflicts with ${base}`,
         typed: `Your ${repo}#${number} conflicts with ${base}: merge ${base} into it, fix the conflicts and push: git fetch origin ${base} && git merge origin/${base}` }

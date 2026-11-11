@@ -138,13 +138,13 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     gh.task(2, ['size:s'])
     gh.task(3, ['size:s', 'needs:gpu'])
     gh.task(4, ['size:s', 'builder:pip', 'status:taken'], hours(5))
-    // Pull requests: a typed READ-OK from the login every agent posts as; failed checks; a conflict; behind; no reader yet;
-    // ready to merge; and a HOLD.
+    // Pull requests: a typed READ-OK from the login every agent posts as; failed checks; a conflict; blocked by GitHub's rules;
+    // no reader yet; ready to merge; and a HOLD.
     gh.pull(10, sha(10)); gh.say(10, `READ-OK ${sha(10).slice(0, 7)}`)
     gh.pull(11, sha(11)); gh.say(11, `Juno, 11:00, to **Pip**: READ-OK ${sha(11).slice(0, 7)}`)
     gh.runs.set(sha(11), [{ name: 'test', status: 'completed', conclusion: 'failure' }, { name: 'lint', status: 'completed', conclusion: 'failure' }])
     gh.pull(12, sha(12)); gh.say(12, `Juno, 11:00, to **Pip**: READ-OK ${sha(12).slice(0, 7)}`); gh.mergeable.set(12, 'dirty')
-    gh.pull(13, sha(13)); gh.say(13, `Juno, 11:00, to **Pip**: READ-OK ${sha(13).slice(0, 7)}`); gh.mergeable.set(13, 'behind')
+    gh.pull(13, sha(13)); gh.say(13, `Juno, 11:00, to **Pip**: READ-OK ${sha(13).slice(0, 7)}`); gh.mergeable.set(13, 'blocked')
     gh.pull(14, sha(14))
     gh.pull(15, sha(15)); gh.say(15, `Juno, 11:00, to **Pip**: READ-OK ${sha(15).slice(0, 7)}`)
     gh.pull(16, sha(16)); gh.say(16, `Juno, 11:05, to **Pip**: HOLD ${sha(16).slice(0, 7)}: the day count is off by one.`)
@@ -189,7 +189,7 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     one(10, /not merged yet at \w+: the READ-OK from deehw is typed/)
     one(10, /to \*\*Juno\*\*: please read this pull request/)
     one(12, /not merged yet at \w+: it conflicts with main/)
-    one(13, /not merged yet at \w+: it is behind main/)
+    one(13, /not merged yet at \w+: GitHub's rules for main block the merge/)
     // No verdict in 30 minutes: another reader is asked too (Swarm plan, step 1, item 1), each reader once in the hour.
     const asked14 = (harness.get(14) ?? []).filter(body => /: please read this pull request/.test(body)).map(body => /\*\*(\w+)\*\*/.exec(body)?.[1])
     expect(asked14, '#14').toHaveLength(2)
