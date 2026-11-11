@@ -68,7 +68,7 @@ export class GitHubAssign {
   /** The tasks nobody could start whose PM was told why, by task and reason (sayBlocked), forgotten as the others are. */
   private readonly blocked = new Set<string>()
   /** What commits change, as the merger reads it (sameChange), so a verdict both count is one neither asks again. */
-  private readonly patches = new Map<string, string | null>()
+  private readonly patches = new Map<string, unknown>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */

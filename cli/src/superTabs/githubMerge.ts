@@ -280,75 +280,137 @@ const COMPARE_FILES_MAX = 300
 const PATCHES_MAX = 1_000
 
 /** A hunk's line numbers, which a rebase moves; what follows them (the heading the hunk is under) stays. */
-const HUNK = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@/
 /** A submodule's whole patch: the commit it points at. */
 const SUBMODULE = /^[+-]Subproject commit [0-9a-f]{40,64}$/
+
+/** Where a hunk's first changed line is in the file it was made from, and how many lines the hunk covers before and after. */
+type Hunk = [at: number, was: number, is: number]
+/** What a commit changes since the commit of the base it stands on ([from]): its change in one word, and each file's hunks. */
+interface Change { hash: string; from: string; hunks: Map<string, Hunk[]> }
+
+/** A patch's hunks, in order. */
+function hunksOf(rows: readonly string[]): Hunk[] {
+  const hunks: Hunk[] = []
+  let line = 0, open = false
+  for (const row of rows) {
+    const head = HUNK.exec(row)
+    if (head) { hunks.push([0, Number(head[2] ?? 1), Number(head[3] ?? 1)]); line = Number(head[1]); open = true; continue }
+    if (!hunks.length) continue
+    // Its first added or removed row: the lines before it are the ones around it.
+    if (open && (row.startsWith('+') || row.startsWith('-'))) { hunks.at(-1)![0] = line; open = false }
+    if (row.startsWith(' ') || row.startsWith('-')) line++
+  }
+  return hunks
+}
 
 /**
  * A compare's files as one change: each file's status and names and its patch as GitHub gives it, without each hunk's line
  * numbers. The lines around the added and removed ones count, and the heading each hunk is under: read without them, as
  * lampOS's `git diff -U0 | git patch-id` did, the same line added in another function was the same change, and a READ-OK
- * carried to code nobody had read. A rebase onto a base that changed those very lines is read again.
+ * carried to code nobody had read. A rebase onto a base that changed those very lines is read again. Where each hunk is, is
+ * given beside it (sameChange counts it: the same lines may stand in several places of a file).
  *
  * A file GitHub gives no patch for and counts no changed lines in (a binary, a rename alone, an empty file) is its content, by
  * its blob: two heads that differ only in a binary are two changes.
  *
  * Null, so a verdict counts only on its own head: when a file with changed lines has no patch (too large for GitHub to
  * give); when one with no lines names no blob (a mode change alone: GitHub sends none); when a file may be a symbolic link or
- * a submodule (the compare does not say a file's kind, and a link's patch is its target as one line with no newline at its
- * end, a submodule's its commit: a regular file with that text would read the same); or when the list may be cut short.
+ * a submodule (the compare does not say a file's kind; a link's patch is its target with no newline at its end and no line
+ * around it, a submodule's its commit: a regular file with that text would read the same); or when the list may be cut short.
  * Not told apart, as the compare carries no mode: an executable bit on a file that is added or edited.
  */
-function changeOf(files: Json[]): string | null {
+function changeOf(files: Json[]): { hash: string; hunks: Map<string, Hunk[]> } | null {
   if (files.length >= COMPARE_FILES_MAX) return null
-  const parts: string[] = []
+  const parts: string[] = [], hunks = new Map<string, Hunk[]>()
   for (const file of [...files].sort((a, b) => String(a.filename ?? '').localeCompare(String(b.filename ?? '')))) {
     const rows = String(file.patch ?? '').split('\n')
     const lines = rows.filter(row => row.startsWith('+') || row.startsWith('-'))
     const whole = lines.length > 0
     if (!whole && (Number(file.changes ?? 0) > 0 || !/^[0-9a-f]{40,64}$/.test(String(file.sha ?? '')))) return null
-    // One line each way at most, each with no newline at its end and nothing around it: what a link's patch is.
-    const link = whole && lines.length <= 2 && rows.filter(row => row.startsWith('\\')).length === lines.length && !rows.some(row => row.startsWith(' '))
+    const link = whole && rows.some(row => row.startsWith('\\')) && !rows.some(row => row.startsWith(' '))
     if (link || (whole && lines.every(line => SUBMODULE.test(line)))) return null
     parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''),
       whole ? rows.map(row => row.replace(HUNK, '@@')) : [String(file.sha)]]))
+    hunks.set(String(file.filename ?? ''), hunksOf(rows))
   }
-  return createHash('sha256').update(parts.join('\n')).digest('hex')
+  return { hash: createHash('sha256').update(parts.join('\n')).digest('hex'), hunks }
+}
+
+/** One compare, kept in [kept] under its two ends: null when GitHub cannot give it, or does not know a commit. A commit's
+ *  change since another does not change. */
+async function compared<T>(reads: GitHubReads, kept: Map<string, unknown>, repo: string, from: string, to: string, read: (compare: Json) => T | null): Promise<T | null> {
+  const key = `${repo}\n${from}\n${to}`
+  if (kept.has(key)) return kept.get(key) as T | null
+  let found: T | null
+  try {
+    found = read(await reads.one(repo, `/repos/${repo}/compare/${from}...${to}`))
+  } catch (error) {
+    if (!(error instanceof GitHubStop) || error.everywhere) throw error
+    found = null
+  }
+  kept.set(key, found)
+  if (kept.size > PATCHES_MAX) kept.delete(kept.keys().next().value!)
+  return found
 }
 
 /**
- * What [sha] changes since its merge base with [base], as lampOS's lib.sh patch_of reads it (`git diff -U0 <merge base> <sha> |
+ * What [sha] changes since its merge base with [base], as lampOS's lib.sh patch_of reads it (`git diff <merge base> <sha> |
  * git patch-id`), from GitHub's compare, kept in [kept]. Null when GitHub cannot give it whole, or does not know the commit: no
  * failure of the repository, and a verdict on it then counts only on its own head. Whitespace counts here, where patch-id drops
  * it: a change of spaces alone is read again.
  */
-async function patchOf(reads: GitHubReads, kept: Map<string, string | null>, repo: string, base: string, sha: string): Promise<string | null> {
-  const key = `${repo}\n${base}\n${sha}`
-  if (kept.has(key)) return kept.get(key)!
-  let change: string | null
-  try {
-    const files = (await reads.one(repo, `/repos/${repo}/compare/${base}...${sha}`)).files
-    change = Array.isArray(files) ? changeOf(files.map(object)) : null
-  } catch (error) {
-    if (!(error instanceof GitHubStop) || error.everywhere) throw error
-    change = null
+const patchOf = (reads: GitHubReads, kept: Map<string, unknown>, repo: string, base: string, sha: string): Promise<Change | null> =>
+  compared(reads, kept, repo, base, sha, compare => {
+    const change = Array.isArray(compare.files) ? changeOf(compare.files.map(object)) : null
+    const from = String(object(compare.merge_base_commit).sha ?? '')
+    return change && /^[0-9a-f]{40,64}$/.test(from) ? { ...change, from } : null
+  })
+
+/** How the base itself changed each file from its commit [from] to its later commit [to]: the hunks of each, null for a file
+ *  GitHub gives no patch for. Null when [to] does not hold [from], or the list may be cut short. */
+const movedBy = (reads: GitHubReads, kept: Map<string, unknown>, repo: string, from: string, to: string): Promise<Map<string, Hunk[] | null> | null> =>
+  compared(reads, kept, repo, from, to, compare => {
+    const files = Array.isArray(compare.files) ? compare.files.map(object) : null
+    if (!files || files.length >= COMPARE_FILES_MAX || compare.behind_by !== 0) return null
+    return new Map(files.flatMap(file => [String(file.filename ?? ''), String(file.previous_filename ?? '')].filter(Boolean)
+      .map(name => [name, typeof file.patch === 'string' ? hunksOf(file.patch.split('\n')) : null] as const)))
+  })
+
+/** Whether each hunk of [now] is where [then] had it: at the same line when both stand on the same commit of the base, else
+ *  further by what the base itself added or removed above it between the two. The lines around a change do not say where it
+ *  is when the same lines stand in several places: a step added to one job of a workflow, and the same step added to another. */
+async function inPlace(reads: GitHubReads, kept: Map<string, unknown>, repo: string, then: Change, now: Change): Promise<boolean> {
+  const moved = then.from === now.from ? new Map<string, Hunk[] | null>() : await movedBy(reads, kept, repo, then.from, now.from)
+  if (!moved) return false
+  for (const [file, hunks] of now.hunks) {
+    const were = then.hunks.get(file), above = moved.get(file)
+    if (!were || were.length !== hunks.length || above === null) return false
+    for (const [at, [line]] of hunks.entries()) {
+      const before = were[at]![0]
+      // A change of the base above it moves it by what that change added or removed. One at its very line changes the lines
+      // around it, and then the two are not the same change.
+      if (line !== before + (above ?? []).filter(([start]) => start < before).reduce((sum, [, was, is]) => sum + is - was, 0)) return false
+    }
   }
-  kept.set(key, change)
-  if (kept.size > PATCHES_MAX) kept.delete(kept.keys().next().value!)
-  return change
+  return true
 }
 
-/** Which of the verdicts' commits [shas] change what [head] changes (patchOf): lampOS counts a READ-OK for the head "or a head whose
- *  diff from its merge base is the same patch, i.e. a plain rebase" (train-bot.sh). Updated from main with nothing of its own
- *  changed, a pull request waited on a reader who had read it all. Read only when a verdict is on an earlier head. */
-export async function sameChange(reads: GitHubReads, kept: Map<string, string | null>, repo: string, base: string, head: string,
+/** Which of the verdicts' commits [shas] change what [head] changes (patchOf), where it changes it (inPlace): lampOS counts a
+ *  READ-OK for the head "or a head whose diff from its merge base is the same patch, i.e. a plain rebase" (train-bot.sh).
+ *  Updated from main with nothing of its own changed, a pull request waited on a reader who had read it all. Read only when a
+ *  verdict is on an earlier head. */
+export async function sameChange(reads: GitHubReads, kept: Map<string, unknown>, repo: string, base: string, head: string,
   shas: Iterable<string>): Promise<Set<string>> {
   const same = new Set<string>()
   const earlier = [...new Set(shas)].filter(sha => !head.startsWith(sha))
   if (!earlier.length) return same
   const now = await patchOf(reads, kept, repo, base, head)
   if (now === null) return same
-  for (const sha of earlier) if (await patchOf(reads, kept, repo, base, sha) === now) same.add(sha)
+  for (const sha of earlier) {
+    const then = await patchOf(reads, kept, repo, base, sha)
+    if (then && then.hash === now.hash && await inPlace(reads, kept, repo, then, now)) same.add(sha)
+  }
   return same
 }
 
@@ -430,7 +492,7 @@ export class GitHubMerge {
   private readonly seenAt = new Map<string, number>()
   private readonly looked = new Map<string, string>()
   /** What commits change (sameChange). */
-  private readonly patches = new Map<string, string | null>()
+  private readonly patches = new Map<string, unknown>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
