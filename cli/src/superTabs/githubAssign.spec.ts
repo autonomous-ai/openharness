@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
+import { parseSuperTabArgs } from './command.js'
 import { GitHubAssign } from './githubAssign.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
@@ -15,6 +16,8 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
   const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
+    /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
+    deleted: null as ((issue: Json, label: string) => number | void) | null,
     files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
@@ -45,9 +48,12 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     if (path === '/repos/acme/app/labels') { state.labels.push({ name: (body as Json).name }); return { status: 201, etag: null, body: {}, resetAt: null } }
     const removed = /\/issues\/(\d+)\/labels\/(.+)$/.exec(path)
     if (method === 'DELETE' && removed) {
-      if (state.deleteAnswer !== 200) return { status: state.deleteAnswer, etag: null, body: {}, resetAt: null }
-      const target = state.open.find(i => i.number === Number(removed[1]))!
-      target.labels = (target.labels as Json[]).filter(l => l.name !== decodeURIComponent(removed[2]!))
+      const target = state.open.find(i => i.number === Number(removed[1]))!, label = decodeURIComponent(removed[2]!)
+      const refused = state.deleteAnswer !== 200 ? state.deleteAnswer : state.deleted?.(target, label)
+      if (refused) return { status: refused, etag: null, body: {}, resetAt: null }
+      // A label that is not on the issue: GitHub answers 404.
+      if (!(target.labels as Json[]).some(l => l.name === label)) return { status: 404, etag: null, body: {}, resetAt: null }
+      target.labels = (target.labels as Json[]).filter(l => l.name !== label)
       return { status: 200, etag: null, body: [], resetAt: null }
     }
     const labels = /\/issues\/(\d+)\/labels$/.exec(path)
@@ -307,7 +313,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
       f.github.state.comments.set(30, [comment('READ-OK f6edb44')])
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with your name, as in "Atlas, \d\d:\d\d: READ-OK f6edb44"/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, then run `harness super-tab read ok acme\/app#30 f6edb44 /)])
     })
 
     // The reader Harness asked as "Kai Lee" and that answered as "kai-lee" is one: it read, and is not still waited for.
@@ -432,8 +438,19 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull()]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with your name, as in "Atlas, \d\d:\d\d: READ-OK f6edb44" or "Atlas, \d\d:\d\d: HOLD f6edb44" with the file, line and fix\.$/)])
+      // A verdict is a command (githubVerdict.ts): the ask carries it whole, with the pull request and the head, and no form
+      // to type by hand. Harness writes the comment, so the reader's own name and the time are not the reader's to get right.
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, then run `harness super-tab read ok acme\/app#30 f6edb44 'what you found'`\. For a HOLD, read hold in place of read ok, with the file, line and fix\.$/)])
+      expect(asks(f)[0]).not.toMatch(/READ-OK|start your comment/)
+      // In backticks, so GitHub's page shows it as written (it shortens acme/app#30 to #30 elsewhere), and one the CLI takes.
+      const command = /`harness super-tab (read ok \S+ \S+) 'what you found'`/.exec(asks(f)[0]!)![1]!
+      expect(parseSuperTabArgs(['--tab', 'tab', '--agent', 'atlas', ...command.split(' '), 'what you found'], { port: 14001, dataDir: '/fixture', machineId: 'mac' }).payload)
+        .toMatchObject({ action: 'read', repository: 'acme/app', number: 30, verdict: 'READ-OK', sha: 'f6edb44', text: 'what you found' })
       await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
+      // Read back from GitHub after a restart, the ask is known for what it is: Atlas is not asked twice.
+      f.github.state.comments.set(30, [comment(asks(f)[0]!)])
+      await f.make().tick()
       expect(asks(f)).toHaveLength(1)
     })
 
@@ -474,7 +491,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.github.state.comments.set(30, [comment(`Juno, 14:00: ${verdict} f6edb44${verdict === 'HOLD' ? ': the day count is off by one.' : ''}`)])
         await f.assigner.tick()
         expect(asks(f).map(body => body.replaceAll(/\d\d:\d\d/g, 'HH:MM'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
-          + `after your ${verdict} on f6edb44: please read it again, and start your comment with your name, as in "Juno, HH:MM: READ-OK abcdef1" or "Juno, HH:MM: HOLD abcdef1" with the file, line and fix.`])
+          + `after your ${verdict} on f6edb44: please read it again, then run \`harness super-tab read ok acme/app#30 abcdef1 'what you found'\`. For a HOLD, read hold in place of read ok, with the file, line and fix.`])
         // Once: GitHub shows the ask, and Juno is still reading.
         f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment(asks(f)[0]!)])
         await f.make().tick()
@@ -501,12 +518,49 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:m', 'builder:juno'])], { crew: team })
     f.github.state.applied = true
     await f.assigner.tick()
+    // status:taken comes off after the builder's label too, taken at the read or not: a claim that lands while the task is
+    // taken back (githubClaim.ts) would leave it taken with no builder, which nobody plans and neither side repairs.
     expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
-      '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+      '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/1/labels/status%3Ataken',
+      '/repos/acme/app/issues/2/labels/builder%3Ajuno', '/repos/acme/app/issues/2/labels/status%3Ataken'])
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1, 2])
     // The next plan gives both to Pip, two deep.
     await f.assigner.tick()
     expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+  })
+
+  // githubClaim.ts marks a task taken, and takes its own mark off only when it sees its builder's label gone. One that lands
+  // just before the label goes left the task taken with no builder: nobody plans it (readProblem), and neither side repaired it.
+  it('leaves no task taken with no builder when a claim lands while the task is taken back', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(2, ['size:m', 'builder:juno'])], { crew: team })
+    // Juno's claim lands as its label is about to go.
+    f.github.state.deleted = (task, label) => { if (label === 'builder:juno') task.labels = [...task.labels as Json[], { name: 'status:taken' }] }
+    await f.assigner.tick()
+    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m'])
+    expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([2])
+  })
+
+  it('says so when GitHub refuses to take the taken mark off last, and has still taken the task back', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(2, ['size:m', 'builder:juno'])], { crew: team })
+    f.github.state.deleted = (_task, label) => label === 'status:taken' ? 403 : undefined
+    await f.assigner.tick()
+    // The builder's label is off: the task is taken back, and said so once.
+    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m'])
+    expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([2])
+    expect(f.log.mock.calls.map(([line]) => String(line))).toContainEqual('[super-tab] Task assignment: TAKEN_NOT_CLEARED acme/app#2: GitHub answered 403')
+    expect(f.log.mock.calls.some(([line]) => String(line).includes('TAKE_BACK_REFUSED'))).toBe(false)
+  })
+
+  // Moved by hand to another builder since the read, who may have claimed it: that claim is not this pass's to undo.
+  it('takes no taken mark off a task whose builder label was already gone', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(2, ['size:m', 'builder:juno'])], { crew: team })
+    f.github.state.deleted = (task, label) => { if (label === 'builder:juno') task.labels = [{ name: 'size:m' }, { name: 'builder:pip' }, { name: 'status:taken' }] }
+    await f.assigner.tick()
+    expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+    expect((f.github.state.open[0]!.labels as Json[]).map(l => l.name)).toEqual(['size:m', 'builder:pip', 'status:taken'])
   })
 
   it('keeps the task of a builder that went away while its pull request waits for its readers or its merge', async () => {
@@ -521,7 +575,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       author_association: 'OWNER' }])
     await f.assigner.tick()
     expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/status%3Ataken',
-      '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+      '/repos/acme/app/issues/2/labels/builder%3Ajuno', '/repos/acme/app/issues/2/labels/status%3Ataken'])
   })
 
   it('keeps a down builder\'s tasks while nobody else can take them, and gives back a stopping one\'s all the same', async () => {
@@ -533,7 +587,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const stopping = setup([issue(1, ['size:s', 'builder:pip'])],
       { crew: { builders: [], machines: crew().machines, away: [{ name: 'Pip', label: 'builder:pip', why: 'stopping' }] } })
     await stopping.assigner.tick()
-    expect(stopping.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Apip'])
+    expect(stopping.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Apip',
+      '/repos/acme/app/issues/1/labels/status%3Ataken'])
   })
 
   it('forgets the asks and take backs it made once their pull request or task is no longer open', async () => {
@@ -596,7 +651,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const two = setup([issue(2, ['size:s', 'builder:pip'])], { crew: { builders: [one.builders[0]!, { ...crew().builders[1]!, machineId: 'box' }],
       machines: [...short.machines, { machineId: 'box', observation: crew().machines[0]!.observation }] } })
     await two.assigner.tick()
-    expect(two.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/builder%3Apip'])
+    expect(two.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/builder%3Apip',
+      '/repos/acme/app/issues/2/labels/status%3Ataken'])
   })
 
   describe('quiet tasks', () => {
@@ -619,7 +675,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.clock.now += 2 * HOUR
       await f.assigner.tick()
       expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
-        '/repos/acme/app/issues/1/labels/builder%3Ajuno'])
+        '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/1/labels/status%3Ataken'])
       expect(f.said().some(([, body]) => String(body).includes('Juno has had no activity on it since it was asked'))).toBe(true)
     })
 
@@ -640,7 +696,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await restarted.tick()
       expect(quietAsks(f)).toHaveLength(1)
       expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
-        '/repos/acme/app/issues/1/labels/builder%3Ajuno'])
+        '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/1/labels/status%3Ataken'])
     })
 
     it('says an ask GitHub refuses, and asks again next pass', async () => {

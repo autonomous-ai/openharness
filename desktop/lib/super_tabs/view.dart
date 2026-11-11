@@ -3478,6 +3478,9 @@ class _SuperTabViewState extends State<SuperTabView>
   SuperTabSnapshot? _indexed;
   Map<int, String> _references = const {};
   Map<String, SuperTabPerson> _people = const {};
+  // One list for every row: each reads its several-word names once for a
+  // list (message_text.dart).
+  List<String> _agentNames = const [];
   void _index() {
     final snapshot = c.snapshot;
     if (identical(snapshot, _indexed)) return;
@@ -3486,6 +3489,10 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final g in snapshot?.conversations ?? <SuperTabConversation>[])
         if (g.number != null) g.number!: g.id,
     };
+    _agentNames = [
+      for (final agent in snapshot?.agents ?? const <SuperTabAgent>[])
+        agent.name,
+    ];
     _people = {};
     for (final person in snapshot?.people ?? <SuperTabPerson>[]) {
       _people.putIfAbsent(person.id, () => person);
@@ -3553,10 +3560,7 @@ class _SuperTabViewState extends State<SuperTabView>
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username,
       ],
-      agentNames: [
-        for (final agent in c.snapshot?.agents ?? const <SuperTabAgent>[])
-          agent.name,
-      ],
+      agentNames: _agentNames,
       mentionAddresses: {
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username: person.email,

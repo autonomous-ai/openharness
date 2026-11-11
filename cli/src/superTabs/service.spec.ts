@@ -172,6 +172,17 @@ it('starts the leaderboard\'s reporter with the host and stops it with the servi
   service.port.disconnected()
   expect(shipping.stop).toHaveBeenCalledOnce()
 })
+// An agent's answer to its launch line, posted in its chat (superTabs/firstAnswers.ts), looked for while the host runs.
+it('starts the first answers with the host and stops them with the service', async () => {
+  const firstAnswers = { start: vi.fn(), stop: vi.fn() }
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
+    shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => firstAnswers })
+  expect(firstAnswers.start).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(firstAnswers.start).toHaveBeenCalledOnce()
+  service.port.disconnected()
+  expect(firstAnswers.stop).toHaveBeenCalledOnce()
+})
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
   for (const path of ['/api/auth/me', '/api/super-tabs/../auth/me', '/api/super-tabs%2F..', 'https://elsewhere.invalid', '/api/super-tabs#other']) {
@@ -930,9 +941,9 @@ describe('a verdict by command', () => {
       data: path.includes('/github-comments') ? { recorded: true } : swarmData(agent, path, state) } }))
     const core = fakeCore({ account: { backend: call, identity: vi.fn(async () => ({ accountId: 'me' }) as never) }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } })
     const sent: Array<{ path: string; body: unknown }> = []
-    const github = { get: vi.fn(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+    const github = { get: vi.fn(async (path: string): Promise<{ status: number; etag: null; resetAt: null; body: unknown }> => ({ status: 200, etag: null, resetAt: null,
       body: path === '/user' ? { login: 'reader-login' } : path.includes('/comments') ? [] : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } })),
-      send: vi.fn(async (_method: string, path: string, body?: unknown) => { sent.push({ path, body })
+      send: vi.fn(async (_method: string, path: string, body?: unknown): Promise<{ status: number; etag: null; resetAt: null; body: unknown }> => { sent.push({ path, body })
         return { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } }) }
     const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github })
     const read = (extra: Record<string, unknown> = {}) => service.requests.super_tabs({ action: 'read', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 27,
@@ -956,12 +967,51 @@ describe('a verdict by command', () => {
     expect(t.github.get).not.toHaveBeenCalled()
     t.service.port.stop()
   })
+  it('takes a task as the calling agent, under its name, and records its claim as that agent\'s', async () => {
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'builder:juno' }], html_url: 'https://github.com/acme/app/issues/34' }
+        : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'builder:juno' }, { name: 'status:taken' }] }
+        : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } })
+    expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
+      .toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', taken: true } })
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
+    expect(t.sent[1]!.body).toEqual({ body: expect.stringMatching(/^Juno, \d\d:\d\d: taken by Juno$/) })
+    expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
+    expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 0 }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    t.service.port.stop()
+  })
+  // The CLI gives up after 30 seconds and says "Try again" while the daemon works on: the same command again joins the one
+  // still running, and posts nothing of its own (the second review of #3907).
+  it('does a command that arrives again while the first still runs once, and answers both', async () => {
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'builder:juno' }] } : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'builder:juno' }, { name: 'status:taken' }] }
+        : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
+    const take = () => t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)
+    const answers = await Promise.all([take(), take()])
+    expect(answers).toEqual(Array(2).fill({ ok: true, value: { url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true } }))
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
+    t.service.port.stop()
+    // A verdict the same way; another verdict on the same head is its own command.
+    const u = verdictSetup()
+    const reads = await Promise.all([u.read(), u.read(), u.read({ verdict: 'HOLD', text: 'It breaks the build.' })])
+    expect(reads.map(read => 'ok' in read)).toEqual([true, true, true])
+    expect(u.sent.map(sent => String((sent.body as { body: string }).body).split('\n')[0]!.replace(/^Juno, \d\d:\d\d: /, ''))).toEqual([`READ-OK ${HEAD}`, `HOLD ${HEAD}`])
+    u.service.port.stop()
+  })
   // Review of #3902: this computer's gh login is its person's, so only that person's own agent here posts with it, as GitHub
   // news and the merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
   it('posts with this computer\'s GitHub login only for its own person\'s agent, and signs with the agent\'s name when it has no display name', async () => {
     for (const other of [{ contributorId: 'mate' }, { machineOwnerId: 'mate' }]) {
       const t = verdictSetup(other)
       expect(await t.read()).toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.' })
+      expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
+        .toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'A task is taken with its person\'s own GitHub login, on that person\'s computer.' })
       expect(t.github.get).not.toHaveBeenCalled()
       t.service.port.stop()
     }
