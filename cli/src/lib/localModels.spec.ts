@@ -1816,6 +1816,49 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(scan).toHaveBeenCalledTimes(2)
   })
 
+  it('answers a Swarm machine reading from the last scan without starting one, and a person\'s ask still starts one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.now(), scan = vi.fn(async () => apps)
+    const fromApps = (snapshot: Awaited<ReturnType<LocalModels['list']>>) => snapshot.models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)
+    service = appService({ appModels: scan })
+    // No scan yet and none saved: a reading lists no app's models, and starts no scan to find them.
+    expect(fromApps(await service.list('home', false, false))).toEqual([])
+    expect(scan).not.toHaveBeenCalled()
+    vi.setSystemTime(start + 3000)
+    await service.list('home')
+    await service.list('home', false, false)
+    expect(scan).toHaveBeenCalledTimes(1)
+    // Long past the 30 seconds a person's ask scans again after, a reading answers from that scan as it is.
+    vi.setSystemTime(start + 60_000)
+    expect(fromApps(await service.list('home', false, false))).toEqual([ollama.id, studio.id])
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(start + 63_000)
+    await service.list('home')
+    await service.settled()
+    expect(scan).toHaveBeenCalledTimes(2)
+    // A person's ask answered from a reading's list a moment old still starts the scan that is due.
+    vi.setSystemTime(start + 100_000)
+    await service.list('home', false, false)
+    await service.list('home')
+    await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(3))
+    await service.settled()
+  })
+
+  it('lists an engine serving on a Swarm\'s grid for its reading when no scan has found its model', async () => {
+    const swarm = 'swarm-0123456789ab'
+    const record = (modelId: string, alias: string) => ({ spec: 1, modelId, grid: swarm, name: alias, engine: 'ollama', served: alias,
+      alias, port: 41000, binary: '/usr/local/bin/ollama', pid: 4242 })
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([record(ollama.id, 'llama3.2:3b'), record('app:ollama:gone:1b', 'gone:1b')]))
+    up.add(ollama.id)
+    const scan = vi.fn(async () => [])
+    const rows = (await appService({ appModels: scan }).list('home', false, false)).models.filter(m => m.app === 'Ollama')
+    expect(scan).not.toHaveBeenCalled()
+    // Its engine gone, the other is served nowhere and has no row.
+    expect(rows).toEqual([expect.objectContaining({ id: ollama.id, name: 'llama3.2:3b', canStart: false, canStop: false,
+      servedOn: [{ grid: swarm, servedAs: ['llama3.2:3b'] }] })])
+  })
+
   it('answers from the last scan while a slow one runs, and the list after it has the new one', async () => {
     let scans = 0, release!: () => void
     const models = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
