@@ -179,6 +179,7 @@ describe('what Harness says of the counts', () => {
     expect(dayLine(numbers(), 'Wed 11 Nov', goal)).toMatch(/ and 3 in hand\. Goal: 41 of 60 checks pass on the main branch, 3 fail and 16 wait\.$/)
     expect(dayLine(numbers(), 'Wed 11 Nov', { total: 2, passed: 2, failed: 0, waiting: 0 })).toMatch(/ Goal: 2 of 2 checks pass on the main branch\.$/)
     expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 1, failed: 0, waiting: 0 })).toMatch(/ Goal: 1 of 1 check passes on the main branch\.$/)
+    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 0, failed: 0, waiting: 1 })).toMatch(/ Goal: 0 of 1 check passes on the main branch, 0 fail and 1 waits\.$/)
     expect(dayLine(numbers(), 'Wed 11 Nov', { total: 3, passed: 1, failed: 1, waiting: 1 })).toMatch(/ Goal: 1 of 3 checks pass on the main branch, 1 fails and 1 waits\.$/)
     for (const none of [null, undefined]) expect(dayLine(numbers(), 'Wed 11 Nov', none)).toMatch(/ and 3 in hand\.$/)
   })

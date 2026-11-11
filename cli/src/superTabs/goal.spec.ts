@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GOAL_MAX, goalOf, goalRows, scoreOf } from './goal.js'
+import { GOAL_MAX, goalOf, goalRows, LINE_MAX, scoreOf } from './goal.js'
 import { GitHubReads, type GitHubGet } from './githubRest.js'
 
 type Json = Record<string, unknown>
@@ -36,6 +36,15 @@ describe('a project\'s goal file', () => {
     expect(many).toHaveLength(GOAL_MAX)
     expect(many.at(-1)).toEqual({ milestone: `Milestone ${GOAL_MAX - 1}`, check: `check ${GOAL_MAX - 1}` })
   })
+
+  // The row's pattern takes time by the square of a line's length, and the file is the repository's text.
+  it('reads no row from a line too long to be one, and so reads a file of one very long line at once', () => {
+    expect(goalRows(`| Sync | \`${'b'.repeat(LINE_MAX - 13)}\` |`)).toHaveLength(1)
+    expect(goalRows(`| Sync | \`${'b'.repeat(LINE_MAX - 12)}\` |`)).toEqual([])
+    const began = Date.now()
+    expect(goalRows(`| a${' '.repeat(400_000)}| x\n| Sync | \`a\` |`)).toEqual([{ milestone: 'Sync', check: 'a' }])
+    expect(Date.now() - began).toBeLessThan(1_000)
+  })
 })
 
 describe('a goal\'s score on one commit', () => {
@@ -65,47 +74,70 @@ describe('a goal\'s score on one commit', () => {
 })
 
 describe('a project\'s goal as GitHub has it', () => {
-  const SHA = (n: number) => String(n).repeat(40).slice(0, 40)
-  /** A repository's goal file, its branch's last commits (the newest first) and the check runs of each, by page. */
-  function github(file: string | null, commits: Json[][], branch = 'main') {
+  const SHA = (n: number) => n.toString(16).padStart(2, '0').repeat(20)
+  /** A repository's goal file and its branch's commits, the newest first: each with its check runs and the commits it stands
+   *  on, its first parent first (the one before it in the list unless it says another). */
+  function github(file: string | null, commits: Array<Json[] | { runs: Json[]; parents: number[] }>, branch = 'main') {
     const asked: string[] = []
-    const get: GitHubGet = async path => {
-      asked.push(path)
-      const url = new URL(`https://api.github.com${path}`), page = Number(url.searchParams.get('page') ?? 1), ok = (body: unknown) => ({ status: 200, etag: null, resetAt: null, body })
+    const all = commits.map((commit, n) => Array.isArray(commit) ? { runs: commit, parents: n + 1 < commits.length ? [n + 1] : [] } : commit)
+    const get: GitHubGet = async (path, etag) => {
+      asked.push(`${path}${etag ? ' (with an ETag)' : ''}`)
+      const url = new URL(`https://api.github.com${path}`), page = Number(url.searchParams.get('page') ?? 1), ok = (body: unknown) => ({ status: 200, etag: '"kept"', resetAt: null, body })
       if (url.pathname === '/repos/acme/app/contents/agents/GOAL.md') return file === null ? { status: 404, etag: null, body: null, resetAt: null } : ok({ content: Buffer.from(file).toString('base64'), encoding: 'base64' })
-      if (url.pathname === '/repos/acme/app/commits' && url.searchParams.get('sha') === branch) return ok(commits.map((_, n) => ({ sha: SHA(n + 1) })).slice(0, Number(url.searchParams.get('per_page'))))
-      const runs = /^\/repos\/acme\/app\/commits\/(\d{40})\/check-runs$/.exec(url.pathname)
-      if (runs) return ok({ check_runs: commits[Number(runs[1]![0]) - 1]!.slice((page - 1) * 100, page * 100) })
+      if (url.pathname === '/repos/acme/app/commits' && url.searchParams.get('sha') === branch && url.searchParams.get('per_page') === '100') {
+        return ok(all.map((commit, n) => ({ sha: SHA(n + 1), parents: commit.parents.map(parent => ({ sha: SHA(parent + 1) })) })))
+      }
+      const runs = /^\/repos\/acme\/app\/commits\/([0-9a-f]{40})\/check-runs$/.exec(url.pathname)
+      if (runs) return ok({ check_runs: all[parseInt(runs[1]!.slice(0, 2), 16) - 1]!.runs.slice((page - 1) * 100, page * 100) })
       return { status: 500, etag: null, body: null, resetAt: null }
     }
     return { reads: new GitHubReads(get), asked: () => asked.map(path => path.replace('/repos/acme/app', '')) }
   }
   const done = [run(1, 'Settings sync offline', 'success'), run(2, 'The app starts in a second', 'success'), run(3, 'Every screen has a test', 'failure')]
+  const running = [run(1, 'Settings sync offline', 'success'), run(2, 'The app starts in a second', null, 'in_progress')]
 
   it('scores the file\'s milestones on the branch\'s tip when all its checks have ended', async () => {
     const t = github(FILE, [done, [run(9, 'Settings sync offline', 'failure')]])
     expect(await goalOf(t.reads, 'acme/app', 'main')).toEqual({ total: 3, passed: 2, failed: 1, waiting: 0 })
-    expect(t.asked()).toEqual(['/contents/agents/GOAL.md', '/commits?sha=main&per_page=5', `/commits/${SHA(1)}/check-runs?per_page=100`])
+    expect(t.asked()).toEqual(['/contents/agents/GOAL.md', '/commits?sha=main&per_page=100', `/commits/${SHA(1)}/check-runs?per_page=100`])
   })
 
-  // After each landing the tip has no run yet, and a tip pushed with [skip ci] never has one: the goal is what the last commit
+  // After each landing the tip has no run yet, and a tip pushed with [skip ci] never has one: the goal is what the last landing
   // that was checked through says, not "0 of 60 pass, 60 wait".
-  it('scores the newest of the branch\'s last five commits whose checks have all ended, and its tip when none has', async () => {
-    const running = [run(1, 'Settings sync offline', 'success'), run(2, 'The app starts in a second', null, 'in_progress')]
+  it('scores the newest of the branch\'s last five landings whose checks have all ended', async () => {
     const t = github(FILE, [[], running, done, [run(9, 'Settings sync offline', 'failure')]])
     expect(await goalOf(t.reads, 'acme/app', 'main')).toEqual({ total: 3, passed: 2, failed: 1, waiting: 0 })
     expect(t.asked().slice(2)).toEqual([1, 2, 3].map(n => `/commits/${SHA(n)}/check-runs?per_page=100`))
-    const none = github(FILE, [running, [], [], [], [], done])
+  })
+
+  // A train that lands as a merge commit brings its members' own commits and the train's merges of them: none was pushed to the
+  // branch, so none has a check of it. Counted among "the last five commits", they hid the landing before (second review).
+  it('follows the branch\'s own line of landings, not every commit a landing brought with it', async () => {
+    // The tip is a train's landing of three pull requests, still running; the landing before it was checked through.
+    const brought = Array.from({ length: 6 }, () => ({ runs: [] as Json[], parents: [7] }))
+    const t = github(FILE, [{ runs: running, parents: [7, 1] }, ...brought, done, []])
+    expect(await goalOf(t.reads, 'acme/app', 'main')).toEqual({ total: 3, passed: 2, failed: 1, waiting: 0 })
+    expect(t.asked().slice(2)).toEqual([`/commits/${SHA(1)}/check-runs?per_page=100`, `/commits/${SHA(8)}/check-runs?per_page=100`])
+  })
+
+  it('scores the landing with the fewest checks still waiting when none of the five has ended, the newest of those', async () => {
+    const one = [run(1, 'Settings sync offline', 'success')]
+    const none = github(FILE, [[], running, one, running, [], done])
     expect(await goalOf(none.reads, 'acme/app', 'main')).toEqual({ total: 3, passed: 1, failed: 0, waiting: 2 })
     expect(none.asked()).toHaveLength(2 + 5)
-    // A branch GitHub lists no commit of, or commits it names by nothing readable: every milestone waits.
+    expect(await goalOf(github(FILE, [[], one, [run(1, 'Settings sync offline', 'failure')]]).reads, 'acme/app', 'main')).toEqual({ total: 3, passed: 1, failed: 0, waiting: 2 })
+    // After a milestone is added, every older landing waits on it: the one that lacks only that is the goal, not a tip with none.
+    const added = `${FILE}| A new milestone | \`make new\` |\n`
+    expect(await goalOf(github(added, [[], done]).reads, 'acme/app', 'main')).toEqual({ total: 4, passed: 2, failed: 1, waiting: 1 })
+    // A branch GitHub lists no commit of, or commits it names by nothing readable: every milestone waits, and nothing more is asked.
     expect(await goalOf(github(FILE, []).reads, 'acme/app', 'main')).toEqual({ total: 3, passed: 0, failed: 0, waiting: 3 })
     const paths: string[] = []
     const unread = new GitHubReads(async path => { paths.push(path); return { status: 200, etag: null, resetAt: null,
-      body: path.includes('/contents/') ? { content: Buffer.from(FILE).toString('base64'), encoding: 'base64' } : path.includes('/check-runs') ? { total_count: 0 } : [{ sha: '../../pulls' }, {}, { sha: SHA(1) }] } })
+      body: path.includes('/contents/') ? { content: Buffer.from(FILE).toString('base64'), encoding: 'base64' } : path.includes('/check-runs') ? { total_count: 0 }
+        : path.includes('unlisted') ? { message: 'not a list' } : [{ sha: '../../pulls' }, {}, { sha: SHA(1), parents: 'none' }] } })
     expect(await goalOf(unread, 'acme/app', 'main')).toEqual({ total: 3, passed: 0, failed: 0, waiting: 3 })
-    // Only what is a commit's name is asked after.
     expect(paths.filter(path => path.includes('/check-runs'))).toEqual([`/repos/acme/app/commits/${SHA(1)}/check-runs?per_page=100`])
+    expect(await goalOf(unread, 'acme/app', 'unlisted')).toEqual({ total: 3, passed: 0, failed: 0, waiting: 3 })
   })
 
   it('says nothing of a project with no goal file or no row, and reads no commit for it', async () => {
@@ -120,10 +152,19 @@ describe('a project\'s goal as GitHub has it', () => {
     const other = (id: number): Json => ({ id, name: `build ${id}`, status: 'completed', conclusion: 'success' })
     const t = github(FILE, [[...Array.from({ length: 250 }, (_, n) => other(n + 1)), ...done.map(each => ({ ...each, id: 900 + Number(each.id) }))]], 'release/1 beta')
     expect(await goalOf(t.reads, 'acme/app', 'release/1 beta')).toMatchObject({ passed: 2, failed: 1 })
-    expect(t.asked().slice(1)).toEqual(['/commits?sha=release%2F1%20beta&per_page=5', `/commits/${SHA(1)}/check-runs?per_page=100`, `/commits/${SHA(1)}/check-runs?per_page=100&page=2`,
+    expect(t.asked().slice(1)).toEqual(['/commits?sha=release%2F1%20beta&per_page=100', `/commits/${SHA(1)}/check-runs?per_page=100`, `/commits/${SHA(1)}/check-runs?per_page=100&page=2`,
       `/commits/${SHA(1)}/check-runs?per_page=100&page=3`])
     const far = github(FILE, [[...Array.from({ length: 300 }, (_, n) => other(n + 1)), ...done]])
     expect(await goalOf(far.reads, 'acme/app', 'main')).toMatchObject({ passed: 0, waiting: 3 })
     expect(far.asked()).toHaveLength(2 + 3)
+  })
+
+  // A commit's check runs are hundreds of kilobytes, asked for once: kept under their ETag as other reads are, a few hundred
+  // of them filled the Swarm's process (second review).
+  it('keeps nothing of the commits and checks it read: asked again, they are asked outright', async () => {
+    const t = github(FILE, [done])
+    await goalOf(t.reads, 'acme/app', 'main')
+    await goalOf(t.reads, 'acme/app', 'main')
+    expect(t.asked().slice(3)).toEqual(['/contents/agents/GOAL.md (with an ETag)', '/commits?sha=main&per_page=100', `/commits/${SHA(1)}/check-runs?per_page=100`])
   })
 })

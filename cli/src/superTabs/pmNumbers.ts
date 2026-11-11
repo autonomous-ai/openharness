@@ -143,7 +143,7 @@ const noTask = (n: Numbers, builders: number): string => n.open > 0 ? `the ${cou
   : `no sized task is open${n.unsized ? ` (${counted(n.unsized, 'open issue')} ${n.unsized === 1 ? 'has' : 'have'} no size)` : ''}`
 
 /** A goal's score in a few words: "41 of 60 checks pass on the main branch, 3 fail and 16 wait". */
-const scored = (goal: Score): string => `${goal.passed} of ${counted(goal.total, 'check')} pass${goal.total === 1 && goal.passed === 1 ? 'es' : ''} on the main branch`
+const scored = (goal: Score): string => `${goal.passed} of ${counted(goal.total, 'check')} pass${goal.total === 1 ? 'es' : ''} on the main branch`
   + `${goal.failed || goal.waiting ? `, ${goal.failed} fail${goal.failed === 1 ? 's' : ''} and ${goal.waiting} wait${goal.waiting === 1 ? 's' : ''}` : ''}`
 
 /** A project's goal as a line has it: its score, null when it states none, undefined when it could not be read. */

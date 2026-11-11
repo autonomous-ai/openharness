@@ -9,10 +9,12 @@
  * So a project lists its milestones in `agents/GOAL.md`, a table of two columns: what must be true, and the command that
  * checks it, in backticks. The repository's own CI runs each command on its main branch as a check named `goal: <milestone>`
  * (the workflow `harness super-tab goal` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
- * default branch, and the checks from the newest of that branch's last commits on which every milestone's check has ended: a
- * milestone passes when its check concluded success there, and fails when it concluded anything else. The branch's tip has
- * no run yet in the minutes after each landing, and never when it was pushed with `[skip ci]`: scored alone, a goal read "0
- * of 60 pass, 60 wait" most of the time (its first review). A project with no file, or no row, has no goal.
+ * default branch, and the checks from the newest of that branch's last landings on which every milestone's check has ended: a
+ * milestone passes when its check concluded success there, fails when it concluded in failure, and waits otherwise. The
+ * branch's tip has no run yet in the minutes after each landing, and never when it was pushed with `[skip ci]`: scored alone,
+ * a goal read "0 of 60 pass, 60 wait" most of the time (its first review). A landing is a commit on the branch's first-parent
+ * line: a train that lands as a merge commit brings its members' commits with it, which were never pushed to the branch and
+ * carry no check of it (its second review). A project with no file, or no row, has no goal.
  *
  * Only counts leave here. A milestone's words are the repository's text, and none of them is typed to an agent.
  */
@@ -30,8 +32,12 @@ export const GOAL_CHECK = 'goal: '
 export const GOAL_MAX = 100, MILESTONE_MAX = 100
 /** Pages of a hundred of a commit's checks read for them: a hundred milestones beside two hundred checks of the project's own. */
 const CHECK_PAGES = 3
-/** How many of the branch's last commits are looked at for one whose goal checks have all ended. */
-const COMMITS = 5
+/** How many of the branch's last landings are looked at for one whose goal checks have all ended, among how many of its last
+ *  commits: a train of twenty brings twenty merge commits and their pull requests' own. */
+const LANDINGS = 5
+/** The longest line read as a row: a milestone, a command and a few bars. The row's pattern takes time by the square of a
+ *  line's length, and the file is the repository's text: one line of a megabyte held the daemon for minutes (second review). */
+export const LINE_MAX = 1_000
 
 /** A milestone and the command that checks it. */
 export interface GoalRow { milestone: string; check: string }
@@ -44,6 +50,7 @@ export interface Score { total: number; passed: number; failed: number; waiting:
 export function goalRows(text: string | null): GoalRow[] {
   const rows = new Map<string, GoalRow>()
   for (const line of (text ?? '').split(/\r?\n/)) {
+    if (line.length > LINE_MAX) continue
     const found = /^\|\s*(.+?)\s*\|\s*`([^`]+)`\s*\|\s*$/.exec(line.trim())
     const milestone = found?.[1]!.replace(/\s+/g, ' '), check = found?.[2]!.trim()
     if (!milestone || !check || milestone.length > MILESTONE_MAX || rows.has(milestone)) continue
@@ -72,23 +79,27 @@ export function scoreOf(rows: readonly GoalRow[], runs: readonly Json[]): Score 
 }
 
 /** The goal of [repo] on its [base] branch as it is now, or null when it states none: scored on the newest of the branch's
- *  last [COMMITS] commits whose goal checks have all ended, or on its tip when none has. Unchanged, every read is a 304. */
+ *  last [LANDINGS] landings whose goal checks have all ended, or, when none has, on the one with the fewest still waiting (the
+ *  newest of those). The commits and their checks are asked outright and not kept: they are large, and asked for once. */
 export async function goalOf(reads: GitHubReads, repo: string, base: string): Promise<Score | null> {
   const rows = goalRows(await reads.file(repo, GOAL_FILE))
   if (!rows.length) return null
-  const commits = (await reads.current(repo, `/repos/${repo}/commits?sha=${encodeURIComponent(base)}&per_page=${COMMITS}`, 1)).map(commit => String(commit.sha ?? ''))
-  let tip: Score | null = null
-  for (const sha of commits.filter(sha => /^[0-9a-f]{40}$/.test(sha))) {
+  const listed = await reads.fresh(repo, `/repos/${repo}/commits?sha=${encodeURIComponent(base)}&per_page=${PAGE}`)
+  const commits = (Array.isArray(listed) ? listed.map(object) : []).filter(commit => /^[0-9a-f]{40}$/.test(String(commit.sha)))
+  const parent = new Map(commits.map(commit => [String(commit.sha), String(object(Array.isArray(commit.parents) ? commit.parents[0] : undefined).sha ?? '')]))
+  let best: Score | null = null
+  for (let sha = String(commits[0]?.sha ?? ''), landing = 0; parent.has(sha) && landing < LANDINGS; sha = parent.get(sha)!, landing++) {
     const runs: Json[] = []
     for (let page = 1; page <= CHECK_PAGES; page++) {
-      const listed = object(await reads.one(repo, `/repos/${repo}/commits/${sha}/check-runs?per_page=${PAGE}${page > 1 ? `&page=${page}` : ''}`)).check_runs
-      const found = Array.isArray(listed) ? listed.map(object) : []
-      runs.push(...found)
-      if (found.length < PAGE) break
+      const found = object(await reads.fresh(repo, `/repos/${repo}/commits/${sha}/check-runs?per_page=${PAGE}${page > 1 ? `&page=${page}` : ''}`)).check_runs
+      // Only what a score reads of a run is held.
+      const held = Array.isArray(found) ? found.map(object).map(run => ({ id: run.id, name: run.name, status: run.status, conclusion: run.conclusion })) : []
+      runs.push(...held)
+      if (held.length < PAGE) break
     }
     const score = scoreOf(rows, runs)
     if (!score.waiting) return score
-    tip ??= score
+    if (!best || score.waiting < best.waiting) best = score
   }
-  return tip ?? scoreOf(rows, [])
+  return best ?? scoreOf(rows, [])
 }

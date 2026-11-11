@@ -11,10 +11,10 @@
  * another agent and land on the train. A file that is there already is left as it is.
  */
 import { execFile } from 'node:child_process'
-import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, join, sep } from 'node:path'
 import { gitEnv } from '../lib/gitProject.js'
-import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, MILESTONE_MAX } from './goal.js'
+import { GOAL_CHECK, GOAL_FILE, GOAL_MAX, LINE_MAX, MILESTONE_MAX } from './goal.js'
 
 export const GOAL_WORKFLOW = '.github/workflows/goal.yml'
 
@@ -30,9 +30,11 @@ there. Harness tells the project's PM and its channel how many pass. A command t
 `
 
 /** The lines of the workflow that read the goal file, as goal.ts goalRows reads it: a table row whose second cell is a command
- *  in backticks, a milestone once, at most [GOAL_MAX] of [MILESTONE_MAX] characters. Node, as every GitHub runner has it. */
+ *  in backticks, a milestone once, at most [GOAL_MAX] of [MILESTONE_MAX] characters, from lines of [LINE_MAX] at most. Node,
+ *  as every GitHub runner has it. */
 export const GOAL_READER = String.raw`const rows = new Map()
 for (const line of require('fs').readFileSync('${GOAL_FILE}', 'utf8').split(/\r?\n/)) {
+  if (line.length > ${LINE_MAX}) continue
   const found = /^\|\s*(.+?)\s*\|\s*\x60([^\x60]+)\x60\s*\|\s*$/.exec(line.trim())
   const milestone = found && found[1].replace(/\s+/g, ' '), check = found && found[2].trim()
   if (!milestone || !check || milestone.length > ${MILESTONE_MAX} || rows.has(milestone)) continue
@@ -44,8 +46,9 @@ console.log('rows=' + JSON.stringify([...rows.values()]))`
 /** The workflow, for a repository whose main branch is [base]: one job reads the rows, and one job for each runs its check
  *  under the name Harness looks for. A check is the repository's own command, on its main branch only, where what it runs was
  *  read and landed as any change; it reaches the shell as a variable, never as text of the script, and fails when any part of
- *  it does (`-eo pipefail`). A newer push takes the place of a run still going; ten checks run at once and each has half an
- *  hour, so a goal never holds a project's own CI or a runner for long. */
+ *  it does (`-eo pipefail`). One run at a time: a push while one runs waits its turn, and a newer push takes that turn, so
+ *  some landing's checks always end however fast landings come (cancelling the run in hand, none ever did). Ten checks run
+ *  at once and each has half an hour, so a goal holds no runner for long. */
 export const goalWorkflow = (base: string): string => `# Runs each check of ${GOAL_FILE} on the main branch, as a check named "${GOAL_CHECK}<milestone>".
 # Harness reads those to show how far the project is from its goal. Add what your checks need (a toolchain, a cache) to the goal job's steps.
 name: goal
@@ -56,10 +59,11 @@ permissions:
   contents: read
 concurrency:
   group: goal
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   rows:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       rows: @@{ steps.read.outputs.rows }@@
     steps:
@@ -96,7 +100,8 @@ const gitLine = (cwd: string, args: readonly string[]): Promise<string | null> =
 
 /**
  * Writes the goal file and its workflow into the repository [cwd] is in, each only where nothing is there yet (not even a
- * link to nowhere), and says what to do next in words an agent reads. The workflow names the main branch as the checkout
+ * link to nowhere) and only inside the checkout (a folder of it that is a link to elsewhere is not written through), and says
+ * what to do next in words an agent reads. The workflow names the main branch as the checkout
  * knows it (origin's HEAD), `main` when it does not say; the answer says which, as a checkout can be behind a rename.
  */
 export async function startGoal(cwd: string, git: (cwd: string, args: readonly string[]) => Promise<string | null> = gitLine): Promise<{ ok: boolean; said: string }> {
@@ -111,6 +116,7 @@ export async function startGoal(cwd: string, git: (cwd: string, args: readonly s
     // Whatever is there, a link to nowhere too: lstat does not follow it, so nothing is written through one.
     if (lstatSync(file, { throwIfNoEntry: false })) { kept.push(path); continue }
     mkdirSync(dirname(file), { recursive: true })
+    if (!`${realpathSync(dirname(file))}${sep}`.startsWith(`${realpathSync(root)}${sep}`)) return { ok: false, said: `${dirname(path)} is a link to outside this checkout: nothing was written there.` }
     writeFileSync(file, text)
     wrote.push(path)
   }

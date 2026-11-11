@@ -39,7 +39,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
       : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
       // Main's last commit and its checks, where a project's goal is scored (goal.ts).
-      : url.pathname === '/repos/acme/app/commits' ? [{ sha: TIP }]
+      : url.pathname === '/repos/acme/app/commits' ? url.searchParams.get('sha') === 'main' ? [{ sha: TIP, parents: [] }] : null
       : url.pathname === `/repos/acme/app/commits/${TIP}/check-runs` ? { check_runs: state.checks }
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),

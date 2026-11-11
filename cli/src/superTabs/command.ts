@@ -1,5 +1,4 @@
 import { claimAsked } from './githubClaim.js'
-import { startGoal } from './goalStarter.js'
 import { splitAsked } from './githubSplit.js'
 import { verdictAsked } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
@@ -262,7 +261,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
     operationId = request.payload.operationId
     // The goal file and its workflow are written here, into the caller's own checkout: nothing of it is the daemon's to do.
     if (request.payload.action === 'goal') {
-      const written = await (deps.goal ?? (() => startGoal(process.cwd())))()
+      // Loaded for this action alone: it brings git's helpers, which no other Swarm command needs.
+      const written = await (deps.goal ?? (async () => (await import('./goalStarter.js')).startGoal(process.cwd())))()
       print(written.said)
       return written.ok ? 0 : 1
     }

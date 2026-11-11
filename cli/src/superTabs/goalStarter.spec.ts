@@ -43,6 +43,12 @@ describe('a project\'s goal file and its workflow, written into a checkout', () 
     symlinkSync(outside, join(linked, 'agents/GOAL.md'))
     expect((await startGoal(linked, git(linked, 'origin/main'))).said).toContain('(agents/GOAL.md was there already)')
     expect(existsSync(outside)).toBe(false)
+    // Nor a folder of the checkout that is a link to elsewhere: nothing is written outside it.
+    const through = folder(), elsewhere = folder()
+    symlinkSync(elsewhere, join(through, 'agents'))
+    expect(await startGoal(through, git(through, 'origin/main'))).toEqual({ ok: false, said: 'agents is a link to outside this checkout: nothing was written there.' })
+    expect(existsSync(join(elsewhere, 'GOAL.md'))).toBe(false)
+    expect(existsSync(join(through, '.github'))).toBe(false)
     // What it cannot write for another reason is the command's failure.
     const blocked = folder()
     writeFileSync(join(blocked, 'agents'), 'a file where the folder goes')
@@ -100,9 +106,11 @@ describe('the workflow that checks a goal', () => {
     expect(text).not.toMatch(/@@\{|\}@@/)
   })
 
-  it('lets one failing check fail alone, a newer push take a run\'s place, and no check hold a runner for long', () => {
+  it('lets one failing check fail alone, runs one push at a time, and lets no job hold a runner for long', () => {
     expect(text).toContain('    strategy:\n      fail-fast: false\n      max-parallel: 10\n')
-    expect(text).toContain('concurrency:\n  group: goal\n  cancel-in-progress: true\n')
+    // One run at a time, and the one in hand is never cancelled: however fast landings come, some landing's checks end.
+    expect(text).toContain('concurrency:\n  group: goal\n  cancel-in-progress: false\n')
+    expect(text).toContain('  rows:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n')
     expect(text).toContain('    runs-on: ubuntu-latest\n    timeout-minutes: 30\n')
     // The rows are read from the commit that was pushed.
     expect(text).toContain('    steps:\n      - uses: actions/checkout@v4\n      - id: read\n')
@@ -118,7 +126,8 @@ describe('the workflow that checks a goal', () => {
     const files = ['# Goal\n\n| Milestone | Check |\n|---|---|\n| Settings sync offline | `npm test -- sync.offline` |\n  |  The  app   starts | `scripts/start --under 1000`|\n',
       '| Sync | `a` |\r\n| Sync | `b` |\n| Start | `c | d` |\n| No check | npm test |\n| Empty | ` ` |\n| ' + 'x'.repeat(101) + ' | `a` |\n| ' + 'y'.repeat(100) + ' | `b` |\nnot a row\n| Only one |\n',
       Array.from({ length: 105 }, (_, n) => `| Milestone ${n} | \`check "${n}" && echo '$HOME' \` |`).join('\n'), '', '| “Quotes” & <tags> ☃ | `echo "${{ secrets.X }}"` |\n',
-      '﻿| With a mark before it | `a` |\n|\tTabs\tand spaces\t|\t`b`\t|\n| rows=[] | `c` |\n| A | `x`y` |\n']
+      '﻿| With a mark before it | `a` |\n|\tTabs\tand spaces\t|\t`b`\t|\n| rows=[] | `c` |\n| A | `x`y` |\n',
+      `| Just fits | \`${'b'.repeat(1_000 - 18)}\` |\n| One too long | \`${'b'.repeat(1_000 - 20)}\` |\n| a${' '.repeat(50_000)}| x\n`]
     for (const file of files) {
       const root = folder()
       mkdirSync(join(root, 'agents'))
