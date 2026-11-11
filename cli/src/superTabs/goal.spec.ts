@@ -37,7 +37,30 @@ describe('a project\'s goal file', () => {
     expect(many.at(-1)).toEqual({ milestone: `Milestone ${GOAL_MAX - 1}`, check: `check ${GOAL_MAX - 1}` })
   })
 
-  // The row's pattern takes time by the square of a line's length, and the file is the repository's text.
+  // As one pattern a row was read in time by the cube of its line's length: a 1,000-character line of spaces took a fifth of a
+  // second, and a file of them minutes, in the daemon and in the workflow (review of the Desktop score, 2026-11-11). Read by
+  // plain searches from the row's end, a megabyte of the worst lines is read at once: under the old reader this test ran out
+  // of its time.
+  it('reads a file of the slowest lines there are at once, and the rows among them', () => {
+    const slow = [`|${' '.repeat(LINE_MAX - 2)}a`, `|${' '.repeat(500)}|${' '.repeat(490)}\`a\` x`, `| a |${' '.repeat(LINE_MAX - 10)}\`x`, `|${' |'.repeat(498)} x`]
+    for (const line of slow) expect(line.length).toBeLessThanOrEqual(LINE_MAX)
+    const file = [...Array.from({ length: 1_000 }, (_, n) => slow[n % slow.length]), '| Sync | `a` |'].join('\n')
+    expect(goalRows(file)).toEqual([{ milestone: 'Sync', check: 'a' }])
+  })
+
+  it('reads a row by its last two backticks and the bars around them, whatever else its line holds', () => {
+    expect(goalRows('| a | b | `x` |')).toEqual([{ milestone: 'a | b', check: 'x' }])
+    expect(goalRows('| a `q` | `x | y` |')).toEqual([{ milestone: 'a `q`', check: 'x | y' }])
+    expect(goalRows('|a|`x`|')).toEqual([{ milestone: 'a', check: 'x' }])
+    // No milestone, no bar between the cells, nothing in the backticks, something after them: no row.
+    for (const none of ['|', '||', '|`x`|', '|  | `x` |', '| a | `` |', '| a | ` ` |', '| a | `x` y |', '| a  `x` |', '| a | x` |', '` | a | `x` |', '| a | `x`']) {
+      expect(goalRows(none), none).toEqual([])
+    }
+    // A milestone is one line's words: one with a line's end inside it (a lone return, U+2028, U+2029) is none, at its ends it is space.
+    expect(goalRows('| a\rb | `x` |\n| a\u2028b | `x` |\n| a\u2029b | `x` |')).toEqual([])
+    expect(goalRows('|\u2028 a \u2029| `x` |')).toEqual([{ milestone: 'a', check: 'x' }])
+  })
+
   it('reads no row from a line too long to be one', () => {
     expect(goalRows(`| Sync | \`${'b'.repeat(LINE_MAX - 13)}\` |`)).toHaveLength(1)
     expect(goalRows(`| Sync | \`${'b'.repeat(LINE_MAX - 12)}\` |`)).toEqual([])
