@@ -1088,6 +1088,9 @@ clamps to the window; narrower layouts retain their existing preview toggle.
 Section headings use their natural text height with 8-point group spacing,
 never a full result-row height. Loading, failed refresh and settled emptiness
 are different states; keep existing results visible while refreshing.
+In a full tab the footer says `This tab is full. Open a new tab to add more.`
+once, and the empty list says nothing. A Swarm's pickers (Attach, Add agent)
+bring an agent into its team, so a full tab never limits them or their footer.
 
 **Cmd-N / New Tab** — one shared form and controller. Agent and project above
 the “Harness anything” prompt; model, approvals and profile below; Worktree and
