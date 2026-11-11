@@ -655,6 +655,7 @@
   "test/super_tab_person_mentions_test.dart": 6.7,
   "test/super_tab_person_names_test.dart": 5.7,
   "test/super_tab_personal_lead_card_test.dart": 10.8,
+  "test/super_tab_personal_lead_shots_test.dart": 2.5,
   "test/super_tab_personal_lead_test.dart": 3.6,
   "test/super_tab_personal_projects_test.dart": 9.4,
   "test/super_tab_personal_sidebar_bench_test.dart": 2.5,
