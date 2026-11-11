@@ -16,7 +16,9 @@ import 'model.dart';
 /// comment that names the agent or is on its own task or pull request, or a task newly labelled for it. Their Harness read
 /// it with their own gh and relayed it (backend githubRelay.ts); the agent hears it as any message there. It is GitHub's
 /// words, not the person's, so it is a card on the left: where it was and who wrote it, its first line, and Read for the
-/// rest and the way to it on GitHub.
+/// rest and the way to it on GitHub. Since 2026-11-12 the server gives such a row to its agent alone (backend model.ts
+/// NOTICE_READERS: anh Dee, "it should be like a human conversation"), so only a server before that one sends it to a
+/// person: this card stays for that server, and can go on or after 2026-12-11.
 class SuperTabGitHubRow extends StatelessWidget {
   const SuperTabGitHubRow({
     super.key,
