@@ -10,6 +10,7 @@ import '../state/app_state.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import 'controller.dart';
+import 'github_issues.dart' show SwarmGitHub;
 import 'model.dart';
 import 'my_agents.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
@@ -165,8 +166,17 @@ class PersonalProjects extends ChangeNotifier {
   static String storageKey(String account) => 'super_tab.repos.$account';
 
   /// Per account and Personal Swarm, for this run: repo to project id, null once
-  /// the person deleted it (it is not made again).
+  /// the person deleted it (it is not asked for again this run).
   final _known = <String, Map<String, Map<String, String?>>>{};
+
+  /// Per account and Personal Swarm: the repos whose project this run made, which two repos of one name tell apart.
+  final _made = <String, Set<String>>{};
+
+  /// Per account and Personal Swarm: the repos whose GitHub repository the server refused to take: not asked again.
+  final _unnamed = <String, Set<String>>{};
+
+  /// Accounts whose kept record still holds the repos' projects from before 2026-11-12: written again without them.
+  final _stale = <String>{};
 
   /// Per account and Personal Swarm: v3's tab projects not closed yet, desk tab id to project id.
   final _tabs = <String, Map<String, Map<String, String>>>{};
@@ -197,12 +207,16 @@ class PersonalProjects extends ChangeNotifier {
   Map<String, String?> _projects(String account, String swarm) =>
       (_known[account] ??= {})[swarm] ??= {};
 
-  /// Which repos' panes the project [projectId] shows.
-  Set<String> _reposOf(String account, String swarm, String projectId) => {
-    for (final MapEntry(:key, :value)
-        in _known[account]?[swarm]?.entries ?? <MapEntry<String, String?>>[])
-      if (value == projectId) key,
-  };
+  /// The id of [repo]'s project in [c], the server's own (backend `project.create`: the Swarm, its person and the request),
+  /// so every computer of theirs knows it without asking.
+  static String projectIdOf(SuperTabController c, String repo) => stableId([
+    c.tabId,
+    'person:${c.accountId}',
+    personalProjectOperation(repo),
+  ]);
+
+  /// [repo]'s `owner/name` when it is on GitHub, else null: what a project's `githubRepository` holds.
+  static String? gitHubName(String repo) => SwarmGitHub.repositoryOf(repo);
 
   /// The repos the person's panes and their agents in [c] work in: an agent started in the Swarm has no pane in a tab.
   Set<String> _repos(SuperTabController c) => {
@@ -241,10 +255,9 @@ class PersonalProjects extends ChangeNotifier {
     if (!snapshot.isProjectLead(conversationId)) return const [];
     final project = snapshot.projectFor(conversationId);
     if (project == null) return const [];
-    final repos = _reposOf(c.accountId, c.tabId, project.id);
     return [
       for (final entry in personalPanes(app))
-        if (repos.contains(entry.repo)) entry.pane,
+        if (projectIdOf(c, entry.repo) == project.id) entry.pane,
     ];
   }
 
@@ -261,20 +274,24 @@ class PersonalProjects extends ChangeNotifier {
   /// per row (ENGINEERING §4, review of #3073): a project made for panes
   /// whose repos have none of them open, the same answer as [panesFor] being
   /// empty for it.
+  ///
+  /// A repo's project is known by its id ([projectIdOf]): those of this run's repos, and on any computer one that names its
+  /// GitHub repository.
   Set<String> hiddenIn(SuperTabController c) {
-    if (!eligible(c)) return const {};
+    if (!eligible(c) || _unresolvedPanes(app)) return const {};
     final snapshot = c.snapshot!;
-    final known = _known[c.accountId]?[c.tabId];
-    if (known == null || known.isEmpty || _unresolvedPanes(app)) {
-      return const {};
-    }
-    final shown = {for (final repo in _repos(c)) ?known[repo]};
+    final shown = {for (final repo in _repos(c)) projectIdOf(c, repo)};
+    final made = {
+      ...?_known[c.accountId]?[c.tabId]?.values.nonNulls,
+      for (final project in snapshot.projects)
+        if (project.githubRepository case final name?
+            when projectIdOf(c, 'github.com/${name.toLowerCase()}') ==
+                project.id)
+          project.id,
+    };
     return {
-      for (final id in known.values)
-        if (id != null &&
-            !shown.contains(id) &&
-            snapshot.projectById(id) != null)
-          id,
+      for (final id in made)
+        if (!shown.contains(id) && snapshot.projectById(id) != null) id,
     };
   }
 
@@ -331,6 +348,8 @@ class PersonalProjects extends ChangeNotifier {
         (_known[account]?.remove(swarm) != null) |
         (_tabs[account]?.remove(swarm) != null);
     _renamed[account]?.remove(swarm);
+    _made.remove('$account/$swarm');
+    _unnamed.remove('$account/$swarm');
     // Called while a view builds: saved after, and no one is told now.
     if (had) unawaited(_save(account));
   }
@@ -351,9 +370,13 @@ class PersonalProjects extends ChangeNotifier {
               key.substring(_tabPrefix.length),
               () => value,
             );
+          } else {
+            _stale.add(account);
           }
         }
+        if (entry.containsKey('renamed')) _stale.add(account);
       }
+      if (_stale.remove(account)) await _save(account);
     } catch (_) {
       // Nothing kept: the desk's own tabs are found again by their request.
     }
@@ -404,9 +427,9 @@ class PersonalProjects extends ChangeNotifier {
         var made = false;
         for (final repo in wanted) {
           if (projects.containsKey(repo)) continue;
-          // One that names its GitHub repository is found with no request: another of their computers made it.
-          if (_ofGitHub(c, repo) case final id?) {
-            projects[repo] = id;
+          // There already, made by this computer or another: known by its id, with no request.
+          if (c.snapshot?.projectById(projectIdOf(c, repo)) case final known?) {
+            projects[repo] = known.id;
             notifyListeners();
             continue;
           }
@@ -416,6 +439,7 @@ class PersonalProjects extends ChangeNotifier {
           if (!eligible(c)) return;
           if (answer case (:final id)) {
             projects[repo] = id;
+            if (id != null) (_made[scope] ??= {}).add(repo);
             made = true;
             notifyListeners();
           }
@@ -432,24 +456,6 @@ class PersonalProjects extends ChangeNotifier {
     }
   }
 
-  /// [repo]'s `owner/name` when it is on GitHub, else null: what a project's `githubRepository` holds.
-  static String? gitHubName(String repo) {
-    final parts = repo.split('/');
-    return parts.length == 3 && parts.first == 'github.com'
-        ? '${parts[1]}/${parts[2]}'
-        : null;
-  }
-
-  /// The project of [c] that names [repo] as its GitHub repository, if one does.
-  String? _ofGitHub(SuperTabController c, String repo) {
-    final name = gitHubName(repo);
-    if (name == null) return null;
-    return c.snapshot?.projects
-        .where((p) => p.githubRepository?.toLowerCase() == name)
-        .firstOrNull
-        ?.id;
-  }
-
   /// Tells the server the GitHub repository of each of [c]'s repo projects that does not name it yet (backend
   /// `project.github`), once a request: what every computer's Tasks board then reads. Whether any was set.
   Future<bool> _nameGitHub(SuperTabController c) async {
@@ -461,7 +467,12 @@ class PersonalProjects extends ChangeNotifier {
     ).entries.toList()) {
       final name = gitHubName(repo);
       final project = id == null ? null : c.snapshot?.projectById(id);
-      if (name == null || project == null || project.githubRepository != null) {
+      // One whose record names its address already has its board; one the server refused stays refused.
+      if (name == null ||
+          project == null ||
+          project.githubRepository != null ||
+          project.repository?['repositoryUrl'] != null ||
+          (_unnamed[scope]?.contains(repo) ?? false)) {
         continue;
       }
       final key = '$scope/$repo/github';
@@ -483,6 +494,17 @@ class PersonalProjects extends ChangeNotifier {
         _failures.remove(key);
         _retryAt.remove(key);
         named = true;
+      } on SuperTabFailure catch (failure) {
+        // A refusal is the answer: asked no more. A lost connection or a busy server is asked again.
+        if (failure.statusCode >= 400 && failure.statusCode < 500) {
+          (_unnamed[scope] ??= {}).add(repo);
+          appLog.warn(
+            'super-tabs',
+            'Personal project repository refused (${failure.code})',
+          );
+        } else {
+          _failed(key, 'repository', failure);
+        }
       } catch (error) {
         _failed(key, 'repository', error);
       }
@@ -630,8 +652,8 @@ class PersonalProjects extends ChangeNotifier {
     );
   }
 
-  /// Two repos of one name, both still under it: each is renamed to its long
-  /// name, once. A name the person chose stays.
+  /// Two repos of one name, both still under it, one of them made this run: each is renamed to its long name, once. A
+  /// name the person chose stays.
   Future<bool> _tellApart(SuperTabController c) async {
     final account = c.accountId, swarm = c.tabId;
     final projects = _projects(account, swarm);
@@ -642,7 +664,11 @@ class PersonalProjects extends ChangeNotifier {
       (byName[repoName(repo)] ??= []).add(repo);
     }
     var changed = false;
-    for (final repos in byName.values.where((r) => r.length > 1)) {
+    // Only when one of them was made this run: a name the person chose for one since, even the repo's own, stays.
+    final made = _made['$account/$swarm'] ?? const <String>{};
+    for (final repos in byName.values.where(
+      (r) => r.length > 1 && r.any(made.contains),
+    )) {
       for (final repo in repos) {
         if (renamed.contains(repo)) continue;
         final id = projects[repo]!;

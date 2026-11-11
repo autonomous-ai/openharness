@@ -1289,7 +1289,17 @@ class ConversationServer {
         final projects = state['projects'] ??= <dynamic>[
           projectFixture('lead', state['name'] as String, 'lead'),
         ];
-        final id = 'project-$revision', leadId = 'lead-$revision';
+        // As the backend's (`project.create`): the id comes from the Swarm, its person and the request, so the same request
+        // from another computer names the same project.
+        final swarm = RegExp(r'/super-tabs/([^/]+)/')
+            .firstMatch(path)
+            ?.group(1);
+        final id = _backendId([
+              Uri.decodeComponent(swarm ?? 'tab'),
+              'person:${reader ?? 'owner'}',
+              operationId,
+            ]),
+            leadId = 'lead-$revision';
         (projects as List).add({
           ...projectFixture(
             id,

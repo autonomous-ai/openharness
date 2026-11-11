@@ -497,6 +497,34 @@ void main() {
       expect(names, isNot(contains('scratch')));
     });
 
+    test('a GitHub repository the server refuses is not asked again, and one whose record names its address is not '
+        'asked at all', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final named = _commands(f, 'project.github').length;
+      expect(named, 2);
+      (f.connection.server.state['projects'] as List).cast<Map>().forEach((p) {
+        p.remove('githubRepository');
+        if (p['name'] == 'web') {
+          p['repository'] = {'repositoryUrl': 'https://github.com/acme/web'};
+        }
+      });
+      await c.refresh();
+      f.connection.server.refuse = {
+        'code': 'PROJECT_REPOSITORY_SET',
+        'message': 'This project has a repository.',
+      };
+      // Synced again: api's is refused (409), web's is not asked (its record names its address).
+      await projects.sync(c);
+      f.connection.server.refuse = null;
+      await projects.sync(c);
+      final again = _commands(f, 'project.github').skip(named).toList();
+      expect([for (final p in again) p['command']['repository']], ['acme/api']);
+    });
+
     test('nothing is sent of a pane but its project\'s name and its GitHub '
         'repository', () async {
       final f = SuperTabLaunchFixture();
@@ -1071,6 +1099,35 @@ void main() {
       two.panes.add(p.api2);
       expect(projects.hidden(c, api.id), isFalse);
       expect(projects.panesFor(c, api.leadConversationId), [p.api2]);
+    });
+
+    // Review of #4088: nothing of a repo's project is kept on a computer, so a restart must still know it.
+    test('after a restart, a repo project whose panes are all closed still leaves the list', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final restarted = SuperTabLaunchFixture();
+      restarted.store.values.addAll(f.store.values);
+      restarted.connection.server.state
+        ..clear()
+        ..addAll(f.connection.server.state);
+      final rp = _desk(restarted);
+      final rc = await _personal(restarted);
+      final projects = PersonalProjects.of(restarted.app);
+      final api = named(rc, 'api');
+      expect(projects.hidden(rc, api.id), isFalse);
+      restarted.app.swarms
+          .firstWhere((s) => s.id == 'one')
+          .panes
+          .remove(rp.api);
+      restarted.app.swarms
+          .firstWhere((s) => s.id == 'two')
+          .panes
+          .remove(rp.api2);
+      // No sync since the restart: known by the GitHub repository it names.
+      expect(projects.hidden(rc, api.id), isTrue);
+      expect(p.api, isNotNull);
     });
 
     test('the list works out every hidden project in one pass, with the same '
