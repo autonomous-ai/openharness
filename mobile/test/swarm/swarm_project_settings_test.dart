@@ -16,8 +16,6 @@ import 'package:harness_mobile/swarm/swarm_project_settings.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
-import 'package:harness_mobile/swarm/swarm_unread.dart';
 
 import '../support/real_fonts.dart';
 import '../voice_fakes.dart';
@@ -121,12 +119,6 @@ void main() {
       'members': people(1),
     };
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changed();
-    swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     swarm.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (
       _,
     ) => {'messages': <Object>[], 'next': null};
@@ -986,7 +978,7 @@ void main() {
       WidgetTester tester, {
       required String visibility,
       String name = 'Mobile',
-      SwarmProjectNews news = swarmNoProjectNews,
+      bool unread = false,
       double width = 390,
     }) {
       final snapshot = SuperTabSnapshot.fromJson(
@@ -1019,7 +1011,7 @@ void main() {
                   project: SwarmHomeProject(
                     swarmId: tab,
                     project: snapshot.projects.single,
-                    news: news,
+                    unread: unread,
                   ),
                   onTap: () {},
                 ),
@@ -1067,15 +1059,11 @@ void main() {
     testWidgets('the row\'s right side holds only its notifications', (
       tester,
     ) async {
-      await row(
-        tester,
-        visibility: 'private',
-        news: (bold: true, tags: 2, hasWaitingTag: true),
-      );
-      final tags = find.byType(SwarmTags);
-      expect(tags, findsOneWidget);
+      await row(tester, visibility: 'private', unread: true);
+      final dot = find.byKey(const ValueKey('swarm-project-unread'));
+      expect(dot, findsOneWidget);
       expect(tester.getTopRight(lock).dx, lessThan(tester.getTopLeft(name).dx));
-      expect(tester.getTopRight(tags).dx, 390 - AppSpace.l);
+      expect(tester.getTopRight(dot).dx, 390 - AppSpace.l);
     });
 
     testWidgets('a long name ellipsizes and keeps the lock in '

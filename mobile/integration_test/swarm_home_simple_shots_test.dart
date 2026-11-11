@@ -105,26 +105,6 @@ void main() {
       );
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
           changes(cursor: 'c2', derived: derived);
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-        'decisions': [
-          for (final (id, question) in [
-            ('d1', 'Ship the login fix behind a flag?'),
-            ('d2', 'Merge the voice messages batch?'),
-          ])
-            {
-              'id': id,
-              'projectName': 'spaceship',
-              'conversationId': 'lead-spaceship',
-              'conversationTitle': 'spaceship',
-              'askerName': 'River',
-              'question': question,
-              'options': ['Yes', 'No'],
-            },
-        ],
-      };
-      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       fake.routes['/api/super-tabs/$personal/parts'] = (_) => timed(
         firstLoad(
           tabId: personal,
@@ -139,12 +119,6 @@ void main() {
       );
       fake.routes['/api/super-tabs/$personal/changes'] = (_) =>
           changes(cursor: 'c2');
-      fake.routes['/api/super-tabs/$personal/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/$personal/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       fake.routes['/api/super-tabs/$tab/conversations/'] = (_) => {
         'messages': <Object>[],
         'next': null,

@@ -26,22 +26,6 @@ void main() {
     expect(r.error, isNull);
   });
 
-  test("each conversation's partner is kept beside the Swarm", () async {
-    final swarm = FakeSwarm();
-    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      groups: [
-        {...groupData('g1'), 'partnerId': 'person-dee'},
-        groupData('g2'),
-      ],
-    );
-    final r = reader(swarm);
-    addTearDown(r.dispose);
-
-    await r.refresh();
-
-    expect(r.partners, {'g1': 'person-dee'});
-  });
-
   test('later reads ask only what changed since the cursor', () async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(cursor: 'c1');
@@ -73,7 +57,7 @@ void main() {
     () async {
       final swarm = FakeSwarm();
       swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
-        ...firstLoad(cursor: 'c1', derived: {'mentionsWaiting': 2}),
+        ...firstLoad(cursor: 'c1', derived: {'teamAccounts': false}),
         'derivedEtag': 'e1',
       };
       swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {
@@ -91,7 +75,7 @@ void main() {
         swarm.paths.last,
         '/api/super-tabs/$tab/changes?cursor=c1&derivedEtag=e1',
       );
-      expect(r.snapshot!.mentionsWaiting, 2);
+      expect(r.snapshot!.teamAccounts, isFalse);
       expect(r.error, isNull);
     },
   );
@@ -279,13 +263,10 @@ void main() {
   });
 
   group('a big Swarm', () {
-    /// [n] groups besides the Lead's, each with a partner.
+    /// [n] groups besides the Lead's.
     List<Map<String, dynamic>> work(int n, {String title = 'Work'}) => [
       for (var g = 0; g < n; g++)
-        {
-          ...groupData('g$g', title: '$title $g', number: g),
-          'partnerId': 'person-$g',
-        },
+        groupData('g$g', title: '$title $g', number: g),
     ];
 
     /// How many turns the UI's event loop took while [read] ran: none while
@@ -318,7 +299,6 @@ void main() {
         r.snapshot!.conversations,
         hasLength(swarmParseOffThreadParts + 1),
       );
-      expect(r.partners['g7'], 'person-7');
       expect(r.error, isNull);
     });
 

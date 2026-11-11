@@ -13,8 +13,7 @@ import '../voice_fakes.dart' show MemoryKeyValueStore;
 
 import 'swarm_fixture.dart';
 
-/// The account's Swarms on the phone, and everything they ask of the person in
-/// one list: open decisions, Lead tags and work waiting on them.
+/// The account's Swarms on the phone, each read again only when it changed.
 void main() {
   Map<String, dynamic> listing(String id, String name) => {
     'id': id,
@@ -94,46 +93,6 @@ void main() {
     },
   );
 
-  test('what each Swarm asks of the person is one list', () async {
-    final fake = backend(
-      {
-        'a': [groupData('g1', title: 'Login', status: 'needs_human')],
-        'b': [],
-      },
-      derived: {
-        'b': {'decisionsWaiting': 1, 'mentionsWaiting': 0},
-      },
-    );
-    fake.routes['/api/super-tabs/b/decisions?state=open'] = (_) => {
-      'decisions': [
-        {
-          'id': 'd1',
-          'conversationId': 'g9',
-          'question': 'Ship it?',
-          'options': ['Yes', 'No'],
-          'createdAt': '2026-10-27T01:00:00.000Z',
-        },
-      ],
-    };
-    fake.routes['/api/super-tabs/b/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
-    final i = inbox(fake);
-
-    await i.refresh();
-    await settle();
-
-    expect(i.needs, hasLength(2));
-    expect(
-      i.needs.whereType<SwarmDecisionNeed>().single.decision.question,
-      'Ship it?',
-    );
-    expect(i.needs.whereType<SwarmDecisionNeed>().single.swarmId, 'b');
-    final work = i.needs.whereType<SwarmWorkNeed>().single;
-    expect(work.work.conversation.title, 'Login');
-    expect(work.swarmId, 'a');
-  });
-
   test('a Swarm the person left is dropped, with all it held', () async {
     final fake = backend({
       'a': [groupData('g1', status: 'needs_human')],
@@ -151,7 +110,6 @@ void main() {
 
     expect([for (final s in i.swarms) s.id], ['b']);
     expect(i.reader('a'), isNull);
-    expect(i.needs, isEmpty);
   });
 
   test('a Swarm its owner deleted leaves the switcher on the next read, and '
@@ -181,7 +139,6 @@ void main() {
     expect([for (final s in i.swarms) s.id], ['b']);
     expect(i.reader('a'), isNull);
     expect(i.reader('c'), isNull);
-    expect(i.needs, isEmpty);
   });
 
   test(
@@ -222,98 +179,6 @@ void main() {
       expect(chat.draft, isEmpty);
     },
   );
-
-  test(
-    'a private question is out of the list from the moment the Swarm is '
-    'read again in full, even when the new read of what waits fails',
-    () async {
-      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
-      final fake = backend(
-        {
-          'a': [
-            groupData(
-              'g-private',
-              title: 'Pair',
-              audience: [me, 'person-other'],
-            ),
-          ],
-        },
-        derived: {'a': derived},
-      );
-      Object? open = {
-        'decisions': [
-          {
-            'id': 'd1',
-            'conversationId': 'g-private',
-            'question': 'Rotate the keys?',
-            'options': ['Yes', 'No'],
-          },
-        ],
-      };
-      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => open;
-      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
-      final i = inbox(fake);
-      await i.refresh();
-      await settle();
-      expect(i.needs.whereType<SwarmDecisionNeed>(), hasLength(1));
-
-      // Taken out of the private chat: the Swarm is read again without it,
-      // and the read of what waits for the person stalls.
-      fake.routes['/api/super-tabs/a/parts'] = (_) =>
-          firstLoad(tabId: 'a', derived: derived);
-      fake.routes['/api/super-tabs/a/changes'] = (_) => {'reload': true};
-      final stalled = Completer<Object?>();
-      open = stalled.future;
-      await i.refresh();
-      await settle();
-
-      expect(i.needs.whereType<SwarmDecisionNeed>(), isEmpty);
-
-      stalled.completeError(
-        const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.'),
-      );
-      await settle();
-
-      expect(i.needs.whereType<SwarmDecisionNeed>(), isEmpty);
-    },
-  );
-
-  test('work that starts waiting after the first read is news', () async {
-    var status = 'working';
-    var changedAt = 100;
-    final fake = backend({'a': []});
-    // The status is a part: its change moves the Swarm's last change.
-    fake.routes['/api/super-tabs/list'] = (_) => {
-      'tabs': [
-        {...listing('a', 'Swarm a'), 'lastChangedAt': changedAt},
-      ],
-      'next': null,
-    };
-    fake.routes['/api/super-tabs/a/parts'] = (_) => firstLoad(
-      tabId: 'a',
-      groups: [groupData('g1', title: 'Login', status: status)],
-    );
-    fake.routes['/api/super-tabs/a/changes'] = (_) => changes(
-      cursor: 'c2',
-      groups: [part('g1', 50, groupData('g1', title: 'Login', status: status))],
-      lastChangedAt: changedAt,
-    );
-    final i = inbox(fake);
-    final news = <SwarmNeed>[];
-    i.onArrived = news.add;
-    await i.refresh();
-    expect(news, isEmpty);
-
-    status = 'needs_human';
-    changedAt = 200;
-    await i.refresh();
-
-    expect(news.single, isA<SwarmWorkNeed>());
-    await i.refresh();
-    expect(news, hasLength(1), reason: 'still waiting is not news again');
-  });
 
   group('a poll reads a Swarm again', () {
     /// Swarms `a` and `b`, listed as last changed at [changedAt].
@@ -376,38 +241,6 @@ void main() {
       },
     );
 
-    // Decisions and tags are not parts: one answered or done on another
-    // device moves no last-change time.
-    test('every poll while something waits in it', () async {
-      final fake = two(
-        {'a': 100, 'b': 100},
-        derived: {
-          'a': {'decisionsWaiting': 1, 'mentionsWaiting': 0},
-        },
-      );
-      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
-        'decisions': [
-          {
-            'id': 'd1',
-            'conversationId': 'g1',
-            'question': 'Ship it?',
-            'options': ['Yes'],
-          },
-        ],
-      };
-      final i = inbox(fake);
-      await i.refresh();
-      await settle();
-
-      await i.refresh();
-      await settle();
-      await i.refresh();
-      await settle();
-
-      expect(changeReads(fake, 'a'), 2);
-      expect(changeReads(fake, 'b'), 0);
-    });
-
     test('at the next poll when its last read failed', () async {
       final fake = two({'a': 100, 'b': 100});
       var failing = true;
@@ -426,80 +259,33 @@ void main() {
 
       expect(i.reader('b')!.snapshot, isNotNull);
     });
-
-    test('at the next poll when its asks could not be read', () async {
-      final fake = two(
-        {'a': 100, 'b': 100},
-        derived: {
-          'a': {'decisionsWaiting': 0, 'mentionsWaiting': 1},
-        },
-      );
-      var failing = true;
-      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => failing
-          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
-          : {
-              'mentions': [
-                {
-                  'id': 'm1',
-                  'conversationId': 'g1',
-                  'messageId': 'msg-1',
-                  'text': 'Look',
-                },
-              ],
-            };
-      final i = inbox(fake);
-      await i.refresh();
-      await settle();
-      expect(i.asks('a')!.error, isNotNull);
-
-      failing = false;
-      await i.refresh();
-      await settle();
-
-      expect(i.needs.whereType<SwarmMentionNeed>(), hasLength(1));
-    });
   });
 
   group('notifies only when what it shows changed', () {
-    /// Swarm `a` with work waiting on the person and one open decision;
-    /// [groups] answers each change read.
-    FakeSwarm waiting({List<Map<String, dynamic>> Function()? groups}) {
-      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
-      final fake = backend(
-        {
-          'a': [groupData('g1', title: 'Login', status: 'needs_human')],
-        },
-        derived: {'a': derived},
-      );
-      fake.routes['/api/super-tabs/a/changes'] = (_) => changes(
-        cursor: 'c2',
-        groups: groups?.call() ?? const [],
-        derived: derived,
-      );
-      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
-        'decisions': [
-          {
-            'id': 'd1',
-            'conversationId': 'g1',
-            'question': 'Ship it?',
-            'options': ['Yes', 'No'],
-          },
+    /// Swarm `a` with work in g1, whose last change moves at every list read,
+    /// so every poll reads its changes; [groups] answers each.
+    FakeSwarm working({List<Map<String, dynamic>> Function()? groups}) {
+      final fake = backend({
+        'a': [groupData('g1', title: 'Login')],
+      });
+      var changedAt = 100;
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {...listing('a', 'Swarm a'), 'lastChangedAt': changedAt++},
         ],
+        'next': null,
       };
-      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
+      fake.routes['/api/super-tabs/a/changes'] = (_) =>
+          changes(cursor: 'c2', groups: groups?.call() ?? const []);
       return fake;
     }
 
     // Every 15-second poll rebuilt Home, the drawer and Project, twice or
     // more, with nothing new (audit of 44d284f65, items 4 and 5).
     test('a poll that finds everything as it was notifies nothing', () async {
-      final i = inbox(waiting());
+      final i = inbox(working());
       await i.refresh();
       await settle();
-      expect(i.needs, hasLength(2));
-      final needs = i.needs;
       var notifies = 0;
       i.addListener(() => notifies++);
 
@@ -509,17 +295,12 @@ void main() {
       await settle();
 
       expect(notifies, 0);
-      expect(i.needs, same(needs));
     });
 
     test('a poll that changes a Swarm notifies once', () async {
       var title = 'Login';
       final i = inbox(
-        waiting(
-          groups: () => [
-            part('g1', 9, groupData('g1', title: title, status: 'needs_human')),
-          ],
-        ),
+        working(groups: () => [part('g1', 9, groupData('g1', title: title))]),
       );
       await i.refresh();
       await settle();
@@ -532,7 +313,7 @@ void main() {
 
       expect(notifies, 1);
       expect(
-        i.needs.whereType<SwarmWorkNeed>().single.work.conversation.title,
+        i.reader('a')!.snapshot!.conversation('g1')!.title,
         'Login on the phone',
       );
     });
@@ -576,112 +357,20 @@ void main() {
       expect(notifies, greaterThan(0));
     });
 
-    test("a Swarm's asks ending their loading are told", () async {
-      final fake = waiting();
-      final open = Completer<Object?>();
-      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) =>
-          open.future;
-      final i = inbox(fake);
-      await i.refresh();
-      await settle();
-      expect(i.asks('a')!.loading, isTrue);
-      var notifies = 0;
-      i.addListener(() => notifies++);
-
-      open.complete({'decisions': <Object>[]});
-      await settle();
-
-      expect(i.asks('a')!.loading, isFalse);
-      expect(notifies, 1);
-    });
-
-    // A Done or an answer waited for the poll's slowest Swarm read before
-    // Home showed it: on the owner's iPhone a read takes seconds.
-    test('a slow poll holds back no Done and no answer', () async {
-      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 1};
-      final fake = backend({'a': []}, derived: {'a': derived});
-      var answered = false, done = false;
-      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
-        'decisions': [
-          if (!answered)
-            {
-              'id': 'd1',
-              'conversationId': 'g1',
-              'question': 'Ship it?',
-              'options': ['Yes', 'No'],
-            },
-        ],
-      };
-      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
-        'mentions': [
-          if (!done)
-            {
-              'id': 'm1',
-              'conversationId': 'g1',
-              'messageId': 'msg-1',
-              'text': 'Can you check the copy?',
-            },
-        ],
-      };
-      final sent = Completer<void>();
-      fake.routes['/api/super-tabs/a/commands'] = (body) async {
-        final command = body!['command'] as Map;
-        if (command['type'] == 'decision.answer') {
-          await sent.future;
-          answered = true;
-        } else {
-          done = true;
-        }
-        return {'result': <String, dynamic>{}};
-      };
-      final i = inbox(fake);
-      await i.refresh();
-      await settle();
-      final asks = i.asks('a')!;
-      expect(i.needs.whereType<SwarmMentionNeed>(), hasLength(1));
-      final decision = i.needs.whereType<SwarmDecisionNeed>().single.decision;
-      final read = Completer<void>();
-      final changed = fake.routes['/api/super-tabs/a/changes']!;
-      fake.routes['/api/super-tabs/a/changes'] = (q) async {
-        await read.future;
-        return changed(q);
-      };
-      unawaited(i.refresh());
-      await settle();
-      var notifies = 0;
-      i.addListener(() => notifies++);
-
-      unawaited(asks.done(asks.mentions.single));
-      await settle();
-
-      expect(i.needs.whereType<SwarmMentionNeed>(), isEmpty);
-
-      notifies = 0;
-      unawaited(asks.answer(decision, 0));
-      await settle();
-
-      expect(notifies, greaterThan(0), reason: 'its buttons wait at once');
-      expect(asks.answering, contains('d1'));
-
-      sent.complete();
-      await settle();
-
-      expect(i.needs.whereType<SwarmDecisionNeed>(), isEmpty);
-      read.complete();
-      await settle();
-    });
-
     testWidgets('a screen over it builds once per change, not once per poll', (
       tester,
     ) async {
-      final i = inbox(waiting());
+      final i = inbox(working());
       var builds = 0;
       await tester.pumpWidget(
         ListenableBuilder(
           listenable: i,
           builder: (_, _) {
             builds++;
-            return Text('${i.needs.length}', textDirection: TextDirection.ltr);
+            return Text(
+              '${i.swarms.length}',
+              textDirection: TextDirection.ltr,
+            );
           },
         ),
       );
@@ -694,7 +383,7 @@ void main() {
 
       await poll();
       final afterFirst = builds;
-      expect(find.text('2'), findsOneWidget);
+      expect(find.text('1'), findsOneWidget);
 
       await poll();
       await poll();
@@ -1016,10 +705,8 @@ void main() {
     await settle();
 
     expect(store.values[key], isNotNull, reason: 'kept, not forgotten');
-    // The first read's mark, kept apart as no read of a tag.
     expect(jsonDecode(store.values[key]!), {
       'marks': {'g1': 3},
-      'firstRead': {'g1': 3},
     });
     final next = SwarmInbox(
       accountId: me,

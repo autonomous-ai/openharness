@@ -11,9 +11,8 @@ import 'swarm_fixture.dart';
 
 /// The phone's notices follow each chat's setting as the desktop's do
 /// (#2453): All new messages tells of each new message in a chat the person
-/// is not looking at; Mentions only and Muted tell of none, and a tag is
-/// told whatever the chat's setting, as on the desktop. A notice names the
-/// project only (lock screen, Lead 10-27).
+/// is not looking at; Mentions only and Muted tell of none. A notice names
+/// the project only (lock screen, Lead 10-27).
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -85,20 +84,16 @@ void main() {
     expect(told(), hasLength(2));
   });
 
-  test('Mentions only and Muted tell of no new message; a tag is told in '
-      'Mentions only, never in a chat the person muted (anh Dee, '
-      '2026-11-09)', () async {
-    backend.settings = {'g2': 'muted'};
+  test('Mentions only and Muted tell of no new message', () async {
+    backend.settings = {'g1': 'mentions', 'g2': 'muted'};
     final session = await start();
 
     backend
       ..move('g1', 4)
-      ..move('g2', 4)
-      ..mention('t1', 'g2')
-      ..mention('t2', 'g1');
+      ..move('g2', 4);
     await poll(session);
 
-    expect(told(), ['mention:t2']);
+    expect(told(), isEmpty);
   });
 
   test(
@@ -325,7 +320,6 @@ class _Backend {
   /// in each, the newest message that is the person's own.
   final agentChats = <String>{};
   final personSequences = <String, int>{};
-  final mentions = <Map<String, dynamic>>[];
   var version = 2;
   var reload = false;
 
@@ -351,10 +345,7 @@ class _Backend {
             ),
   ];
 
-  Map<String, dynamic> get derived => {
-    'mentionsWaiting': mentions.length,
-    'chatSettings': settings,
-  };
+  Map<String, dynamic> get derived => {'chatSettings': settings};
 
   _Backend() {
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -387,12 +378,6 @@ class _Backend {
               for (final g in groups) part(g['id'] as String, version, g),
             ],
           );
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': mentions,
-    };
   }
 
   void move(String id, int sequence) {
@@ -408,13 +393,4 @@ class _Backend {
     sequences[id] = 3;
     version = 2 + sequences.length;
   }
-
-  void mention(String id, String conversationId) => mentions.add({
-    'id': id,
-    'conversationId': conversationId,
-    'messageId': 'm-$id',
-    'projectId': project,
-    'projectName': 'Mobile',
-    'leadName': 'River',
-  });
 }

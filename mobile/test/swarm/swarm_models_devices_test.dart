@@ -65,12 +65,6 @@ void main() {
       };
       fake.routes['/api/super-tabs/${s.id}/changes'] = (_) =>
           changes(cursor: 'c2');
-      fake.routes['/api/super-tabs/${s.id}/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/${s.id}/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
     }
     return fake;
   }

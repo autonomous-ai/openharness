@@ -13,8 +13,7 @@ const swarmBuddyKey = '';
 /// What the phone knows of Buddies (spec: Buddies, 10-28; in every Swarm
 /// since #2090, where they replaced Chat with PM): each person's Buddy chat in
 /// each project, where the PM's private lines to them land, and the Buddy that
-/// may run in it. Read from a Swarm's raw state, as [SwarmReader.partners] is:
-/// the model the phone shares with the desktop (`model.dart`, held to it by
+/// may run in it. Read from a Swarm's raw state: the model the phone shares with the desktop (`model.dart`, held to it by
 /// `desktop_parity_test.dart`) does not carry Buddies on this branch yet.
 @immutable
 class SwarmBuddies {

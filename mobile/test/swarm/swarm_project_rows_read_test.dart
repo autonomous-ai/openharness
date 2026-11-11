@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_unread.dart';
@@ -9,7 +8,7 @@ import 'swarm_fixture.dart';
 
 /// A project's row on Home reads as the desktop's sidebar row
 /// (project_sidebar.dart `_row`, #2427, #2638): bold only for its own chat, a
-/// person's message there past the reader's mark or a tag of theirs there.
+/// person's message there past the reader's mark.
 /// Agents' progress in its tasks or its chat never keeps it bold, so a
 /// project read on any device stops showing as unread (Dee, 11-05, #3268).
 void main() {
@@ -33,42 +32,18 @@ void main() {
     'lastMainSequence': main,
   };
 
-  Map<String, dynamic> tag(String id, String conversationId, int sequence) => {
-    'id': id,
-    'messageSequence': sequence,
-    'projectId': project,
-    'projectName': 'Mobile',
-    'conversationId': conversationId,
-    'conversationTitle': 'Mobile',
-    'messageId': 'msg-$id',
-    'leadName': 'River',
-    'text': 'Look',
-    'createdAt': '2026-11-05T01:00:00.000Z',
-  };
-
   /// The phone reading a Swarm whose first load holds [groups] and the
   /// server's [readMarks] from every device of the reader.
-  Future<({FakeSwarm swarm, SwarmReader reader, SwarmAsks asks})> rig({
+  Future<({FakeSwarm swarm, SwarmReader reader})> rig({
     List<Map<String, dynamic>> groups = const [],
     Map<String, int> readMarks = const {},
-    List<Map<String, dynamic>> tags = const [],
   }) async {
     final swarm = FakeSwarm();
-    final derived = {
-      'mentionsWaiting': tags.length,
-      'decisionsWaiting': 0,
-      'readMarks': readMarks,
-    };
+    final derived = {'readMarks': readMarks};
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
         firstLoad(groups: groups, derived: derived);
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: {'mentionsWaiting': tags.length});
-    swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': tags,
-    };
-    swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
+        changes(cursor: 'c2');
     swarm.routes['/api/super-tabs/$tab/conversations/'] = (body) => {
       'sequence': body!['sequence'],
     };
@@ -78,20 +53,18 @@ void main() {
       request: swarm.request,
     );
     final marks = reader.readMarks = SwarmReadMarks(reader, store: null);
-    final asks = SwarmAsks(reader);
     addTearDown(() {
-      asks.dispose();
       marks.dispose();
       reader.dispose();
     });
     await reader.refresh();
     await settle();
-    return (swarm: swarm, reader: reader, asks: asks);
+    return (swarm: swarm, reader: reader);
   }
 
   /// A poll in which [groups] moved and the server's marks [readMarks] moved.
   Future<void> poll(
-    ({FakeSwarm swarm, SwarmReader reader, SwarmAsks asks}) r, {
+    ({FakeSwarm swarm, SwarmReader reader}) r, {
     required int version,
     List<Map<String, dynamic>> groups = const [],
     Map<String, int> readMarks = const {},
@@ -105,12 +78,8 @@ void main() {
     await settle();
   }
 
-  SwarmProjectNews? row(
-    ({FakeSwarm swarm, SwarmReader reader, SwarmAsks asks}) r,
-  ) => swarmProjectNews(r.reader, r.asks)[project];
-
-  bool bold(({FakeSwarm swarm, SwarmReader reader, SwarmAsks asks}) r) =>
-      row(r)?.bold ?? false;
+  bool bold(({FakeSwarm swarm, SwarmReader reader}) r) =>
+      swarmUnreadProjects(r.reader).contains(project);
 
   test('reading a project on Desktop clears its row on the phone after the '
       'next poll, while its tasks keep getting agent posts', () async {
@@ -130,7 +99,6 @@ void main() {
     await poll(r, version: 21, readMarks: {leadChat: 4});
 
     expect(bold(r), isFalse);
-    expect(row(r)?.tags ?? 0, 0);
   });
 
   test(
@@ -212,19 +180,15 @@ void main() {
   );
 
   test(
-    'thread-only replies and tags do not make the project chat unread',
+    'thread-only replies do not make the project chat unread',
     () async {
       final r = await rig(
         groups: [
           {...lead(main: 4, person: 4), 'lastMessageSequence': 12},
         ],
         readMarks: {leadChat: 4},
-        tags: [
-          {...tag('thread-tag', leadChat, 12), 'threadId': 'thread-root'},
-        ],
       );
       expect(bold(r), isFalse);
-      expect(row(r)?.tags ?? 0, 0);
     },
   );
 
@@ -253,29 +217,5 @@ void main() {
     await settle();
 
     expect(bold(r), isTrue);
-  });
-
-  test(
-    'a tag of hers in the project chat keeps it bold with its count',
-    () async {
-      final r = await rig(
-        groups: [lead(main: 5, person: 1)],
-        readMarks: {leadChat: 4},
-        tags: [tag('t1', leadChat, 5)],
-      );
-
-      expect(row(r), (bold: true, tags: 1, hasWaitingTag: true));
-    },
-  );
-
-  test('a tag in a task leaves the row quiet but listed under Unread and '
-      'Mentions', () async {
-    final r = await rig(
-      groups: [busyTask('g1', main: 5)],
-      readMarks: {leadChat: 0, 'g1': 4},
-      tags: [tag('t1', 'g1', 5)],
-    );
-
-    expect(row(r), (bold: false, tags: 0, hasWaitingTag: true));
   });
 }

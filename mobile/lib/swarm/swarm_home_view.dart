@@ -2,13 +2,10 @@ import 'model.dart';
 import 'swarm_buddy.dart';
 
 /// One Swarm as Home last drew it: a state [SuperTabSnapshot.fromJson] reads,
-/// thinned to what Home, its drawer and a project's rows draw, and each
-/// conversation's partner ([swarmPartners]). Its Buddy chats and Buddies say
-/// whose they are, as a read does, for [SwarmBuddies.read].
-typedef SwarmHomeSwarm = ({
-  Map<String, dynamic> state,
-  Map<String, String> partners,
-});
+/// thinned to what Home, its drawer and a project's rows draw. Its Buddy
+/// chats and Buddies say whose they are, as a read does, for
+/// [SwarmBuddies.read].
+typedef SwarmHomeSwarm = ({Map<String, dynamic> state});
 
 /// [snapshot] thinned to what Home draws: its projects, its agents by name,
 /// engine and status, each conversation's title, project, people, work
@@ -19,8 +16,7 @@ typedef SwarmHomeSwarm = ({
 /// with the next read. [buddies] marks the Buddy chats and Buddies, so none
 /// is drawn as work before that read.
 SwarmHomeSwarm swarmHomeSwarm(
-  SuperTabSnapshot snapshot,
-  Map<String, String> partners, {
+  SuperTabSnapshot snapshot, {
   SwarmBuddies buddies = SwarmBuddies.none,
 }) => (
   state: {
@@ -67,7 +63,6 @@ SwarmHomeSwarm swarmHomeSwarm(
     'starts': const <Object>[],
     'invitations': const <Object>[],
   },
-  partners: {...partners},
 );
 
 /// A built-in picture by its name. An uploaded one is not kept: its signed

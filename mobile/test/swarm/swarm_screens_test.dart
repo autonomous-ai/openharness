@@ -400,20 +400,6 @@ void main() {
       expect(find.text('This conversation is read only.'), findsOneWidget);
     });
 
-    testWidgets('the decision asked in it is not shown in it: it is answered '
-        'in Activity (Dee, 11-01)', (tester) async {
-      await pump(
-        tester,
-        backend(),
-        const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.text('Which name should the flag have?'), findsOneWidget);
-      expect(find.text('Ship it behind a flag?'), findsNothing);
-      expect(key('swarm-option-d1-0'), findsNothing);
-    });
-
     testWidgets('a viewer reads it and cannot post', (tester) async {
       await pump(
         tester,
@@ -539,9 +525,7 @@ void main() {
   });
 
   group("Home's Swarm mark", () {
-    testWidgets('counts what needs the person, and opens Swarm', (
-      tester,
-    ) async {
+    testWidgets('opens Swarm, with no count on it', (tester) async {
       final host = await pump(
         tester,
         backend(),
@@ -550,7 +534,7 @@ void main() {
       await host.session!.inbox.refresh();
       await tester.pumpAndSettle();
 
-      expect(find.text('3'), findsOneWidget);
+      expect(find.text('3'), findsNothing, reason: 'three asks, no count');
 
       await tester.tap(key('swarm-mark'));
       await tester.pumpAndSettle();

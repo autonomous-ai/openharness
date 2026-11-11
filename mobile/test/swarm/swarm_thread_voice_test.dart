@@ -67,12 +67,6 @@ void main() {
     };
     fake.routes[parts] = (_) => read();
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     final rows = [
       message('m1', 1, 'Can you check the drawer mockup?'),
       message('m2', 2, 'Looks good. One question.'),

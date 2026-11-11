@@ -19,7 +19,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
-import 'prompt_alerts.dart';
 import 'swarm_code_block.dart';
 import 'swarm_outbox.dart';
 import 'swarm_post_line.dart';
@@ -35,7 +34,6 @@ import 'swarm_conversation.dart';
 import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
-import 'swarm_inbox.dart';
 import 'swarm_lead_start.dart';
 import 'swarm_lead_start_card.dart';
 import 'swarm_reader.dart';
@@ -44,7 +42,6 @@ import 'swarm_message_edit.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
-import 'swarm_need_rows.dart';
 import 'swarm_paste.dart';
 import 'swarm_person_sheet.dart';
 import 'swarm_project_page.dart';
@@ -413,9 +410,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Places the chat's New messages line once, from what the chat's
   /// first read brought and how far the person had read it
   /// ([SwarmReadMarks.readThrough]; nothing here is read until then, so that is
-  /// how far as it opened) ([swarmFirstUnread]), above a row the chat draws:
-  /// never a prompt's warning already answered, which a task's chat often
-  /// has (Desktop's `_ownShown`).
+  /// how far as it opened) ([swarmFirstUnread]), above a row the chat draws.
   /// The phone's marks may come back after the first read: the chat stays
   /// held, and the line is placed once they are back ([_marksMoved]). It
   /// stays there however the chat and its marks move on. Without one,
@@ -438,7 +433,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     _stopAwaitingMarks();
     _lineDecided = true;
-    final drawn = {for (final m in _drawnOf(c).rows) m.id};
+    final drawn = {for (final m in c.stream) m.id};
     final at = swarmFirstUnread(
       c.messages,
       c.reader.readMarks?.readThrough(c.id),
@@ -856,7 +851,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// as it draws them — those waiting below while the person reads back
   /// join once they show. Thread-only replies are the thread's own.
   List<SuperTabMessage> _findRows(SwarmConversation c) {
-    final rows = _drawnOf(c).rows;
+    final rows = c.stream;
     final held = _held.value;
     final at = held == null ? -1 : rows.lastIndexWhere((m) => m.id == held);
     return at < 0 ? rows : rows.sublist(0, at + 1);
@@ -1540,36 +1535,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         );
                       },
                     ),
-                    if (view.decisionsAside.isNotEmpty)
-                      Padding(
-                        key: const ValueKey('swarm-decisions-aside'),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpace.l,
-                        ),
-                        child: Row(
-                          children: [
-                            Text(
-                              view.decisionsAside.length == 1
-                                  ? '1 decision set aside'
-                                  : '${view.decisionsAside.length} decisions set aside',
-                              style: swarmChatText(
-                                13.5,
-                                color: AppPalette.textSecondary,
-                              ),
-                            ),
-                            SwarmButton(
-                              key: const ValueKey('swarm-decisions-show'),
-                              label: 'Show',
-                              style: SwarmButtonStyle.link,
-                              onPressed: () => _session?.home.setDecisionsAside(
-                                c.reader.tabId,
-                                view.decisionsAside,
-                                aside: false,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     if (view.old)
                       Padding(
                         key: const ValueKey('swarm-old-chat'),
@@ -1862,31 +1827,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  /// What [c]'s list draws, oldest first ([rows]): its main stream, a reply
-  /// only in its thread showing there alone, with a task's steps' rows merged
-  /// in by time (task steps design) ([stream]); less the prompt warnings
-  /// already [answered].
-  ({
-    List<SuperTabMessage> stream,
-    Set<String> answered,
-    List<SuperTabMessage> rows,
-  })
-  _drawnOf(SwarmConversation c) {
-    final snapshot = c.reader.snapshot;
-    final stream = c.stream;
-    final answered = answeredPromptAlerts(
-      stream,
-      (agentId) => snapshot?.agent(agentId),
-    );
-    final rows = answered.isEmpty
-        ? stream
-        : [
-            for (final m in stream)
-              if (!answered.contains(m.id)) m,
-          ];
-    return (stream: stream, answered: answered, rows: rows);
-  }
-
   /// The messages, newest at the foot, with the decisions asked among them.
   /// The entries are made again only when what they are made from changed,
   /// and each row is the one built before while it draws the same ([_row]):
@@ -1912,40 +1852,34 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         }
         return const SwarmChatSkeleton();
       }
-      if (view.decisions.isEmpty) {
-        // A Personal project with no Lead offers to start one, as Desktop's
-        // empty chat does (task #2941).
-        if (SwarmScope.computersOf(context)
-            case final SwarmLeadComputers computers
-            when swarmWantsLeadStart(c.reader, c.id)) {
-          return Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpace.screenInset),
-              child: SwarmLeadStartCard(
-                reader: c.reader,
-                computers: computers,
-                chatId: c.id,
-              ),
+      // A Personal project with no Lead offers to start one, as Desktop's
+      // empty chat does (task #2941).
+      if (SwarmScope.computersOf(context)
+          case final SwarmLeadComputers computers
+          when swarmWantsLeadStart(c.reader, c.id)) {
+        return Align(
+          alignment: Alignment.topCenter,
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpace.screenInset),
+            child: SwarmLeadStartCard(
+              reader: c.reader,
+              computers: computers,
+              chatId: c.id,
             ),
-          );
-        }
-        return _said(
-          'No messages yet.',
-          key: const ValueKey('swarm-chat-empty'),
+          ),
         );
       }
+      return _said(
+        'No messages yet.',
+        key: const ValueKey('swarm-chat-empty'),
+      );
     }
     final snapshot = c.reader.snapshot;
-    final (:stream, :answered, rows: messages) = _drawnOf(c);
-    // The notes hidden are part of what the rows were made from: a warning
-    // goes once its agent's prompt is answered, with no new message.
+    final messages = c.stream;
     final from = (
-      stream,
-      view.decisions,
+      messages,
       c.hasOlder,
       _held.value,
-      answered.join(','),
       _lineAt,
       // A reply can move a row's tag, and so its grouping, with no new row.
       [
@@ -1954,24 +1888,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       ].join(','),
     );
     if (from != _madeFrom) {
-      // Read back: the messages after the newest shown then wait below, and
-      // so do decisions asked after it.
+      // Read back: the messages after the newest shown then wait below.
       final held = _held.value;
       final at = held == null
           ? -1
           : messages.lastIndexWhere((m) => m.id == held);
       final shown = at < 0 ? messages : messages.sublist(0, at + 1);
-      final last = shown.lastOrNull?.createdAt;
-      final asks = at < 0 || last == null
-          ? view.decisions
-          : [
-              for (final need in view.decisions)
-                if (!(need.decision.createdAt?.isAfter(last) ?? false)) need,
-            ];
       _shown = _timeline(
         shown,
-        asks,
-        hasOlder: c.hasOlder,
         tagged: (m) => c.thread(m.id)?.askTag != null,
         lineAt: _lineAt,
       ).reversed.toList();
@@ -2165,30 +2089,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     ),
             ),
           );
-        case _AskEntry(:final need, :final grouped):
-          final asker = snapshot == null ? null : swarmAsker(snapshot, need);
-          final role = asker == null ? null : view.roles[asker.id];
-          final coordinator = asker != null && view.leads.contains(asker.id);
-          return _row(
-            key,
-            (
-              need,
-              grouped,
-              asker?.id,
-              role,
-              coordinator,
-              swarmPictureKey(asker?.avatar),
-            ),
-            () => _Ask(
-              session: session,
-              need: need,
-              grouped: grouped,
-              askerId: asker?.id,
-              role: role,
-              pm: coordinator,
-              picture: asker?.avatar,
-            ),
-          );
       }
     }
 
@@ -2281,7 +2181,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _LineEntry() => 'swarm-new-messages-line',
     _DayEntry(:final day) => 'swarm-row-day-${day.toIso8601String()}',
     _MessageEntry(:final message) => 'swarm-row-m-${message.id}',
-    _AskEntry(:final need) => 'swarm-row-${need.key}',
   };
 
   /// [key]'s row as built from [inputs]: the one built before while they are
@@ -2590,8 +2489,6 @@ class _ChatView {
     required this.roles,
     required this.leads,
     required this.mentionable,
-    required this.decisions,
-    required this.decisionsAside,
     required this.buddyProject,
     required this.hint,
   });
@@ -2634,26 +2531,6 @@ class _ChatView {
               .firstOrNull
               ?.name
         : null;
-    // Only the person's own Buddy chat holds decisions, its project's, as
-    // Desktop shows them above it; every other chat leaves them to Activity
-    // (Dee, 11-01: they blocked the project chat). A chat not open to the
-    // person shows none either, even while the decisions read has not caught
-    // up.
-    final asked = [
-      if (group != null && buddyProject != null)
-        for (final need in session.inbox.needs)
-          if (need is SwarmDecisionNeed &&
-              need.swarmId == reader.tabId &&
-              (buddyProject == swarmBuddyKey ||
-                  need.decision.projectId == buddyProject))
-            need,
-    ];
-    bool aside(SwarmDecisionNeed need) =>
-        session.home.decisionAside(need.swarmId, need.decision.id);
-    final decisions = [
-      for (final need in asked)
-        if (!aside(need)) need,
-    ];
     return _ChatView(
       known: group != null,
       title: group == null
@@ -2679,13 +2556,6 @@ class _ChatView {
           if (snapshot!.isLead(agent.id)) agent.id,
       },
       mentionable: [for (final agent in c.mentionable) agent.id],
-      decisions: before != null && _sameAsks(before.decisions, decisions)
-          ? before.decisions
-          : List.unmodifiable(decisions),
-      decisionsAside: [
-        for (final need in asked)
-          if (aside(need)) need.decision.id,
-      ],
       buddyProject: buddyProject,
       // "Message Wren"; plain while no Buddy runs to read it.
       hint: buddyProject != null && swarmBuddy(reader, buddyProject) != null
@@ -2722,10 +2592,6 @@ class _ChatView {
 
   /// The agents a post can mention, by id.
   final List<String> mentionable;
-  final List<SwarmDecisionNeed> decisions;
-
-  /// The decisions of this Buddy chat set aside with Not now, by id.
-  final List<String> decisionsAside;
 
   /// The project whose Buddy chat of the person's own this is; null for any
   /// other chat.
@@ -2733,24 +2599,6 @@ class _ChatView {
 
   /// What the empty composer says.
   final String hint;
-
-  /// Whether [a] and [b] draw the same decisions, in the same order.
-  static bool _sameAsks(List<SwarmDecisionNeed> a, List<SwarmDecisionNeed> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      final x = a[i].decision, y = b[i].decision;
-      if (a[i].key != b[i].key ||
-          x.askerName != y.askerName ||
-          x.question != y.question ||
-          x.unblocks != y.unblocks ||
-          x.recommended != y.recommended ||
-          x.createdAt != y.createdAt ||
-          !listEquals(x.options, y.options)) {
-        return false;
-      }
-    }
-    return true;
-  }
 
   @override
   bool operator ==(Object other) =>
@@ -2766,8 +2614,6 @@ class _ChatView {
       mapEquals(other.roles, roles) &&
       setEquals(other.leads, leads) &&
       listEquals(other.mentionable, mentionable) &&
-      identical(other.decisions, decisions) &&
-      listEquals(other.decisionsAside, decisionsAside) &&
       other.buddyProject == buddyProject &&
       other.hint == hint;
 
@@ -2782,8 +2628,6 @@ class _ChatView {
     old,
     Object.hashAll(names),
     Object.hashAll(mentionable),
-    Object.hashAll(decisionsAside),
-    decisions,
     buddyProject,
     hint,
   );
@@ -2809,69 +2653,17 @@ final class _MessageEntry extends _Entry {
   final bool grouped;
 }
 
-/// A decision asked of the person, in its place among the messages.
-final class _AskEntry extends _Entry {
-  _AskEntry(this.need, {this.grouped = false});
-  final SwarmDecisionNeed need;
-
-  /// Drawn under its asker's message just before it, as part of it.
-  final bool grouped;
-}
-
-/// [messages] (oldest first) with the [asks] put where they were asked and a
-/// divider where each day starts. An ask from before the messages read so far
-/// — while there are [hasOlder] ones — goes at the foot instead, so a question
-/// still open is never out of sight behind "Earlier messages". The New
+/// [messages] (oldest first) with a divider where each day starts. The New
 /// messages line goes right above [lineAt], which is then drawn in full, not
 /// as a follow-up of the one before.
 List<_Entry> _timeline(
-  List<SuperTabMessage> messages,
-  List<SwarmDecisionNeed> asks, {
-  required bool hasOlder,
+  List<SuperTabMessage> messages, {
   required bool Function(SuperTabMessage) tagged,
   String? lineAt,
 }) {
   final grouped = swarmGroupedMessages(messages, tagged: tagged);
-  final oldest = messages.map((m) => m.createdAt).nonNulls.firstOrNull;
-  bool before(DateTime? asked, DateTime? at) =>
-      asked != null && at != null && asked.isBefore(at);
-  final waiting = <SwarmDecisionNeed>[], late = <SwarmDecisionNeed>[];
-  for (final ask in asks) {
-    (hasOlder && before(ask.decision.createdAt, oldest) ? late : waiting).add(
-      ask,
-    );
-  }
-  waiting.sort((a, b) {
-    final x = a.decision.createdAt, y = b.decision.createdAt;
-    if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
-    return x.compareTo(y);
-  });
-
   final rows = <(_Entry, DateTime?)>[];
-  // An ask right after its asker's own message — "One question before the
-  // release:" — is drawn as part of it.
-  void ask(SwarmDecisionNeed need) {
-    final asked = need.decision.createdAt;
-    final last = rows.lastOrNull?.$1;
-    final at = last is _MessageEntry ? last.message.createdAt : null;
-    final grouped =
-        last is _MessageEntry &&
-        last.message.fromAgent &&
-        last.message.authorName == need.decision.askerName &&
-        asked != null &&
-        at != null &&
-        !asked.isBefore(at) &&
-        asked.difference(at) <= const Duration(minutes: 5);
-    rows.add((_AskEntry(need, grouped: grouped), asked));
-  }
-
-  var next = 0;
   for (final m in messages) {
-    while (next < waiting.length &&
-        before(waiting[next].decision.createdAt, m.createdAt)) {
-      ask(waiting[next]);
-      next++;
-    }
     if (m.id == lineAt) rows.add((_LineEntry(), m.createdAt));
     // Grouped only right under a message: not under a question or the line.
     final under = rows.isNotEmpty && rows.last.$1 is _MessageEntry;
@@ -2879,10 +2671,6 @@ List<_Entry> _timeline(
       _MessageEntry(m, grouped: under && grouped.contains(m.id)),
       m.createdAt,
     ));
-  }
-  waiting.skip(next).forEach(ask);
-  for (final need in late) {
-    rows.add((_AskEntry(need), need.decision.createdAt));
   }
 
   final timeline = <_Entry>[];
@@ -2999,13 +2787,6 @@ String? swarmRole(SuperTabSnapshot snapshot, SuperTabMessage message) {
 
 String? swarmAgentRole(SuperTabSnapshot snapshot, String agentId) =>
     snapshot.roleOf(agentId)?.badge;
-
-/// The agent asking [need], found by the name it asked under: a decision
-/// names its asker, not their id.
-SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
-    snapshot.agents
-        .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
-        .firstOrNull;
 
 /// Around the chat's column of messages, and of the skeleton standing in for
 /// them.
@@ -3320,116 +3101,6 @@ class _Pending extends StatelessWidget {
                 onDelete: onDelete,
               ),
             ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A decision asked of the person, among the messages: from its asker, a card
-/// with the question and its options side by side.
-class _Ask extends StatelessWidget {
-  const _Ask({
-    required this.session,
-    required this.need,
-    required this.grouped,
-    required this.askerId,
-    required this.role,
-    required this.pm,
-    required this.picture,
-  });
-
-  final SwarmSession session;
-
-  /// The picture its asker chose.
-  final SuperTabAvatarPicture? picture;
-  final SwarmDecisionNeed need;
-  final bool grouped;
-
-  /// Its asker in the Swarm and their role; null for one no longer in it.
-  final String? askerId, role;
-
-  /// Its asker is its project's coordinator, whatever its role is called.
-  final bool pm;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final tty = Tty.of(context);
-    final decision = need.decision;
-    final at = decision.createdAt?.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-    return Padding(
-      key: ValueKey('swarm-ask-${decision.id}'),
-      padding: SwarmMessageFrame.padding(grouped: grouped),
-      child: SwarmMessageFrame(
-        grouped: grouped,
-        avatar: SwarmChatAvatar(
-          name: decision.askerName,
-          id: askerId ?? decision.askerName,
-          agent: true,
-          pm: pm,
-          picture: picture,
-        ),
-        header: SwarmMessageHeader(
-          name: decision.askerName,
-          agent: true,
-          role: role,
-          trailing: at == null
-              ? null
-              : Text(
-                  '${two(at.hour)}:${two(at.minute)}',
-                  style: tty.style(color: AppPalette.textFaint, size: 12.5),
-                ),
-        ),
-        body: [
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(top: AppSpace.s),
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.l,
-              AppSpace.m,
-              AppSpace.l,
-              AppSpace.l,
-            ),
-            decoration: BoxDecoration(
-              color: swarmChatCard(tty),
-              border: Border.all(color: swarmChatHair(tty)),
-              borderRadius: BorderRadius.circular(AppCard.radius),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(decision.question, style: swarmChatText(16, height: 1.4)),
-                if (decision.unblocks.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Unblocks: ${decision.unblocks}',
-                    style: swarmChatText(13.5, color: AppPalette.textSecondary),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                // Its answer held, sending or dropped: told by the session
-                // and the Swarm's asks, not by the chat around it.
-                ListenableBuilder(
-                  listenable: Listenable.merge([
-                    session,
-                    ?session.inbox.asks(need.swarmId),
-                  ]),
-                  builder: (context, _) => SwarmDecisionAnswer(
-                    session: session,
-                    need: need,
-                    fillRecommended: true,
-                    onNotNow: () => session.home.setDecisionsAside(
-                      need.swarmId,
-                      [need.decision.id],
-                      aside: true,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

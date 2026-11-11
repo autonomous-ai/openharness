@@ -319,7 +319,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             swarmId: swarm.id,
             conversationId: conversationId,
             messageId: null,
-            decisionId: null,
             threadId: null,
           ));
           return;
@@ -378,7 +377,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       swarmId: link.tabId,
       conversationId: link.conversationId,
       messageId: link.messageId,
-      decisionId: null,
       threadId: null,
     ));
   }

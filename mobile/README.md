@@ -64,11 +64,9 @@ resolves the swarm’s harnesses for navigation.
 ## Swarm (Settings ▸ Experimental)
 
 `lib/swarm/` brings a Swarm (the desktop's collaborative tab, not the desk groups above) to the
-phone: what needs the person first (decisions, the Product Manager's tags, work waiting on them),
-the Swarms and their projects, a project's conversations, posting with @mentions, and decisions
-answered with one tap. Reads and writes go straight to the backend using the phone's own sign-in
-(`AppNotifier.swarmRequest`), so posting and answering decisions work while every account machine
-is offline. Command retries keep the same operation ID, including after a bearer refresh or a
+phone: the Swarms and their projects, a project's channel, and the person's chats with their
+agents, posting with @mentions. Reads and writes go straight to the backend using the phone's own
+sign-in (`AppNotifier.swarmRequest`), so posting works while every account machine is offline. Command retries keep the same operation ID, including after a bearer refresh or a
 fallback through an account machine (`super_tabs`, end-to-end encrypted). Writes fall back only
 when the direct transport or server is unavailable; authentication, access and rate-limit refusals
 stand. The backend enforces what the signed-in person may read and change. Operations that run on
@@ -77,14 +75,14 @@ through the machine. `model.dart` and `parts.dart` are copies of the desktop's, 
 `test/swarm/desktop_parity_test.dart`.
 
 - **Cost.** One `SwarmSession` per signed-in account while Swarm is on. In the foreground it reads
-  what needs the person every 15 seconds, and an open Swarm's changes (first load, then `/changes`)
+  the account's Swarms every 15 seconds, and an open Swarm's changes (first load, then `/changes`)
   every 5 seconds while a screen shows it. In the background it reads nothing.
-- **Notices** are local only: a foreground read that finds something new posts one while no Swarm
-  screen is open (Home, a terminal). They say who asks and in which project, never the question or
-  the message (`swarm_notices.dart`), because a locked phone may show them; notices to a closed or
-  backgrounded app need push from the backend.
-- **Choices.** `swarm_choices.dart` holds the six UX answers (the way in, the first screen, a
-  project's layout, posting, notices, Undo), each the recommended one until the app's owner decides.
+- **Notices.** Only these: a new message in an agent's 1:1 chat or in a chat set to "All new
+  messages" (`swarm_notices.dart`, posted by a foreground read while no Swarm screen is open, taken
+  down once read), an agent's question and a device's (`lib/notify/`). A Swarm notice never carries
+  the message, because a locked phone may show it.
+- **Choices.** `swarm_choices.dart` holds the UX answers still open (the way in, posting, notices),
+  each the recommended one until the app's owner decides.
 
 ## It is a VIEWER build, always
 

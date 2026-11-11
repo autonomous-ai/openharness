@@ -39,12 +39,6 @@ void main() {
       'next': null,
     };
     fake.routes[changesPath] = (_) => changes(cursor: 'c2');
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     for (final chat in [buddyChat, leadChat]) {
       fake.routes['/api/super-tabs/$tab/conversations/$chat/messages'] = (_) =>
           {'messages': <Object>[], 'next': null};

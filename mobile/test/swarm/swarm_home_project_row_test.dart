@@ -2,19 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
-import 'package:harness_mobile/swarm/swarm_unread.dart';
 
 import 'swarm_fixture.dart';
 
 /// A project on Swarm Home, one line as Slack's channels (2026-11-03): its
-/// #name — bold with something new — and its tags at the end; no Swarm on it,
+/// #name — bold with something new, a dot at its end; no Swarm on it,
 /// as Home heads each Swarm's projects with its name. No dot, no second line, no time.
 void main() {
   final now = DateTime(2026, 10, 27, 9);
@@ -60,8 +57,7 @@ void main() {
     WidgetTester tester, {
     int running = 0,
     String name = 'Mobile',
-    SwarmProjectNews news = swarmNoProjectNews,
-    bool tagsLoading = false,
+    bool unread = false,
     DateTime? active,
     double width = 390,
     VoidCallback? onTap,
@@ -84,9 +80,8 @@ void main() {
                     swarmId: 'tab',
                     project: snapshot.projects.first,
                     active: active,
-                    news: news,
+                    unread: unread,
                   ),
-                  tagsLoading: tagsLoading,
                   onTap: onTap ?? () {},
                   onLongPress: onLongPress,
                 ),
@@ -124,16 +119,12 @@ void main() {
     ),
   );
 
-  testWidgets("no dot for how its team is, working, idle or with a tag "
-      "waiting: the name starts at the row's inset", (tester) async {
-    for (final (running, news) in [
-      (0, swarmNoProjectNews),
-      (1, swarmNoProjectNews),
-      (0, (bold: true, tags: 1, hasWaitingTag: true)),
-    ]) {
-      await pump(tester, running: running, news: news);
+  testWidgets("no dot for how its team is, working or idle: the name starts "
+      "at the row's inset", (tester) async {
+    for (final running in [0, 1]) {
+      await pump(tester, running: running);
 
-      expect(dots(), findsNothing, reason: '$running running, $news');
+      expect(dots(), findsNothing, reason: '$running running');
       expect(find.byKey(const ValueKey('swarm-project-dot')), findsNothing);
       expect(tester.getTopLeft(name).dx, AppSpace.l);
     }
@@ -145,13 +136,13 @@ void main() {
     final style = nameText(tester).style!;
     expect(style.color, AppPalette.textSecondary);
     expect(style.fontWeight, isNot(FontWeight.w600));
-    expect(find.byType(SwarmTags), findsNothing);
+    expect(find.byKey(const ValueKey('swarm-project-unread')), findsNothing);
   });
 
   testWidgets('something new: bold in the main ink, heard as unread, with a '
       "dot at its end (anh Dee's mockup, 2026-11-04)", (tester) async {
     final semantics = tester.ensureSemantics();
-    await pump(tester, news: (bold: true, tags: 0, hasWaitingTag: false));
+    await pump(tester, unread: true);
 
     final style = nameText(tester).style!;
     expect(style.color, AppPalette.textPrimary);
@@ -166,46 +157,6 @@ void main() {
       reason: "at the row's end",
     );
     semantics.dispose();
-  });
-
-  testWidgets('quiet, or with tags that say it, no unread dot', (tester) async {
-    for (final news in [
-      swarmNoProjectNews,
-      (bold: true, tags: 2, hasWaitingTag: true),
-    ]) {
-      await pump(tester, news: news);
-      expect(
-        find.byKey(const ValueKey('swarm-project-unread')),
-        findsNothing,
-        reason: '$news',
-      );
-    }
-  });
-
-  testWidgets('tags waiting: @N filled at its end, the name bright', (
-    tester,
-  ) async {
-    await pump(tester, news: (bold: false, tags: 2, hasWaitingTag: true));
-
-    final tags = tester.widget<SwarmTags>(find.byType(SwarmTags));
-    expect(tags.filled, isTrue);
-    expect(nameText(tester).style!.color, AppPalette.textPrimary);
-    final rowBox = tester.getRect(find.byKey(row));
-    expect(
-      tester.getRect(find.byType(SwarmTags)).right,
-      greaterThan(rowBox.right - 40),
-      reason: 'at the row\'s end',
-    );
-  });
-
-  testWidgets('tags on their way: a skeleton in their place', (tester) async {
-    await pump(tester, tagsLoading: true);
-
-    expect(
-      find.byKey(const ValueKey('swarm-project-tags-loading')),
-      findsOneWidget,
-    );
-    expect(find.byType(Skeleton), findsOneWidget);
   });
 
   testWidgets('has no Swarm on it: one heading per Swarm says it (anh Dee, '

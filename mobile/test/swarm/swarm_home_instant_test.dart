@@ -15,7 +15,6 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
-import 'package:harness_mobile/swarm/waiting_work.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_computers_fake.dart';
@@ -25,22 +24,19 @@ import 'swarm_fixture.dart';
 /// (owner, 2026-10-27: 4 to 5 seconds of "Reading your Swarms…" on the
 /// iPhone 14), then reads.
 void main() {
-  /// The Home kept: project Mobile, its Product Manager River, Nova waiting
-  /// on the person in Fix login.
+  /// The Home kept: project Mobile, its Product Manager River, Nova in Fix
+  /// login.
   SwarmHomeEntry kept() {
     final state = SuperTabParts.firstLoad({
       ...firstLoad(
         groups: [
-          {
-            ...groupData(
-              'g1',
-              title: 'Fix login',
-              number: 4,
-              agentIds: ['agent-builder'],
-              status: 'needs_human',
-            ),
-            'partnerId': me,
-          },
+          groupData(
+            'g1',
+            title: 'Fix login',
+            number: 4,
+            agentIds: ['agent-builder'],
+            status: 'needs_human',
+          ),
         ],
       ),
       'members': [
@@ -53,10 +49,7 @@ void main() {
     return (
       id: tab,
       name: 'Phone Swarm',
-      view: swarmHomeSwarm(
-        SuperTabSnapshot.fromJson(state),
-        swarmPartners(state),
-      ),
+      view: swarmHomeSwarm(SuperTabSnapshot.fromJson(state)),
     );
   }
 
@@ -140,11 +133,6 @@ void main() {
         ),
         findsNothing,
         reason: 'one line: its #name, not its people',
-      );
-      expect(
-        [for (final need in host.session!.inbox.needs) need.conversationId],
-        ['g1'],
-        reason: 'Nova waiting in Fix login, kept for Activity',
       );
       expect(host.session!.inbox.loaded, isFalse, reason: 'nothing read yet');
       expect(fake.paths, ['/api/super-tabs/list']);

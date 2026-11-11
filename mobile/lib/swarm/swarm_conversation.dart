@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:harness_mobile/phone/voice_recorder.dart' show VoiceTake;
 
 import 'model.dart';
-import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
 import 'swarm_buddy_sessions.dart';
@@ -632,21 +631,8 @@ class SwarmConversation extends ChangeNotifier
       // device.
       unawaited(_reread());
     }
-    // An agent's prompt answered hides its warning with no new message
-    // (prompt_alerts.dart): the page redraws for it.
-    final answered = answeredPromptAlerts(
-      messages,
-      reader.snapshot!.agent,
-    ).join(',');
-    if (answered != _answeredAlerts) {
-      _answeredAlerts = answered;
-      notifyListeners();
-    }
     _checkReceipt();
   }
-
-  /// The prompt warnings the page last hid, as one key.
-  String _answeredAlerts = '';
 
   /// Asks the reader for this conversation by id: a closed one comes back,
   /// and [_swarmChanged] reads it; one the person cannot read is lost.
@@ -1413,7 +1399,6 @@ class SwarmConversation extends ChangeNotifier
     }
     return true;
   }
-
 
   /// How often the person's newest message is read again while its delivery
   /// is queued, and for how long once it is on screen (Lead, 10-30): a phone

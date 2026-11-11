@@ -8,7 +8,6 @@ import 'package:harness_mobile/swarm/swarm_outbox.dart';
 import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
-import 'package:harness_mobile/swarm/swarm_unread.dart';
 
 import 'swarm_fixture.dart';
 
@@ -1230,7 +1229,7 @@ void main() {
       addTearDown(c.dispose);
       await c.load();
       SuperTabConversation g1() => r.reader.snapshot!.conversation('g1')!;
-      bool bold() => swarmChatNews(r.reader, null, g1()).bold;
+      bool bold() => m.marks.unread(g1());
 
       r.swarm.routes['$messages?after=2'] = (_) => {
         'messages': [
@@ -1251,7 +1250,6 @@ void main() {
       await settle();
 
       expect(c.messages.last.threadReply, isTrue, reason: 'loaded, last');
-      expect(m.marks.unread(g1()), isFalse);
       expect(bold(), isFalse);
 
       r.swarm.routes['$messages?after=3'] = (_) => {

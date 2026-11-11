@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
@@ -15,9 +14,6 @@ import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_home_view_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
-import 'package:harness_mobile/swarm/swarm_unread.dart';
-import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'swarm_fixture.dart';
@@ -38,7 +34,6 @@ class _FailingStore extends MemoryKeyValueStore {
 /// does to the Projects list, that it is kept on this phone, and that the menu
 /// goes with the account or the Swarms it sorts.
 void main() {
-  const SwarmProjectNews bold = (bold: true, tags: 0, hasWaitingTag: false);
   const web = 'project-2';
   const webLead = 'group-lead-web';
   final now = DateTime.utc(2030, 1, 2, 12);
@@ -46,7 +41,7 @@ void main() {
   SwarmHomeProject row(
     String id, {
     DateTime? active,
-    SwarmProjectNews news = swarmNoProjectNews,
+    bool unread = false,
   }) => SwarmHomeProject(
     swarmId: tab,
     project: SuperTabProject.fromJson({
@@ -59,7 +54,7 @@ void main() {
       'updateMinutes': 5,
     }),
     active: active,
-    news: news,
+    unread: unread,
   );
 
   List<String> ids(List<SwarmHomeProject> list) => [
@@ -71,12 +66,8 @@ void main() {
     final projects = [
       row('old-read', active: now.subtract(hour * 48)),
       row('new-read', active: now.subtract(hour)),
-      row('older-unread', active: now.subtract(hour * 3), news: bold),
-      row(
-        'tagged',
-        active: now.subtract(hour * 2),
-        news: (bold: true, tags: 2, hasWaitingTag: true),
-      ),
+      row('older-unread', active: now.subtract(hour * 3), unread: true),
+      row('tagged', active: now.subtract(hour * 2), unread: true),
       row('pinned-read', active: now.subtract(hour * 72)),
     ];
     final pins = {swarmHomeProjectKey(tab, 'pinned-read')};
@@ -110,7 +101,7 @@ void main() {
       final lists = swarmHomeLists(
         [
           ...projects,
-          row('pinned-tagged', active: now.subtract(hour * 90), news: bold),
+          row('pinned-tagged', active: now.subtract(hour * 90), unread: true),
         ],
         pins: {...pins, swarmHomeProjectKey(tab, 'pinned-tagged')},
         now: now,
@@ -120,12 +111,11 @@ void main() {
       expect(ids(lists.recent), ['older-unread', 'tagged', 'new-read']);
     });
 
-    test('All leaves them; Unread keeps anything new, pinned too; Mentions '
-        'keeps only tags', () {
+    test('All leaves them; Unread keeps anything new, pinned too', () {
       final lists = swarmHomeLists(
         [
           ...projects,
-          row('pinned-unread', active: now.subtract(hour * 90), news: bold),
+          row('pinned-unread', active: now.subtract(hour * 90), unread: true),
         ],
         pins: {...pins, swarmHomeProjectKey(tab, 'pinned-unread')},
         now: now,
@@ -138,9 +128,6 @@ void main() {
       expect(ids(unread.pinned), ['pinned-unread']);
       expect(ids(unread.recent), ['older-unread', 'tagged']);
       expect(unread.quiet, isEmpty);
-      final mentions = swarmHomeFiltered(lists, SwarmHomeFilter.mentions);
-      expect(mentions.pinned, isEmpty);
-      expect(ids(mentions.recent), ['tagged']);
     });
   });
 
@@ -156,7 +143,7 @@ void main() {
       prefs
         ..setSort(SwarmHomeSort.newest)
         ..setUnreadsFirst(true)
-        ..setFilter(SwarmHomeFilter.mentions);
+        ..setFilter(SwarmHomeFilter.unread);
       await settle();
       expect(prefs.viewChanged, isTrue);
       prefs.dispose();
@@ -165,7 +152,7 @@ void main() {
       await settle();
       expect(again.sort, SwarmHomeSort.newest);
       expect(again.unreadsFirst, isTrue);
-      expect(again.filter, SwarmHomeFilter.mentions);
+      expect(again.filter, SwarmHomeFilter.unread);
 
       again
         ..setSort(SwarmHomeSort.sections)
@@ -183,7 +170,6 @@ void main() {
           (p) => p.setSort(SwarmHomeSort.newest),
           (p) => p.setUnreadsFirst(true),
           (p) => p.setFilter(SwarmHomeFilter.unread),
-          (p) => p.setFilter(SwarmHomeFilter.mentions),
         ]) {
           final store = MemoryKeyValueStore();
           final prefs = SwarmHomePrefs(accountId: me, store: store);
@@ -217,7 +203,7 @@ void main() {
 
       store.values['swarm_home.$me'] = jsonEncode({
         'pins': ['$tab/$project'],
-        'filter': 'someday',
+        'filter': 'mentions',
         'sort': 'someday',
         'unreadsFirst': 'yes',
       });
@@ -232,7 +218,7 @@ void main() {
       final store = MemoryKeyValueStore()
         ..values['swarm_home.$me'] = jsonEncode({
           'pins': ['$tab/$project'],
-          'filter': 'mentions',
+          'unread': true,
           'sort': 'newest',
           'unreadsFirst': true,
         });
@@ -244,7 +230,7 @@ void main() {
       expect(early.viewChanged, isFalse);
       expect(early.pins, {'$tab/$project'});
       final kept = jsonDecode(store.values['swarm_home.$me']!) as Map;
-      expect(kept.containsKey('filter'), isFalse);
+      expect(kept.containsKey('unread'), isFalse);
       expect(kept.containsKey('sort'), isFalse);
       expect(kept.containsKey('unreadsFirst'), isFalse);
       early.dispose();
@@ -252,7 +238,7 @@ void main() {
 
     test('a read answering after the session closed changes nothing', () async {
       final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
+        ..values['swarm_home.$me'] = jsonEncode({'unread': true});
       final gone = SwarmHomePrefs(accountId: me, store: store)..dispose();
       await settle();
       expect(gone.filter, SwarmHomeFilter.all);
@@ -281,19 +267,19 @@ void main() {
         final store = MemoryKeyValueStore()
           ..values['swarm_home.$me'] = jsonEncode({
             'pins': [for (var i = 0; i < 60; i++) '$tab/p$i'],
-            'filter': 'mentions',
+            'unread': true,
             'unreadsFirst': true,
           });
         final full = SwarmHomePrefs(accountId: me, store: store);
         await settle();
         expect(full.pins, hasLength(SwarmHomePrefs.keptPins));
-        expect(full.filter, SwarmHomeFilter.mentions);
+        expect(full.filter, SwarmHomeFilter.unread);
         full.setSort(SwarmHomeSort.newest);
         await settle();
         final kept = jsonDecode(store.values['swarm_home.$me']!) as Map;
         expect(kept['pins'], hasLength(SwarmHomePrefs.keptPins));
         expect(kept['sort'], 'newest');
-        expect(kept['filter'], 'mentions');
+        expect(kept['unread'], isTrue);
         full.dispose();
       },
     );
@@ -302,7 +288,7 @@ void main() {
       final store = MemoryKeyValueStore();
       final mine = SwarmHomePrefs(accountId: me, store: store);
       await settle();
-      mine.setFilter(SwarmHomeFilter.mentions);
+      mine.setFilter(SwarmHomeFilter.unread);
       await settle();
       mine.dispose();
       final other = SwarmHomePrefs(accountId: 'person-other', store: store);
@@ -315,11 +301,10 @@ void main() {
   group('Home', () {
     final mobileAt = now.subtract(const Duration(hours: 2));
 
-    /// One Swarm: Mobile, with its project chat unread; and Web, read and quiet for
-    /// [webAgo], with what waits in [mentions].
+    /// One Swarm: Mobile, with its project chat unread; and Web, read and
+    /// quiet for [webAgo].
     FakeSwarm backend({
       Duration webAgo = const Duration(hours: 1),
-      FutureOr<Object?> Function(Map<String, dynamic>?)? mentions,
     }) {
       final fake = FakeSwarm();
       fake.routes['/api/super-tabs/list'] = (_) => {
@@ -330,7 +315,6 @@ void main() {
       };
       final derived = <String, dynamic>{
         'readMarks': {leadChat: 2, 'g1': 1, webLead: 1},
-        if (mentions != null) 'mentionsWaiting': 1,
       };
       final changedAt = {
         leadChat: mobileAt.millisecondsSinceEpoch,
@@ -379,11 +363,6 @@ void main() {
       };
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
           changes(cursor: 'c2', derived: derived);
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] =
-          mentions ?? (_) => {'mentions': <Object>[]};
       fake.routes['/api/super-tabs/$tab/conversations/'] = (body) => {
         'sequence': body?['sequence'],
         'messages': <Object>[],
@@ -491,7 +470,7 @@ void main() {
       expect(ticked('swarm-view-unreads-true'), isFalse);
       expect(ticked('swarm-view-filter-all'), isTrue);
       expect(ticked('swarm-view-filter-unread'), isFalse);
-      expect(ticked('swarm-view-filter-mentions'), isFalse);
+      expect(key('swarm-view-filter-mentions'), findsNothing);
 
       await tapRow(tester, 'swarm-view-sort');
       expect(key('swarm-view-sort-sections'), findsNothing);
@@ -710,176 +689,6 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    Map<String, dynamic> tagInWeb() => {
-      'mentions': [
-        {
-          'id': 'm1',
-          'projectId': web,
-          'projectName': 'Web',
-          'conversationId': webLead,
-          'conversationTitle': 'Web',
-          'messageId': 'msg-tag',
-          'leadName': 'River',
-          'text': 'Can you check the copy?',
-        },
-      ],
-    };
-
-    testWidgets('Mentions lists only where the person is tagged, not what is '
-        'merely unread', (tester) async {
-      await pump(tester, backend(mentions: (_) => tagInWeb()));
-      await open(tester);
-      await tapRow(tester, 'swarm-view-filter');
-      await tapRow(tester, 'swarm-view-filter-mentions');
-      await close(tester);
-      expect(project_(web), findsOneWidget);
-      expect(project_(project), findsNothing);
-      expect(dot(), findsOneWidget);
-    });
-
-    testWidgets('Mentions with none says so, only once its read answered: a '
-        'skeleton until then, never a false "No mentions"', (tester) async {
-      final answer = Completer<Object?>();
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      await pump(
-        tester,
-        backend(mentions: (_) => answer.future),
-        store: store,
-        settle: false,
-      );
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(project_(project), findsNothing);
-      expect(find.text('No mentions.'), findsNothing);
-
-      answer.complete({'mentions': <Object>[]});
-      await tester.pumpAndSettle();
-      expect(find.text('No mentions.'), findsOneWidget);
-      expect(key('swarm-filter-show-all'), findsOneWidget);
-    });
-
-    testWidgets('a failed read of the mentions is not none: it says so, keeps '
-        'Show all, and a later read that answers brings them', (tester) async {
-      var fail = true;
-      final fake = backend(
-        mentions: (_) {
-          if (fail) {
-            throw SuperTabFailure('BUSY', 'Busy', statusCode: 503);
-          }
-          return tagInWeb();
-        },
-      );
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      // The mentions' skeleton breathes while the read is retried, so the
-      // screen never settles until it answers.
-      final host = await pump(tester, fake, store: store, settle: false);
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('Mentions could not be read.'), findsOneWidget);
-      expect(find.text('No mentions.'), findsNothing);
-      expect(key('swarm-filter-show-all'), findsOneWidget);
-      expect(find.textContaining('0 need you'), findsNothing);
-
-      fail = false;
-      await host.session!.inbox.asks(tab)!.load();
-      await tester.pumpAndSettle();
-      expect(project_(web), findsOneWidget);
-      expect(find.text('Mentions could not be read.'), findsNothing);
-    });
-
-    /// [fake] with a second Swarm, whose mentions [read] answers.
-    void secondSwarm(
-      FakeSwarm fake,
-      FutureOr<Object?> Function(Map<String, dynamic>?) read,
-    ) {
-      const second = 'tab-2';
-      fake.routes['/api/super-tabs/list'] = (_) => {
-        'tabs': [
-          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-          {'id': second, 'name': 'Other Swarm', 'ownerId': me},
-        ],
-        'next': null,
-      };
-      const derived = {'mentionsWaiting': 1};
-      fake.routes['/api/super-tabs/$second/parts'] = (_) =>
-          firstLoad(tabId: second, derived: derived);
-      fake.routes['/api/super-tabs/$second/changes'] = (_) =>
-          changes(cursor: 'c2', derived: derived);
-      fake.routes['/api/super-tabs/$second/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/$second/mentions?state=waiting'] = read;
-    }
-
-    testWidgets('one Swarm\'s mentions failing says so even with another '
-        'Swarm\'s mention listed, and goes once it answers', (tester) async {
-      var fail = true;
-      final fake = backend(mentions: (_) => tagInWeb());
-      secondSwarm(fake, (_) {
-        if (fail) {
-          throw SuperTabFailure('BUSY', 'Busy', statusCode: 503);
-        }
-        return {'mentions': <Object>[]};
-      });
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      final host = await pump(tester, fake, store: store);
-      expect(project_(web), findsOneWidget);
-      expect(key('swarm-mentions-failed'), findsOneWidget);
-      expect(key('swarm-filter-show-all'), findsNothing);
-
-      fail = false;
-      await host.session!.inbox.asks('tab-2')!.load();
-      await tester.pumpAndSettle();
-      expect(project_(web), findsOneWidget);
-      expect(key('swarm-mentions-failed'), findsNothing);
-    });
-
-    testWidgets('a failed read of a Swarm then taken away does not keep '
-        'saying so', (tester) async {
-      final fake = backend(mentions: (_) => tagInWeb());
-      secondSwarm(
-        fake,
-        (_) => throw SuperTabFailure('BUSY', 'Busy', statusCode: 503),
-      );
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      final host = await pump(tester, fake, store: store);
-      expect(key('swarm-mentions-failed'), findsOneWidget);
-
-      host.session!.inbox.reader('tab-2')!.revoke();
-      await tester.pump();
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      expect(key('swarm-mentions-failed'), findsNothing);
-    });
-
-    testWidgets('a cold start with Mentions saved shows one skeleton, not '
-        'two', (tester) async {
-      final parts = Completer<Object?>();
-      final answer = Completer<Object?>();
-      final fake = backend(mentions: (_) => answer.future);
-      final load = fake.routes['/api/super-tabs/$tab/parts']!;
-      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
-        await parts.future;
-        return load(body);
-      };
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      await pump(tester, fake, store: store, settle: false);
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(key('swarm-mentions-loading'), findsNothing);
-      expect(find.byType(SwarmSkeletonRows), findsOneWidget);
-
-      parts.complete();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(key('swarm-mentions-loading'), findsWidgets);
-      answer.complete({'mentions': <Object>[]});
-      await tester.pumpAndSettle();
-    });
-
     testWidgets('a choice is still there after the app is opened again', (
       tester,
     ) async {
@@ -974,53 +783,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(SwarmHomeProjectRow), findsOneWidget);
       expect(project_(project), findsOneWidget);
-    });
-
-    testWidgets('a tag in a private chat or a Buddy chat does not list its '
-        'project under Mentions', (tester) async {
-      Map<String, dynamic> tagIn(String chat) => {
-        'id': 'm-$chat',
-        'projectId': web,
-        'projectName': 'Web',
-        'conversationId': chat,
-        'conversationTitle': 'Secret title',
-        'messageId': 'msg-$chat',
-        'leadName': 'River',
-        'text': 'private',
-      };
-      final fake = backend(
-        mentions: (_) => {
-          'mentions': [tagIn('g-private'), tagIn('g-buddy')],
-        },
-      );
-      final load = fake.routes['/api/super-tabs/$tab/parts']!;
-      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
-        final read = await load(body) as Map<String, dynamic>;
-        return {
-          ...read,
-          'groups': [
-            ...read['groups'] as List,
-            part('g-private', 90, {
-              ...groupData(
-                'g-private',
-                title: 'Secret title',
-                audience: [me, 'ken'],
-              ),
-              'projectId': web,
-            }),
-            part('g-buddy', 91, {
-              ...buddyChatData('g-buddy', owner: me),
-              'projectId': web,
-            }),
-          ],
-        };
-      };
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      await pump(tester, fake, store: store);
-      expect(project_(web), findsNothing);
-      expect(find.text('No mentions.'), findsOneWidget);
-      expect(find.text('Secret title'), findsNothing);
     });
   });
 }

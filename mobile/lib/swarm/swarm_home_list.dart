@@ -10,9 +10,8 @@ const swarmQuietAfter = Duration(hours: 24);
 /// in one list, nothing folded. A pin holds under both.
 enum SwarmHomeSort { sections, newest }
 
-/// Which projects Home lists: [all]; those with something new, [unread]; those
-/// where the person is tagged or asked to decide, [mentions].
-enum SwarmHomeFilter { all, unread, mentions }
+/// Which projects Home lists: [all], or those with something new, [unread].
+enum SwarmHomeFilter { all, unread }
 
 /// What a pin names: a project in one Swarm, as the same id may be in
 /// another.
@@ -20,19 +19,20 @@ String swarmHomeProjectKey(String swarmId, String projectId) =>
     '$swarmId/$projectId';
 
 /// One project on Home: [project] of Swarm [swarmId], when its work last
-/// moved ([active], null when not known) and what is new in it ([news]).
+/// moved ([active], null when not known) and whether something is new in it
+/// ([unread]).
 class SwarmHomeProject {
   const SwarmHomeProject({
     required this.swarmId,
     required this.project,
     this.active,
-    this.news = swarmNoProjectNews,
+    this.unread = false,
   });
 
   final String swarmId;
   final SuperTabProject project;
   final DateTime? active;
-  final SwarmProjectNews news;
+  final bool unread;
 
   String get key => swarmHomeProjectKey(swarmId, project.id);
 }
@@ -70,7 +70,7 @@ SwarmHomeLists swarmHomeLists(
     } else if (sort == SwarmHomeSort.sections &&
         active != null &&
         now.difference(active) > swarmQuietAfter &&
-        !_hasNews(project)) {
+        !project.unread) {
       quiet.add(project);
     } else {
       recent.add(project);
@@ -89,8 +89,8 @@ SwarmHomeLists swarmHomeLists(
                     .toLowerCase(),
               ),
           ]..sort((a, b) {
-            if (unreadsFirst && _hasNews(a.$1) != _hasNews(b.$1)) {
-              return _hasNews(a.$1) ? -1 : 1;
+            if (unreadsFirst && a.$1.unread != b.$1.unread) {
+              return a.$1.unread ? -1 : 1;
             }
             final byName = a.$2.compareTo(b.$2);
             return byName != 0 ? byName : a.$1.key.compareTo(b.$1.key);
@@ -99,8 +99,8 @@ SwarmHomeLists swarmHomeLists(
     }
     final order = {for (final (i, p) in list.indexed) p: i};
     return list..sort((a, b) {
-      if (unreadsFirst && _hasNews(a) != _hasNews(b)) {
-        return _hasNews(a) ? -1 : 1;
+      if (unreadsFirst && a.unread != b.unread) {
+        return a.unread ? -1 : 1;
       }
       final (x, y) = (a.active, b.active);
       if (x != null && y != null && x != y) return y.compareTo(x);
@@ -119,9 +119,6 @@ SwarmHomeLists swarmHomeLists(
   );
 }
 
-bool _hasNews(SwarmHomeProject p) =>
-    p.news.bold || p.news.tags > 0 || p.news.hasWaitingTag;
-
 /// [lists] under Home's [filter] (`SwarmHomePrefs.filter`; unread is the
 /// desktop's `_hasUnread`), pinned ones too. None with something new was
 /// folded.
@@ -131,9 +128,7 @@ SwarmHomeLists swarmHomeFiltered(SwarmHomeLists lists, SwarmHomeFilter filter) {
     case SwarmHomeFilter.all:
       return lists;
     case SwarmHomeFilter.unread:
-      keep = _hasNews;
-    case SwarmHomeFilter.mentions:
-      keep = (p) => p.news.hasWaitingTag || p.news.tags > 0;
+      keep = (p) => p.unread;
   }
   return (
     pinned: lists.pinned.where(keep).toList(),
@@ -145,7 +140,7 @@ SwarmHomeLists swarmHomeFiltered(SwarmHomeLists lists, SwarmHomeFilter filter) {
 /// When each project of [snapshot] last moved: the newest change of its
 /// chats ([SuperTabConversation.changedAt]), its project chat and its work
 /// alike, closed work too. Not the person's Buddy chat ([buddies]) or a
-/// private chat, as a project's news counts neither ([swarmProjectNews]). A
+/// private chat, as a project's news counts neither ([swarmUnreadProjects]). A
 /// project none of whose chats has a time is not in it.
 Map<String, DateTime> swarmProjectActivity(
   SuperTabSnapshot snapshot,

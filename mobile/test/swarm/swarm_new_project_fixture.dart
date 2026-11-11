@@ -258,12 +258,6 @@ class NewProjectSwarm {
     fake.routes['/api/super-tabs/$id/routing-policy'] = (_) => {
       'policy': policy,
     };
-    fake.routes['/api/super-tabs/$id/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$id/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     fake.routes['/api/super-tabs/$id/conversations/'] = (_) => {
       'messages': <Object>[],
       'next': null,

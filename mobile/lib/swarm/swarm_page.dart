@@ -454,14 +454,12 @@ class _SwarmPageState extends State<SwarmPage> {
     final sections = <(SwarmListing, SwarmHomeLists)>[];
     final reading = <String>{};
     final failed = <String, String>{};
-    final asking = <String>{};
     var any = false;
     for (final swarm in shown) {
-      if (inbox.asks(swarm.id)?.loading ?? false) asking.add(swarm.id);
       switch (inbox.reader(swarm.id)) {
         case final SwarmReader reader when reader.snapshot != null:
           final snapshot = reader.snapshot!;
-          final news = swarmProjectNews(reader, inbox.asks(swarm.id));
+          final unread = swarmUnreadProjects(reader);
           final activity = swarmProjectActivity(snapshot, reader.buddies);
           final projects = [
             for (final project in snapshot.projects)
@@ -469,7 +467,7 @@ class _SwarmPageState extends State<SwarmPage> {
                 swarmId: swarm.id,
                 project: project,
                 active: activity[project.id],
-                news: news[project.id] ?? swarmNoProjectNews,
+                unread: unread.contains(project.id),
               ),
           ];
           any = any || projects.isNotEmpty;
@@ -497,36 +495,26 @@ class _SwarmPageState extends State<SwarmPage> {
         lists.pinned.isNotEmpty ||
         lists.recent.isNotEmpty ||
         lists.quiet.isNotEmpty;
-    // Mentions come from their own read: until it answers, none listed says
-    // nothing. A failed one is not none, and says so even over the mentions
-    // another Swarm has listed.
-    final mentionsOn = filter == SwarmHomeFilter.mentions;
-    final mentionsComing = mentionsOn && asking.isNotEmpty;
-    final mentionsFailed =
-        mentionsOn &&
-        shown.any((swarm) => inbox.asks(swarm.id)?.readFailed ?? false);
     // The filter on with nothing to list, and nothing still to come: it says
     // so, and offers them all.
     final nothingListed =
         filter != SwarmHomeFilter.all &&
         any &&
         reading.isEmpty &&
-        !mentionsComing &&
         !sections.any((section) => listsAny(section.$2));
     Widget row(SwarmHomeProject project) => SwarmHomeProjectRow(
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
-      tagsLoading: asking.contains(project.swarmId),
       onTap: () => _openProject(context, project.swarmId, project.project.id),
       onLongPress: () => unawaited(_pin(context, session, project)),
     );
     final empty = !any && reading.isEmpty && failed.isEmpty;
     // Filtered with some listed: what is left out is said, never silent.
     final filterOn =
-        filter != SwarmHomeFilter.all && !nothingListed && !mentionsFailed
+        filter != SwarmHomeFilter.all && !nothingListed
         ? SwarmRow(
             key: const ValueKey('swarm-filter-on'),
-            title: mentionsOn ? 'Mentions only' : 'Unread only',
+            title: 'Unread only',
             trailing: Text(
               'Show all',
               style: AppType.label(color: AppPalette.swarmAccent),
@@ -537,16 +525,10 @@ class _SwarmPageState extends State<SwarmPage> {
     final notices = [
       ?filterOn,
       if (empty) const SwarmRow(title: 'No project yet', onTap: null),
-      if (mentionsFailed)
+      if (nothingListed)
         const SwarmRow(
-          key: ValueKey('swarm-mentions-failed'),
-          title: 'Mentions could not be read.',
-          onTap: null,
-        )
-      else if (nothingListed)
-        SwarmRow(
-          key: const ValueKey('swarm-filter-none'),
-          title: mentionsOn ? 'No mentions.' : 'Nothing unread.',
+          key: ValueKey('swarm-filter-none'),
+          title: 'Nothing unread.',
           onTap: null,
         ),
       if (nothingListed)
@@ -630,11 +612,6 @@ class _SwarmPageState extends State<SwarmPage> {
               children: [SwarmRow(title: error, onTap: null)],
             ),
           ]),
-      // A Swarm still to be read has its skeleton: one is enough.
-      if (mentionsComing && reading.isEmpty) ...[
-        const SizedBox(height: AppSpace.s),
-        SwarmSkeletonRows(id: 'swarm-mentions-loading', nameOnly: true),
-      ],
     ];
   }
 

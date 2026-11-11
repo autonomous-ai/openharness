@@ -77,29 +77,13 @@ void main() {
         .toIso8601String(),
   };
 
-  /// A decision River asked in chat g1, at [minute] past one.
-  Map<String, dynamic> decision(String id, {int minute = 0}) => {
-    'id': id,
-    'projectId': project,
-    'projectName': 'Mobile',
-    'conversationId': 'g1',
-    'conversationTitle': 'Fix login',
-    'askerName': 'River',
-    'question': 'Ship it behind a flag?',
-    'options': ['Flag 1 week', 'Everyone'],
-    'recommended': 0,
-    'createdAt': DateTime.utc(2026, 10, 27, 1, minute).toIso8601String(),
-  };
-
   /// One Swarm whose chat g1 has River (its project's Product Manager) and
   /// Nova (an engineer), reading [page] as its latest messages with the lines
-  /// of [threads], with [decisions] open in it. With [audience], g1 is that
-  /// person's own chat.
+  /// of [threads]. With [audience], g1 is that person's own chat.
   FakeSwarm backend(
     List<Map<String, dynamic>> page, {
     Object? next,
     List<Map<String, dynamic>> threads = const [],
-    List<Map<String, dynamic>> decisions = const [],
     List<String>? audience,
     List<Map<String, dynamic>>? members,
     List<Map<String, dynamic>>? projects,
@@ -107,8 +91,6 @@ void main() {
     List<Map<String, dynamic>> additionalGroups = const [],
     Map<String, dynamic> g1 = const {},
   }) {
-    // The Swarm's counts say a decision waits: what has its list read.
-    final derived = {'decisionsWaiting': decisions.length};
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -138,7 +120,6 @@ void main() {
             ...g1,
           },
         ],
-        derived: derived,
       ),
       'members': [
         for (final member in members ?? [person(me)])
@@ -146,13 +127,7 @@ void main() {
       ],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': decisions,
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
+        changes(cursor: 'c2');
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': next,
@@ -371,10 +346,10 @@ void main() {
     expect(face('m2').pm, isFalse);
   });
 
-  // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the
-  // prompt was answered, and a new one came under every message after it.
-  testWidgets('a prompt warning shows once, while its agent still waits, '
-      'and goes once it is answered', (tester) async {
+  // Swarm v4 posts no prompt warning: the agent is marked instead. Those
+  // v1-v3 stored are no chat row while the backend removes them.
+  testWidgets('a v1-v3 prompt warning is no chat row, its agent waiting or '
+      "not; a usage limit's note still is", (tester) async {
     Map<String, dynamic> alert(String id, int sequence, String kind) => {
       ...message(
         id,
@@ -414,12 +389,11 @@ void main() {
     };
     final host = await pump(tester, fake);
 
-    // Still waiting: only the newest warning, and the usage limit's own note.
     expect(key('swarm-message-a1'), findsNothing);
-    expect(key('swarm-message-a4'), findsOneWidget);
+    expect(key('swarm-message-a4'), findsNothing);
     expect(key('swarm-message-a3'), findsOneWidget);
 
-    // Answered: the backend clears the agent's alert, and its warning goes.
+    // Answered: the backend clears the agent's alert.
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
       ...changes(cursor: 'c3', lastChangedAt: 200),
       'agents': [part('agent-builder', 2, nova([]))],
@@ -643,35 +617,6 @@ void main() {
 
     expect(inView(tester, find.text('Message 40\nMore text')), isTrue);
     expect(marksSent().last, 40);
-  });
-
-  testWidgets('a chat with open decisions shows none of them: they are '
-      'answered in Activity (Dee, 11-01)', (tester) async {
-    await pump(
-      tester,
-      backend(
-        [
-          message('m1', 1, text: 'The build is green'),
-          message('m2', 2, author: me, text: 'Flag it', minute: 2),
-        ],
-        decisions: [decision('d1', minute: 1), decision('d2', minute: 3)],
-      ),
-    );
-
-    expect(key('swarm-message-m1'), findsOneWidget);
-    expect(key('swarm-message-m2'), findsOneWidget);
-    expect(key('swarm-ask-d1'), findsNothing);
-    expect(key('swarm-ask-d2'), findsNothing);
-    expect(find.text('Ship it behind a flag?'), findsNothing);
-    expect(key('swarm-option-d1-0'), findsNothing);
-  });
-
-  testWidgets('a chat with no messages and an open decision says it has no '
-      'messages, with no decision under it', (tester) async {
-    await pump(tester, backend(const [], decisions: [decision('d1')]));
-
-    expect(key('swarm-chat-empty'), findsOneWidget);
-    expect(key('swarm-ask-d1'), findsNothing);
   });
 
   testWidgets('a reply quotes its original; tapping the quote brings the '
@@ -1624,74 +1569,6 @@ void main() {
     expect(today, lessThan(tester.getTopLeft(find.text('From today')).dy));
   });
 
-  /// g1 as the person's own Buddy chat: the one chat that still holds the
-  /// decisions asked of them in its project, as Desktop shows them there.
-  const ownBuddy = {'kind': 'buddy', 'buddyOwnerId': me};
-
-  testWidgets('in the person\'s own Buddy chat, a decision sits among the '
-      'messages where it was asked: a card with its question, the options '
-      'side by side', (tester) async {
-    await pump(
-      tester,
-      backend(
-        [
-          message('m1', 1, text: 'The build is green'),
-          message('m2', 2, author: me, text: 'Flag it', minute: 2),
-        ],
-        g1: ownBuddy,
-        decisions: [decision('d1', minute: 1)],
-      ),
-    );
-
-    final card = tester.getRect(key('swarm-ask-d1'));
-    expect(card.top, greaterThan(tester.getRect(key('swarm-message-m1')).top));
-    expect(
-      card.bottom,
-      lessThanOrEqualTo(tester.getRect(key('swarm-message-m2')).top + 1),
-    );
-    expect(
-      find.descendant(of: key('swarm-ask-d1'), matching: find.text('River')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: key('swarm-ask-d1'), matching: find.text('PM')),
-      findsOneWidget,
-    );
-    final first = tester.getRect(key('swarm-option-d1-0'));
-    final second = tester.getRect(key('swarm-option-d1-1'));
-    expect(first.top, second.top, reason: 'side by side');
-    expect(first.right, lessThan(second.left));
-
-    await tester.tap(key('swarm-option-d1-1'));
-    await tester.pump();
-    expect(find.text('Sending “Everyone”'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 10));
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('in the Buddy chat, an open decision from before the messages '
-      'read so far waits at the foot, not behind Earlier messages', (
-    tester,
-  ) async {
-    await pump(
-      tester,
-      backend(
-        [
-          for (var i = 10; i < 34; i++)
-            message('m$i', i, text: 'Line $i\nof the log', minute: i),
-        ],
-        next: {'sequence': 10, 'id': 'm10'},
-        g1: ownBuddy,
-        decisions: [decision('d1')],
-      ),
-    );
-
-    expect(
-      tester.getRect(key('swarm-ask-d1')).top,
-      greaterThan(tester.getRect(key('swarm-message-m33')).top),
-    );
-  });
-
   testWidgets('an @mention of one of the Swarm\'s agents is marked', (
     tester,
   ) async {
@@ -1740,41 +1617,6 @@ void main() {
     await tester.enterText(field, 'one\ntwo\nthree');
     await tester.pump();
     expect(tester.getSize(field).height, greaterThan(oneLine * 2));
-  });
-
-  testWidgets('in the Buddy chat, a decision asked just after its asker\'s '
-      'own message is drawn as part of it, under one name and time', (
-    tester,
-  ) async {
-    await pump(
-      tester,
-      backend(
-        [
-          message(
-            'm1',
-            1,
-            author: 'agent-lead',
-            text: 'One question before the release:',
-          ),
-        ],
-        g1: ownBuddy,
-        decisions: [decision('d1', minute: 1)],
-      ),
-    );
-
-    // Under the message's own name and time: the card carries none.
-    expect(
-      find.descendant(
-        of: key('swarm-ask-d1'),
-        matching: find.textContaining('River'),
-      ),
-      findsNothing,
-    );
-    expect(find.text(time(1)), findsNothing);
-    expect(
-      tester.getRect(key('swarm-ask-d1')).top,
-      greaterThanOrEqualTo(tester.getRect(key('swarm-message-m1')).bottom - 1),
-    );
   });
 
   testWidgets(

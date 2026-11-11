@@ -19,10 +19,7 @@ void main() {
         (
           id: 'a',
           name: 'Swarm a',
-          view: (
-            state: SuperTabParts.firstLoad(firstLoad(tabId: 'a')).state,
-            partners: const <String, String>{},
-          ),
+          view: (state: SuperTabParts.firstLoad(firstLoad(tabId: 'a')).state),
         ),
       ]),
     );

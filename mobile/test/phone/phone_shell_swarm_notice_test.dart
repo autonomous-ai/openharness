@@ -56,7 +56,6 @@ void main() {
             messageId: const ['project', 'pm', 'group'].contains(kind)
                 ? 'm7'
                 : null,
-            decisionId: null,
             threadId: null,
           );
           if (start == 'cold') notices().openedSwarm.value = target;
@@ -113,7 +112,6 @@ void main() {
       swarmId: 'tab-b',
       conversationId: 'g9',
       messageId: null,
-      decisionId: null,
       threadId: null,
     );
     await tester.pump();
@@ -150,7 +148,6 @@ void main() {
       swarmId: tab,
       conversationId: leadChat,
       messageId: 'm7',
-      decisionId: null,
       threadId: null,
     );
     for (var i = 0; i < 20; i++) {
@@ -192,7 +189,6 @@ void main() {
       swarmId: tab,
       conversationId: leadChat,
       messageId: 'reply-r2',
-      decisionId: null,
       threadId: 'root-1',
     );
     for (var i = 0; i < 20; i++) {
@@ -217,7 +213,6 @@ void main() {
       swarmId: 'tab-b',
       conversationId: 'g9',
       messageId: null,
-      decisionId: null,
       threadId: null,
     );
     await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));

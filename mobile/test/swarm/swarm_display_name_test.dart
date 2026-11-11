@@ -128,12 +128,6 @@ void main() {
       };
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
           changes(cursor: 'c2');
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       fake.routes[messages] = (_) => {
         'messages': page.reversed.toList(),
         'next': null,
@@ -307,12 +301,6 @@ void main() {
       };
       swarm.routes['/api/super-tabs/$tab/changes'] = (_) =>
           changes(cursor: 'c2');
-      swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-        'decisions': <Object>[],
-      };
-      swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-        'mentions': <Object>[],
-      };
       swarm.routes['/api/super-tabs/$tab/commands'] = (_) => {'ok': true};
       final account = ValueNotifier<String?>(me);
       host = SwarmHost(

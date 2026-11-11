@@ -115,7 +115,6 @@ class SwarmHomeCache {
                     'id': s.id,
                     'name': s.name,
                     'state': s.view.state,
-                    'partners': s.view.partners,
                   },
               ],
             }),
@@ -182,19 +181,8 @@ class SwarmHomeCache {
           'id': final String id,
           'name': final String name,
           'state': final Map<String, dynamic> state,
-          'partners': final Map<String, dynamic> partners,
         })
-          (
-            id: id,
-            name: name,
-            view: (
-              state: state,
-              partners: {
-                for (final MapEntry(:key, :value) in partners.entries)
-                  if (value is String) key: value,
-              },
-            ),
-          ),
+          (id: id, name: name, view: (state: state)),
     ];
   }
 }

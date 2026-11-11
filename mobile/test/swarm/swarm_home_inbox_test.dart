@@ -8,7 +8,6 @@ import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
-import 'package:harness_mobile/swarm/waiting_work.dart';
 
 import 'swarm_fixture.dart';
 
@@ -16,7 +15,7 @@ import 'swarm_fixture.dart';
 /// by the first read, and rid of a Swarm the moment a read says the person
 /// lost it (owner, 2026-10-27).
 void main() {
-  /// Swarm `a`'s Home with [title] work waiting on the person, as kept.
+  /// Swarm `a`'s Home with [title] work, as kept.
   SwarmHomeEntry kept({String title = 'Kept work', String project = 'Mobile'}) {
     final state = SuperTabParts.firstLoad(
       firstLoad(
@@ -36,20 +35,14 @@ void main() {
           ],
         ),
         groups: [
-          {
-            ...groupData('g1', title: title, status: 'needs_human'),
-            'partnerId': me,
-          },
+          groupData('g1', title: title),
         ],
       ),
     ).state;
     return (
       id: 'a',
       name: 'Swarm a',
-      view: swarmHomeSwarm(
-        SuperTabSnapshot.fromJson(state),
-        swarmPartners(state),
-      ),
+      view: swarmHomeSwarm(SuperTabSnapshot.fromJson(state)),
     );
   }
 
@@ -108,11 +101,10 @@ void main() {
       expect([for (final s in i.swarms) s.name], ['Swarm a']);
       expect(i.reader('a')!.snapshot!.projects.single.name, 'Mobile');
       expect(
-        i.needs.whereType<SwarmWorkNeed>().single.work.conversation.title,
+        i.reader('a')!.snapshot!.conversation('g1')!.title,
         'Kept work',
       );
       expect(i.loaded, isFalse);
-      expect(i.asks('a')!.loading, isTrue, reason: 'its asks are not kept');
     },
   );
 
@@ -134,7 +126,6 @@ void main() {
           name: 'Swarm a',
           view: swarmHomeSwarm(
             SuperTabSnapshot.fromJson(state),
-            swarmPartners(state),
             buddies: SwarmBuddies.read(state, me),
           ),
         ),
@@ -172,46 +163,6 @@ void main() {
     expect(titles, isNot(contains('Kept work')));
     expect(await keptTitles(cache), contains('Fresh work'));
     expect(await keptTitles(cache), isNot(contains('Kept work')));
-  });
-
-  test('work in the Home kept is never news', () async {
-    final cache = memoryHomeCache();
-    await cache.write(me, [kept(title: 'Login')]);
-    final listed = Completer<Object?>();
-    final i = inbox(
-      backend(
-        listed: listed,
-        groups: [
-          {
-            ...groupData('g1', title: 'Login', status: 'needs_human'),
-            'partnerId': me,
-          },
-          // Waiting already at the first read, not since: no news either.
-          {
-            ...groupData('g2', title: 'Billing', status: 'blocked'),
-            'partnerId': me,
-          },
-        ],
-      ),
-      cache,
-    );
-    final news = <SwarmNeed>[];
-    i.onArrived = news.add;
-    await until(() => i.swarms.isNotEmpty);
-
-    listed.complete({
-      'tabs': [
-        {'id': 'a', 'name': 'Swarm a', 'ownerId': me, 'lastChangedAt': 100},
-      ],
-      'next': null,
-    });
-    await i.refresh();
-    await settle();
-
-    expect(i.needs.whereType<SwarmWorkNeed>(), hasLength(2));
-    expect(news, isEmpty);
-    // The read is kept in the background: its folder goes only after.
-    await homeSaved(cache);
   });
 
   test('a Swarm off the list leaves the Home kept at once', () async {

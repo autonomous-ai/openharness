@@ -594,47 +594,6 @@ class SwarmProjectTile extends StatelessWidget {
   }
 }
 
-/// The Lead's tags still waiting on the person in a chat or a project, at
-/// its row's trailing edge: "@2" in the warning ink, said in words (desktop
-/// design system: Mentions); [filled], on an accent pill, as Home's project
-/// rows draw it (Tony's prototype B1, 2026-10-29).
-class SwarmTags extends StatelessWidget {
-  const SwarmTags(this.count, {super.key, this.filled = false});
-
-  final int count;
-  final bool filled;
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Text(
-      '@$count',
-      maxLines: 1,
-      style: AppType.caption(
-        color: filled ? AppInk.onFill : AppColors.warning,
-        fontWeight: AppFont.semibold,
-        height: filled ? 1 : null,
-        fontFeatures: const [FontFeature.tabularFigures()],
-      ),
-    );
-    return Semantics(
-      label: count == 1 ? '1 mention' : '$count mentions',
-      excludeSemantics: true,
-      child: filled
-          ? Container(
-              constraints: const BoxConstraints(minWidth: 22, minHeight: 20),
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
-              alignment: Alignment.center,
-              decoration: ShapeDecoration(
-                color: AppPalette.accent,
-                shape: const StadiumBorder(),
-              ),
-              child: text,
-            )
-          : text,
-    );
-  }
-}
-
 /// How a [SwarmButton] is drawn.
 enum SwarmButtonStyle {
   /// A quiet button on a field, rimmed: a decision's option.

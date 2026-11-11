@@ -18,7 +18,7 @@ import '../test/voice_fakes.dart' show MemoryKeyValueStore;
 
 /// Swarm's chat and start screens on a simulator, a screenshot at each step,
 /// for comparing with Tony's prototype v2: the chat as the prototype fills it
-/// (a reply's quote, a decision under its asker's message, an @mention), the
+/// (a reply's quote, an @mention), the
 /// @ picker, Reply, a quote followed to its original, a post on its way; then
 /// each start screen.
 ///
@@ -100,7 +100,6 @@ void main() {
       ],
       'next': null,
     };
-    const derived = {'decisionsWaiting': 1};
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
         head: headData(
@@ -137,35 +136,11 @@ void main() {
             workerId: 'agent-kai',
           ),
         ],
-        derived: derived,
       ),
       'members': [part(me, 1, person(me))],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': [
-        {
-          'id': 'd1',
-          'projectId': project,
-          'projectName': 'openharness',
-          'conversationId': conversation,
-          'conversationTitle': 'tony',
-          'askerName': 'River',
-          'question':
-              'Ship mobile v1 behind a flag for a week, or to everyone?',
-          'options': ['Flag 1 week', 'Everyone'],
-          'recommended': -1,
-          'createdAt': at(
-            11,
-            35,
-          ).add(const Duration(seconds: 20)).toUtc().toIso8601String(),
-        },
-      ],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
+        changes(cursor: 'c2');
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': {'sequence': 2, 'id': 'm2'},
@@ -196,7 +171,7 @@ void main() {
         const SwarmConversationPage(swarmId: tab, conversationId: conversation),
       ),
     );
-    await walk.waitFor(walk.key('swarm-ask-d1'));
+    await walk.waitFor(walk.key('swarm-message-m6'));
     await walk.shot('chat');
 
     await tester.enterText(find.byType(TextField), '@');
@@ -294,12 +269,6 @@ void main() {
       };
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
     fake.routes[messages] = (_) => first.future;
     fake.routes['$messages?before=21&beforeId=m21'] = (_) => earlier.future;
     fake.routes['/api/super-tabs/$tab/conversations/g-new/messages'] = (_) => {
