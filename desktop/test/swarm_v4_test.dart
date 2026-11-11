@@ -104,16 +104,19 @@ void main() {
   );
 
   // anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible".
-  testWidgets('Invite people, in the left pane, opens the Swarm\'s people for its owner', (
-    tester,
-  ) async {
-    await show(tester);
-    await tester.tap(find.text('Invite people'));
-    for (var i = 0; i < 3; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    expect(find.byType(SwarmSharingDialog), findsOneWidget);
-  });
+  testWidgets(
+    'Invite people, in the left pane, opens the Swarm\'s people for its owner',
+    (tester) async {
+      await show(tester);
+      await tester.tap(find.text('Invite people'));
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(SwarmSharingDialog), findsOneWidget);
+      // The owner's own form, where an invitation is made.
+      expect(find.byKey(const Key('swarm-invite-email')), findsOneWidget);
+    },
+  );
 
   testWidgets('a long message in an agent\'s chat shows whole, with no More', (
     tester,

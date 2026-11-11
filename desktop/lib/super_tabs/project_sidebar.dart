@@ -106,8 +106,9 @@ class ProjectSidebar extends StatelessWidget {
   final VoidCallback? onManage;
 
   /// Opens the Swarm's people, to invite someone: a row under the Swarm's name for its owner, the one person who may invite
-  /// (backend sharing.ts). People join a Swarm by an invitation, and Manage people was the only way there (anh Dee,
-  /// 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible").
+  /// (backend commands.ts, invite.create), and never in their Personal Swarm, which is theirs alone. People join a Swarm by
+  /// an invitation, and Manage people was the only way there (anh Dee, 2026-11-11: "it's quite difficult to invite people.
+  /// i have no idea where to find it. invite should be visible").
   final VoidCallback? onInvite;
 
   /// Opens Manage on its Machines, where a computer in Your Machines is managed.
@@ -303,8 +304,14 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your Team, Projects, then Top Teams; Manage
-  /// stays at the foot. Nothing else.
+  /// Whether this is the person's Personal Swarm, theirs alone (manage_page.dart, swarm_switcher.dart).
+  bool get _personal => switch (app) {
+    final app? => PersonalSwarm.of(app).id == controller.tabId,
+    null => false,
+  };
+
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Invite people for its owner, Your Team,
+  /// Projects, then Top Teams; Manage stays at the foot. Nothing else.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
@@ -321,7 +328,7 @@ class ProjectSidebar extends StatelessWidget {
         channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
-      if (onInvite case final invite? when controller.isOwner)
+      if (onInvite case final invite? when controller.isOwner && !_personal)
         _iconRow(
           key: 'project-sidebar-invite',
           icon: AppIcons.userPlus,
