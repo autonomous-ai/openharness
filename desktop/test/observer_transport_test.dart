@@ -14,6 +14,8 @@ import 'package:harness/e2ee/keys.dart';
 import 'package:harness/viewer/observer_relay_codec.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/loopback_websocket.dart';
+
 void main() {
   test('a direct observer without a codec fails before dialing', () async {
     String? refusal;
@@ -56,10 +58,11 @@ void main() {
           request.headers.value('sec-websocket-protocol'),
           'fixture-token',
         );
-        final socket = await WebSocketTransformer.upgrade(
+        final socket = await acceptWebSocket(
           request,
           protocolSelector: (p) => p.first,
         );
+        if (socket == null) return;
         sockets.add(socket);
         SessionKeys? keys;
         socket.listen((raw) async {

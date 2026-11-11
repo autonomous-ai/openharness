@@ -5,7 +5,7 @@
  *
  * What it hands the core is typed by core/api.ts, the core's contract: the Super Tab members' waits and cards on the
  * devices (`SuperTabsCore`), a member's terminal for its Lead, the close and reopen of its agents (`SwarmAgents`), a
- * start's Swarm role (`SwarmLaunch`), an older session's role at its restart (`AdoptSwarmSkill`), its chat queued while
+ * start's Swarm role (`SwarmLaunch`), an attached agent's role at its restart (`AdoptSwarmSkill`), its chat queued while
  * an agent works, the Leads that are never stopped, and its chat files streamed to the backend. And the Super Tab
  * service's own start, for when it runs in the core's process (services/superTabs.ts), so a core running every service
  * there with the Swarm off loads none of it either.

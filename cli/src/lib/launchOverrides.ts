@@ -44,6 +44,7 @@ import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
+import { hooksHeldDetail } from '../engines/kit/hooksHeldDetail.js'
 
 export interface LaunchOverrides {
   native?: NativeLaunch
@@ -122,7 +123,7 @@ export interface LaunchOverridesDeps {
    *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
-    basics(lead: boolean): string
+    basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
   }
@@ -155,6 +156,9 @@ export interface LaunchSource extends NativeLaunchSource {
   swarmSkill?: SwarmSkill
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
+  /** The name it was started under (the registry row's `defaultName`): a Swarm agent's own instructions are in its folder's
+   *  `agents/<name>.md`, carried in at each relaunch. */
+  name?: string | null
   /**
    * What the workspace's SCM needs re-applied to the pane — the registry row's `scmLaunch`. A git
    * worktree asks for nothing. Absent or null: no SCM prepared this folder, or the row predates it.
@@ -298,7 +302,7 @@ export async function prepareLaunchOverrides(
     // File-configured engines can move their native home. Prepare hooks after
     // those operation-owned locations are known, before any native dispatch.
     if (native && deps.prepareNative && !await deps.prepareNative(native, owner, overrides.env, overrides.clearEnv)) {
-      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the engine’s native hook preparation.' }
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail(engine, 'Waiting to confirm the engine’s native hook preparation.') }
     }
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
@@ -337,7 +341,8 @@ export async function prepareLaunchOverrides(
     }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
-    const swarmInstructions = source.swarmSkill ? swarm!.basics(source.swarmSkill.role === 'coordinator') : undefined
+    const swarmInstructions = source.swarmSkill
+      ? swarm!.basics(source.swarmSkill.role === 'coordinator', { cwd: source.cwd ?? null, name: source.name ?? null }) : undefined
     const told = agentLaunchArgs(engine, source.startedBy, {
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })
@@ -437,7 +442,7 @@ async function prepareBaseLaunchOverrides(
       // A production native preparation covers the selected profile before any
       // grid/configuration commit. Legacy callers must also await and check it.
       if (!deps.native && !await deps.installCodexHooks(home)) return {
-        ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm Codex’s hooks in the selected profile.',
+        ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: hooksHeldDetail('codex', 'Waiting to confirm Codex’s hooks in the selected profile.'),
       }
       return {
         ok: true,

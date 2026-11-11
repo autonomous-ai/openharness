@@ -3,7 +3,7 @@
  * macOS (`__fixtures__/`, docs/superpowers/specs/2026-11-10-openclaw-engine-design.md). It imports nothing of
  * OpenClaw's code.
  */
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { stripAnsi } from '../kit/pane.js'
 
 /**
@@ -46,6 +46,8 @@ export const OPENCLAW_RULE = /^\s*─{8,}\s*$/
 const STATUS = {
   ready: /^(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)$/,
   busy: /^\S{1,2} (?:running|streaming|connecting)\b/,
+  /** A run in progress; `connecting` is the TUI still reaching its Gateway, before any run. */
+  running: /^\S{1,2} (?:running|streaming)\b/,
   noGateway: /^gateway disconnected\b/,
   /** The connection dropped or just came back: `gateway disconnected: …` (5 s), `disconnected` after it, `gateway
    * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). */
@@ -72,9 +74,11 @@ export interface OpenclawScreen {
   footer: string | null
   /** The status line says the Gateway connection dropped or just came back. */
   gatewayLost: boolean
+  /** The status line says a run is in progress: `running` or `streaming`, not `connecting`. */
+  running: boolean
 }
 
-const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false }
+const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false, running: false }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
 export function openclawScreenLines(capture: string): string[] {
@@ -135,18 +139,31 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
       : STATUS.busy.test(said) ? 'busy'
         : STATUS.ready.test(said) ? 'ready' : null
   return {
-    key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null, url, state, footer, gatewayLost: STATUS.gatewayLost.test(said),
+    key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null,
+    url,
+    state,
+    footer,
+    gatewayLost: STATUS.gatewayLost.test(said),
+    running: STATUS.running.test(said),
   }
 }
 
 /**
- * The TUI's arguments. A bare `openclaw tui` opens the last session any TUI used, so a launch always names one;
+ * How the TUI is started. A bare `openclaw tui` opens the last session any TUI used, so a launch always names one;
  * `--session <key>` creates or attaches `agent:main:<key>`, and a full key as the target resumes it.
  */
 export const OPENCLAW_LAUNCH = {
   base: ['tui'],
   newSession: (agentId: string): string[] => ['--session', `harness-${agentId}`],
   resume: (key: string): string[] => [key],
+  /**
+   * The first prompt is typed into the pane, never given in argv: the TUI sends `--message` once, after its first
+   * Gateway connection, and never again (OpenClaw 2026.11.2 `state.autoMessageSent`), so a TUI started before its
+   * Gateway would drop it.
+   */
+  firstPrompt: 'typed',
+  /** The daemon's variables a TUI starts with, so it opens the state folder Harness reads. */
+  environment: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'],
 } as const
 
 /** What a person reads when OpenClaw cannot work for Harness, each with what to do about it. */
@@ -158,6 +175,8 @@ export const OPENCLAW_STATES = {
   harnessNode: 'This Harness needs Node 24 to read OpenClaw.',
   remote: 'This OpenClaw runs on another machine.',
   unsupported: 'This OpenClaw version is not supported yet.',
+  /** A run is in progress and Harness's state folder holds no session for it: the Gateway writes to another folder. */
+  noSessions: "Harness cannot find this OpenClaw's sessions. Start Harness with the Gateway's OPENCLAW_STATE_DIR, then restart this agent.",
 } as const
 
 /** The screens a TUI cannot work for Harness on, and what the agent says while one is up (cleared once it is gone). */
@@ -187,6 +206,21 @@ export function openclawRuntimeState(output: string): string | null {
  */
 export function openclawAgentDb(stateDir: string, agentId: string, agentDir?: string | null): string {
   return join(agentDir || join(stateDir, 'agents', agentId, 'agent'), 'openclaw-agent.sqlite')
+}
+
+/** A leading `~` alone or before a separator, as OpenClaw's `expandHomePrefix` (`~user` is left as written). */
+const HOME_PREFIX = /^~(?=$|[\\/])/
+
+/**
+ * The state folder OpenClaw opens when nothing else names one, as its `resolveStateDir`: `OPENCLAW_STATE_DIR`, else
+ * `<home>/.openclaw`, where home is `OPENCLAW_HOME` when set, else the OS home. Both are trimmed, a blank one is unset,
+ * and a leading `~` is expanded: `OPENCLAW_HOME`'s against the OS home, `OPENCLAW_STATE_DIR`'s against that home.
+ */
+export function openclawDefaultStateDir(vars: Readonly<Record<string, string | undefined>>, osHome: string): string {
+  const named = vars.OPENCLAW_HOME?.trim()
+  const home = named ? resolve(named.replace(HOME_PREFIX, () => osHome)) : resolve(osHome)
+  const stateDir = vars.OPENCLAW_STATE_DIR?.trim()
+  return stateDir ? resolve(stateDir.replace(HOME_PREFIX, () => home)) : resolve(home, '.openclaw')
 }
 
 /**

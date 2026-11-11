@@ -26,7 +26,7 @@ import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
-import { crewOf } from './assign/crew.js'
+import { crewOf, labelOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
 
@@ -242,6 +242,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     say: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
       command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } }),
     file: join(api.dataDir, 'super-tab-next-things.json'),
+    // Verdicts read as the merger reads them (githubMerge.ts verdicts): every agent of a person posts as that person's login, so a
+    // signature names its reader only when it names one of the team, and only a READ-OK the backend recorded is a read.
+    team: async agent => new Set(list((await held().reads.read(agent.tabId, agent.agentId)).state.agents)
+      .map(a => labelOf(String(a.displayName ?? a.name ?? a.id)))),
+    named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '' }, comments),
   })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()

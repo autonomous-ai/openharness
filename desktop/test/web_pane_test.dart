@@ -14,6 +14,7 @@ import 'package:harness/state/harness_monitor_controller.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
 import 'package:harness/widgets/pane_menu.dart';
 import 'package:harness/widgets/transient_menus.dart';
@@ -621,6 +622,29 @@ void main() {
           find.byKey(const ValueKey('web-pane-browser-bar')),
           findsOneWidget,
         );
+        // The page under the bar is told so, and a viewer's own toolbar hides (preview.html): each new document,
+        // and only then.
+        Iterable<String> told() => controller.scripts.where(
+          (s) => s.contains("setAttribute('data-harness-browser-bar'"),
+        );
+        controller.delegate!.onPageFinished!(gateway);
+        await tester.pump();
+        final stamps = told().length;
+        expect(stamps, greaterThan(0));
+        await tester.pump();
+        expect(told(), hasLength(stamps), reason: 'nothing new to say');
+        controller.delegate!.onPageFinished!(gateway);
+        expect(told(), hasLength(stamps + 1), reason: 'a reload is a new page');
+        // Carried by its header like a terminal: the viewer beside the terminal moves too.
+        expect(
+          find.descendant(
+            of: find.byType(WebPanePanel),
+            matching: find.byWidgetPredicate(
+              (w) => w is Draggable<PaneDragRef>,
+            ),
+          ),
+          findsOneWidget,
+        );
         // The gateway redirects to the page; the bar names the page's path on the agent's machine.
         controller.backward = true;
         controller.delegate!.onUrlChange!(
@@ -696,6 +720,14 @@ void main() {
     ) async {
       await open(tester);
       expect(find.byKey(const ValueKey('web-pane-browser-bar')), findsNothing);
+      final controller = platform.controllers.single;
+      controller.delegate!.onPageFinished!(controller.loads.single.toString());
+      await tester.pump();
+      expect(
+        controller.scripts.where((s) => s.contains('data-harness-browser-bar')),
+        isEmpty,
+        reason: 'a viewer with no bar over it keeps its own toolbar',
+      );
       // The terminal's resize is coalesced against the wall clock, so a layout soon after the first one leaves its
       // 50 ms timer pending; the session (and its dispose) belongs to the app, torn down only after this check.
       await tester.pump(const Duration(milliseconds: 50));

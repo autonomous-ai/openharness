@@ -644,8 +644,15 @@ class SuperTabProject {
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
-      deciderId = row['decider'] is String ? row['decider'] as String : null;
+      deciderId = row['decider'] is String ? row['decider'] as String : null,
+      pmChatId = row['pmChat'] is Map
+          ? superTabMap(row['pmChat'])['id'] as String?
+          : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The 1:1 chat its next PM takes, open while that PM starts (backend pmChat.ts), read as the desktop's model reads
+  /// it: only its person reads it, so null for anyone else, once a PM took it, and from a backend before it.
+  final String? pmChatId;
 
   /// The Board way of working (#3819), read as the desktop's model reads it; the phone draws it with #3821.
   final bool boardMode;

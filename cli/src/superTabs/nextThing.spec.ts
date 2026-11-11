@@ -30,7 +30,9 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     // Each pull request as GitHub details it, its comments, and its head's check runs; a pull request listed and not here is
     // clean and read by nobody yet.
     pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]>,
-    owed: [] as Array<{ number: number; sha: string }> }
+    owed: [] as Array<{ number: number; sha: string }>,
+    // The team's builder labels, and who the backend recorded as each verdict comment's writer, by its id.
+    team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
     head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
@@ -65,7 +67,11 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     const status = [...refuse].find(([end]) => path.endsWith(end))?.[1] ?? 200
     return { status, etag: null, body: null, resetAt: null }
   })
-  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log })
+  const team = vi.fn(async (_agent: WatchedAgent) => state.team)
+  const named = vi.fn(async (_agent: WatchedAgent, _repo: string, comments: Json[]) => state.recordsDown ? null
+    : comments.map(c => state.recorded[Number(c.id)] ? { ...c, recorded: state.recorded[Number(c.id)] } : c))
+  const make = () => new NextThing({ onEnd, watched: async () => state.watched, owed, working: async () => state.working, get, send, tell, say, file, log,
+    team, named })
   let turns = 0
   /** A turn of [harnessId] ending, then the settle after it. */
   const end = async (extra: Partial<TurnEnd> = {}) => {
@@ -74,7 +80,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     await vi.advanceTimersByTimeAsync(NEXT_SETTLE_MS)
   }
   const told = () => tell.mock.calls.map(([, , text]) => text)
-  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, next: make() }
+  return { state, listeners, onEnd, calls, tell, say, log, file, owed, send, written, refuse, make, end, told, team, named, next: make() }
 }
 
 describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => {
@@ -431,7 +437,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const slow = new Promise<void>(resolve => { answer = resolve })
     const watched = f.state.watched
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { await slow; return watched }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
+      get: async () => ({ status: 200, etag: null, body: f.state.items, resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log })
     next.start()
     await f.end()
     await f.end()
@@ -455,7 +461,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = setup()
     const next = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false, send: f.send,
-      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file })
+      get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named })
     next.start()
     await f.end()
     expect(warn).toHaveBeenCalledWith('[super-tab] next thing of agent h-pip: Error.')
@@ -520,7 +526,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
     expect(stopped.tell).not.toHaveBeenCalled()
     const failing = new NextThing({ onEnd: f.onEnd, watched: async () => { throw new Error('offline') }, owed: () => [], working: async () => false,
-      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, log: f.log })
+      send: f.send, get: async () => ({ status: 200, etag: null, body: [], resetAt: null }), tell: f.tell, say: f.say, file: f.file, team: f.team, named: f.named, log: f.log })
     failing.start()
     await vi.advanceTimersByTimeAsync(START_LOOK_MS)
     expect(f.log).toHaveBeenCalledWith('[super-tab] next things as Harness started: Error.')
@@ -611,6 +617,38 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
     await g.end()
     expect(g.told()).toEqual([`Next: acme/app#12 Fix the login bug. It is given to you and nobody has taken it: ${TAKE} acme/app#12`])
     g.next.stop()
+  })
+
+  // The sandbox, 2026-11-11: every agent of a person posts as its person's login, and so did the pull request's opener. Read
+  // with no team and no records, a reader's HOLD read as "from deehw", and a read made by command was asked for again.
+  it('reads verdicts as the merger does where every comment is one login\'s: the backend\'s record, and the team\'s names', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    const short = HEAD.slice(0, 7)
+    f.state.team = new Set(['builder:pip', 'builder:amari'])
+    f.state.pulls[30] = { user: { login: 'juno-gh' } }
+    f.state.comments[30] = [said(`Amari, 05:00, to **Pip**: HOLD ${short}: README.md: say it there too.`)]
+    // Pip owes a read of #24, and made it by command: its record names it.
+    f.state.owed = [{ number: 24, sha: short }]
+    f.state.pulls[24] = { user: { login: 'juno-gh' }, head: { sha: HEAD, ref: 'juno/24' } }
+    f.state.comments[24] = [{ ...said(`Pip, 05:10, to **Juno**: READ-OK ${short}`), id: 901 }]
+    f.state.recorded = { 901: 'Pip' }
+    const held = `Your acme/app#30 has a HOLD from Amari at ${short}: fix what it asks and push, and it is read again. Read it: `
+      + 'gh pr view 30 --repo acme/app --comments'
+    expect(await f.next.inbox('h-pip')).toEqual([held])
+    // A HOLD stands typed or by command, so it is still said while the records cannot be read, by the team's signature.
+    f.state.recordsDown = true
+    expect(await f.make().inbox('h-pip')).toEqual([held])
+    // Typed, not made by command, it is no read: still owed.
+    const g = setup({ items: [] })
+    g.state.owed = [{ number: 24, sha: short }]
+    g.state.pulls[24] = { user: { login: 'juno-gh' }, head: { sha: HEAD, ref: 'juno/24' } }
+    g.state.comments[24] = [{ ...said(`Pip, 05:10, to **Juno**: READ-OK ${short}`), id: 902 }]
+    expect(await g.next.inbox('h-pip')).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
+    // The records cannot be read: whether it read is not known, so it is not asked, and asked once they can be.
+    g.state.recordsDown = true
+    expect(await g.make().inbox('h-pip')).toEqual([])
+    g.state.recordsDown = false
+    expect(await g.make().inbox('h-pip')).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
   })
 
   it('lists at most INBOX_MAX, and fails by GitHub\'s code when GitHub cannot be read', async () => {

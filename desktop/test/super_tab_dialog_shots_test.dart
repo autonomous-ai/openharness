@@ -12,7 +12,7 @@ import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/sharing.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
-import 'swarm_sharing_test.dart' show SwarmSharingServer;
+import 'support/swarm_sharing_server.dart';
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 

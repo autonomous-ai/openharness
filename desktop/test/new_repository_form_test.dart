@@ -103,7 +103,7 @@ void main() {
       integration:
           HarnessLaunchIntegration(
               creationId: 'new-repository-fixture',
-              actionLabel: newProject ? 'New Project' : 'New Harness',
+              actionLabel: newProject ? 'New project' : 'New Harness',
               projectVisibility: 'public',
               prepare: (_, task, _) async => task,
               beforeSubmit: (_, _) async {},
