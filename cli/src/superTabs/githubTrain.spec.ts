@@ -882,6 +882,7 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     // At once, and not when its run ends: a run on a base that moved lands nothing.
     await f.tick()
     expect(f.writes(built)).toEqual(['PATCH /pulls/900', expect.stringMatching(/^DELETE /)])
+    expect(f.state.pulls.get(900)).toMatchObject({ state: 'closed', merged_at: null, title: 'Train, base moved: #4 #5' })
     await f.settle()
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: main moved under it')
