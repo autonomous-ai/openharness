@@ -181,6 +181,8 @@ ConversationServer swarmV4Server() {
 SwarmGitHub swarmV4GitHub({
   List<List<String>>? calls,
   bool Function()? signedOut,
+  // The checks at the head of #5770, first builder's pull request for #5759.
+  String firstBuilderChecks = 'SUCCESS',
 }) => SwarmGitHub(
   run: (arguments) async {
     calls?.add(arguments);
@@ -294,7 +296,7 @@ SwarmGitHub swarmV4GitHub({
                   'nodes': [
                     {
                       'commit': {
-                        'statusCheckRollup': {'state': 'SUCCESS'},
+                        'statusCheckRollup': {'state': firstBuilderChecks},
                       },
                     },
                   ],

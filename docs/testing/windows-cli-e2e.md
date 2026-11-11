@@ -47,6 +47,11 @@ No merge or publication.
 
 ## Setup recipe
 
+Since 2026-11-11 `install.ps1` and the updater refuse a terminal host whose files are not signed
+([Windows code signing](../windows-code-signing.md#only-signed-terminal-hosts-reach-a-computer)). A branch build served
+by the fake CDN is unsigned: `setx HARNESS_ALLOW_UNSIGNED 1` for each test user, and set it in the window that runs
+the installer, before step 5. A staging build of a release is signed and needs nothing.
+
 1. Preflight: the staging `install.ps1` names `…/harness/staging/`; nothing listens on 18473/18475; the VM's build.
 2. Users: `New-LocalUser -PasswordNeverExpires` (as admin; `net user … /add` asks a Y/N question for a password over
    14 characters and fails over SSH), `Users` group; `first-login.sh` for each (profile and key). hxe2e: `setx PORT
