@@ -95,7 +95,8 @@ const CHECKS_SETTLE_MS = 3 * 60_000
 const TOLD_MAX = 5_000
 /** Records asked for in one request (the backend takes at most 100 ids), how many are remembered, and how long after a comment
  *  was written one with no record is taken as typed by hand: the command records it within seconds of posting it. */
-const AUTHORS_PAGE = 100, RECORDED_MAX = 5_000, RECORD_SETTLE_MS = 2 * 60_000
+const AUTHORS_PAGE = 100, RECORDED_MAX = 5_000
+export const RECORD_SETTLE_MS = 2 * 60_000
 /** How long an answer about a comment is kept before it is asked about again: a record made late (the command run again after
  *  the server refused it) and an agent's new name are read within it, with no restart. */
 const RECORD_AGAIN_MS = 10 * 60_000
@@ -150,8 +151,9 @@ const VERDICT_FIRST = /^(?:READ-OK|HOLD)\b/
  *  From the login that opened it, which every agent of the author's person posts as, a signature is one only when it names one
  *  of the team; any other is unsigned, its reader that login, and its READ-OK is `ownLogin`: it counts for no read. */
 export function verdicts(comments: Json[], body: string, people: PullPeople):
-  { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; at: string }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; kind: 'recorded' | 'signed' | 'login'; at: string }>()
+  { readers: Map<string, Verdict>; twoReads: boolean } {
+  // Each reader's HOLDs that stand, its last READ-OK made by command, and its last typed one, by its name as sameKey reads it.
+  const said = new Map<string, { holds: Said[]; ok?: Said; typed?: Said }>()
   let twoReads = /\bTWO READS\b/.test(body)
   // The team's names as sameKey reads them, from its builder labels: a team agent is known however it signs.
   const team = new Set([...people.team].map(label => sameKey(label.replace(/^builder:/i, ''))))
@@ -164,7 +166,7 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     const login = String(object(comment.user).login ?? '')
     const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
     const pattern = SIGNATURE.exec(first)?.[1]
-    // The agent the backend recorded as this comment's writer (GitHubMerge recordedNames) is its reader, whatever the comment
+    // The agent the backend recorded as this comment's writer (VerdictRecords) is its reader, whatever the comment
     // opens with: the command that made it knew the agent from its session, and a name can be typed by anyone.
     // From the login that opened the pull request it is one of the team's, as a typed signature must be: any other agent of
     // that person (review of #3906: its Buddy's record merged what its typed name did not) reads as that login.
@@ -174,21 +176,102 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
       ?? (pattern && !VERDICT_FIRST.test(pattern) && (!fromOpener || team.has(sameKey(pattern))) ? pattern : undefined)
     const reader = signature ?? login
     if (!reader || reader === SELF) continue
-    const at = String(comment.created_at ?? '')
     // One reader however it writes its name (a HOLD as "Kai Lee" is lifted by its READ-OK as "kai-lee"); a name of no letters
     // or digits, as written.
     const key = readerKey(reader)
-    const last = readers.get(key)
-    // A HOLD is lifted only by its own kind: a signature's by a signature, a login's (unsigned) by that login. A person whose
-    // login reads as an agent's name is not that agent. A HOLD made by command (recorded) is lifted only by a READ-OK made
-    // by command: anyone can type its reader's name (review of #3906). A typed HOLD is lifted by its reader's command too.
-    const kind = recorded ? 'recorded' : signature ? 'signed' : 'login'
-    if (last?.verdict === 'HOLD' && found.verdict === 'READ-OK' && last.kind !== kind && !(last.kind === 'signed' && kind === 'recorded')) continue
-    if (!last || at >= last.at) readers.set(key, { verdict: found.verdict, sha: found.sha, name: reader, ownLogin: !signature && fromOpener, kind, at })
+    const mine = said.get(key) ?? { holds: [] }
+    said.set(key, mine)
+    const writer = isWriter(people.writers, reader), ownLogin = !signature && fromOpener
+    const one: Said = { verdict: found.verdict, sha: found.sha, name: reader, ownLogin, recorded: !!recorded, byCommand: !!named, retyped: false,
+      at: String(comment.created_at ?? ''), login: login.toLowerCase(), unsigned: !signature, own: writer || ownLogin }
+    // A HOLD, typed or made by command, stands until a READ-OK made by command lifts it.
+    if (found.verdict === 'HOLD') { mine.holds.push(one); continue }
+    // A typed READ-OK is no read and lifts nothing: a name can be typed by anyone, from any login (plan item 3; review of #3708:
+    // a writer's READ-OK from another login read as a reader's, and a HOLD was lifted by a login that reads as its reader's name).
+    // Only its own unsigned HOLDs does a login take back by typing: none of another's, and none of the login that opened it,
+    // which its writer posts as. A person has no command to run.
+    if (!recorded) {
+      mine.typed = one
+      if (!ownLogin) mine.holds = mine.holds.filter(hold => !(hold.unsigned && !hold.own && hold.login === one.login && hold.at <= one.at))
+      continue
+    }
+    mine.ok = one
+    if (writer) continue
+    // A READ-OK made by command lifts, made after them (so on their head or a later one: the command reads the head): its own
+    // reader's HOLDs, typed or not; the HOLDs of the pull request's own side, which no reader is asked to lift (its writers' own,
+    // and unsigned ones from the login that opened it, which every agent of its person posts as); and the unsigned HOLDs of the
+    // login it was posted from.
+    const lifts = (holder: string, hold: Said) => hold.own || (hold.unsigned ? hold.login === one.login : holder === key)
+    for (const [holder, theirs] of said) theirs.holds = theirs.holds.filter(hold => hold.at > one.at || !lifts(holder, hold))
   }
-  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin, at: v.at }])), twoReads }
+  const readers = new Map<string, Verdict>()
+  for (const [key, mine] of said) {
+    const last = mine.holds.at(-1) ?? mine.ok ?? mine.typed
+    // A HOLD its reader answered with a typed READ-OK: it is asked to make that by command (githubAssign.ts).
+    const retyped = last?.verdict === 'HOLD' && !!mine.typed && mine.typed.at > last.at
+    if (last) readers.set(key, { verdict: last.verdict, sha: last.sha, name: last.name, ownLogin: last.ownLogin, recorded: last.recorded, byCommand: last.byCommand, retyped, at: last.at })
+  }
+  return { readers, twoReads }
 }
+/** A reader's verdict as `verdicts` reads it: whether it counts as made by command (`recorded`) or was made by one whose agent is
+ *  no teammate (`byCommand` alone), whether it is an unsigned one from the login that opened the pull request (`ownLogin`), and,
+ *  for a HOLD, whether its reader answered it with a typed READ-OK (`retyped`). */
+export interface Verdict { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; recorded: boolean; byCommand: boolean; retyped: boolean; at: string }
+interface Said extends Verdict { login: string; unsigned: boolean; own: boolean }
 
+
+/** Who made each of a project's verdicts by command, as the backend recorded it (backend superTabs/githubComments.ts), for the
+ *  merger and the assigner alike. */
+export class VerdictRecords {
+  /** Who the backend recorded as the writer of a verdict's comment, by `<repo>#<comment id>`; null for one it has no record of
+   *  (typed by hand). A record never changes, so each comment is asked about once. */
+  private readonly recorded = new Map<string, { name: string | null; at: number }>()
+  /** Each repository whose records the backend did not give: left alone, longer each time (retryIn), and said once. */
+  private readonly down = new Map<string, { misses: number; againAt: number }>()
+
+  constructor(private readonly authors: (project: LedProject, ids: string[]) => Promise<Record<string, { name: string }>>,
+    private readonly now: () => number, private readonly log: (line: string) => void) {}
+
+  /**
+   * [comments] with the agent the backend recorded for each verdict among them (`recorded`), which `verdicts` counts as its
+   * reader. Only a comment that gives a verdict is asked about, once: a record is made as the comment is, so one with none two
+   * minutes after it was written was typed by hand. Null while a verdict among them was never answered for and the backend
+   * cannot be asked: only a READ-OK made by command is a read, so it cannot be told from a typed one. Said once per repository.
+   */
+  async named(project: LedProject, comments: Json[]): Promise<Json[] | null> {
+    const key = (comment: Json) => `${project.repo}#${String(comment.id)}`
+    // A comment changed since it was written is not the words its record was made for (the command never edits): typed by hand.
+    const asWritten = (comment: Json) => comment.updated_at === undefined || comment.updated_at === comment.created_at
+    const given = comments.filter(comment => Number.isSafeInteger(comment.id) && comment.review !== true && asWritten(comment)
+      && ownVerdict(String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''))
+    const unknown = given.filter(comment => this.now() - (this.recorded.get(key(comment))?.at ?? -Infinity) >= RECORD_AGAIN_MS)
+    for (let from = 0; from < unknown.length && this.now() >= (this.down.get(project.repo)?.againAt ?? 0); from += AUTHORS_PAGE) {
+      const page = unknown.slice(from, from + AUTHORS_PAGE)
+      try {
+        const authors = await this.authors(project, page.map(comment => `issue:${String(comment.id)}`))
+        for (const comment of page) {
+          const name = authors[`issue:${String(comment.id)}`]?.name
+          const settled = this.now() - Date.parse(String(comment.created_at ?? '')) >= RECORD_SETTLE_MS
+          this.recorded.delete(key(comment))
+          if (typeof name === 'string' && name.trim()) this.recorded.set(key(comment), { name, at: this.now() })
+          else if (settled) this.recorded.set(key(comment), { name: null, at: this.now() })
+        }
+        if (this.down.delete(project.repo)) this.log(`[super-tab] verdicts' records are read again · ${project.repo}`)
+      } catch (error) {
+        const misses = (this.down.get(project.repo)?.misses ?? 0) + 1
+        if (misses === 1) this.log(`[super-tab] verdicts' records cannot be read: nothing merges and no reader is asked · AUTHORS_UNREAD ${project.repo}: ${error instanceof Error ? error.message : 'the server did not answer'}`)
+        this.down.set(project.repo, { misses, againAt: this.now() + retryIn(misses) })
+      }
+    }
+    while (this.recorded.size > RECORDED_MAX) this.recorded.delete(this.recorded.keys().next().value!)
+    // A verdict never answered for while the backend cannot be asked: nothing can be read of this pull request yet.
+    if (this.down.has(project.repo) && given.some(comment => !this.recorded.has(key(comment)))) return null
+    return comments.map(comment => {
+      const name = Number.isSafeInteger(comment.id) && asWritten(comment) ? this.recorded.get(key(comment))?.name : undefined
+      return name ? { ...comment, recorded: name } : comment
+    })
+  }
+}
 
 /** The most files GitHub lists in one compare: a change of that many or more cannot be read whole. */
 const COMPARE_FILES_MAX = 300
@@ -333,18 +416,12 @@ export class GitHubMerge {
   private readonly now: () => number
   private readonly log: (line: string) => void
 
-  /** Who the backend recorded as the writer of a verdict's comment, by `<repo>#<comment id>`; null for one it has no record of
-   *  (typed by hand). A record never changes, so each comment is asked about once. */
-  private readonly recorded = new Map<string, { name: string | null; at: number }>()
-  /** While the backend does not answer for records it is left alone, longer each time (retryIn), and said once. */
-  private authorsDown = 0
-  private authorsAgainAt = 0
 
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>; get: GitHubGet
     send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
-    /** The agents the backend recorded as the writers of a project's GitHub comments, by `issue:<id>` (backend
-     *  superTabs/githubComments.ts): a verdict made by command (githubVerdict.ts) is its agent's. */
-    authors?: (project: LedProject, ids: string[]) => Promise<Record<string, { name: string }>> }) {
+    /** Who made each verdict by command (githubVerdict.ts), as the backend recorded it: only such a READ-OK is a read. One for
+     *  the merger and the assigner. */
+    records: VerdictRecords }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -429,34 +506,38 @@ export class GitHubMerge {
       if ((Array.isArray(pull.labels) ? pull.labels : []).some(label => object(label).name === HOLD_LABEL)) continue
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
       const at = this.see(open, `${repo}#${number}@${head}`)
-      const comments = await this.recordedNames(project, await pullTalk(this.reads, repo, number))
+      // Only a READ-OK made by command is a read: while the records cannot be read, nothing merges (said once, VerdictRecords).
+      const comments = await this.deps.records.named(project, await pullTalk(this.reads, repo, number))
+      if (!comments) continue
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       const holds = [...readers].filter(([, r]) => r.verdict === 'HOLD')
       if (holds.length) {
-        // Only its writers' own HOLDs stand: no reader is asked to lift them (githubAssign.ts askReaders), so it is said, once for
-        // the head (review of #3708). A reader's HOLD is the reader's to say. "READ-OK on <sha>" reads as no verdict (ownVerdict).
-        const writers = holds.map(([reader, r]) => isWriter(people.writers, reader) ? r : null)
-        const held = writers.every(r => r !== null) ? writers[0] : null
+        // Only HOLDs of its own side stand (its writers' own, or unsigned ones from the login that opened it): no reader of
+        // theirs is asked to lift them, so it is said, once for the head (review of #3708). A reader's HOLD is the reader's to say.
+        // "READ-OK made by command on <sha>" reads as no verdict (ownVerdict).
+        const own = (reader: string, r: Verdict) => r.ownLogin || isWriter(people.writers, reader)
+        const held = holds.every(([reader, r]) => own(reader, r)) ? holds[0]![1] : null
         if (held) {
-          await this.tellOnce(repo, number, head, author, 'held', `${held.name} on ${held.sha.slice(0, 7)} is a writer's own: `
-            + `${held.name} lifts it with a READ-OK on ${head.slice(0, 7)}.`, comments)
+          await this.tellOnce(repo, number, head, author, 'held', `${held.name} on ${held.sha.slice(0, 7)} is `
+            + `${held.ownLogin ? 'unsigned, from the login that opened it' : 'a writer\'s own'}: another agent's READ-OK made by command on ${head.slice(0, 7)} lifts it.`, comments)
         }
         continue
       }
       // A READ-OK on an earlier head whose change is the head's is one on it (sameChange).
       const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].filter(r => r.verdict === 'READ-OK').map(r => r.sha))
-      // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
+      // Only READ-OKs made by command count, its writers' own never, and a reader who signs two ways is one.
       const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && (head.startsWith(r.sha) || same.has(r.sha)) && !isWriter(people.writers, reader))
-      const reads = new Map(onHead.filter(([, r]) => !r.ownLogin))
+      const reads = new Map(onHead.filter(([, r]) => r.recorded))
       if (reads.size < (twoReads ? 2 : 1)) {
-        // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
-        const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
-        // Not before its record can be there, nor while records cannot be read: a verdict made by command a moment ago
-        // read as unsigned, and its reader was told to sign what the command had just signed (review of #3906).
-        const settled = !this.deps.authors || (!this.authorsDown && this.now() - Date.parse(unsigned?.at ?? '') >= RECORD_SETTLE_MS)
-        if (unsigned && settled) await this.tellOnce(repo, number, head, author, 'unsigned', `${unsigned.name} is unsigned, and every agent of its person posts as that `
-          + `login: its reader signs it, as in "<name>, HH:MM: READ-OK ${head.slice(0, 7)}".`, comments)
+        // A typed READ-OK from the login that opened it is no one Harness can ask again (githubAssign.ts asks a named reader
+        // again): said on the pull request, once for its head. Not before its record can be there: a verdict made by command a
+        // moment ago reads as typed until it is (review of #3906).
+        const typed = onHead.find(([, r]) => r.ownLogin && !r.byCommand)?.[1]
+        if (typed && this.now() - Date.parse(typed.at) >= RECORD_SETTLE_MS) {
+          await this.tellOnce(repo, number, head, author, 'unsigned', `${typed.name} is typed, and only a READ-OK made by command counts: `
+            + `its reader runs \`harness super-tab read ok ${repo}#${number} ${head.slice(0, 7)}\`.`, comments)
+        }
         continue
       }
       const checks = await this.checks(repo, at, head)
@@ -524,45 +605,6 @@ export class GitHubMerge {
     const before = this.looked.get(at)
     this.looked.set(at, checks.summary)
     return this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary ? { state: 'running', failed: [], none } : { ...checks, none }
-  }
-
-  /**
-   * [comments] with the agent the backend recorded for each verdict among them (`recorded`), which `verdicts` counts as its
-   * reader. Only a comment that gives a verdict is asked about, once: a record is made as the comment is, so one with none two
-   * minutes after it was written was typed by hand. While the backend cannot be asked, names are read as typed, as before, and
-   * that is said once.
-   */
-  private async recordedNames(project: LedProject, comments: Json[]): Promise<Json[]> {
-    if (!this.deps.authors) return comments
-    const key = (comment: Json) => `${project.repo}#${String(comment.id)}`
-    // A comment changed since it was written is not the words its record was made for (the command never edits): typed by hand.
-    const asWritten = (comment: Json) => comment.updated_at === undefined || comment.updated_at === comment.created_at
-    const given = comments.filter(comment => Number.isSafeInteger(comment.id) && comment.review !== true && asWritten(comment)
-      && ownVerdict(String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''))
-    const unknown = given.filter(comment => this.now() - (this.recorded.get(key(comment))?.at ?? -Infinity) >= RECORD_AGAIN_MS)
-    for (let from = 0; from < unknown.length && this.now() >= this.authorsAgainAt; from += AUTHORS_PAGE) {
-      const page = unknown.slice(from, from + AUTHORS_PAGE)
-      try {
-        const authors = await this.deps.authors(project, page.map(comment => `issue:${String(comment.id)}`))
-        for (const comment of page) {
-          const name = authors[`issue:${String(comment.id)}`]?.name
-          const settled = this.now() - Date.parse(String(comment.created_at ?? '')) >= RECORD_SETTLE_MS
-          this.recorded.delete(key(comment))
-          if (typeof name === 'string' && name.trim()) this.recorded.set(key(comment), { name, at: this.now() })
-          else if (settled) this.recorded.set(key(comment), { name: null, at: this.now() })
-        }
-        if (this.authorsDown) this.log('[super-tab] verdicts are read by their record again')
-        this.authorsDown = 0
-      } catch (error) {
-        if (!this.authorsDown) this.log(`[super-tab] verdicts are read as typed · AUTHORS_UNREAD ${project.repo}: ${error instanceof Error ? error.message : 'the server did not answer'}`)
-        this.authorsAgainAt = this.now() + retryIn(++this.authorsDown)
-      }
-    }
-    while (this.recorded.size > RECORDED_MAX) this.recorded.delete(this.recorded.keys().next().value!)
-    return comments.map(comment => {
-      const name = Number.isSafeInteger(comment.id) && asWritten(comment) ? this.recorded.get(key(comment))?.name : undefined
-      return name ? { ...comment, recorded: name } : comment
-    })
   }
 
   /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's

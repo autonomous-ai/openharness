@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/agent_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
@@ -117,15 +119,43 @@ void main() {
   int channelReads(List<String> paths) =>
       paths.where((p) => p.contains('/conversations/lead/messages')).length;
 
+  /// An app that reads the Swarm's computer, `host`, as Desktop reads its person's own: each agent's terminal on it.
+  AppNotifier hostApp() {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    const machine = Machine(
+      machineId: 'host',
+      authMode: MachineAuthMode.remote,
+      name: 'Host',
+    );
+    app.machines = [...app.machines, machine];
+    app.machineStates['host'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [
+        for (final id in ['first builder', 'second', 'third', 'reviewer-two'])
+          Agent(
+            id: 'session-$id',
+            name: id,
+            engine: 'claude',
+            terminalAvailable: true,
+          ),
+      ];
+    return app;
+  }
+
   group('the reader', () {
     SwarmAgentStates reader(
       SuperTabController c, {
       SwarmGitHub? github,
+      AppNotifier? app,
       Duration? boardEvery = const Duration(minutes: 1),
     }) {
       final states = SwarmAgentStates(
         controller: c,
         github: github ?? swarmV4GitHub(),
+        app: app,
         boardEvery: boardEvery,
         settle: Duration.zero,
       );
@@ -137,7 +167,95 @@ void main() {
       SwarmAgentStates states,
       SuperTabController c,
       String agent,
-    ) => states.of(c.snapshot!.agent(agent)!);
+    ) => SwarmAgentStates.rowOf(c.snapshot!.agent(agent)!, states: states);
+
+    // Swarm plan, step 1, item 1: "What Harness knows is a state anyone can see: at a task, working, waiting on a build,
+    // waiting on its person, out of quota until a time, idle, not running."
+    test('says needs you to its person, then limited until, then on #N, then working, then free', () async {
+      final server = world();
+      final c = await read(server);
+      final app = hostApp();
+      final states = reader(c, app: app);
+      await idle(states);
+      String? row(String id, {String me = 'owner', DateTime? now}) =>
+          SwarmAgentStates.rowOf(
+            c.snapshot!.agent(id)!,
+            states: states,
+            app: app,
+            me: me,
+            now: now,
+          );
+      expect(row('second'), 'free');
+      await app.handleEventForTest('host', {
+        'type': 'turn_started',
+        'agentId': 'session-second',
+      });
+      expect(row('second'), 'working');
+      // At a task says which, working or not.
+      await app.handleEventForTest('host', {
+        'type': 'turn_started',
+        'agentId': 'session-first builder',
+      });
+      expect(row('first builder'), 'on #5759');
+      // A question on its screen is its person's to answer: needs you, to them alone.
+      await app.handleEventForTest('host', {
+        'type': 'commander_question',
+        'agentId': 'session-second',
+        'dbSessionId': 's1',
+        'payload': {
+          'requestId': 'q_1',
+          'questions': [
+            {
+              'key': 'Which branch?',
+              'q': 'Which branch?',
+              'options': ['main', 'dev'],
+              'multi': false,
+            },
+          ],
+        },
+      });
+      expect(row('second'), 'needs you');
+      expect(row('second', me: 'someone else'), 'waiting on its person');
+      // A usage limit its machine saw holds it until the reset, before its task; past the reset it no longer does.
+      final until = DateTime(2026, 11, 11, 15, 40);
+      (server.state['agents'] as List).cast<Map<String, dynamic>>().firstWhere(
+        (a) => a['id'] == 'first builder',
+      )['limitedUntil'] = until
+          .toUtc()
+          .toIso8601String();
+      await c.refresh();
+      expect(
+        row('first builder', now: DateTime(2026, 11, 11, 15)),
+        'limited until 15:40',
+      );
+      expect(row('first builder', now: DateTime(2026, 11, 11, 16)), 'on #5759');
+      // Not running comes first, whatever else is known.
+      expect(row('third'), 'offline');
+      // With no app, what the Swarm and its board say.
+      expect(stateOf(states, c, 'second'), 'free');
+    });
+
+    test('redraws its rows when what one says moves, and not for a change that moves none', () async {
+      final c = await read(world());
+      final app = hostApp();
+      final states = reader(c, app: app);
+      await idle(states);
+      var told = 0;
+      states.addListener(() => told++);
+      await app.handleEventForTest('host', {
+        'type': 'turn_started',
+        'agentId': 'session-second',
+      });
+      expect(told, 1);
+      // Another change of the app that moves no row: nothing.
+      app.notifyListeners();
+      expect(told, 1);
+      await app.handleEventForTest('host', {
+        'type': 'turn_ended',
+        'agentId': 'session-second',
+      });
+      expect(told, 2);
+    });
 
     test(
       'says offline before on #N before free, and nothing for the rest',
@@ -637,6 +755,7 @@ void main() {
       WidgetTester tester, {
       ConversationServer? server,
       bool withApp = true,
+      AppNotifier? app,
       Size size = const Size(1440, 900),
       Brightness brightness = Brightness.light,
     }) async {
@@ -659,7 +778,7 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              app: withApp ? createApp() : null,
+              app: withApp ? app ?? createApp() : null,
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
@@ -703,6 +822,46 @@ void main() {
         }
         // Teammates' agents are not on Your Team.
         expect(key('super-agent-seventh'), findsNothing);
+      },
+    );
+
+    // Swarm plan, step 1, item 1: what Harness knows is a state anyone can see, as it changes.
+    testWidgets(
+      'an agent of the person\'s says working while a turn runs, then needs you once a question is on its screen',
+      (tester) async {
+        final app = hostApp();
+        await show(tester, app: app);
+        expect(detail('super-agent-second'), 'free');
+        await tester.runAsync(
+          () => app.handleEventForTest('host', {
+            'type': 'turn_started',
+            'agentId': 'session-second',
+          }),
+        );
+        await tester.pump();
+        expect(detail('super-agent-second'), 'working');
+        // At a task says which, working or not.
+        expect(detail('super-agent-first builder'), 'on #5759');
+        await tester.runAsync(
+          () => app.handleEventForTest('host', {
+            'type': 'commander_question',
+            'agentId': 'session-second',
+            'dbSessionId': 's1',
+            'payload': {
+              'requestId': 'q_1',
+              'questions': [
+                {
+                  'key': 'Which branch?',
+                  'q': 'Which branch?',
+                  'options': ['main', 'dev'],
+                  'multi': false,
+                },
+              ],
+            },
+          }),
+        );
+        await tester.pump();
+        expect(detail('super-agent-second'), 'needs you');
       },
     );
 

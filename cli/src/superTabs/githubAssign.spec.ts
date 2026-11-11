@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { parseSuperTabArgs } from './command.js'
 import { GitHubAssign } from './githubAssign.js'
+import { VerdictRecords } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
+import { commandRecords } from './commandRecords.fake.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -13,6 +15,7 @@ const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye',
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
 function fakeGitHub(open: Json[], closed: Json[] = []) {
+  const records = commandRecords()
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
   const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
@@ -31,7 +34,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
-      : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? (state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []).map(records.served)
       : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
       : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.get(url.pathname.split('...').at(-1)!) ?? null
       : url.pathname === '/repos/acme/app/labels' ? state.labels
@@ -65,7 +68,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     }
     return { status: path.endsWith('/comments') ? state.commentAnswer : 201, etag: null, body: {}, resetAt: null }
   }
-  return { state, sent, get, send }
+  return { state, sent, get, send, authors: records.authors }
 }
 
 /** Pip and Juno on one Mac with room and quota. */
@@ -80,7 +83,7 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const log = vi.fn()
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
-    now: () => clock.now, log })
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
@@ -244,13 +247,27 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
 
     // lampOS #5212: a read posted as a review is a read; asked for another, its pull request waited on a reader it already had.
-    it('counts a READ-OK posted as a review as a read, and asks nobody else', async () => {
-      const f = setup([], { crew: team })
-      f.github.state.pulls = [pull()]
-      f.github.state.reviews.set(30, [{ id: 7, state: 'APPROVED', body: 'Juno, 07:10, to **Pip**: READ-OK f6edb44', submitted_at: '2026-11-09T07:10:00Z',
-        author_association: 'MEMBER', user: { login: 'deehw' } }])
-      await f.assigner.tick()
-      expect(asks(f)).toEqual([])
+    // Plan item 3 (review of #3708): a READ-OK typed by hand, as a review or a comment, is no read. Its reader is asked again, by
+    // name, to make it by command, and counted as reading meanwhile; pull requests read before the command now read again so.
+    it('asks a reader whose READ-OK on the head was typed to read it again by command, once, and nobody else', async () => {
+      for (const typed of [{ reviews: [{ id: 7, state: 'APPROVED', body: 'Juno, 07:10, to **Pip**: READ-OK f6edb44', submitted_at: '2026-11-09T07:10:00Z',
+        author_association: 'MEMBER', user: { login: 'deehw' } }], comments: [] }, { reviews: [], comments: [comment('Juno, 07:10: READ-OK f6edb44', { typed: true, created_at: '2026-11-09T07:10:00Z' })] }]) {
+        const f = setup([], { crew: team })
+        f.github.state.pulls = [pull()]
+        f.github.state.reviews.set(30, typed.reviews)
+        f.github.state.comments.set(30, typed.comments)
+        await f.assigner.tick()
+        expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Juno\*\*: your READ-OK on f6edb44 was typed, and only one made by command counts: please read it again, .*super-tab read ok acme\/app#30 f6edb44/)])
+        // GitHub shows the ask: Juno is reading, and is not asked again until it answers.
+        f.github.state.comments.set(30, [...typed.comments, comment(asks(f)[0]!, { created_at: '2026-11-09T07:31:00Z' })])
+        await f.make().tick()
+        expect(asks(f)).toHaveLength(1)
+        // It answers by command: a read, and nobody more is asked.
+        f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment('Juno, 07:40: READ-OK f6edb44', { created_at: '2026-11-09T07:40:00Z' })])
+        f.clock.now += 10 * 60_000
+        await f.make().tick()
+        expect(asks(f)).toHaveLength(1)
+      }
     })
 
     // lampOS lib.sh patch_of: a verdict on an earlier head whose change is the head's still stands. Updated from main with nothing of
@@ -289,12 +306,50 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)[0]).not.toContain(name)
     })
 
-    it('asks the login that opened the pull request to read again after its unsigned HOLD on an older head', async () => {
-      const f = setup([], { crew: team })
-      f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
-      f.github.state.comments.set(30, [comment('HOLD 1234567: off by one')])
-      await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*deehw\*\*: the head is now f6edb44, after your HOLD on 1234567: please read it again/)])
+    // Review of #3957: a reader that answers its own HOLD with a typed READ-OK is asked for the command; one asked READ_ASKS times
+    // for the head is no longer counted on; and a READ-OK made before a HOLD of the pull request's own side lifts nothing.
+    it('asks for the command after a typed answer to a HOLD, another reader once one is asked out, and another after an own-side HOLD', async () => {
+      const held = setup([], { crew: team })
+      held.github.state.pulls = [pull()]
+      held.github.state.comments.set(30, [comment('Juno, 07:00: HOLD f6edb44 off by one', { created_at: '2026-11-09T07:00:00Z' }),
+        comment('Juno, 07:10: READ-OK f6edb44', { typed: true, created_at: '2026-11-09T07:10:00Z' })])
+      await held.assigner.tick()
+      expect(asks(held)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: your READ-OK on f6edb44 was typed/)])
+      const out = setup([], { crew: team })
+      out.github.state.pulls = [pull()]
+      const ask = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Juno**: please read this pull request, then run \`harness super-tab read ok acme/app#30 f6edb44 'what you found'\`.`, { created_at: at })
+      out.github.state.comments.set(30, [ask('2026-11-09T06:00:00Z'), ask('2026-11-09T06:20:00Z'), ask('2026-11-09T06:40:00Z'),
+        comment('Juno, 07:00: READ-OK f6edb44', { typed: true, created_at: '2026-11-09T07:00:00Z' })])
+      await out.assigner.tick()
+      expect(asks(out)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      const after = setup([], { crew: team })
+      after.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+      after.github.state.comments.set(30, [comment('Juno, 07:00: READ-OK f6edb44', { created_at: '2026-11-09T07:00:00Z' }),
+        comment('HOLD f6edb44: wait', { created_at: '2026-11-09T07:05:00Z' })])
+      await after.assigner.tick()
+      expect(asks(after)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+    })
+
+    // Review of #3957: while the backend gives no records, only a pull request with a verdict never answered for waits; one
+    // with none is read, and its reader asked.
+    it('waits only on a verdict never answered for while the backend gives no records', async () => {
+      const records = new VerdictRecords(async () => { throw new Error('down') }, () => Date.parse('2026-11-09T07:31:00Z'), () => {})
+      const thanks = { id: 2, body: 'Thanks.', created_at: '2026-11-09T07:00:00Z' }
+      expect(await records.named(PROJECT, [{ id: 1, body: 'Juno, 07:00: READ-OK f6edb44', created_at: '2026-11-09T07:00:00Z' }])).toBeNull()
+      expect(await records.named(PROJECT, [thanks])).toEqual([thanks])
+    })
+
+    // Review of #3708: every agent of a person posts as the login that opened its pull request, its writer too. Asked to answer
+    // as that login, the writer, which hears its own pull request, could lift the HOLD. Another agent's READ-OK made by command
+    // lifts it (githubMerge.ts verdicts): a reader is asked, on any head.
+    it('asks a reader, never the login that opened it, while that login\'s unsigned HOLD stands, on an older head or the head', async () => {
+      for (const sha of ['1234567', 'f6edb44']) {
+        const f = setup([], { crew: team })
+        f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+        f.github.state.comments.set(30, [comment(`HOLD ${sha}: off by one`)])
+        await f.assigner.tick()
+        expect(asks(f), sha).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+      }
     })
 
     // Review of #3708: a task taken over makes the reader Harness asked one of its writers. Counted as still reading, it kept
