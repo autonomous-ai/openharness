@@ -319,6 +319,18 @@ describe('the connectors service', () => {
       }
     }, 30_000)
 
+    it('says once that no one can tell whose the port is, when the lookup cannot answer', async () => {
+      const { holder, taken, said, told } = await held(async () => null)
+      try {
+        await vi.advanceTimersByTimeAsync(3_600_000)
+        expect(told(`cannot tell which account holds bridge port ${taken}`)).toBe(1)
+        expect(told(`a process of this account holds bridge port ${taken}`)).toBe(0)
+      } finally {
+        said.mockRestore()
+        holder.close()
+      }
+    }, 30_000)
+
     it('still moves off it when another account takes it over, within five minutes of asking less', async () => {
       let mine = true
       const { holder, taken, said, told, savedPort } = await held(async () => mine)

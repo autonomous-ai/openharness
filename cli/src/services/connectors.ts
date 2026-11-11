@@ -48,7 +48,7 @@ const TRIES_BEFORE_ASKING = 3
 
 /**
  * The longest wait between two asks while the holder is this account's, or no one can say. Asking is lsof on macOS, about
- * 60 ms of a core: at every 5 s try it was about 1% of a core for as long as a second Harness home, a dev build or a
+ * 40 ms of a core: at every 5 s try it was about 1% of a core for as long as a second Harness home, a dev build or a
  * leftover core held the port (2026-11-11). Another account taking the port over from such a holder is seen within this,
  * and only where agents reach the bridge through its socket or pipe, so the port's holder hears none of their calls.
  */
@@ -80,6 +80,7 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   let skip = 0
   let gap = 1
   let toldMine = false
+  let toldUnknown = false
   bridge.on('listening', () => {
     if (leaving) moving!.moved((bridge.address() as AddressInfo).port, port)
     leaving = false
@@ -102,6 +103,10 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
       if (mine === true && !toldMine) {
         toldMine = true
         console.warn(`[connections] a process of this account holds bridge port ${port} (another Harness home, a dev build?); the bridge takes the port once it lets go`)
+      }
+      if (mine === null && !toldUnknown) {
+        toldUnknown = true
+        console.warn(`[connections] cannot tell which account holds bridge port ${port}; the bridge keeps trying the port and asking`)
       }
       again()
     })
