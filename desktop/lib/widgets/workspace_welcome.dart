@@ -11,6 +11,7 @@ import '../state/swarm_navigation.dart';
 import '../state/welcome_sessions.dart';
 import '../state/workspace_chrome.dart';
 import '../state/session_activity.dart';
+import '../super_tabs/swarm_switcher.dart' show kPersonalSwarmRow;
 import '../super_tabs/visible_tick.dart';
 import 'engine_identity.dart';
 import 'finger_target.dart';
@@ -503,11 +504,29 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome>
                     ),
                   ),
                 ),
-            child: Text(
-              tab.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: rowStyle,
+            // Its mark in the column the recent harnesses' marks stand in, so its name starts where theirs do
+            // (PSQA, 2026-11-12: the names sat 30 points left of the harnesses above).
+            child: Row(
+              children: [
+                ExcludeSemantics(
+                  child: Icon(
+                    tab.id == kPersonalSwarmRow
+                        ? AppIcons.user
+                        : AppIcons.users,
+                    size: 18,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    tab.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: rowStyle,
+                  ),
+                ),
+              ],
             ),
           ),
       ],

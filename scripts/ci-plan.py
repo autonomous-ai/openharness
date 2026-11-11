@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Select fast CI suites from a complete Git diff and verify their final results.
 
-A PR runs the unit suite of each component it changes, and nothing else. Merge
+A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS). Merge
 groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
@@ -46,15 +46,12 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
               # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
               "installer": "pty"}
-# Paths inside another component that also select a suite: the PTY host's suite runs the CLI's
-# ptyhost terminal contract against the host it builds, and the host builds on the vendored terminal.
-# The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too.
-# The Windows pipe's shared proof vectors are read by the desktop app's test as well as the CLI's spec.
+# Code inside another component that a suite runs as its own (its references are scanned as the suite's reads): the PTY
+# host's suite runs the CLI's ptyhost terminal contract against the host it builds, and the host builds on the vendored
+# terminal. The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too. A file a suite
+# only reads is in DEPENDS.
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
-        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
-        "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop",
-        # The goal file's rows, read by goal.ts and by Desktop's reader alike (desktop/test/swarm_goal_test.dart).
-        "cli/src/superTabs/__fixtures__/goal-rows.json": "desktop"}
+        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui"}
 # Each Swarm UI style allowlist is checked by its own component's job (check-ui-style.py --only), so
 # it is that component's input: a PR or main commit that changes it runs (never reuses) that suite.
 # Any other file in scripts/ui-style-allowlist/ stays a shared input.
@@ -63,21 +60,14 @@ ALSO.update(STYLE_ALLOWLISTS)
 # The Desktop VM runner and the measured file times it splits the shards by (task #3458): a change to either runs those
 # shards, so a split that runs short cannot merge on process checks alone.
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
-# The desktop files the phone's tests read (mobile/test): the Swarm models the phone carries as copies or must parse alike
-# (swarm/desktop_parity_test.dart), the words and helpers its other tests compare. A desktop-only change to one runs
-# mobile-checks too; it once failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
-# test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
-ALSO.update({f"desktop/{path}": "mobile" for path in (
-    "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
-    "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart",
-    "lib/super_tabs/live_card.dart", "lib/widgets/engine_identity.dart", "lib/super_tabs/tasks/personal_tasks.dart",
-    "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
+# The desktop test helper the phone's tests import (session_work_page_test.dart).
+ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
-# Reuse after Update branch. A PR's own diff selects suites by the maps above; reusing an
-# earlier result also needs every file a suite reads outside its own directory, because
-# main's commits were never tested together with this PR. "dir/" is a prefix, else a file.
+# Reuse after Update branch. Reusing an earlier result needs every file a suite may read outside its own directory,
+# because main's commits were never tested together with this PR: these sets are broad on purpose, as the scan misses a
+# path joined from parts, and a miss here would reuse a stale result. "dir/" is a prefix, else a file.
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
@@ -91,9 +81,9 @@ DEPENDS = {
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
     # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
-    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
-            "backend/src/superTabs/processNotes.ts", "desktop/",
-            "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
+    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+            "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/",
+            "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
@@ -116,6 +106,87 @@ DEPENDS = {
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
     "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
+                "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
+                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
+}
+
+# Selection. The files each suite reads outside its own directory, as narrow as the scan shows: a PR that changes one
+# runs that suite (#4033 changed a CLI file Desktop's tests read and ran the CLI's suite only). Each is inside the
+# suite's DEPENDS above. Name files, not their folders: a folder runs its reader on every PR that touches it.
+# test_ci_plan.CrossReadTests scans the components' sources against these too; a path built from parts is declared by
+# hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
+PR_READS = {
+    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
+    # reads the CLI's super-tab usage line.
+    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
+                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
+                "daemons/frames.json",
+                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "provider/reference-provider/", "tests/fixtures/"),
+    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
+    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
+    # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
+    # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
+    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+            "cli/e2e/harness/", "desktop/assets/connector-icons/",
+            "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
+            "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
+            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/assets/connector-icons/",
+            "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
+            "mobile/test/viewer/deviceHistory.vectors.json",
+            "pty/", "store/", "tui/"),
+    "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
+                   "docs/research/2026-09-30-memory-extraction-cases.json"),
+    # Its generators write (and its checks may compare) these outputs.
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "desktop/assets/daemon-art/",
+                "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
+                "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
+    "firmware": ("daemons/plates/tux.mjs", "daemons/review/traits.html",
+                 "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
+    # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
+    # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
+    # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);
+    # the scan skips a path outside every component. Its tools also import the web release scripts.
+    "desktop": ("backend/src/lib/communityContract.ts", "backend/src/lib/hubMetricsContract.ts", "cli/src/engines/",
+                "cli/src/lib/__fixtures__/github-repository-vectors.json", "cli/src/lib/e2ee/applicationFrames.ts",
+                "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineInstall.ts", "cli/src/lib/engineLaunch.ts",
+                "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts", "cli/src/lib/viewerFrames.ts",
+                # The Windows pipe's shared proof vectors; the goal file's rows (desktop/test/swarm_goal_test.dart).
+                "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json", "cli/src/messages/wire.ts",
+                "cli/src/sharing/protocol.ts", "cli/src/superTabs/__fixtures__/goal-rows.json", "daemons/frames.json", "docs/images/",
+                "daemons/plates.json",
+                "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
+                "daemons/tools/illustrated/generate.py", "mobile/lib/e2ee/relay_session_crypto.dart",
+                "mobile/lib/p2p/terminal_p2p_link.dart", "mobile/lib/p2p/terminal_p2p_plugin.dart",
+                "mobile/lib/p2p/terminal_p2p_policy.dart", "mobile/lib/ws/relay_codec.dart",
+                "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",
+                "tests/fixtures/shared-pane-layouts.json",
+                "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
+    # The desktop files the phone's tests read: the Swarm models the phone carries as copies or must parse alike
+    # (swarm/desktop_parity_test.dart), the words and helpers its other tests compare; a desktop-only change to one once
+    # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
+    # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
+    "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/engines/",
+               "cli/src/lib/e2ee/applicationFrames.ts", "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineLaunch.ts",
+               "cli/src/lib/productUsageSignals.ts", "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts",
+               "cli/src/lib/viewerFrames.ts", "cli/src/messages/wire.ts", "cli/src/sharing/protocol.ts",
+               "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json",
+               *(f"desktop/lib/{path}" for path in (
+                   "super_tabs/model.dart", "super_tabs/controller.dart", "super_tabs/parts.dart", "super_tabs/profile_model.dart",
+                   "widgets/engine_identity.dart", "screens/swarm_screen.dart")),
+               "docs/performance/"),
+    # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
+    # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
+    # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
+    "os": ("cli/package.json", "cli/src/cable/serial.ts", "devices/harness-device/firmware/README.md", "docs/naming-system.md",
+           "docs/terminology.md", "term/", "tui/"),
+    "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
+    "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
+            "tests/fixtures/shared-pane-layouts.json"),
+    # backend/src/lib/: its Hub contract specs import the backend's contract modules, named without an extension.
+    "website": ("backend/src/lib/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
 }
@@ -160,13 +231,24 @@ NOT_READS = {
                                                  {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
     "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
+    **{source: ("test data: a task's owned paths", {"desktop/"})
+       for source in ("cli/src/superTabs/fixtures/read/legacy-tab-lead.json", "cli/src/superTabs/fixtures/read/parts-lead.json",
+                      "cli/src/superTabs/fixtures/read/status-lead.json", "cli/src/superTabs/service.spec.ts")},
+    "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
     "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
+    "cli/src/superTabs/scoreboard.spec.ts": ("test data: the files landings touched most", {"backend/", "docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
+    "daemons/tools/generate.mjs": ("a generator run by hand (daemons-checks runs card.test.mjs only); what it writes "
+                                   "under cli/src/pair/, a folder the CLI no longer has, no suite reads", {"cli/"}),
+    "desktop/tool/native_benchmark/connected_stack.mjs": ("a benchmark run by hand against the built CLI", {"cli/"}),
+    "desktop/tool/test_test_flavor_isolation.py": ("a macOS check run by hand with the CLI's installed packages", {"cli/"}),
+    "devices/harness-device/firmware/test/device_release_check.py": ("a release check run by hand that fingerprints the "
+                                                                     "CLI's sources", {"cli/"}),
     "desktop/test/p2p/mobile_parity_test.dart": ("reads ../mobile/<file> only for the phone files desktop-tests' sparse "
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
@@ -175,6 +257,7 @@ NOT_READS = {
                                                          {"AGENTS.md", "CLAUDE.md"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
+    "os/tests/build-update-fixture.py": ("the CLI bundle a hand-run build copies from its work folder", {"cli/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
     # tui-test runs cargo test only (tui/tests/ holds no Rust tests); these read build output and installed packages.
     "tui/tests/local-first.py": ("a script run by hand against the built CLI (cli/dist)", {"cli/"}),
@@ -205,15 +288,22 @@ def sha(value):
     return value
 
 
+def owners(path):
+    """The suites whose own files include this path: its component's, and ALSO's and SUBCOMPONENTS' extras."""
+    suite = COMPONENTS.get(path.split("/", 1)[0])
+    scopes = {suite} if suite else set()
+    scopes |= {also for prefix, also in ALSO.items() if path.startswith(prefix)}
+    scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
+    return scopes
+
+
 def select(paths):
+    """Each changed path runs its owners' suites and every suite that declares reading it (PR_READS)."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
-        suite = COMPONENTS.get(path.split("/", 1)[0])
-        scopes = {suite} if suite else set()
-        scopes |= {also for prefix, also in ALSO.items() if path.startswith(prefix)}
-        scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
+        scopes = owners(path) | {suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
         selected |= scopes
         reasons[path] = sorted(scopes)
     return selected, reasons
@@ -237,14 +327,15 @@ def shared_input(path):
         return "workflow, CI script, merge tool or repository setting"
     if PurePosixPath(path).name in LOCKS_AND_TOOLCHAINS:
         return "lockfile or toolchain pin"
-    if not select([path])[0] and not inert(path):
+    if not owners(path) and not inert(path):
         return "outside every component"
     return None
 
 
-def reads(suite, path):
-    own = suite in select([path])[0] and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
-    return own or any(covers(entry, path) for entry in DEPENDS.get(suite, ()))
+def reads(suite, path, inputs=None):
+    """Whether the suite reads this path: its own files, or its inputs (DEPENDS for reuse; PR_READS for selection)."""
+    own = suite in owners(path) and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
+    return own or any(covers(entry, path) for entry in (DEPENDS if inputs is None else inputs).get(suite, ()))
 
 
 def changed_paths(root, old, new):
@@ -447,8 +538,8 @@ QUOTED_PATH = re.compile(r"""(?<![\w/.-])['"](?!\.\.?/)([A-Za-z0-9_.-]+/[^'"`\s$
 COMMENT_LINE = ("//", "#", "*", "/*", "<!--")
 
 
-def undeclared_reads(root, suite, known_paths=()):
-    """Files of this suite that name another directory's path without a DEPENDS entry: [(source, target)].
+def undeclared_reads(root, suite, known_paths=(), inputs=None):
+    """Files of this suite that name another directory's path without an entry in inputs (DEPENDS): [(source, target)].
 
     Run on a full checkout (the merge helper's, before accepting reuse; or locally). A read the scan
     cannot see (a path built from parts) belongs in DEPENDS by hand. known_paths count as existing:
@@ -461,14 +552,14 @@ def undeclared_reads(root, suite, known_paths=()):
     tops = {path.split("/", 1)[0] for path in tracked if "/" in path}
     found = []
     for source in sorted(sources):
-        if not SOURCE_FILE.search(source) or "/evidence/" in source or suite not in select([source])[0]:
+        if not SOURCE_FILE.search(source) or "/evidence/" in source or suite not in owners(source):
             continue
         try:
             text = (Path(root) / source).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         top = source.split("/", 1)[0]
-        if not reads(suite, source):
+        if not reads(suite, source, inputs):
             continue  # In a folder this suite skips; what it refers to is read only if a read file says so.
 
         def existing(target):
@@ -495,7 +586,7 @@ def undeclared_reads(root, suite, known_paths=()):
                       and (t in tracked or t in folders or str(PurePosixPath(t).parent) in folders)]
             if inside:
                 known = existing(inside[0])
-                if known and not reads(suite, known + "x" if known.endswith("/") else known):
+                if known and not reads(suite, known + "x" if known.endswith("/") else known, inputs):
                     found.append((source, known))
                 # Fail closed when the other reading names a real path too: a look-alike file inside the
                 # component (which the PR controls) must not hide a read of another directory.
@@ -503,7 +594,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     if target.split("/", 1)[0] != top and (target in tracked or target in folders):
                         known = target + "/" if target in folders else target
                         probe = known + "x" if known.endswith("/") else known
-                        if known not in data and not shared_input(probe) and not reads(suite, probe):
+                        if known not in data and not shared_input(probe) and not reads(suite, probe, inputs):
                             found.append((source, known))
                 continue
             for target in targets:
@@ -514,7 +605,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     continue  # Names nothing in this repository (a URL path, a generated file).
                 # A folder read (a path built at run time) needs the whole folder declared.
                 probe = known + "x" if known.endswith("/") else known
-                if not shared_input(probe) and not reads(suite, probe):
+                if not shared_input(probe) and not reads(suite, probe, inputs):
                     found.append((source, known))
                 break
 
@@ -533,7 +624,7 @@ def undeclared_reads(root, suite, known_paths=()):
             if known is None or any(covers(entry, known) for entry in data):
                 continue
             probe = known + "x" if known.endswith("/") else known
-            if not shared_input(probe) and not reads(suite, probe):
+            if not shared_input(probe) and not reads(suite, probe, inputs):
                 found.append((source, known))
     return sorted(set(found))
 
