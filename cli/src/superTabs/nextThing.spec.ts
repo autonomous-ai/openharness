@@ -15,6 +15,9 @@ let files = 0
 
 const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', harnessId: 'h-pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }
 const TAKE = 'harness super-tab take'
+const HEAD = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'
+/** A reader's comment on a pull request, as a teammate's verdict reads on GitHub. */
+const said = (text: string, at = '2026-11-11T05:00:00Z'): Json => ({ body: text, user: { login: 'juno-gh' }, author_association: 'MEMBER', created_at: at })
 
 /** A task of acme/app labelled for Pip, taken or not; a pull request when [pull]. */
 const item = (number: number, title: string, labels: string[] = [], pull = false): Json => ({ number, title,
@@ -23,14 +26,30 @@ const item = (number: number, title: string, labels: string[] = [], pull = false
 /** Pip, a builder of acme/app on this computer, whose turns end; GitHub answers its open labelled tasks and pull requests. */
 function setup(options: { items?: Json[]; working?: boolean | null; watched?: WatchedAgent[]; file?: string } = {}) {
   const state = { items: options.items ?? [item(12, 'Fix the login bug')], working: options.working ?? false as boolean | null,
-    watched: options.watched ?? [PIP], down: false }
+    watched: options.watched ?? [PIP], down: false,
+    // Each pull request as GitHub details it, its comments, and its head's check runs; a pull request listed and not here is
+    // clean and read by nobody yet.
+    pulls: {} as Record<number, Json>, comments: {} as Record<number, Json[]>, runs: {} as Record<string, Json[]> }
+  const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
+    head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
   const onEnd = vi.fn((listener: (end: TurnEnd) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } })
   const calls: string[] = []
   const get: GitHubGet = async path => {
     calls.push(path)
     if (state.down) throw new SuperTabHostError('GITHUB_UNAVAILABLE', 'No answer.', 503)
-    return { status: 200, etag: null, body: state.items, resetAt: null }
+    const ok = (body: unknown) => ({ status: 200, etag: null, body, resetAt: null })
+    const url = new URL(`https://api.github.com${path}`)
+    if (url.pathname === '/repos/acme/app/issues') return ok(state.items)
+    const pull = /^\/repos\/acme\/app\/pulls\/(\d+)$/.exec(url.pathname)
+    if (pull) return ok(pullOf(Number(pull[1])))
+    const talk = /^\/repos\/acme\/app\/issues\/(\d+)\/comments$/.exec(url.pathname)
+    if (talk) return ok(state.comments[Number(talk[1])] ?? [])
+    if (/^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname)) return ok([])
+    const runs = /^\/repos\/acme\/app\/commits\/(\w+)\/check-runs$/.exec(url.pathname)
+    if (runs) return ok({ check_runs: state.runs[runs[1]!] ?? [] })
+    if (/^\/repos\/acme\/app\/commits\/\w+\/status$/.test(url.pathname)) return ok({ statuses: [] })
+    throw new Error(`not a read of this test: ${path}`)
   }
   const tell = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
   const say = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
@@ -95,6 +114,69 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // lampOS's order: findings on one's own pull requests first, then rebases, then the next task. The merger says each once on the
+  // pull request and GitHub news brings it (githubMerge.ts); an agent that ended its turn on it slept on it.
+  it('says a reader\'s HOLD on its pull request\'s head before its next task; one on an earlier head waits for its reader', async () => {
+    const f = setup({ items: [item(12, 'Add the export'), item(30, 'Fix the login bug', [], true)] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12 checks the old token. Use the new one.`)]
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([`Your acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)}: fix what it asks and push, and it is read again. `
+      + 'Read it: gh pr view 30 --repo acme/app --comments'])
+    // It pushed its fix: the HOLD is on the head before, and its reader's to read again. Its next task, then.
+    f.state.pulls[30] = { head: { sha: 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1' } }
+    await f.end()
+    expect(f.told().at(-1)).toBe(`Next: acme/app#12 Add the export. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
+    f.next.stop()
+  })
+
+  it('says its checks failed at its head, then its branch behind or conflicting with its base, each with the command that helps', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }, { name: 'lint', status: 'completed', conclusion: 'success' }]
+    f.next.start()
+    await f.end()
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'success' }]
+    for (const mergeable of ['behind', 'dirty', 'clean']) {
+      f.state.pulls[30] = { mergeable_state: mergeable }
+      await f.end()
+    }
+    expect(f.told()).toEqual([
+      `Your acme/app#30 failed its checks at ${HEAD.slice(0, 7)}: ci/required. Fix them and push: gh pr checks 30 --repo acme/app`,
+      'Your acme/app#30 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push',
+      'Your acme/app#30 conflicts with main: merge main into it, fix the conflicts and push: git fetch origin main && git merge origin/main'])
+    f.next.stop()
+  })
+
+  it('says nothing of a draft, which is work going on, nor of a pull request GitHub gives no head or base, nor of one it says nothing of', async () => {
+    const f = setup({ items: [30, 31, 32, 33].map(number => item(number, 'Fix the login bug', [], true)) })
+    f.state.pulls[30] = { draft: true, mergeable_state: 'dirty' }
+    f.state.pulls[31] = { head: {}, mergeable_state: 'dirty' }
+    f.state.pulls[32] = { base: {}, mergeable_state: 'dirty' }
+    // No words, no check runs read, and no mergeable state yet (GitHub works it out after the first read).
+    f.state.pulls[33] = { body: undefined, mergeable_state: undefined }
+    f.state.runs[HEAD] = {} as unknown as Json[]
+    f.next.start()
+    await f.end()
+    expect(f.tell).not.toHaveBeenCalled()
+    f.next.stop()
+  })
+
+  it('says the same HOLD three times, then to its person once; a push starts it over', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12.`)]
+    f.next.start()
+    for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
+    expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`Harness told Pip that its acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)} `
+      + '3 times as its turns ended, and nothing changed. Harness stops: tell Pip what to do.'])
+    const pushed = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2'
+    f.state.pulls[30] = { head: { sha: pushed } }
+    f.state.comments[30] = [said(`Juno, 05:30: HOLD ${pushed.slice(0, 7)}: still the old token.`, '2026-11-11T05:30:00Z')]
+    await f.end()
+    expect(f.told().at(-1)).toContain(`has a HOLD from Juno at ${pushed.slice(0, 7)}`)
+    f.next.stop()
+  })
+
   it('waits for its turns to settle: two ends close together are one look', async () => {
     const f = setup()
     f.next.start()
@@ -113,7 +195,7 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(new Set(f.tell.mock.calls.map(([, id]) => id)).size).toBe(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([
-      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task 3 times as its turns ended, and it has not taken it. Harness stops giving it: tell Pip what to do.'])
+      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task 3 times as its turns ended, and nothing changed. Harness stops: tell Pip what to do.'])
     expect(f.say.mock.calls[0]![0]).toBe(PIP)
     f.state.items = [item(15, 'Write the docs')]
     await f.end()
@@ -173,8 +255,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.start()
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
     expect(f.told()[0]).toBe(`Next: acme/app#12. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
-    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task 3 times as its turns ended, and it has not taken it. '
-      + 'Harness stops giving it: tell Pip what to do.')
+    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task 3 times as its turns ended, and nothing changed. '
+      + 'Harness stops: tell Pip what to do.')
     f.next.stop()
   })
 

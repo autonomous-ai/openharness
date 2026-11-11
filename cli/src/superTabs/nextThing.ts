@@ -6,13 +6,16 @@
  * turn", 24 Oct), their own work first: findings on their own pull requests, then rebases, then the next task
  * (docs/research/2026-11-10-swarm-study/README.md).
  *
- * This part gives the next task. When a turn of one of this computer's person's agents ends, and a few seconds on nothing
- * else has set it working (a message typed the moment it ended comes first), its project's repository is read as GitHub has
- * it now: its open tasks and pull requests labelled builder:<its name>, one read, a 304 when nothing changed. A task it took
- * (status:taken) with no pull request of its yet is its own work, and nothing is typed. Otherwise the oldest task given to it
- * and not taken is typed to it, as Harness, ending with the command that takes it, as every ask Harness types does. The same
- * task typed three times with no change goes to its person instead, once, and is not typed a fourth time; the counts outlive a
- * restart.
+ * When a turn of one of this computer's person's agents ends, and a few seconds on nothing else has set it working (a message
+ * typed the moment it ended comes first), its project's repository is read as GitHub has it now: its open tasks and pull
+ * requests labelled builder:<its name>, one read, a 304 when nothing changed. Its own work comes first, as lampOS's order has it:
+ * for each pull request of its that is not a draft, a reader's HOLD on its head, then its checks failed at its head, then its
+ * branch behind or conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
+ * which the merger has said on the pull request once and GitHub news brought it, and it slept on. Then a task it took
+ * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
+ * given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness types does. The same
+ * thing typed three times with no change (a push changes a pull request's head) goes to its person instead, once, and is not
+ * typed a fourth time; the counts outlive a restart.
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -21,6 +24,7 @@ import type { TurnEnd } from '../core/api.js'
 import { named } from './agentReplies.js'
 import { labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
+import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet } from './githubRest.js'
 import { identifier, object } from './wire.js'
 
@@ -102,19 +106,60 @@ export class NextThing {
   }
 
   private async next(agent: WatchedAgent): Promise<void> {
+    const name = agent.names[0]!
     for (const repo of agent.repos) {
       const items = await this.reads.current(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=100`, 1)
       const tasks = items.filter(it => !it.pull_request && Number.isSafeInteger(it.number))
-      const pulls = items.filter(it => it.pull_request)
+      const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
+      for (const pull of pulls) {
+        const work = await this.ownWork(repo, Number(pull.number))
+        if (work) return this.give(agent, `${repo}#${pull.number} ${work.kind} ${work.head}`, work.typed,
+          `told ${name} that its ${repo}#${pull.number} ${work.what}`)
+      }
       // A task it took with no pull request of its yet is its own work to go on with.
       if (tasks.filter(task => labelNames(task).includes('status:taken')).length > pulls.length) return
       const next = tasks.filter(task => !labelNames(task).includes('status:taken')).sort((a, b) => Number(a.number) - Number(b.number))[0]
-      if (next) return this.give(agent, `${repo}#${next.number}`, String(next.title ?? '').trim())
+      if (!next) continue
+      const key = `${repo}#${next.number}`, title = String(next.title ?? '').trim()
+      return this.give(agent, key, `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`,
+        `gave ${name} ${title ? `${key} (${title})` : key} as its next task`)
     }
   }
 
-  /** Types [key] to [agent], or says it to its person once it was typed [NEXT_TIMES] times with no change. */
-  private async give(agent: WatchedAgent, key: string, title: string): Promise<void> {
+  /** What stands in the way of [number], a pull request of the agent's, that it fixes itself, the first of: a reader's HOLD on its
+   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch behind or
+   *  conflicting with its base. Null for a draft, which is work going on, and for one with none of them, or none known yet. */
+  private async ownWork(repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
+    const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
+    const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
+    if (pull.draft === true || !head || !base) return null
+    const { readers } = verdicts(await pullTalk(this.reads, repo, number), String(pull.body ?? ''), pullPeople(pull, new Set()))
+    const hold = [...readers.values()].find(reader => reader.verdict === 'HOLD' && head.startsWith(reader.sha))
+    if (hold) {
+      return { kind: 'hold', head: short, what: `has a HOLD from ${hold.name} at ${short}`,
+        typed: `Your ${repo}#${number} has a HOLD from ${hold.name} at ${short}: fix what it asks and push, and it is read again. Read it: gh pr view ${number} --repo ${repo} --comments` }
+    }
+    const runs = (await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=100`)).check_runs
+    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    if (checks.state === 'failed') {
+      return { kind: 'checks', head: short, what: `failed its checks at ${short}`,
+        typed: `Your ${repo}#${number} failed its checks at ${short}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
+    }
+    const state = String(pull.mergeable_state ?? '')
+    if (state === 'behind') {
+      return { kind: 'behind', head: short, what: `is behind ${base}`,
+        typed: `Your ${repo}#${number} is behind ${base}: merge ${base} into it and push: git fetch origin ${base} && git merge origin/${base} && git push` }
+    }
+    if (state === 'dirty') {
+      return { kind: 'dirty', head: short, what: `conflicts with ${base}`,
+        typed: `Your ${repo}#${number} conflicts with ${base}: merge ${base} into it, fix the conflicts and push: git fetch origin ${base} && git merge origin/${base}` }
+    }
+    return null
+  }
+
+  /** Types [typed] to [agent] for [key], or, once that was typed [NEXT_TIMES] times with no change, says to its person, once, what
+   *  Harness [did] that many times. */
+  private async give(agent: WatchedAgent, key: string, typed: string, did: string): Promise<void> {
     const memory = this.memory ??= this.load()
     let kept = memory[agent.agentId]
     if (kept?.key !== key) kept = { key, times: 0, told: false }
@@ -123,12 +168,11 @@ export class NextThing {
     if (kept.times >= NEXT_TIMES) {
       if (kept.told) return
       const name = agent.names[0]!
-      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness gave ${name} ${title ? `${key} (${title})` : key} as its next task ${NEXT_TIMES} `
-        + `times as its turns ended, and it has not taken it. Harness stops giving it: tell ${name} what to do.`)
+      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} ${NEXT_TIMES} times as its turns ended, and nothing `
+        + `changed. Harness stops: tell ${name} what to do.`)
       kept.told = true
     } else {
-      await this.deps.tell(agent, this.operation(agent, key, String(kept.times)),
-        `Next: ${title ? `${key} ${title}` : key}. It is given to you and nobody has taken it: harness super-tab take ${key}`)
+      await this.deps.tell(agent, this.operation(agent, key, String(kept.times)), typed)
       kept.times++
     }
     this.save(memory)
