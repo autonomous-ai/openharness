@@ -19,9 +19,10 @@ import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
-import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
+import { GitHubMentions, repositorySlug, watchedAgents, type WatchedAgent } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
 import { currentNames, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { gatedWrites } from './githubWrites.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
@@ -166,7 +167,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
-  const github = (options.github ?? githubRest)()
+  // Every write passes the gate: nothing of Harness's said twice in a day, and none past its hourly limits (githubWrites.ts).
+  const github = gatedWrites((options.github ?? githubRest)())
   // What GitHub names a project's repository now: a take, a read or a cut may name it either way (githubVerdict.ts ProjectRepositories).
   const currentName = currentNames(github.get)
   // The verdicts, claims and cuts being made by command now, by agent and what was asked: as many as there are commands running.
@@ -182,14 +184,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     return login
   }).catch(error => { githubLogin = null; throw error })
   // GitHub for this computer's person's v4 agents (githubMentions.ts).
+  // As the agent, to itself only, in its chat with its person: as the host tells a skill notice (host.ts tellSkill).
+  const tellAgent = (api: CoreApi) => (agent: WatchedAgent, operationId: string, text: string) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`,
+    { operationId, asAgentId: agent.agentId, command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } })
+  // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
+  const sayToPerson = (api: CoreApi) => (agent: WatchedAgent, operationId: string, text: string) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`,
+    { operationId, asAgentId: agent.agentId, command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } })
   const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
     watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
       roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
     get: github.get,
     relay: (tabId, operationId, command) => backend(api, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, command }),
-    // As the agent, to itself only, in its chat with its person: as the host tells a skill notice (host.ts tellSkill).
-    tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
-      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
+    tell: tellAgent(api),
+    say: sayToPerson(api),
     file: join(api.dataDir, 'super-tab-github-news.json'),
   })))(core, sources)
   // The projects whose PM is this person's agent here, running or stopped, which the merger and the assigner work for. The
@@ -245,11 +252,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     owed: (agent, repo) => mentions.owed(agent.agentId, repo),
     working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
     get: github.get, send: github.send,
-    tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
-      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
-    // In its chat, for its person to read and not typed to it: as the host posts an agent's first answer (firstAnswers.ts).
-    say: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
-      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [], text } }),
+    tell: tellAgent(api),
+    say: sayToPerson(api),
     file: join(api.dataDir, 'super-tab-next-things.json'),
     // Verdicts read as the merger reads them (githubMerge.ts verdicts): every agent of a person posts as that person's login, so a
     // signature names its reader only when it names one of the team, and only a READ-OK the backend recorded is a read.
