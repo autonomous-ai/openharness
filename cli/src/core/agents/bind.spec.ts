@@ -1078,10 +1078,25 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     shown = screen('screen-no-gateway-reconnected').replace(/session plain/g, 'session abort')
     await run.binding.bindObservedAgent(tui())
     expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([session, reading]) => [session, reading])).toEqual([
-      ['agent:main:abort', { ready: false, gatewayLost: false }],
-      ['agent:main:abort', { ready: true, gatewayLost: false }],
-      ['agent:main:abort', { ready: false, gatewayLost: true }],
-      ['agent:main:abort', { ready: true, gatewayLost: true }],
+      ['agent:main:abort', { ready: false, gatewayLost: false, running: true }],
+      ['agent:main:abort', { ready: true, gatewayLost: false, running: false }],
+      ['agent:main:abort', { ready: false, gatewayLost: true, running: false }],
+      ['agent:main:abort', { ready: true, gatewayLost: true, running: false }],
+    ])
+  })
+
+  // A run with no session in the store for 30 s is a store the Gateway does not write (engines/openclaw/live.ts).
+  it('tells the stream when the pane reads a run in progress', async () => {
+    let shown = screen('screen-abort-running')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:abort' }))
+    await run.binding.bindObservedAgent(tui())
+    // `connecting` is the TUI still reaching its Gateway: no run yet.
+    shown = shown.replace('running •', 'connecting •')
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([, reading]) => reading)).toEqual([
+      { ready: false, gatewayLost: false, running: true },
+      { ready: false, gatewayLost: false, running: false },
     ])
   })
 
@@ -1097,7 +1112,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     vi.mocked(run.deps.openclawPaneDue).mockReturnValue(true)
     await run.binding.bindObservedAgent(tui())
     expect(run.deps.capturePane).toHaveBeenCalledOnce()
-    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false }, shown)
+    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false, running: false }, shown)
     // A pane not bound yet is read on every pass: its footer is how it is bound.
     vi.mocked(run.deps.openclawPaneDue).mockReturnValue(false)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
