@@ -101,12 +101,13 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: 
   /** What each pass counted (pmNumbers.ts). */
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers, _goal: () => Promise<Score | null>) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
-  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
+  const running = vi.fn((_agentId: string) => true)
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send, running,
     now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said, clock, numbers }
+  return { github, assigner, make, log, labelled, said, clock, numbers, running }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -589,17 +590,37 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([])
     })
 
-    it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {
-      const f = setup([], { crew: team })
-      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip' }, { name: 'hold' }] })]
+    // Code review of #4060: a stopped PM asked never hears it, and is not asked again; while nobody else can read, that is said once.
+    it('asks its PM to read only while its session runs here, and says once that nobody can read it', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      f.running.mockReturnValue(false)
+      await f.assigner.tick()
       await f.assigner.tick()
       expect(asks(f)).toEqual([])
+      expect(f.log.mock.calls.filter(([line]) => /NO_READER acme\/app#30@/.test(String(line)))).toHaveLength(1)
+      f.running.mockReturnValue(true)
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+    })
+
+    it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {
+      const f = setup([], { crew: team })
+      // On hold, in any case: its task waits with it, so its builder is not called quiet on it (code review of #4060).
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip' }, { name: 'Hold' }] })]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toContain('Pip')
       const failing = pull()
       f.github.state.pulls = [failing]
       f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }])
       await f.assigner.tick()
       expect(asks(f)).toEqual([])
+      // Run again and passed: read again once ten minutes are up (a failing head is not read each pass), and its reader asked.
       f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'success' }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      f.clock.now += 10 * 60_000
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
     })

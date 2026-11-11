@@ -242,6 +242,23 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // Code review of #4060: a read owed for a pull request since put on hold, or whose checks failed, waits as the pull request does.
+  it('types no read of a pull request on hold or failing its checks, and types it once it is lifted and passing', async () => {
+    const f = setup({ items: [] })
+    f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }]
+    f.state.pulls[24] = { labels: [{ name: 'hold' }] }
+    f.next.start()
+    await f.end()
+    f.state.pulls[24] = {}
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }]
+    await f.end()
+    expect(f.told()).toEqual([])
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'success' }]
+    await f.end()
+    expect(f.told()).toEqual([expect.stringMatching(/^Read acme\/app#24 at /)])
+    f.next.stop()
+  })
+
   it('types no read it made on that head, nor one whose pull request moved on or closed, and does not read those again', async () => {
     const f = setup({ items: [item(12, 'Add the export')] })
     f.state.owed = [{ number: 24, sha: HEAD.slice(0, 7) }, { number: 25, sha: 'abcdef1' }, { number: 26, sha: HEAD.slice(0, 7) }]

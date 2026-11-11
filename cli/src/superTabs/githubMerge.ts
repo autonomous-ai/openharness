@@ -106,6 +106,9 @@ const RECORD_AGAIN_MS = 10 * 60_000
 interface Ready extends TrainPull { author: string; comments: Json[] }
 /** The label a person puts on a pull request to keep Harness from landing it (AGENTS.md). */
 const HOLD_LABEL = 'hold'
+/** Whether a person put [pull] on hold: the label in any case, as GitHub keeps one label whatever its case. The merger merges
+ *  none, the assigner asks no reader for one, and its builder is typed nothing of it (nextThing.ts). */
+export const isHeld = (pull: Json): boolean => (Array.isArray(pull.labels) ? pull.labels.map(object) : []).some(label => String(label.name).toLowerCase() === HOLD_LABEL)
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -489,7 +492,13 @@ export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? nul
 export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
   const failed: string[] = [], seen: string[] = []
   let running = false
+  // A check run again on the same head is listed again: its latest run decides, so one that failed and then passed has passed.
+  const latest = new Map<string, Json>()
   for (const run of runs) {
+    const kept = latest.get(String(run.name ?? ''))
+    if (!kept || !(Number(kept.id) > Number(run.id))) latest.set(String(run.name ?? ''), run)
+  }
+  for (const run of latest.values()) {
     seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
@@ -501,7 +510,14 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|') }
+  // Each named once: a workflow's check run and the status it sets share a name (#4055: "ci/required, process-checks, ci/required").
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed: [...new Set(failed)], summary: seen.sort().join('|') }
+}
+
+/** [head]'s checks as [reads] has them: its check runs and its combined status (checksOf). */
+export async function headChecks(reads: GitHubReads, repo: string, head: string): Promise<ReturnType<typeof checksOf>> {
+  const runs = object(await reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
+  return checksOf(Array.isArray(runs) ? runs.map(object) : [], await reads.one(repo, `/repos/${repo}/commits/${head}/status`))
 }
 
 export class GitHubMerge {
@@ -621,7 +637,7 @@ export class GitHubMerge {
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
-      if ((Array.isArray(pull.labels) ? pull.labels : []).some(label => object(label).name === HOLD_LABEL)) continue
+      if (isHeld(pull)) continue
       // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
       const at = this.see(open, `${repo}#${number}@${head}`)
       // Only a READ-OK made by command is a read: while the records cannot be read, nothing merges (said once, VerdictRecords).
@@ -660,7 +676,7 @@ export class GitHubMerge {
       }
       const checks = await this.checks(repo, at, head)
       if (checks.state === 'running') { waiting.add(`${number}@${head}`); continue }
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${[...new Set(checks.failed)].slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
       if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
@@ -723,8 +739,7 @@ export class GitHubMerge {
   /** The checks of [head], seen as [at] (checksOf): passed only once they hold still (CHECKS_SETTLE_MS), and running until then.
    *  A pull request's and a train's alike. */
   private async checks(repo: string, at: string, head: string): Promise<{ state: 'passed' | 'running' | 'failed'; failed: string[]; none: boolean }> {
-    const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
-    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    const checks = await headChecks(this.reads, repo, head)
     // No check and no status at all: a repository with no CI, or CI that has not started on this head.
     const none = checks.summary === ''
     if (checks.state !== 'passed') return { ...checks, none }

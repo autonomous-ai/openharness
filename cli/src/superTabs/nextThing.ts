@@ -25,7 +25,7 @@ import { named } from './agentReplies.js'
 import { openPieces, readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
-import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
+import { headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
@@ -277,8 +277,7 @@ export class NextThing {
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
     const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
     // One on hold waits for a person: nothing of it is the agent's to fix now.
-    const held = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).some(label => String(label.name).toLowerCase() === 'hold')
-    if (pull.draft === true || held || !head || !base) return null
+    if (pull.draft === true || isHeld(pull) || !head || !base) return null
     // A HOLD stands made by command or typed, so one whose records cannot be read is still said, its reader as the comment shows it.
     const talk = await pullTalk(this.reads, repo, number)
     const { readers } = verdicts(await this.deps.named(agent, repo, talk) ?? talk, String(pull.body ?? ''), pullPeople(pull, await this.deps.team(agent)))
@@ -287,11 +286,10 @@ export class NextThing {
       return { kind: 'hold', head: short, what: `has a HOLD from ${hold.name} at ${short}`,
         typed: `Your ${repo}#${number} has a HOLD from ${hold.name} at ${short}: fix what it asks and push, and it is read again. Read it: gh pr view ${number} --repo ${repo} --comments` }
     }
-    const runs = (await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=100`)).check_runs
-    const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
+    const checks = await headChecks(this.reads, repo, head)
     if (checks.state === 'failed') {
       return { kind: 'checks', head: short, what: `failed its checks at ${short}`,
-        typed: `Your ${repo}#${number} failed its checks at ${short}: ${[...new Set(checks.failed)].slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
+        typed: `Your ${repo}#${number} failed its checks at ${short}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
     }
     const state = String(pull.mergeable_state ?? '')
     if (state === 'behind') {
@@ -353,6 +351,8 @@ export class NextThing {
     if (this.answered.has(key)) return null
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${ask.number}`)
     const head = String(object(pull.head).sha ?? '')
+    // On hold, or failing its checks: it waits, and so does its read (Harness asks no reader for it either, githubAssign.ts).
+    if (pull.state === 'open' && (isHeld(pull) || (head.startsWith(ask.sha) && (await headChecks(this.reads, repo, head)).state === 'failed'))) return null
     if (pull.state === 'open' && head.startsWith(ask.sha)) {
       // Whether it read is not known while the records cannot be read: it is not asked now, nor taken as answered.
       const talk = await this.deps.named(agent, repo, await pullTalk(this.reads, repo, ask.number))

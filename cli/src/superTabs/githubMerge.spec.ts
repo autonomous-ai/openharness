@@ -817,6 +817,13 @@ describe('the rule\'s parts', () => {
     expect(checksOf([], {}).state).toBe('passed')
     expect(checksOf([{ status: 'completed', conclusion: 'skipped' }], { statuses: [{ state: 'success' }] }).state).toBe('passed')
     expect(checksOf([{ status: 'queued' }], {}).state).toBe('running')
+    // A check run again on the same head: its latest run decides, and it is named once (#4055 listed ci/required twice).
+    expect(checksOf([{ id: 2, name: 'ci/required', status: 'completed', conclusion: 'success' }, { id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], {}).state)
+      .toBe('passed')
+    expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }, { id: 2, name: 'ci/required', status: 'completed', conclusion: 'failure' }], {}).failed)
+      .toEqual(['ci/required'])
+    expect(checksOf([{ id: 1, name: 'ci/required', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'failure', context: 'ci/required' }] }).failed)
+      .toEqual(['ci/required'])
     expect(checksOf([{ name: 'lint', status: 'completed', conclusion: 'failure' }], { statuses: [{ state: 'error', context: 'ci/required' }] }))
       .toEqual({ state: 'failed', failed: ['lint', 'ci/required'], summary: 'ci/required:error|lint:completed:failure' })
     // What was read, in any order GitHub lists it, as one line: two looks that read the same are the same.
