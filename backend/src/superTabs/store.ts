@@ -23,6 +23,7 @@ import { commentAuthors, recordComment, sameRepository, type CommentKind } from 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
+import { forgetRemovedPanes } from './removedPanes.js'
 import { applyCommand, authorizeCommandAccess, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import { agentOpenDeliveries, OPEN_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
@@ -2661,6 +2662,8 @@ export class SuperTabStore {
         const reservation = state.harnessReservations?.find(r => r.machineId === machineId && r.harnessId === proof.harnessId && r.generation === proof.generation)
         if (!reservation) continue
         state.harnessReservations = state.harnessReservations?.filter(r => r !== reservation)
+        // Its session ended: a record that its person took it out goes with it (removedPanes.ts).
+        forgetRemovedPanes(state, machineId, id => id === proof.harnessId)
         state.releasedHarnesses ??= []
         if (!state.releasedHarnesses.some(r => r.machineId === machineId && r.harnessId === proof.harnessId)) state.releasedHarnesses.push({ machineId, harnessId: proof.harnessId })
         const id = stableId('swarm-session', state.environment, user.sub, stableId(machineId, proof.harnessId))
