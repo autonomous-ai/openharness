@@ -89,6 +89,10 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   (stopping, down, out of quota), or two such tasks with different builders, it waits until they land; one that is closed
   is not waited for ([the allocator's design](2026-11-11-swarm-allocator/BUILD.md), package 3; until then it was given
   as soon as the other was taken, before that one had any code). A task a builder holds already is planned as it is.
+  Its pull request then lands after the other's: while a pull request is open for a task it comes after, the merger does
+  not land it, whichever of that one's commits it holds, and tells its builder once, asking for nothing
+  (`githubMerge.ts earlierPull`). Held only while it carried the other's newest commit, one built on a commit a reader
+  had held landed that commit before its fix.
 - **Builders** are the project's regular Claude Code and Codex agents as the PM reads the Swarm (`crewOf`): never the PM,
   a Buddy, one stopping, one whose machine is down, or another private project's. A builder is quicker in a part where its
   label was on closed issues: 15% a task, 40% at most.

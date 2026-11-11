@@ -79,7 +79,10 @@ describe('where the day\'s landed changes waited', () => {
     const closed = [landed(1, 3 * HOUR, HOUR), landed(2, 3 * HOUR, HOUR), landed(3, 3 * HOUR, HOUR)]
     const hub = github({
       1: [note(170 * MINUTE, BEHIND), note(150 * MINUTE, BEHIND), note(120 * MINUTE, CONFLICT)],
-      2: [note(170 * MINUTE, BEHIND), note(160 * MINUTE, 'checks failed: unit. Fix them and push.')],
+      // One told that it lands after another, in today's words or those of before 2026-11-12, was told neither.
+      2: [note(170 * MINUTE, BEHIND), note(160 * MINUTE, 'checks failed: unit. Fix them and push.'),
+        note(150 * MINUTE, 'it lands after #7, whose commits it carries (its head b0b0b0b). Nothing to do: it lands as it is once #7 has landed.'),
+        note(140 * MINUTE, 'it carries open #7\'s commits (its head b0b0b0b), so merging it would merge them too. It waits until #7 merges; then update it from main.')],
       // The same words from outside the team are nobody's note.
       3: [note(170 * MINUTE, BEHIND, { author_association: 'CONTRIBUTOR' }), note(160 * MINUTE, CONFLICT, { author_association: 'NONE' })],
     })

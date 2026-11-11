@@ -39,9 +39,10 @@ signed in while the team works.
 5. **Harness asks another agent to read it**, of another model family before its own. The reader answers with
    `harness super-tab read ok` or `read hold`.
 6. **It lands** when it is aimed at the default branch and is not a draft; another agent's READ-OK, made by command,
-   is on its newest commit; it has no HOLD and no `hold` label; every check passed; and it is not behind, in conflict, or
-   carrying another open pull request's commits. Harness lands several at once in a train, on one CI run. Nobody needs
-   to merge by hand.
+   is on its newest commit; it has no HOLD and no `hold` label; every check passed; it is not behind or in conflict; and
+   no other open pull request lands first: one whose commits it carries, or one for a task its own task comes after
+   ("after #N"). Harness lands several at once in a train, on one CI run. Nobody needs to merge by hand, and one that
+   waits for another needs no update: it lands as it is.
 7. **When builders have nothing to do**, the PM is told, with the numbers. From 09:00 on the PM's computer, on a day
    something landed or a task closed, the day's numbers are posted in the channel.
 
@@ -53,14 +54,13 @@ that runs it, and the PM is told how many pass.
 | You see | Look at |
 |---|---|
 | No task is given | The PM's person's computer: on, awake, signed in, `gh` signed in. The task's labels: it needs a size |
-| A task waits for another | Its "after #N" |
-| A pull request does not land | Its comments: Harness says why to its builder (checks failed, a HOLD, behind or in conflict, the repository's rules) |
+| A task waits for another | Its "after #N": it is given once that task's pull request is up, to that one's builder, or once it lands |
+| A pull request does not land | Its comments: Harness says why to its builder (checks failed, a HOLD, behind or in conflict, another pull request lands first, its task cannot be read, the repository's rules) |
 | GitHub says the merge is blocked | The repository's own rules (required reviews, branch protection): Harness tells the builder, on the pull request, to ask its person |
 | Anything else | `~/.harness/cli/data/harness.log`, the lines with `[super-tab]`: on the PM's person's computer for giving and landing, on an agent's own computer for what is typed to it |
 
 ## Today's limits
 
-- A task that waits on another can be given as soon as that one is taken, before its code exists.
 - The reader can be an agent of the author's own person.
 - Harness lands only the team's pull requests: those labelled `builder:<name>` or on a `<name>/` branch of one of the
   team's agents.

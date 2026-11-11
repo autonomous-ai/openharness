@@ -10,6 +10,8 @@ const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
 const OLD = 'a1b2c3d4e5f60000000000000000000000000000'
 /** The commit of main a pull request stands on, and two more of main's, one after the other. */
 const FORK = 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0', M1 = '1'.repeat(40), M2 = '2'.repeat(40)
+/** The head of a pull request another is built on, and its head once a fix is pushed to it. */
+const UNDER = 'b0b0b0b0c0ffee000000000000000000000000ab', FIXED = 'c1c1c1c1c0ffee000000000000000000000000ab'
 const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T12:00:00Z', ...extra })
 /** A pull request of the repository's own branch, as GitHub lists it. */
 const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }], body: 'Closes #2', ...extra,
@@ -20,14 +22,21 @@ function fakeGitHub() {
   const records = commandRecords()
   const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(), commits: new Map<number, Json[]>(), compare: new Map<string, Json>(),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
+    // The tasks, as issues: #2 is the one `pull()` closes. And the status GitHub answers with for a task it does not give.
+    issues: new Map<number, Json>([[2, { number: 2, body: 'Say a quote a day.' }]]), refused: new Map<number, number>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
+  /** Every read asked, and whether it carried the last answer's ETag. */
+  const asked: string[] = []
   const get: GitHubGet = async (path, etag) => {
+    asked.push(`${path}${etag ? ' (with an ETag)' : ''}`)
     if (repo.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     if (repo.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
     if (repo.status) return { status: repo.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
+    const refused = repo.refused.get(Number(/\/issues\/(\d+)$/.exec(p)?.[1]))
+    if (refused) return { status: refused, etag: null, body: null, resetAt: null }
     // Each pull request here is alone and holds main's tip (`behind_by` 0), so it merges on its own; the train is githubTrain.spec.ts.
     const compared = p.split('...').at(-1)!
     const body = p === '/repos/acme/app' ? { default_branch: 'main' }
@@ -36,6 +45,7 @@ function fakeGitHub() {
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? (repo.comments.get(Number(p.split('/').at(-2))) ?? []).map(records.served)
+      : /\/issues\/\d+$/.test(p) ? repo.issues.get(Number(p.split('/').at(-1))) ?? null
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
       // A head against main, from the commit of main it stands on (FORK unless the test says another); and main's own change
@@ -57,7 +67,7 @@ function fakeGitHub() {
     if (method === 'PUT') return { status: repo.mergeAnswer, etag: null, body: { merged: repo.mergeAnswer === 200 }, resetAt: null }
     return { status: 201, etag: null, body: {}, resetAt: null }
   }
-  return { repo, sent, get, send, authors: records.authors }
+  return { repo, sent, asked, get, send, authors: records.authors }
 }
 
 function setup() {
@@ -118,9 +128,10 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   })
 
   // lampOS train-bot.sh (25 Oct, #3014 and #3391 carried #3064's commit under their own): a pull request that carries another open
-  // one's commits would merge them with it, unread or held. It waits until that one merges, told once.
-  it('merges no pull request that carries another open one\'s commits, and tells its author once', async () => {
-    const UNDER = 'b0b0b0b0c0ffee000000000000000000000000ab'
+  // one's commits would merge them with it, unread or held. It waits until that one merges, told once. The note asks for
+  // nothing: until 2026-11-12 it ended "then update it from main", and for one stack of three a builder did, three times, each a
+  // push and a run of the checks, and one a read again, where the train lands such a pull request as it is.
+  it('merges no pull request that carries another open one\'s commits, and tells its author once, asking for nothing', async () => {
     const f = setup()
     f.github.repo.pulls = [pull(), pull({ number: 5, draft: true, labels: [], head: { sha: UNDER, ref: 'ken/base' }, user: { login: 'kenmore' } })]
     f.github.repo.commits.set(4, [{ sha: UNDER }, { sha: HEAD }])
@@ -128,7 +139,8 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.clock.now += 30_000
     await f.merger.tick()
     expect(f.merges()).toEqual([])
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: it carries open #5's commits \(its head b0b0b0b\), so merging it would merge them too\. It waits until #5 merges; then update it from main\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: it lands after #5, whose commits it carries \(its head b0b0b0b\)\. Nothing to do: it lands as it is once #5 has landed\.$/)])
+    expect(f.comments()[0]).not.toMatch(/update|rebase|push/)
     // Once #5 is merged it is no longer open, and this one merges.
     f.github.repo.pulls = [pull()]
     f.clock.now += 30_000
@@ -795,6 +807,201 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   })
 })
 
+// The allocator's design, package 3: a task that comes after another is given to be built on that one's branch, so a pull
+// request built on another's is routine. One is held while it holds the other's head as it is now (above); that alone let a
+// held change land through the pull request built on it.
+describe('a pull request lands after the one its task comes after', () => {
+  const GREEN = [{ name: 'test', status: 'completed', conclusion: 'success' }]
+  type Fixture = ReturnType<typeof setup>
+  /** #5 is for task #2, and a reader's HOLD stands on it. #6 is for task #3, whose text says it comes after #2; it is read OK
+   *  and green, and holds [commits]: #5's head under its own, unless the test says other. */
+  function stack(f: Fixture, commits: Json[] = [{ sha: UNDER }, { sha: HEAD }]): void {
+    f.github.repo.issues.set(3, { number: 3, body: 'Show the day beside the quote.\n\nafter #2' })
+    f.github.repo.pulls = [pull({ number: 5, head: { sha: UNDER } }), pull({ number: 6, body: 'Closes #3', head: { sha: HEAD, ref: 'pip/3' } })]
+    f.github.repo.commits.set(6, commits)
+    f.github.repo.runs.set(UNDER, GREEN)
+    f.github.repo.comments = new Map([[5, [comment('Kai, 14:10: HOLD b0b0b0b quotes.py:12 is off by one.')]], [6, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]])
+  }
+  const landed = (number: number) => ({ method: 'PUT', path: `/repos/acme/app/pulls/${number}/merge`, body: expect.objectContaining({ merge_method: 'squash' }) })
+  const stopped = (f: Fixture) => f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('stopped'))
+  /** The reads of a task's issue that were asked, in order. */
+  const taskReads = (f: Fixture) => f.github.asked.filter(path => /\/issues\/\d+(?: \(with an ETag\))?$/.test(path)).map(path => path.slice('/repos/acme/app'.length))
+  const AFTER = /^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: it lands after #5, which is open for #2: its own task #3 comes after that one\. Nothing to do: it lands as it is once #5 has landed\.$/
+
+  // The hole. #6 was built on #5 at one head; a reader held #5 there, and its builder fixed it with a push and did not touch #6.
+  // #6 then held #5's earlier commits and not its head, so nothing was found, and the held code landed through #6 before its fix.
+  it('lands none built on another\'s earlier head while that one is open: a held change does not land through it before its fix', async () => {
+    const f = setup()
+    stack(f)
+    // It holds #5's head: told once that it lands after #5.
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toHaveLength(1)
+    // The fix is pushed to #5 alone.
+    f.github.repo.pulls = [pull({ number: 5, head: { sha: FIXED } }), f.github.repo.pulls[1]!]
+    for (let pass = 0; pass < 2; pass++) { f.clock.now += 30_000; await f.merger.tick() }
+    expect(f.merges()).toEqual([])
+    // Nothing more is said: it was told for this head that it lands after #5.
+    expect(f.comments()).toHaveLength(1)
+    // #5 has landed, or was closed: #6 lands as it is.
+    f.github.repo.pulls = [f.github.repo.pulls[1]!]
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.merges()).toEqual([landed(6)])
+  })
+
+  it('tells its builder once for its head which pull request it lands after and for which task, asking for nothing, and not again after a restart', async () => {
+    const f = setup()
+    // Built on main alone: it holds none of #5's commits.
+    stack(f, [{ sha: HEAD }])
+    await settle(f)
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(AFTER)])
+    expect(f.comments()[0]).not.toMatch(/update|rebase|push/)
+    // A restart (each release is one) finds the note on the pull request.
+    const restarted = setup()
+    stack(restarted, [{ sha: HEAD }])
+    restarted.github.repo.comments.get(6)!.push(comment(f.comments()[0]!, { author_association: 'OWNER' }))
+    await settle(restarted)
+    expect([...restarted.merges(), ...restarted.comments()]).toEqual([])
+  })
+
+  // A pull request told before 2026-11-12 has the note in the words of then, which began otherwise and asked for an update.
+  it.each<[string, Json[]]>([['it holds the other\'s head', [{ sha: UNDER }, { sha: HEAD }]], ['its task comes after the other\'s', [{ sha: HEAD }]]])(
+    'says nothing again, after a restart, to one told in the note\'s earlier words: %s', async (_case, commits) => {
+      const f = setup()
+      stack(f, commits)
+      f.github.repo.comments.get(6)!.push(comment('Harness, 14:20, to **pip**: not merged yet at f6edb44: it carries open #5\'s commits (its head b0b0b0b), so merging it would '
+        + 'merge them too. It waits until #5 merges; then update it from main.', { author_association: 'OWNER' }))
+      await settle(f)
+      expect([...f.merges(), ...f.comments()]).toEqual([])
+    })
+
+  it.each<[string, (f: Fixture) => void]>([
+    ['the other pull request is no longer open', f => { f.github.repo.pulls = [f.github.repo.pulls[1]!] }],
+    // Its PM took the line out, or the task never had words: nothing says what it comes after.
+    ['its task\'s text is gone', f => { f.github.repo.issues.set(3, { number: 3, body: null }) }],
+    // Two pull requests for a task that names itself would each wait for the other.
+    ['its task names itself', f => {
+      f.github.repo.issues.set(3, { number: 3, body: 'after #3' })
+      f.github.repo.pulls.push(pull({ number: 7, draft: true, body: 'Closes #3', head: { sha: FIXED, ref: 'pip/3-again' } }))
+    }],
+    ['it names no task', f => { f.github.repo.pulls[1] = pull({ number: 6, body: 'Tidy.', head: { sha: HEAD, ref: 'pip/tidy' } }) }],
+    ['it is itself the pull request for both tasks', f => { f.github.repo.pulls = [pull({ number: 6, body: 'Closes #2\nCloses #3', head: { sha: HEAD, ref: 'pip/3' } })] }],
+    // GitHub answers for a pull request's number as for an issue's: its text is no task's.
+    ['the number it names is a pull request\'s', f => {
+      f.github.repo.issues.set(5, { number: 5, pull_request: {}, body: 'after #2' })
+      f.github.repo.pulls[1] = pull({ number: 6, body: 'Closes #5', head: { sha: HEAD, ref: 'pip/tidy' } })
+    }],
+  ])('lands it all the same when %s', async (_case, arrange) => {
+    const f = setup()
+    stack(f, [{ sha: HEAD }])
+    arrange(f)
+    await settle(f)
+    expect(f.merges()).toEqual([landed(6)])
+    expect(f.comments()).toEqual([expect.stringContaining(': merged.')])
+  })
+
+  // Any open pull request for the earlier task counts, as any open one whose head it holds does: a draft is work that will be
+  // read, and a fork's is the same change from elsewhere. And a fork's own pull request waits as any other.
+  it.each<[string, (f: Fixture) => void]>([
+    ['the other is a draft', f => { f.github.repo.pulls[0] = pull({ number: 5, draft: true, head: { sha: UNDER } }) }],
+    ['the other is a fork\'s, by someone outside the team', f => { f.github.repo.pulls[0] = pull({ number: 5, labels: [], head: { sha: UNDER, ref: 'fix-quotes', repo: { full_name: 'kai/app' } } }) }],
+    ['it is itself a fork\'s', f => { f.github.repo.pulls[1] = pull({ number: 6, body: 'Closes #3', head: { sha: HEAD, ref: 'pip/3', repo: { full_name: 'pip/app' } } }) }],
+  ])('lands it after the other all the same when %s', async (_case, arrange) => {
+    const f = setup()
+    stack(f, [{ sha: HEAD }])
+    arrange(f)
+    await settle(f)
+    // Neither merged on its own nor built into a train.
+    expect(f.github.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/6/comments'])
+    expect(f.comments()).toEqual([expect.stringMatching(AFTER)])
+    expect(stopped(f)).toEqual([])
+  })
+
+  // No order lands both, and neither lands on a guess: each is told which it waits for. The lines are their PM's to change.
+  it('lands neither of two whose tasks each say they come after the other, and tells each which it waits for', async () => {
+    const f = setup()
+    stack(f, [{ sha: HEAD }])
+    f.github.repo.issues.set(2, { number: 2, body: 'after #3' })
+    f.github.repo.comments.set(5, [comment('Juno, 14:20, to **Pip**: READ-OK b0b0b0b')])
+    f.github.repo.commits.set(5, [{ sha: UNDER }])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at b0b0b0b: it lands after #6, which is open for #3: its own task #2 comes after that one\./), expect.stringMatching(AFTER)])
+  })
+
+  // A number that is no issue's (GitHub answers 404), or an issue GitHub does not give: what the task comes after is not
+  // known, and nothing lands on a guess. Its builder is told once, the others land, and the task is asked for again ten
+  // minutes on and not every pass: a read that fails is no 304, and counts against this login's requests.
+  it('lands none whose task GitHub does not give, tells it once, lands the others, and asks for the task again ten minutes on', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull(), pull({ number: 6, body: 'Closes #9', head: { sha: UNDER, ref: 'pip/9' } })]
+    f.github.repo.commits.set(6, [{ sha: UNDER }])
+    f.github.repo.runs.set(UNDER, GREEN)
+    f.github.repo.compare.set(UNDER, { files: [] })
+    f.github.repo.comments.set(6, [comment('Juno, 14:20, to **Pip**: READ-OK b0b0b0b')])
+    await settle(f)
+    expect(f.merges()).toEqual([landed(4)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at b0b0b0b: its task #9 could not be read on GitHub, so what it comes after is not known\. Harness reads it again by itself; if #9 is not its task, take it out of the pull request's text\.$/),
+      expect.stringContaining(': merged.')])
+    expect(stopped(f)).toEqual([])
+    expect(taskReads(f)).toEqual(['/issues/2', '/issues/9'])
+    // #4 has landed, and the issue is there now. The next passes do not ask for it; ten minutes on it is read, and #6 lands.
+    f.github.repo.pulls = [f.github.repo.pulls[1]!]
+    f.github.repo.issues.set(9, { number: 9, body: 'Tidy the quotes.' })
+    for (let pass = 0; pass < 3; pass++) { f.clock.now += 30_000; await f.merger.tick() }
+    expect(taskReads(f)).toEqual(['/issues/2', '/issues/9'])
+    expect(f.merges()).toEqual([landed(4)])
+    f.clock.now += 10 * 60_000
+    await f.merger.tick()
+    expect(taskReads(f)).toEqual(['/issues/2', '/issues/9', '/issues/9'])
+    expect(f.merges()).toEqual([landed(4), landed(6)])
+    expect(f.comments()).toHaveLength(3)
+  })
+
+  // A read GitHub refuses for the task alone (403) is as one it has no issue for. GitHub failing on its own side (500) is no
+  // word on the task: the pass stops and waits, as at every read, and nothing is said on the pull request.
+  it.each([[403, ['POST /repos/acme/app/issues/6/comments'], 0], [500, [], 1]])('waits alone when GitHub answers %i for its task, and stops the pass when GitHub itself fails', async (status, writes, stops) => {
+    const f = setup()
+    stack(f, [{ sha: HEAD }])
+    f.github.repo.refused.set(3, status)
+    await settle(f)
+    expect(f.github.sent.map(s => `${s.method} ${s.path}`)).toEqual(writes)
+    expect(f.comments().filter(body => body.includes('its task #3 could not be read on GitHub'))).toHaveLength(writes.length)
+    expect(stopped(f)).toHaveLength(stops)
+  })
+
+  // On the merger's pass, every 30 seconds. An unchanged task is a 304, which GitHub does not count against this login.
+  it('reads a task only for a pull request that could merge now, once for each task it names, five at most, with its last answer\'s ETag', async () => {
+    const f = setup()
+    stack(f, [{ sha: HEAD }])
+    await f.merger.tick()
+    // Its checks have not held still yet: nothing of its task is asked.
+    expect(taskReads(f)).toEqual([])
+    f.clock.now += 3 * 60_000
+    await f.merger.tick()
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(taskReads(f)).toEqual(['/issues/3', '/issues/3 (with an ETag)'])
+    // One that names seven tasks: its first five are read.
+    const many = setup()
+    for (let task = 11; task <= 17; task++) many.github.repo.issues.set(task, { number: task, body: '' })
+    many.github.repo.pulls = [pull({ body: [11, 12, 13, 14, 15, 16, 17].map(task => `Closes #${task}`).join('\n'), head: { sha: HEAD, ref: 'pip/tidy' } })]
+    await settle(many)
+    expect(taskReads(many)).toEqual(['/issues/11', '/issues/12', '/issues/13', '/issues/14', '/issues/15'])
+    expect(many.merges()).toHaveLength(1)
+    // And one that names none asks for nothing.
+    const none = setup()
+    none.github.repo.pulls = [pull({ body: 'Tidy.', head: { sha: HEAD, ref: 'pip/tidy' } })]
+    await settle(none)
+    expect(taskReads(none)).toEqual([])
+    expect(none.merges()).toHaveLength(1)
+  })
+})
+
 describe('the rule\'s parts', () => {
   it('reads each reader\'s last verdict by the name it signs with, or its login unsigned, and TWO READS', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
@@ -820,6 +1027,12 @@ describe('the rule\'s parts', () => {
     expect(noteOf(note('it is behind main: update the branch and push.'))).toBe('behind')
     expect(noteOf(note('it conflicts with main: rebase it on main and push.'))).toBe('dirty')
     expect(noteOf(note('checks failed: unit. Fix them and push.'))).toBe('checks')
+    // One that lands after another was told neither that it is behind nor that it conflicts: in today's words, and in those of
+    // before 2026-11-12, which are on pull requests still.
+    expect(noteOf(note('it lands after #5, whose commits it carries (its head b0b0b0b). Nothing to do: it lands as it is once #5 has landed.'))).toBe('stacked')
+    expect(noteOf(note('it lands after #5, which is open for #2: its own task #3 comes after that one.'))).toBe('stacked')
+    expect(noteOf(note('it carries open #5\'s commits (its head b0b0b0b), so merging it would merge them too. It waits until #5 merges; then update it from main.'))).toBe('stacked')
+    expect(noteOf(note('its task #9 could not be read on GitHub, so what it comes after is not known.'))).toBe('unread')
     expect(noteOf(note('something the merger never says'))).toBeNull()
     expect(noteOf(said('Harness, 14:20: merged.'))).toBeNull()
     expect(noteOf({})).toBeNull()
