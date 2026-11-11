@@ -104,27 +104,50 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     // Juno was given #2 this pass, so nobody is free and no task is open: one in hand before, one given.
     expect(f.labelled()).toEqual([[2, 'builder:juno']])
-    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], dry: true, open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false }]])
+    expect(f.numbers.mock.calls).toEqual([[PROJECT, { builders: 2, free: [], open: 0, unsized: 0, held: 2, landed: 1, landedBy: [['Pip', 1]], closed: 1, more: false }]])
   })
   it('counts a builder with nothing when no task is open, when none can be given, and when the team has no builder', async () => {
     const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])])
     await f.assigner.tick()
-    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 2, free: ['Juno'], open: 0, held: 1 })
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 2, free: [{ id: 'juno', name: 'Juno' }], open: 0, held: 1 })
     // A task GitHub would not label for its builder was not given: its builder still has nothing, and the task is open.
     const g = setup([issue(2, ['size:m'])])
     g.github.state.labelAnswer = 403
     await g.assigner.tick()
-    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: ['Juno', 'Pip'], open: 1, held: 0 })
+    expect(g.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }, { id: 'pip', name: 'Pip' }], open: 1, held: 0 })
     const h = setup([issue(2, ['size:m']), issue(3, [])], { crew: { builders: [], machines: [] } })
     await h.assigner.tick()
     expect(h.numbers.mock.calls.at(-1)![1]).toMatchObject({ builders: 0, free: [], open: 1, unsized: 1, held: 0 })
   })
+  it('counts what the PM landed under its name, a task given and not yet shown labelled as its builder\'s, and a spent builder as not free on any path', async () => {
+    const merged = new Date(Date.parse('2026-11-09T07:31:00Z') - 3_600_000).toISOString()
+    const f = setup([issue(2, ['size:m'])], { closed: [{ number: 9, pull_request: { merged_at: merged }, labels: [{ name: 'builder:faye' }], updated_at: merged }] })
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ landedBy: [['Faye', 1]] })
+    // GitHub's list does not show the label yet: the task is its builder's all the same, and that builder is not free.
+    const given = f.labelled()[0]![1] === 'builder:juno' ? 'Juno' : 'Pip'
+    await f.assigner.tick()
+    expect(f.numbers.mock.calls.at(-1)![1].free.map(free => free.name)).toEqual([given === 'Juno' ? 'Pip' : 'Juno'])
+    // Juno's subscription is spent: with every list full, and with a task given this pass, Juno is still not counted as waiting.
+    const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * 3_600_000).toISOString()
+    const spent: Crew = { builders: [crew().builders[0]!, { ...crew().builders[1]!, machineId: 'spent' }],
+      machines: [crew().machines[0]!, { machineId: 'spent', observation: { ...crew().machines[0]!.observation,
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent: 99, resetsAt }] }] } }] }
+    const full = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip']), issue(3, ['size:s', 'needs:gpu'])], { crew: spent })
+    await full.assigner.tick()
+    expect(full.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [] })
+    const giving = setup([issue(3, ['size:s'])], { crew: spent })
+    await giving.assigner.tick()
+    expect(giving.labelled()).toEqual([[3, 'builder:pip']])
+    expect(giving.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [] })
+  })
+
   it('counts as having nothing a builder whose one task waits on its pull request\'s readers, and not one whose subscription has no room', async () => {
     const f = setup([issue(14, ['size:s', 'builder:pip', 'status:taken'])])
     f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'pip/14' },
       labels: [{ name: 'builder:pip' }], body: 'Closes #14' }]
     await f.assigner.tick()
-    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: ['Juno', 'Pip'], held: 1 })
+    expect(f.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [{ id: 'juno', name: 'Juno' }, { id: 'pip', name: 'Pip' }], held: 1 })
     // Juno's subscription is spent until a reset three hours off: it is given nothing, and is not counted as waiting for work.
     const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * 3_600_000).toISOString()
     const g = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])], { crew: { builders: [crew().builders[0]!, { ...crew().builders[1]!, machineId: 'spent' }],

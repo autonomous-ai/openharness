@@ -25,7 +25,7 @@ import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
-import { messageOf, PmNumbers } from './pmNumbers.js'
+import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { crewOf } from './assign/crew.js'
 
 import { peopleNamed } from './personName.js'
@@ -204,8 +204,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const assigns = (options.githubAssign ?? ((api, held) => {
     // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
     const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
-      send: async (how, project, operationId, text) => backend(api, 'POST', `/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId,
-        command: messageOf(how, project, (await held().reads.read(project.tabId, project.pmAgentId)).state, text) }) })
+      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
     return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records,
       numbers: (project, counted) => numbers.pass(project, counted) })
   }))(core, sources)
