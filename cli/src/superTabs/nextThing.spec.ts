@@ -284,6 +284,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     await f.end()
     await vi.advanceTimersByTimeAsync(TELL_SETTLE_MS)
     expect(f.say).toHaveBeenCalledTimes(2)
+    // Under the same id: the server takes it once, and answers one whose answer was lost as taken (OPERATION_REUSED).
+    expect(f.say.mock.calls[1]![1]).toBe(f.say.mock.calls[0]![1])
     expect(f.told().at(-1)).toContain('acme/app#12')
     f.next.stop()
   })
