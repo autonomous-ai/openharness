@@ -117,8 +117,8 @@ void main() {
       await tester.tap(keyStarting('swarm-project-').first);
       await waitFor(key('swarm-project-menu'));
       await tester.tap(key('swarm-project-menu'));
-      await waitFor(key('swarm-project-menu-status'));
-      await tester.tap(key('swarm-project-menu-status'));
+      await waitFor(key('swarm-project-menu-work'));
+      await tester.tap(key('swarm-project-menu-work'));
       await waitFor(key('swarm-sheet-team'));
       await tester.tap(key('swarm-sheet-team'));
       await waitFor(keyStarting('swarm-open-terminal-'));
@@ -136,11 +136,11 @@ void main() {
       await shot('project');
       // Its ⋮ menu: Buddy chat and the team's status, as it reads now.
       await tester.tap(key('swarm-project-menu'));
-      await waitFor(key('swarm-project-menu-status'));
+      await waitFor(key('swarm-project-menu-work'));
       await shot('project-menu');
       // Closed again by a tap above it, as the person would.
       await tester.tapAt(const Offset(20, 120));
-      await waitGone(key('swarm-project-menu-status'));
+      await waitGone(key('swarm-project-menu-work'));
 
       if (chat.isEmpty) return;
 

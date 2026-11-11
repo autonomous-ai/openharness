@@ -418,11 +418,6 @@ void main() {
       await tester.drag(key('swarm-project-team-list'), const Offset(0, -1000));
       await tester.pumpAndSettle();
       await capture('team-agents');
-      await tester.drag(key('swarm-project-team-list'), const Offset(0, 2000));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-approve-d1'));
-      await tester.pumpAndSettle();
-      await capture('approve');
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));
       host.dispose();

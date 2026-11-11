@@ -11,12 +11,9 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-import 'model.dart';
 import 'swarm_agents.dart';
 import 'swarm_home_view_sheet.dart';
 import 'swarm_inbox.dart';
-import 'swarm_needs_page.dart';
-import 'swarm_project_tasks.dart' show swarmProgressAt;
 import 'swarm_rename.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -54,13 +51,11 @@ String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
     (shown.length > 1 ? 'All Swarms' : 'Swarm');
 
 /// The Swarms Home can show, from its title: All Swarms over several, each
-/// Swarm, the one shown ticked and what waits in each other one counted,
-/// then Sort and filter ([onView]) and the agents on the person's computers
+/// Swarm, the one shown ticked, then Sort and filter ([onView]) and the agents on the person's computers
 /// ([agents]), where Home has them — moved here from Home's filter icon and
 /// Agents tile (anh Dee, 2026-11-04: less on Home) — then New project, for
-/// someone who may write in a Swarm Home shows ([offersNewProject]; moved
-/// from the foot of Home, River 2026-11-04: Home keeps one +, New
-/// message's), and Join or create a Swarm. A Swarm the account loses, or whose read is taken away, while it
+/// someone who may write in a Swarm Home shows ([offersNewProject]), and
+/// Join or create a Swarm. A Swarm the account loses, or whose read is taken away, while it
 /// is open leaves it, and a tap on it shows nothing. A Swarm with a menu for
 /// the person ([swarmHasMenu]) shows a ⋮ on its row; the ⋮, or holding the
 /// row, closes it for that menu over Home ([showSwarmMenu]). Each of the
@@ -205,15 +200,7 @@ class _Switcher extends StatelessWidget {
                   leading: SwarmProjectTile(swarm.name),
                   title: swarm.name,
                   trailing: _trailing(
-                    swarm == shown
-                        ? tick('Shown on Swarm Home')
-                        // What waits in a Swarm Home does not show.
-                        : switch (shown == null
-                              ? 0
-                              : swarmNeedsOf(inbox, swarm.id).length) {
-                            0 => null,
-                            final count => SwarmBadge(count, warn: true),
-                          },
+                    swarm == shown ? tick('Shown on Swarm Home') : null,
                     // Its menu, for someone with something in it to do,
                     // from a ⋮ as a chat's is.
                     menu: swarmHasMenu(inbox, swarm.id)
@@ -363,16 +350,3 @@ class _Glyph extends StatelessWidget {
     child: Icon(icon, size: 22, color: AppPalette.textSecondary),
   );
 }
-
-/// How many tasks of [snapshot] their agents said Done after [since]: work
-/// done holds no time of its Done, which comes at or after its last
-/// progress ([swarmProgressAt]), so what this counts is a floor, as Done
-/// today's is.
-int swarmDoneSince(SuperTabSnapshot snapshot, DateTime since) => snapshot
-    .conversations
-    .where(
-      (g) =>
-          g.assignment?['status'] == 'done' &&
-          (swarmProgressAt(g)?.isAfter(since) ?? false),
-    )
-    .length;

@@ -3,20 +3,29 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
+import 'package:harness_mobile/core/project_folder.dart' show foldDiacritics;
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
-import 'swarm_new_message_sheet.dart' show swarmSearchFold;
 import 'swarm_style.dart';
 
 /// How many older pages one search reads at the most, counted from the last
 /// change to its query (task #2826): as many as a quote's original is looked
 /// for in.
 const swarmFindPages = 50;
+
+/// [text] as Find matches it: in lower case and without its accents — Vietnamese `đ` included — however the keyboard
+/// composed them.
+String swarmSearchFold(String text) =>
+    foldDiacritics(unorm.nfd(text).replaceAll(_marks, '')).toLowerCase();
+
+/// The combining accents a decomposed letter carries.
+final _marks = RegExp('[\u0300-\u036f]');
 
 const _limitNote = 'No more matches in the last $swarmFindPages pages';
 const _startNote = 'No more matches in this chat';

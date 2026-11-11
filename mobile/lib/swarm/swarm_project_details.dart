@@ -23,7 +23,7 @@ import 'team_glance.dart';
 /// is on it; quick actions — its chat's Notifications ([onNotifications]),
 /// Invite for the Swarm's owner alone ([onInvite], [swarmMayInvite]), and
 /// Open terminal for someone who may write, by the menu's rule
-/// (`swarmTerminalAction`); then Status, Work, Team with who is on it, and
+/// (`swarmTerminalAction`); then Work, Team with who is on it, and
 /// Leaderboard. A tap closes the sheet and hands back what it opens, for the
 /// page to open once the sheet is gone; the terminal opens at once, as the
 /// menu's does.
@@ -33,7 +33,6 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
     required this.reader,
     required this.projectId,
     required this.terminal,
-    required this.onStatus,
     required this.onWork,
     required this.onTeam,
     required this.onLeaderboard,
@@ -48,7 +47,7 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
   /// write, or with the project gone.
   final PhoneSheetActionOf terminal;
 
-  final VoidCallback onStatus, onWork, onTeam, onLeaderboard;
+  final VoidCallback onWork, onTeam, onLeaderboard;
 
   /// Null while the project chat is not read.
   final VoidCallback? onNotifications;
@@ -155,12 +154,6 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _row(
-                  'status',
-                  LucideIcons.activity300,
-                  'Status',
-                  () => choose(onStatus),
-                ),
                 _row(
                   'work',
                   LucideIcons.listChecks300,

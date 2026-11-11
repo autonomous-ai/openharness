@@ -388,7 +388,6 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                     for (final need in tasks.waiting)
                       SwarmWaitingRow(
                         key: ValueKey('swarm-waiting-${need.key}'),
-                        session: session,
                         snapshot: snapshot,
                         need: need,
                         personName: personName,
