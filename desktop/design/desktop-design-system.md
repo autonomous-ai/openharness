@@ -108,7 +108,11 @@ values to creation, search and desktop presenters; it is not a second palette.
 `DesktopDialogHeader` provides the shared title/dismiss anatomy.
 `DesktopPromptSurface` keeps form actions visible beneath scrolling content.
 `DesktopPill` is the selector/scope variant of the same control family.
-`AppMenuItem` is the ordinary context-menu row. `AppDropdown` is every
+`AppMenuItem` is the ordinary context-menu row. A row that stands somewhere
+says so in one word at its far end (`state`: `fails`, `not run`), 12 and faint,
+in the error ink when it failed, and in the active row's detail ink on blue; a
+`trailing` widget keeps its own colours and is not for a word of state.
+`AppDropdown` is every
 dropdown: however a click or a key opened it, the control that opened it holds
 focus, and Escape closes the menu from there and leaves focus on the control (on
 a submenu's own row it closes the submenu first). Controllers, keymaps, pending
@@ -743,6 +747,33 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   machine, its engines and the model: each engine is one row, `Claude Code`
   with `Current · 40% left` under it, for its machine's default account,
   the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
+- **Goal score** (`SwarmGoalScore`, `super_tabs/goal_score.dart`; in the
+  gallery; [design note](../../docs/design/2026-11-11-swarm-goal/README.md)).
+  A project that states its goal in `agents/GOAL.md` says how far it is in its
+  bar, 12 after the name's chevron: `Goal 41 of 60`, the milestones whose check
+  passes on the default branch out of those the file lists, in 12-point
+  metadata grey with tabular figures, as an agent's bar says where it runs. A
+  score is plain figures ([Numbers and rankings](#numbers-and-rankings)): no
+  ring, bar or chart, and no count of failures at rest. It is a dropdown that
+  stays plain text until hovered (rule 5): hover, focus or its open menu brings
+  `chevronDown` at 14 and the primary ink, and the chevron's room is kept at
+  rest. The name gives way before the score does. Its menu, 320 wide at most,
+  lists the milestones that do not pass yet, those that fail first, then those
+  not run, each in the file's order, with the row's state word (`fails` in the
+  error ink, `not run` faint); past 8 rows it opens on its search field, as
+  every dropdown does. A row opens its check run on GitHub, or `agents/GOAL.md`
+  when nothing ran for it. With every milestone passing it is text alone, with
+  no chevron and no menu; a project with no goal file, or no row in it, shows
+  nothing, and its bar is as it was. A read that fails keeps the last score,
+  and the menu's first line says why in the board's own words (`Sign in to
+  GitHub: run gh auth login.`), in metadata grey; a score that is text alone
+  says it in its tooltip; with no earlier score nothing shows. Desktop reads
+  it with `gh`, as the tasks (`SwarmGitHub.goal`), by the daemon's rules, so
+  the bar and the PM are told one number: when the project's bar comes on
+  screen, every five minutes while it stays, and when the menu opens, each
+  only on a reading older than a minute. Nothing is read for a project that is
+  not shown, on a phone, or while the Swarm is out of sight.
+  `test/swarm_goal_score_test.dart` clicks through it.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`

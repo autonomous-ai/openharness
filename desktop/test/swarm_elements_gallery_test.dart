@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +18,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
@@ -29,7 +31,9 @@ import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/github_row.dart';
+import 'package:harness/super_tabs/goal_score.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
@@ -48,6 +52,7 @@ import 'package:harness/super_tabs/project_sidebar.dart'
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
+import 'support/swarm_goal_gh.dart';
 import 'support/swarm_v4_data.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -252,6 +257,8 @@ Future<List<SuperTabController>> _show(
           swarm: c,
           instructions: computer.link,
           browserApp: browserApp,
+          goal: _goal(pass: 41, fail: 3, notRun: 16).github,
+          goalDone: _goal(pass: 60).github,
         ),
       ),
     ),
@@ -259,11 +266,33 @@ Future<List<SuperTabController>> _show(
   // The pane's read answers after the first frame, and shows on the next.
   await tester.pump();
   await tester.pump();
+  // The second score is drawn as the mouse over it shows it.
+  final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+  await mouse.addPointer(location: Offset.zero);
+  addTearDown(mouse.removePointer);
+  await mouse.moveTo(tester.getCenter(find.byKey(_Gallery.goalHovered)));
   // Its folder's files start folded; AGENTS.md is opened, as a person clicks it, and CLAUDE.md stays folded.
   await tester.tap(find.byKey(const ValueKey('swarm-shared-row-0')));
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
+}
+
+/// A project's goal as `gh` answers for it: so many milestones that pass, fail and have no run yet, as the design note's
+/// lampOS has 41, 3 and 16 of its 60.
+FakeGoalGitHub _goal({required int pass, int fail = 0, int notRun = 0}) {
+  final names = [
+    for (var n = 1; n <= pass + fail + notRun; n++) 'Milestone $n',
+  ];
+  return FakeGoalGitHub(
+    file: [for (final name in names) '| $name | `make check` |'].join('\n'),
+    landings: [
+      FakeLanding([
+        for (final (n, name) in names.take(pass + fail).indexed)
+          goalRun(n + 1, name, n < pass ? 'SUCCESS' : 'FAILURE'),
+      ]),
+    ],
+  );
 }
 
 /// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
@@ -457,7 +486,13 @@ class _Gallery extends StatelessWidget {
     required this.swarm,
     required this.instructions,
     required this.browserApp,
+    required this.goal,
+    required this.goalDone,
   });
+
+  /// `gh` for a project whose goal is 41 of 60, and for one whose every milestone passes.
+  final SwarmGitHub goal, goalDone;
+  static const goalHovered = ValueKey('gallery-goal-hovered');
 
   /// Where Browser settings reads Faye's.
   final AppNotifier browserApp;
@@ -951,6 +986,46 @@ class _Gallery extends StatelessWidget {
               ),
             ),
           ]),
+          section(
+            'goal',
+            'Goal: at rest, hovered, every milestone passing; its menu\'s rows',
+            [
+              Row(
+                children: [
+                  SwarmGoalScore(repository: 'acme/lampos', github: goal),
+                  gap(),
+                  SwarmGoalScore(
+                    key: goalHovered,
+                    repository: 'acme/lampos',
+                    github: goal,
+                  ),
+                  gap(),
+                  SwarmGoalScore(repository: 'acme/done', github: goalDone),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: 320,
+                child: Column(
+                  children: [
+                    AppMenuItem(
+                      label: 'Update rolls back on failure',
+                      state: 'fails',
+                      stateFailed: true,
+                      leadingSlot: false,
+                      onPressed: () {},
+                    ),
+                    AppMenuItem(
+                      label: 'Busy room is detected',
+                      state: 'not run',
+                      leadingSlot: false,
+                      onPressed: () {},
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
           // is not there.
           section('empty-row', 'Empty: a row', [

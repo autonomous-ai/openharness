@@ -78,4 +78,19 @@ abstract final class SwarmLayout {
   );
   static const EdgeInsets infoRowPadding = EdgeInsets.symmetric(vertical: 6);
   static const double infoLabelWidth = 88;
+
+  /// A project's goal score in its bar (super_tabs/goal_score.dart): its room after the project's name, what its hover
+  /// and click take in around its words, and its words from its chevron.
+  static const EdgeInsets goalMargin = EdgeInsets.only(left: 12);
+  static const EdgeInsets goalPadding = EdgeInsets.symmetric(
+    horizontal: 4,
+    vertical: 2,
+  );
+  static const double goalChevronGap = 4;
+
+  /// The goal's menu: wide enough for a milestone's name beside its state.
+  static const double goalMenuWidth = 320;
+
+  /// The line atop the goal's menu that says why its last read failed, level with the rows' words.
+  static const EdgeInsets goalNotePadding = EdgeInsets.fromLTRB(16, 4, 16, 6);
 }

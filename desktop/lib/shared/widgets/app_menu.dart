@@ -85,6 +85,8 @@ class AppMenuItem extends StatefulWidget {
     this.detail,
     this.leading,
     this.trailing,
+    this.state,
+    this.stateFailed = false,
     this.focusNode,
     this.metrics = AppMenuRowMetrics.compact,
     this.textStyle,
@@ -132,6 +134,15 @@ class AppMenuItem extends StatefulWidget {
   /// meeting it for the first time, and there is nowhere else in a menu row to
   /// put the sentence.
   final Widget? trailing;
+
+  /// A word of state at the row's far end, for a list whose rows each stand somewhere: `fails`, `not run`.
+  ///
+  /// Caption size and faint, or the error ink when [stateFailed]. The row draws it itself, where a [trailing] widget
+  /// keeps its own colours: red on the active row's blue cannot be read, so there it takes the row's detail ink.
+  final String? state;
+
+  /// Whether [state] says something failed.
+  final bool stateFailed;
   final FocusNode? focusNode;
 
   /// A quiet SECOND LINE under the label, for a row whose label alone does not
@@ -203,6 +214,9 @@ class AppMenuItem extends StatefulWidget {
       }
       if (row.note case final note?) {
         text += 8 + line(note, AppType.body());
+      }
+      if (row.state case final state?) {
+        text += 8 + line(state, AppType.caption());
       }
       widest = math.max(widest, text);
     }
@@ -392,6 +406,21 @@ class _AppMenuItemState extends State<AppMenuItem> {
                 if (widget.trailing != null) ...[
                   const SizedBox(width: 8),
                   widget.trailing!,
+                ],
+                if (widget.state case final state?) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    state,
+                    maxLines: 1,
+                    style: AppType.caption(
+                      color: active
+                          ? AppDesktop.selectionDetail
+                          : widget.stateFailed
+                          ? error
+                          : AppPalette.textFaint,
+                      height: 1.35,
+                    ),
+                  ),
                 ],
                 if (widget.selected) ...[
                   const SizedBox(width: 12),
