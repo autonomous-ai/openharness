@@ -840,19 +840,17 @@ export class SuperTabStore {
   }
 
   /** Deletes the repo-less project every Personal Swarm was made with (migration/personalProjectJob.ts), as its owner's
-   *  `project.delete` would, given `personalProject` by the store alone: only while nothing was ever said in it and no agent or
-   *  start is in it. 'kept' when something is, which stays a project like any other; 'gone' when the Swarm or the project is not
-   *  there or is not that one. */
-  async removePersonalProject(tabId: string): Promise<'removed' | 'kept' | 'gone'> {
-    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ownerId: true, autonomousEnv: true, deletedAt: true, format: true } })
-    if (!row || row.deletedAt || row.format !== 2) return 'gone'
+   *  `project.delete` would, given `personalProject` by the store alone: only as it was made, with nothing in it. 'kept' when
+   *  anything is, or someone else owns it now, which stays a project like any other; 'gone' when the Swarm or the project is not
+   *  there or is not that one. [row]: the Swarm's row as the job read it. */
+  async removePersonalProject(row: { id: string; ownerId: string; autonomousEnv: string }): Promise<'removed' | 'kept' | 'gone'> {
     const user: AuthUser = { sub: row.ownerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
     try {
-      await this.executeOnce(user, tabId, { operationId: 'personal-project-removal', command: { type: 'project.delete', projectId: 'lead' } },
+      await this.executeOnce(user, row.id, { operationId: 'personal-project-removal', command: { type: 'project.delete', projectId: 'lead' } },
         undefined, undefined, { personalProject: true })
     } catch (error) {
-      if (error instanceof SuperTabError && error.code === 'PERSONAL_PROJECT_KEPT') return 'kept'
-      if (error instanceof SuperTabError && ['NOT_FOUND', 'PROJECT_OWNER_REQUIRED'].includes(error.code)) return 'gone'
+      if (error instanceof SuperTabError && ['PERSONAL_PROJECT_KEPT', 'PROJECT_OWNER_REQUIRED'].includes(error.code)) return 'kept'
+      if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'gone'
       throw error
     }
     return 'removed'

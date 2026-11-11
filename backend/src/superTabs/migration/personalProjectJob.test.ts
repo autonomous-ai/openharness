@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { PERSONAL_SWARM_OPERATION } from '../deletion.js'
 import { SuperTabError, stableId } from '../model.js'
-import { CURSOR_ID, PAGE, removePersonalProjects, WALKED } from './personalProjectJob.js'
+import { ATTEMPTS, CURSOR_ID, PAGE, removePersonalProjects, WALKED } from './personalProjectJob.js'
 
 type Row = { _id: string; ownerId: string; autonomousEnv: string; format: number; deletedAt: Date | null }
 
@@ -27,7 +27,7 @@ class Database {
 class Store {
   readonly calls: string[] = []
   readonly answers = new Map<string, 'removed' | 'kept' | 'gone' | Error>()
-  async removePersonalProject(tabId: string): Promise<'removed' | 'kept' | 'gone'> {
+  async removePersonalProject({ id: tabId }: { id: string }): Promise<'removed' | 'kept' | 'gone'> {
     this.calls.push(tabId)
     const answer = this.answers.get(tabId) ?? 'removed'
     if (answer instanceof Error) throw answer
@@ -39,17 +39,29 @@ const asDb = (db: Database) => db as unknown as Parameters<typeof removePersonal
 describe('removing the "Personal" project from Personal Swarms', () => {
   it('hands each live Personal Swarm to the store, and no other Swarm, then is done for good', async () => {
     const db = new Database(), store = new Store()
-    const a = db.personal('a'), b = db.personal('b'), c = db.personal('c'), gone = db.personal('d', { deletedAt: new Date() })
+    const a = db.personal('a'), b = db.personal('b'), gone = db.personal('d', { deletedAt: new Date() })
     db.personal('e', { format: 1 })
     db.team('team-1', 'a')
     store.answers.set(b, 'kept')
-    store.answers.set(c, new SuperTabError('PROJECT_OWNER_REQUIRED', 'no', 403))
-    expect(await removePersonalProjects(asDb(db), store)).toEqual({ examined: 6, removed: 1, kept: 1, gone: 0, failed: 1, codes: { PROJECT_OWNER_REQUIRED: 1 }, done: true })
-    expect(store.calls.sort()).toEqual([a, b, c].sort())
+    expect(await removePersonalProjects(asDb(db), store)).toEqual({ examined: 5, removed: 1, kept: 1, gone: 0, failed: 0, codes: {}, done: true })
+    expect(store.calls.sort()).toEqual([a, b].sort())
     expect(store.calls).not.toContain(gone)
     expect(db.cursor).toBe(WALKED)
     expect(await removePersonalProjects(asDb(db), store)).toMatchObject({ examined: 0, done: true })
-    expect(store.calls).toHaveLength(3)
+    expect(store.calls).toHaveLength(2)
+  })
+
+  it('tries a Swarm that failed again on the next passes, and passes it after its last try', async () => {
+    const db = new Database(), store = new Store(), attempts = new Map<string, number>()
+    const ids = ['a', 'b', 'c'].map(owner => db.personal(owner)).sort()
+    store.answers.set(ids[1]!, new SuperTabError('SWARM_BUSY', 'busy', 503))
+    for (let pass = 1; pass < ATTEMPTS; pass++) {
+      expect(await removePersonalProjects(asDb(db), store, { attempts })).toMatchObject({ failed: 1, codes: { SWARM_BUSY: 1 }, done: false })
+      expect(db.cursor).toBe(ids[0])
+    }
+    expect(await removePersonalProjects(asDb(db), store, { attempts })).toMatchObject({ failed: 1, done: true })
+    expect(store.calls).toEqual([ids[0], ids[1], ids[1], ids[1], ids[2]])
+    expect(db.cursor).toBe(WALKED)
   })
 
   it('walks a page at a time and carries on from its cursor', async () => {

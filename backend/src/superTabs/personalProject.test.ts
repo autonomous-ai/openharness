@@ -59,7 +59,20 @@ describe('the one-time removal of the "Personal" project', () => {
     const staffed = fixture(true)
     staffed.run({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'pm', name: 'Pm', configuration: config, lead: true }, own)
     expect(staffed.code(staffed.removal)).toBe('PERSONAL_PROJECT_KEPT')
-    for (const f of [said, task, staffed]) expect(f.state.projects!.map(p => p.id)).toEqual(['lead'])
+    // Something its person set on it, an invitation that lands in it, or a machine its deletion would take out.
+    const named = fixture(true)
+    named.run({ type: 'project.about', projectId: 'lead', about: 'My scratch work' })
+    expect(named.code(named.removal)).toBe('PERSONAL_PROJECT_KEPT')
+    const linked = fixture(true)
+    linked.run({ type: 'project.github', projectId: 'lead', repository: 'owner/scratch' })
+    expect(linked.code(linked.removal)).toBe('PERSONAL_PROJECT_KEPT')
+    const invited = fixture(true)
+    invited.run({ type: 'invite.create', email: 'friend@example.com', role: 'collaborator', conversationId: 'lead' })
+    expect(invited.code(invited.removal)).toBe('PERSONAL_PROJECT_KEPT')
+    const machine = fixture(true)
+    machine.run({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['claude'], maxAgents: 2 }, own)
+    expect(machine.code(machine.removal)).toBe('PERSONAL_PROJECT_KEPT')
+    for (const f of [said, task, staffed, named, linked, invited, machine]) expect(f.state.projects!.map(p => p.id)).toEqual(['lead'])
   })
 
   it('touches no other Swarm\'s first project, and nothing but the store asks it', () => {

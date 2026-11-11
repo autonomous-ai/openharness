@@ -2791,14 +2791,15 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
       return tab
     }
     const empty = await old(person(1), false), spoken = await old(person(2), true)
-    expect(await store.removePersonalProject(empty)).toBe('removed')
+    const remove = (tab: string, who: AuthUser) => store.removePersonalProject({ id: tab, ownerId: who.sub, autonomousEnv: 'prod' })
+    expect(await remove(empty, person(1))).toBe('removed')
     expect((await storedState(empty)).projects).toEqual([])
-    expect(await store.removePersonalProject(empty)).toBe('removed')
-    expect(await store.removePersonalProject(spoken)).toBe('kept')
+    expect(await remove(empty, person(1))).toBe('removed')
+    expect(await remove(spoken, person(2))).toBe('kept')
     expect((await store.read(person(2), spoken)).state.projects!.map(p => p.id)).toEqual(['lead'])
     // A Team Swarm's first project is no Personal one.
     const team = (await store.create(person(3), randomUUID(), 'Team')).id
-    expect(await store.removePersonalProject(team)).toBe('gone')
+    expect(await remove(team, person(3))).toBe('gone')
     expect((await storedState(team)).projects!.map(p => p.id)).toEqual(['lead'])
   })
 

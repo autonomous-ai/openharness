@@ -424,6 +424,11 @@ function dropRemovedRecord(state: SuperTabState, machineId: string, harnessId: s
   if (!state.removedSessions?.length) delete state.removedSessions
 }
 
+/** The fields of the "Personal" project as every Personal Swarm was made with it, or as only the server writes them (its GitHub
+ *  checks): any other is something its person set, and keeps it (project.delete with personalProject). */
+const PERSONAL_PROJECT_KEYS: ReadonlySet<string> = new Set(['id', 'name', 'ownerId', 'ownerGeneration', 'leadConversationId', 'visibility', 'members',
+  'updateMinutes', 'skillMode', 'githubRevision', 'githubSeen'])
+
 /** What becomes of a removed agent's session (removeAgent). */
 type LeavingSession = 'close' | 'keep' | 'closed'
 
@@ -1088,14 +1093,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'project.delete': {
       if (context.personalProject) {
         // The repo-less project every Personal Swarm was made with (anh Dee 2026-11-11: its projects are its person's repos): it
-        // goes only while nothing was ever said in it, dormant chats too (store.ts loads them), and no agent or start is in it.
+        // goes only as it was made, with nothing in it. Nothing ever said in it, dormant chats too (store.ts loads them); no agent,
+        // start, claim, waiting message or PM chat; no invitation landing in it; nothing its person set on it (a repository, a
+        // name, about, status, members, cadence); no machine its deletion would take out with it (projects.ts deleteProject).
         // One with anything in it stays, a project like any other: nothing of a person's is hidden.
         const project = projectsOf(state).find(p => p.id === command.projectId)
-        if (!isPersonalSwarm(state) || command.projectId !== 'lead' || !project || project.repository || state.project) fail('NOT_FOUND', 'This project is unavailable.', 404)
+        if (!isPersonalSwarm(state) || command.projectId !== 'lead' || !project) fail('NOT_FOUND', 'This project is unavailable.', 404)
         const groups = state.conversations.filter(c => !isLeads(c) && !isAgentChat(c) && (c.projectId ?? 'lead') === project.id)
-        if (groups.some(c => c.lastMessageSequence) || state.agents.some(a => agentProjectId(state, a) === project.id)
-          || state.starts?.some(s => !s.error && groups.some(c => c.id === s.request.conversationId)) || project.leadClaim || project.leadWaiting?.length
-          || project.pmChat) fail('PERSONAL_PROJECT_KEPT', 'This project has something in it.', 409)
+        const asMade = Object.keys(project).every(key => PERSONAL_PROJECT_KEYS.has(key)) && !project.members.length && project.updateMinutes === 5
+          && project.name === state.name && !state.project
+        if (!asMade || groups.some(c => c.lastMessageSequence) || state.agents.some(a => agentProjectId(state, a) === project.id)
+          || state.starts?.some(s => !s.error && groups.some(c => c.id === s.request.conversationId))
+          || state.invitations.some(i => groups.some(c => c.id === i.conversationId)) || state.machines?.some(m => m.scope !== 'swarm')) {
+          fail('PERSONAL_PROJECT_KEPT', 'This project has something in it.', 409)
+        }
         deleteWholeProject(deletableProject(state, actor, project.id), 'keep')
         break
       }
