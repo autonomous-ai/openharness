@@ -125,8 +125,9 @@ must be more proactive and ask the user what area they want the agent to focus o
 A builder no longer picks its own reader. Each pass, for every open pull request into the default branch that is not a
 draft and has no HOLD standing, the assigner counts what it needs: one READ-OK on its head from someone other than its
 author, two for TWO READS, less those asked and not answered yet (Harness's asks are its own comments: "Harness, 15:40,
-to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file,
-line and fix)."). It asks a builder of the team that is not its author and not asked already, of another model family
+to **Atlas**: please read this pull request, then run `harness super-tab read ok acme/app#30 f6edb44 'what you found'`.
+For a HOLD, read hold in place of read ok, with the file, line and fix."; the verdict is that command, githubVerdict.ts).
+It asks a builder of the team that is not its author and not asked already, of another model family
 than its author's when one can (a review is never read by its build's family, as the solver's `independentOf`), then the
 one holding the fewest tasks (`assign/crew.ts readerFor`); when no other builder can, its PM, who read for a team of one
 before (the swarm-sandbox's Juno for Pip). The comment names the reader, so GitHub news brings it the
@@ -160,7 +161,8 @@ one ask of its builder by name; with no word 4 hours after, it goes to another (
 A task whose pull request waits for its readers or its merge (ready, with no HOLD on its head) is not its builder's to move,
 and is never asked about. A restart (each release restarts every PM's daemon) finds its own ask as the issue's last touch, so it neither asks twice
 nor waits 4 hours more. status:taken comes off before the builder label: a task left taken with no builder is one nobody
-plans, while one left queued for its builder is taken back again next pass. A take back or an ask GitHub refuses is logged
+plans, while one left queued for its builder is taken back again next pass. It comes off once more after the label, so a
+claim that lands meanwhile (githubClaim.ts) leaves no task taken with no builder. A take back or an ask GitHub refuses is logged
 once (`TAKE_BACK_REFUSED`, `ASK_REFUSED`) and tried again next pass.
 
 ## Learned task times (built)
