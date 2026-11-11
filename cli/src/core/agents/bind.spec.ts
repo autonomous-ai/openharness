@@ -86,7 +86,7 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false) },
     submitAgent: vi.fn(),
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },

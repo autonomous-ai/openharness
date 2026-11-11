@@ -103,6 +103,9 @@ Two defects:
 - It clears once the store shows the session.
 - A fresh session before its first message reads `ready` with no node: no state. A Gateway that is only slow writes
   the node within 30 s of the run starting.
+- An idle pane is read every 30 s, not every pass; one a message was typed into is read on every pass until the
+  message is confirmed, so the run it starts is counted from its start. A run the person starts in the pane itself
+  can be seen up to 30 s late.
 - The daemon logs once per agent the folder it looked in (local log only; telemetry carries no path).
 - A TUI Harness starts gets harnessd's `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME`, so a daemon given the Gateway's
   variable starts TUIs that agree with the Gateway.

@@ -68,7 +68,7 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget'>
+  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation'>
   /** Types a person's message into an agent's pane (core/input.ts `submitAgent`). */
   submitAgent: (agentId: string, content: string) => void
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
@@ -331,7 +331,9 @@ export function createBinding({
       // before the process (`main`, a resume) is the pane's all the same, so nothing is compared with the process's
       // start. A key another agent holds stays that agent's: two panes on `main` share one conversation, and the first
       // keeps it. A bound pane is read when its stream says it may show something new: an idle one is not read every pass.
-      if (agent.sessionId && !openclawPaneDue(agent.sessionId)) return
+      // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
+      // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
+      if (agent.sessionId && !openclawPaneDue(agent.sessionId) && !input.awaitingConfirmation(agent.agentId)) return
       const captured = await read(() => capturePane(agent.agentId))
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)

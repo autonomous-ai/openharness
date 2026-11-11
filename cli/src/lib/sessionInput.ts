@@ -510,6 +510,11 @@ export class SessionInputController {
     return this.states.get(sessionId)?.controlLocked === true
   }
 
+  /** Whether a message typed into this pane awaits the turn that confirms it. */
+  awaitingConfirmation(id: string): boolean {
+    return this.states.get(id)?.awaitingFingerprint != null
+  }
+
   onTurnStarted(sessionId: string, userMessage: string): void {
     const state = this.state(sessionId)
     const session = this.controlSession(sessionId)
