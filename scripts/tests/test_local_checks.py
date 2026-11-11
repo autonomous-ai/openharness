@@ -81,7 +81,9 @@ class LocalGateTests(unittest.TestCase):
                         'make desktop-test ARGS="--workers 0"', 'make desktop-test ARGS="--timeout -1"',
                         'make desktop-test ARGS="--timeout 1e9"', 'make desktop-test ARGS="--timeout  3600"',
                         'make desktop-test ARGS=""', 'make desktop-test ARGS="--plain-name x"',
-                        'make desktop-test ARGS="--workers 4"; touch x', "make desktop-test ARGS='--workers 4'"]:
+                        'make desktop-test ARGS="--workers 4"; touch x', "make desktop-test ARGS='--workers 4'",
+                        'make desktop-test ARGS="--workers 999"', 'make desktop-test ARGS="--timeout 1"',
+                        'make desktop-test ARGS="--workers=4"', 'make desktop-test -- --maxWorkers=2']:
             with self.subTest(command=command), self.assertRaisesRegex(ValueError, "desktop-macos"):
                 planner.verify(p, needs([desktop(command)]), "a" * 40)
         with self.assertRaisesRegex(ValueError, "cli-core"):
