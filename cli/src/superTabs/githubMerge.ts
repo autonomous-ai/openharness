@@ -27,7 +27,7 @@ import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, retryIn, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
-import { GitHubTrain, type TrainPull } from './githubTrain.js'
+import { GitHubTrain, TRAIN_MARK, type TrainPull } from './githubTrain.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -389,6 +389,8 @@ export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'runni
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
   }
   for (const each of Array.isArray(status.statuses) ? status.statuses.map(object) : []) {
+    // The train's own mark on the tip it built is no check of it: counted, a train whose CI had not started read as passed.
+    if (each.context === TRAIN_MARK) continue
     seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
