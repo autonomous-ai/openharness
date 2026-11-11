@@ -1,6 +1,6 @@
 /** A launch resolves once, then keeps that executable through probes and dispatch. */
 import { execFile } from 'node:child_process'
-import { accessSync, closeSync, constants, lstatSync, openSync, readSync, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, lstatSync, openSync, readlinkSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
@@ -101,8 +101,26 @@ export function launchSearchNames(command: string, recipeNames: readonly string[
   return [...new Set([command, ...recipeNames])].filter((name) => platform !== 'win32' || name.toLowerCase() !== 'cmd')
 }
 
+/**
+ * The program a Windows app execution alias at [path] starts, when it is one: the 0-byte link a Microsoft Store app
+ * puts in %LOCALAPPDATA%\Microsoft\WindowsApps, which Node reads as a link into the app's package folder under
+ * WindowsApps. Node can neither stat nor run one (EACCES, in the person's session and in session 0 alike: measured on
+ * Windows 11 with Node 24, 2026-11-11), so it is never an engine Harness can start. Older Claude desktop apps registered
+ * `claude.exe`, and a computer with only that app held every Claude Code launch at "Waiting to confirm access" for good,
+ * where one with nothing installed has Claude Code installed for it (a customer, 2026-11-10). Null for anything else.
+ */
+export function storeAppAlias(path: string): string | null {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return null
+    const target = readlinkSync(path)
+    return target.toLowerCase().includes('\\windowsapps\\') ? target : null
+  } catch { return null }
+}
+const reportedAliases = new Set<string>()
+
 /** A complete absence can authorize installation. Unreadable routes and failed
- * shell capture cannot: installing then would risk replacing a working engine. */
+ * shell capture cannot: installing then would risk replacing a working engine. A Windows Store app's alias is no
+ * engine at all (storeAppAlias): looked past, and absent when nothing else is found. */
 export async function captureLaunchExecutable(engine: AgentEngine, shell?: string): Promise<LaunchExecutableResult> {
   const environment = await launchEnvironment(shell)
   if (!environment || !environment.HOME || !isAbsolute(environment.HOME)) return held('Waiting to read the engine’s launch environment.')
@@ -123,7 +141,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   if (recipe?.executable.npmGlobal) candidates.push(...npmEngineBins().flatMap(bin => recipe.executable.names.map(name => join(bin, name))))
   // A candidate this account may not reach. Looked past, for a later one it can run; with none, held as before rather
   // than installing over what may be there.
-  let unreachable = false
+  let unreachable: string | null = null
   // A dangling link on the way to a candidate (POSIX): a person's choice, so it never proves the engine absent. Looked
   // past as bash and zsh look past it (ENOENT), for a later candidate it can run; with none, held rather than
   // installing. Held at the
@@ -166,15 +184,26 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
       // Homebrew is its owner's alone (mode 770) held every Claude Code launch here for good, its own Claude Code in
       // ~/.local/bin never reached (2026-10-27).
       const code = (error as NodeJS.ErrnoException).code
-      if (code === 'EACCES' || code === 'EPERM') { unreachable = true; continue }
-      return held('Waiting to confirm access to the selected engine executable.')
+      if (code === 'EACCES' || code === 'EPERM') {
+        const app = process.platform === 'win32' ? storeAppAlias(path) : null
+        if (app) {
+          if (!reportedAliases.has(path)) {
+            reportedAliases.add(path)
+            console.warn(`[launch] ${engine}: looked past ${path}, a Windows Store app's alias for ${app}, which is not ${engine}`)
+          }
+          continue
+        }
+        unreachable ??= path
+        continue
+      }
+      return held(`Waiting to confirm access to the selected engine executable (${path}).`)
     }
     const executable = executableSnapshot(nativeVersionProbe({ args: [], output: /^$/, timeoutMs: 5_000 }, () => path))
     if (!executable) return held('Waiting for the selected engine executable to stop changing.')
     return { state: 'ready', executable, environment: withNodeForScript(path, environment) }
   }
   if (aliased) return held('Waiting to confirm the engine search path and its aliases.')
-  if (unreachable) return held('Waiting to confirm access to the selected engine executable.')
+  if (unreachable) return held(`Waiting to confirm access to the selected engine executable (${unreachable}).`)
   return recipe ? { state: 'install', recipe, environment: environment as Record<string, string> } : held('Waiting for the configured engine executable to become available.')
 }
 

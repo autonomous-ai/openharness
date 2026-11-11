@@ -52,6 +52,9 @@ function sources(): string[] {
 
 function loginReadsIn(path: string): string[] {
   const text = readFileSync(path, 'utf8')
+  // A marker in a string or a name is in the file's text too, so a file without one in its text has none to find: only
+  // the few that do are parsed. Parsing all of them took 4.5 s here and passed the 5 s limit on a busy CI runner.
+  if (!STRING_MARKERS.some(marker => text.includes(marker)) && ![...NAME_MARKERS].some(name => text.includes(name))) return []
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
   const found: string[] = []
   const where = (node: ts.Node) => `${relative(CLI, path)}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`

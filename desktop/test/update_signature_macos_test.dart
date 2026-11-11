@@ -1,5 +1,7 @@
+import 'dart:ffi';
 import 'dart:io';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/update/update_signature.dart';
 import 'package:path/path.dart' as p;
@@ -7,7 +9,8 @@ import 'package:path/path.dart' as p;
 /// Real `codesign` on real bundles. Unsigned and ad-hoc fixtures are built
 /// here; a Developer ID, notarized one cannot be (that needs the signing
 /// identity), so the signed cases use an installed release:
-/// `HARNESS_SIGNED_APP_FIXTURE`, else `/Applications/Harness.app`.
+/// `HARNESS_SIGNED_APP_FIXTURE`, else `/Applications/Harness.app`, only read:
+/// a case that stages or changes it works on a clone in its own temp folder.
 final String? _macOnly = Platform.isMacOS ? null : 'needs codesign (macOS)';
 
 String? _signedRelease() {
@@ -61,13 +64,46 @@ String _adHocBundle(String dir, String name) {
   return bundle;
 }
 
-/// An APFS clone: instant, and changing it leaves the original alone.
+/// An APFS clone of the whole bundle in one clonefile(2), and changing it
+/// leaves the original alone. `cp -cR` clones the release's ~6,000 files one
+/// by one, which took 15-66 s on a loaded Mac and ran the test out of time;
+/// it stays for a fixture clonefile cannot clone, such as one on another
+/// volume (errno 18), and copies it.
 String _clone(String source, String dir, String name) {
   final target = p.join(dir, name);
-  final copy = Process.runSync('/bin/cp', ['-cR', source, target]);
-  expect(copy.exitCode, 0, reason: '${copy.stderr}');
+  final from = source.toNativeUtf8(), to = target.toNativeUtf8();
+  // Both looked up first: a lookup between the call and the read could
+  // change errno.
+  final (clonefile, errno) = (_clonefile, _errno);
+  final int result, error;
+  try {
+    result = clonefile(from, to, 0);
+    error = result == 0 ? 0 : errno().value;
+  } finally {
+    malloc
+      ..free(from)
+      ..free(to);
+  }
+  if (result != 0) {
+    final copy = Process.runSync('/bin/cp', ['-cR', source, target]);
+    expect(
+      copy.exitCode,
+      0,
+      reason: 'clonefile $source: errno $error; cp -cR: ${copy.stderr}',
+    );
+  }
   return target;
 }
+
+final _clonefile = DynamicLibrary.process()
+    .lookupFunction<
+      Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Uint32),
+      int Function(Pointer<Utf8>, Pointer<Utf8>, int)
+    >('clonefile');
+final _errno = DynamicLibrary.process()
+    .lookupFunction<Pointer<Int32> Function(), Pointer<Int32> Function()>(
+      '__error',
+    );
 
 Matcher _refusedWith(String text) => throwsA(
   isA<UpdateRefused>().having((e) => e.message, 'message', contains(text)),

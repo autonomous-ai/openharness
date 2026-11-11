@@ -21,6 +21,23 @@ const windows = () => import('./windowsSerial.js')
 
 const runFile = promisify(execFile)
 
+// One ioreg or stty that never returned used to hold discovery (or a port open) until the daemon restarted,
+// and said nothing. execFile's `timeout` kills the child; the race below ends the wait even if the kill
+// does not, since execFile settles only once the child has exited.
+const TOOL_TIMEOUT_MS = 5000
+
+/** A system tool (ioreg, stty) that did not answer in time. */
+export class SerialToolTimeoutError extends Error {
+  override readonly name = 'SerialToolTimeoutError'
+  constructor(readonly tool: string) { super(`${tool} did not answer in ${TOOL_TIMEOUT_MS / 1000} s`) }
+}
+
+function withinToolTimeout<T>(tool: string, work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new SerialToolTimeoutError(tool)), TOOL_TIMEOUT_MS) })
+  return Promise.race([work, late]).finally(() => clearTimeout(timer))
+}
+
 // Darwin's O_EXLOCK (sys/fcntl.h). Node accepts it as an open flag but does not
 // expose the constant. The kernel arbitrates competing opens across users;
 // lsof cannot see another macOS account's descriptors and also has a TOCTOU race.
@@ -117,7 +134,7 @@ export function createDarwinDialFinder(deps: { listDev: () => string[]; runIoreg
     const age = last ? deps.now() - last.at : -1 // a clock stepped back (age < 0) must not pin the cache; '' is a valid fingerprint
     if (!(last && last.settled && fingerprint !== null && fingerprint === last.fingerprint && age >= 0 && age < DIAL_RESCAN_MS)) {
       const prev = last // read before the await; the first scan ever is not an edge
-      const ports = parseDarwinDialPorts(await deps.runIoreg())
+      const ports = parseDarwinDialPorts(await withinToolTimeout('ioreg', deps.runIoreg()))
       const names = new Set((entries ?? []).map(entry => entry.replace(/:\d+:\d+$/, '')))
       last = { settled: (!prev || prev.fingerprint === fingerprint) && ports.every(port => names.has(basename(port.path))), fingerprint, ports, at: deps.now() }
     }
@@ -133,7 +150,7 @@ const findDarwin = createDarwinDialFinder({
   runIoreg: async () => {
     try {
       // Keep each USB device's children (the tty lives below its vendor/product IDs), but skip the rest of the IOService plane.
-      return (await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })).stdout
+      return (await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024, timeout: TOOL_TIMEOUT_MS })).stdout
     } catch {
       throw new Error('Could not enumerate USB dials')
     }
@@ -278,7 +295,7 @@ export class SerialLink {
       // carrier — which is what unplugging a USB serial device looks like — does not hang the port up
       // underneath us.
       const flag = process.platform === 'darwin' ? '-f' : '-F'
-      await runFile('stty', [flag, path, 'raw', 'clocal', '-echo', '-echoe', '-echok', '-echoctl', '-echoke', 'min', '1', 'time', '0'])
+      await withinToolTimeout('stty', runFile('stty', [flag, path, 'raw', 'clocal', '-echo', '-echoe', '-echok', '-echoctl', '-echoke', 'min', '1', 'time', '0'], { timeout: TOOL_TIMEOUT_MS }))
 
       // O_NOCTTY IS LOAD-BEARING, AND ITS ABSENCE KILLED THE DAEMON.
       //

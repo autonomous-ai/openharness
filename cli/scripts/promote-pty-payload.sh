@@ -10,18 +10,25 @@
 # removed from harness/staging/pty/<version>/ while production names them. A version older than the one production
 # holds is refused unless --allow-downgrade is given.
 #
+# Only a zip whose every file Windows found signed is promoted: PTY_SIGNED_ZIPS names them, `<key>=<sha256>` each,
+# space-separated, as cli/scripts/windows-ci/check-pty-signatures.ps1 prints them (release.yml's pty-signatures job runs
+# it on a Windows runner). From 2026-11-04 to 11-09 production named an unsigned host, and Smart App Control then blocked
+# harness-launch.exe, so Harness could neither start nor update itself on those computers.
+#
 # The owner's production order for Windows, once the staging E2E (docs/testing/windows-cli-e2e.md) has passed, and
 # after the merge to main. Each step reads what the one before it published:
 #   1. the Node runtime: run the "Node runtime for Windows" workflow (release-node-runtime-windows.yml) with
 #      metadata_path harness/runtime/metadata.json;
 #   2. the pty payload: run the "Release" workflow (release.yml) for <version> with promote_pty, which runs this
-#      script on CI's federated credential after that run's staging read-back verified the zips;
-#      a maintainer's own gcloud still works too (DRY_RUN=1 DRY_RUN_OUT=<dir> checks and writes nothing);
-#   3. the installer: bash cli/scripts/upload-install-ps1.sh --production
+#      script on CI's federated credential after that run's staging read-back verified the zips and its pty-signatures
+#      job their signatures; a maintainer's own gcloud still works too, with PTY_SIGNED_ZIPS from
+#      check-pty-signatures.ps1 run on Windows (DRY_RUN=1 DRY_RUN_OUT=<dir> checks and writes nothing);
+#   3. the installer: release.yml's promote-pty job publishes it after the host when <version> is the live CLI's
+#      (bash cli/scripts/upload-install-ps1.sh --production by hand otherwise)
 #
 # Environment: GCS_BUCKET; STAGING_METADATA_PATH (harness/staging/pty/metadata.json); METADATA_PATH, the manifest
-# promoted into (harness/pty/metadata.json); DRY_RUN=1 with DRY_RUN_OUT=<dir> reads and checks, and writes nothing to
-# the bucket. Needs gcloud (authenticated), curl and node.
+# promoted into (harness/pty/metadata.json); PTY_SIGNED_ZIPS, the zips found signed (above); DRY_RUN=1 with
+# DRY_RUN_OUT=<dir> reads and checks, and writes nothing to the bucket. Needs gcloud (authenticated), curl and node.
 set -euo pipefail
 
 ALLOW_DOWNGRADE=0
@@ -100,6 +107,11 @@ JS
     exit 1
   fi
   { read -r version; read -r url; read -r sha; read -r size; } <<< "$fields"
+  case " ${PTY_SIGNED_ZIPS:-} " in
+    *" $key=$sha "*) ;;
+    *) echo "error: the $key zip of $VERSION (sha256 $sha) is not one Windows found signed (PTY_SIGNED_ZIPS): run cli/scripts/windows-ci/check-pty-signatures.ps1 -Version $VERSION on Windows first; nothing was promoted." >&2
+       exit 1 ;;
+  esac
   echo ">> checking $key: $url"
   curl -fsSL --retry 3 --retry-all-errors --max-time 300 -H 'Cache-Control: no-cache' "$url" -o "$WORK/$key.zip" \
     || { echo "error: could not fetch $url; nothing was promoted." >&2; exit 1; }
