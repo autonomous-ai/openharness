@@ -85,32 +85,109 @@ Future<SuperTabController> mount(
 }
 
 void main() {
-  testWidgets('Manage has title, counted filters and status groups', (
-    tester,
-  ) async {
-    await mount(tester);
-    expect(find.text('Machines'), findsOneWidget);
-    expect(key('machines-search'), findsOneWidget);
-    expect(find.text('All 4'), findsOneWidget);
-    expect(find.text('Online 2'), findsOneWidget);
-    expect(find.text('Asleep 1'), findsOneWidget);
-    expect(find.text('Offline 1'), findsOneWidget);
-    expect(find.text('YOUR MACHINE'), findsOneWidget);
-    expect(find.text('ONLINE · 1'), findsOneWidget);
-    expect(find.text('ASLEEP · 1'), findsOneWidget);
-    expect(find.text('OFFLINE · 1'), findsOneWidget);
-    expect(find.text('Sorted by status, then name'), findsOneWidget);
+  testWidgets(
+    'Manage › Machines (Swarm v4): the counts a person acts on, search and Add machine, quiet groups; nothing that only describes',
+    (tester) async {
+      await mount(tester);
+      // The Machines tab above names the page: no second title.
+      expect(find.text('Machines'), findsNothing);
+      expect(key('machines-search'), findsOneWidget);
+      expect(find.text('Add machine'), findsOneWidget);
+      // The page's one blue action, a capsule.
+      expect(
+        tester
+            .widget<FilledButton>(key('super-manage-add-machine'))
+            .style!
+            .shape!
+            .resolve({}),
+        isA<StadiumBorder>(),
+      );
+      expect(find.text('2 online · 1 asleep · 1 offline'), findsOneWidget);
+      // No filter chips and no note on the order: search narrows the list, and the groups say the order.
+      for (final id in ['all', 'online', 'asleep', 'offline']) {
+        expect(key('machines-filter-$id'), findsNothing);
+      }
+      expect(find.text('Sorted by status, then name'), findsNothing);
+      // Sentence-case quiet headings, as the left pane's.
+      for (final (id, label) in [
+        ('yours', 'Yours'),
+        ('online', 'Online'),
+        ('asleep', 'Asleep'),
+        ('offline', 'Offline'),
+      ]) {
+        expect(
+          find.descendant(
+            of: key('super-machines-group-$id'),
+            matching: find.text(label),
+          ),
+          findsOneWidget,
+          reason: id,
+        );
+      }
+      expect(find.textContaining(RegExp(r'^[A-Z ·0-9]{4,}$')), findsNothing);
+      expect(
+        tester.getTopLeft(key('machines-line-mine')).dy,
+        lessThanOrEqualTo(160),
+      );
+    },
+  );
+
+  testWidgets(
+    'Manage › Machines stands on the Swarm\'s ground, light and dark',
+    (tester) async {
+      for (final brightness in Brightness.values) {
+        final before = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        await mount(tester);
+        final ground = tester
+            .widgetList<ColoredBox>(
+              find.ancestor(
+                of: key('machines-search'),
+                matching: find.byType(ColoredBox),
+              ),
+            )
+            .first;
+        expect(
+          ground.color,
+          grid.AppPalette.swarmField,
+          reason: brightness.name,
+        );
+        grid.AppTheme.brightness.value = before;
+      }
+    },
+  );
+
+  testWidgets('a count at 0 is left out', (tester) async {
+    final server = ConversationServer();
+    final c = await mount(tester, fixture: server);
+    server.state['machines'] = [machine('mine', 'My Mac', 'owner', 0)];
+    server.revision++;
+    await tester.runAsync(c.refresh);
+    await tester.pump();
+    expect(find.text('1 online'), findsOneWidget);
     expect(
-      tester.getTopLeft(key('machines-line-mine')).dy,
-      lessThanOrEqualTo(160),
+      find.textContaining(RegExp(r'\b0 (online|asleep|offline)')),
+      findsNothing,
     );
   });
 
   testWidgets(
-    'Manage rows have leading dots, owner badge and aligned disk bars, and no crew (v3)',
+    'Manage rows: a status dot, the name, its owner and when last seen, disk free at the right; no badge, no blue',
     (tester) async {
       await mount(tester);
-      expect(find.text('OWNER'), findsOneWidget);
+      // Yours is the group that says whose it is: no badge, and the reader's own row is no blue row.
+      expect(find.text('OWNER'), findsNothing);
+      expect(
+        tester.widget<Material>(key('machines-surface-mine')).color,
+        Colors.transparent,
+      );
+      expect(
+        tester.widget<Text>(key('super-machine-name-mine')).style!.color,
+        grid.AppPalette.textPrimary,
+      );
+      // The disk is what is free, nothing more: no total and no bar.
+      expect(find.textContaining('of 1 TB'), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
       for (final id in ['mine', 'build', 'sleep', 'old']) {
         expect(tester.getSize(key('machines-line-$id')).height, 56);
         expect(key('machines-crew-$id'), findsNothing);
@@ -134,32 +211,22 @@ void main() {
     },
   );
 
-  testWidgets(
-    'search combines with status filters and recovers from no matches',
-    (tester) async {
-      await mount(tester);
-      await tester.tap(key('machines-filter-offline'));
-      await tester.pump();
-      expect(key('super-machine-row-old'), findsOneWidget);
-      expect(key('super-machine-row-mine'), findsNothing);
-      await tester.enterText(key('machines-search'), 'BUILD');
-      await tester.pump();
-      expect(
-        find.text('No machines match your search and filter.'),
-        findsOneWidget,
-      );
-      await tester.tap(key('machines-filter-all'));
-      await tester.pump();
-      expect(key('super-machine-row-build'), findsOneWidget);
-      expect(key('super-machine-row-old'), findsNothing);
-      await tester.enterText(key('machines-search'), '');
-      await tester.pump();
-      expect(key('super-machine-row-mine'), findsOneWidget);
-    },
-  );
-  testWidgets('pinned machine status updates summary and filter counts', (
+  testWidgets('search narrows the machines and says when none match', (
     tester,
   ) async {
+    await mount(tester);
+    await tester.enterText(key('machines-search'), 'BUILD');
+    await tester.pump();
+    expect(key('super-machine-row-build'), findsOneWidget);
+    expect(key('super-machine-row-old'), findsNothing);
+    await tester.enterText(key('machines-search'), 'nothing like it');
+    await tester.pump();
+    expect(find.text('No machine matches.'), findsOneWidget);
+    await tester.enterText(key('machines-search'), '');
+    await tester.pump();
+    expect(key('super-machine-row-mine'), findsOneWidget);
+  });
+  testWidgets('pinned machine status updates the counts', (tester) async {
     final server = ConversationServer();
     final c = await mount(tester, fixture: server);
     (server.state['machines'] as List)[0] = machine(
@@ -171,8 +238,6 @@ void main() {
     server.revision++;
     await tester.runAsync(c.refresh);
     await tester.pump();
-    expect(find.text('Online 1'), findsOneWidget);
-    expect(find.text('Asleep 2'), findsOneWidget);
     expect(find.text('1 online · 2 asleep · 1 offline'), findsOneWidget);
   });
 
@@ -184,7 +249,7 @@ void main() {
       expect(tester.getSize(key('machines-line-mine')).height, 56);
     },
   );
-  testWidgets('disk total changes redraw the aligned value and bar', (
+  testWidgets('a disk reading that changes redraws what is free', (
     tester,
   ) async {
     final server = ConversationServer();
@@ -192,21 +257,17 @@ void main() {
     final resources =
         (server.state['machines'] as List)[1]['observation']['resources']
             as Map;
-    resources['diskTotalBytes'] = 2000000000000;
+    resources['diskFreeBytes'] = 50000000000;
     server.revision++;
     await tester.runAsync(c.refresh);
     await tester.pump();
     expect(
       find.descendant(
         of: key('machines-disk-build'),
-        matching: find.text('of 2 TB'),
+        matching: find.text('50 GB free'),
       ),
       findsOneWidget,
     );
-    final bar = tester.widget<LinearProgressIndicator>(
-      key('machines-disk-bar-build'),
-    );
-    expect(bar.value, .1);
   });
   testWidgets('duplicate hostnames include their owners', (tester) async {
     final server = ConversationServer();
@@ -312,7 +373,8 @@ void main() {
         of: key('machines-disk-$id'),
         matching: find.byType(RichText),
       );
-      expect(texts, findsNWidgets(2));
+      // What is free, its one figure.
+      expect(texts, findsOneWidget);
       for (final text in texts.evaluate()) {
         expect(
           (text.renderObject! as RenderParagraph).didExceedMaxLines,

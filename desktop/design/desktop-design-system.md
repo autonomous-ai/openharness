@@ -705,6 +705,20 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   centred line (`Merged · 16:02`). The same read brings them: the newest 30
   comments (the rest a tap away), 30 reviews and each review's first 20 line
   comments. Read only, as a task is: agents write on GitHub.
+- **Machines** (`SuperTabMachines`, `super_tabs/machines.dart`): Manage ›
+  Machines in Swarm v4 (the lead for anh Dee, 2026-11-11), on the Swarm's
+  ground. The Machines tab names it, so it has no title of its own: one
+  metadata line of the counts a person acts on (`2 online · 1 offline`; a
+  count at 0 is left out), then the search field and the blue `Add machine`.
+  The reader's own computers sit under `Yours`, then `Online`, `Asleep`,
+  `Status unknown` and `Offline`, each a 12 `textSecondary` heading in
+  sentence case; an empty group has none. A row is the connection dot, the
+  name in 15 semibold primary, its owner (`This machine` for this one) and,
+  when it is not online, when it was last seen, in metadata grey, and at the
+  right what its disk has free in 12 faint (`200 GB free`; nothing without a
+  reading). No badge, no blue row, no filter chips, no note on the order and no
+  disk bar. A click opens its readings and agents beneath it; a machine with no
+  agents says nothing of them.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   one thing: `Project settings…`, whose rows are Rename project, Project
   details, Switch PM… and Delete Project. It has no Notifications: a channel

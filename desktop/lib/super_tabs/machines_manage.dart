@@ -24,8 +24,6 @@ Object _machineLayout(List<_MachineView> views) {
 
 extension _ManageMachines on _SuperTabMachinesState {
   bool _matchesMachine(_MachineView view) =>
-      (_machineFilter == 'all' ||
-          _machineStatusGroup(view) == _machineFilter) &&
       '${view.name} ${view.owner?.shownName ?? ''} ${view.id}'
           .toLowerCase()
           .contains(_machineSearch.trim().toLowerCase());
@@ -50,11 +48,15 @@ extension _ManageMachines on _SuperTabMachinesState {
     };
     int count(String group) =>
         views.where((v) => _machineStatusGroup(v) == group).length;
-    final summary =
-        '${count('online')} online · ${count('asleep')} asleep · ${count('offline')} offline';
+    // The counts a person acts on; a count at 0 is left out.
+    final summary = [
+      for (final group in ['online', 'asleep', 'offline'])
+        if (count(group) case final n when n > 0) '$n $group',
+    ].join(' · ');
     final machines = _machines(views);
     return ColoredBox(
-      color: MachinesStyle.background,
+      // The Swarm's one ground (design system, Swarm elements, One surface).
+      color: grid.AppPalette.swarmField,
       child: LayoutBuilder(
         builder: (context, page) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -75,13 +77,11 @@ extension _ManageMachines on _SuperTabMachinesState {
                           final narrow =
                               constraints.maxWidth <
                               MediaQuery.textScalerOf(context).scale(760);
-                          final title = Wrap(
-                            spacing: 12,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              Text('Machines', style: MachinesStyle.title()),
-                              Text(summary, style: MachinesStyle.body()),
-                            ],
+                          // The Machines tab above names the page: the counts alone.
+                          final title = Text(
+                            summary,
+                            key: const ValueKey('machines-summary'),
+                            style: DesktopChrome.metadata(),
                           );
                           final actions = SizedBox(
                             height: 36,
@@ -134,13 +134,9 @@ extension _ManageMachines on _SuperTabMachinesState {
                                     'super-manage-add-machine',
                                   ),
                                   onPressed: add,
+                                  // The app's one blue action, a capsule (design system, Geometry).
                                   style: FilledButton.styleFrom(
-                                    backgroundColor: MachinesStyle.accent,
-                                    foregroundColor: MachinesStyle.onAccent,
-                                    textStyle: MachinesStyle.body(),
-                                    shape: const RoundedRectangleBorder(
-                                      borderRadius: MachinesStyle.radius,
-                                    ),
+                                    shape: const StadiumBorder(),
                                   ),
                                   child: const Text('Add machine'),
                                 ),
@@ -164,64 +160,6 @@ extension _ManageMachines on _SuperTabMachinesState {
                                   ],
                                 );
                         },
-                      ),
-                    ),
-                    Divider(height: 1, color: MachinesStyle.line),
-                    Padding(
-                      padding: MachinesStyle.filterInset,
-                      child: Wrap(
-                        alignment: WrapAlignment.spaceBetween,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              for (final (id, label, total) in [
-                                ('all', 'All', views.length),
-                                ('online', 'Online', count('online')),
-                                ('asleep', 'Asleep', count('asleep')),
-                                ('offline', 'Offline', count('offline')),
-                                if (count('unknown') > 0)
-                                  (
-                                    'unknown',
-                                    'Status unknown',
-                                    count('unknown'),
-                                  ),
-                              ])
-                                ChoiceChip(
-                                  key: ValueKey('machines-filter-$id'),
-                                  label: Text('$label $total'),
-                                  selected: _machineFilter == id,
-                                  showCheckmark: false,
-                                  materialTapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  visualDensity: VisualDensity.compact,
-                                  padding: EdgeInsets.zero,
-                                  onSelected: (_) {
-                                    _machineFilter = id;
-                                    _changed();
-                                  },
-                                  labelStyle: MachinesStyle.small(
-                                    color: _machineFilter == id
-                                        ? MachinesStyle.background
-                                        : MachinesStyle.metadata,
-                                  ),
-                                  selectedColor: MachinesStyle.ink,
-                                  backgroundColor: MachinesStyle.background,
-                                  side: BorderSide(color: MachinesStyle.line),
-                                  shape: const RoundedRectangleBorder(
-                                    borderRadius: MachinesStyle.pillRadius,
-                                  ),
-                                ),
-                            ],
-                          ),
-                          Text(
-                            'Sorted by status, then name',
-                            style: MachinesStyle.small(),
-                          ),
-                        ],
                       ),
                     ),
                     if (c.backendUnreachable)
@@ -256,7 +194,7 @@ extension _ManageMachines on _SuperTabMachinesState {
                     Padding(
                       padding: MachinesStyle.headerInset,
                       child: Text(
-                        'No machines match your search and filter.',
+                        'No machine matches.',
                         style: MachinesStyle.body(),
                       ),
                     )
@@ -280,14 +218,12 @@ class _ManageMachineLine extends StatelessWidget {
     required this.own,
     required this.local,
     required this.now,
-    this.port,
     required this.onMore,
   });
   final _MachineView view;
   final String name;
   final bool own, local;
   final DateTime now;
-  final int? port;
   final Future<void> Function(Offset) onMore;
 
   @override
@@ -362,50 +298,14 @@ class _ManageMachineLine extends StatelessWidget {
                               key: ValueKey('super-machine-name-${view.id}'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: MachinesStyle.name(own: own),
+                              style: MachinesStyle.name(),
                             ),
                           ),
                         ),
-                        if (own) ...[
-                          const SizedBox(width: 4),
-                          Container(
-                            padding: MachinesStyle.badgeInset,
-                            decoration: BoxDecoration(
-                              color: MachinesStyle.accent.withValues(
-                                alpha: .15,
-                              ),
-                              borderRadius: MachinesStyle.radius,
-                            ),
-                            child: Text(
-                              'OWNER',
-                              style: MachinesStyle.small(
-                                color: MachinesStyle.selectedInk,
-                                heading: true,
-                              ),
-                            ),
-                          ),
-                        ],
                       ],
                     ),
-                    Text.rich(
-                      TextSpan(
-                        text: local ? 'This machine' : metadata,
-                        children: local
-                            ? [
-                                TextSpan(
-                                  text:
-                                      ' · ${view.id.length > 8 ? view.id.substring(0, 8) : view.id}${port == null ? '' : ' · port $port'}',
-                                  style: MachinesStyle.identity(),
-                                ),
-                                if (view.cleaning || group != 'online')
-                                  TextSpan(
-                                    text: metadata.substring(
-                                      'This machine'.length,
-                                    ),
-                                  ),
-                              ]
-                            : null,
-                      ),
+                    Text(
+                      metadata,
                       key: ValueKey('machines-metadata-${view.id}'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -445,46 +345,22 @@ class _MachineDisk extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final resources = view.resources;
-    final total = resources?.projectDiskTotalBytes ?? resources?.diskTotalBytes;
     final free = resources?.projectDiskTotalBytes == null
         ? resources?.diskFreeBytes
         : resources?.projectDiskFreeBytes;
-    final fraction = total != null && total > 0 && free != null
-        ? (free / total).clamp(0.0, 1.0)
-        : null;
-    return Column(
+    // What is free, the one figure that decides where an agent goes; nothing when there is no reading.
+    return Align(
       key: ValueKey('machines-disk-${view.id}'),
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text(
-          free == null ? 'Disk unavailable' : '${resourceBytes(free)} free',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: MachinesStyle.body(color: MachinesStyle.ink)
-              .copyWith(fontFeatures: MachinesStyle.tabular),
-        ),
-        Text(
-          total == null
-              ? 'No reading'
-              : 'of ${total >= 1000000000000 ? '${(total / 1000000000000).toStringAsFixed(total % 1000000000000 == 0 ? 0 : 1)} TB' : resourceBytes(total)}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: MachinesStyle.small().copyWith(
-            fontFeatures: MachinesStyle.tabular,
-          ),
-        ),
-        const SizedBox(height: 4),
-        if (fraction != null)
-          LinearProgressIndicator(
-            key: ValueKey('machines-disk-bar-${view.id}'),
-            value: fraction,
-            minHeight: 3,
-            borderRadius: MachinesStyle.radius,
-            color: fraction < .25 ? MachinesStyle.asleep : MachinesStyle.online,
-            backgroundColor: MachinesStyle.chip,
-          ),
-      ],
+      alignment: Alignment.centerRight,
+      child: free == null
+          ? null
+          : Text(
+              '${resourceBytes(free)} free',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(color: grid.AppPalette.textFaint)
+                  .copyWith(fontFeatures: MachinesStyle.tabular),
+            ),
     );
   }
 }

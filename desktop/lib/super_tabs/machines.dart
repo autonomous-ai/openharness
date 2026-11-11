@@ -209,7 +209,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   String? _selectedMachineId;
   String? _focusedMachineId;
   String _machineSearch = '';
-  String _machineFilter = 'all';
   Object? _manageLayoutDrawn;
   Map<String, String> _manageNames = const {};
 
@@ -997,11 +996,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 ? BorderSide(color: MachinesStyle.accent, width: 2)
                 : BorderSide.none,
           ),
-          color: view.owner?.id == c.accountId
-              ? MachinesStyle.selected
-              : selected
-              ? grid.AppSurface.selectedFill
-              : Colors.transparent,
+          color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
           clipBehavior: Clip.antiAlias,
           // No chevron (Dee, 2026-10-27): a click expands the machine, and its
           // details are in the right-click menu, or a long press on a touch screen.
@@ -1055,11 +1050,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     own: view.owner?.id == c.accountId,
                     local: widget.app?.stateOf(view.id)?.isLocalMachine == true,
                     now: widget.now(),
-                    port: widget.app
-                        ?.stateOf(view.id)
-                        ?.localEndpoint
-                        ?.wsUri
-                        .port,
                     onMore: (at) => _menu(view, at),
                   ),
                 ),
@@ -1119,9 +1109,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             ? 'Offline'
                             : view.status == SuperTabMachineStatus.unknown
                             ? "Can't reach Harness"
-                            : view.status == SuperTabMachineStatus.refreshing
-                            ? 'Refreshing…'
-                            : 'No agents yet',
+                            : 'Refreshing…',
                         style: DesktopChrome.metadata(),
                       ),
                     ),
@@ -1420,7 +1408,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// Status first (Scholes, task #3801): the reader's own machines pinned in Yours, then Online, Status unknown and
-  /// Offline, each under a heading with its count. A group with no machine has no heading.
+  /// Offline, each under its quiet heading. A group with no machine has no heading.
   List<(String, String, List<_MachineView>)> _groups([
     List<_MachineView>? sorted,
   ]) {
@@ -1453,15 +1441,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// A group's heading, announced as one.
-  Widget _groupHeading(String key, String label, int count) => Semantics(
+  Widget _groupHeading(String key, String label) => Semantics(
     key: ValueKey('super-machines-group-$key'),
     header: true,
     container: true,
     child: Padding(
       padding: MachinesStyle.groupInset,
       child: Text(
-        key == 'yours' ? 'YOUR MACHINE' : '${label.toUpperCase()} · $count',
-        style: MachinesStyle.small(heading: true),
+        label,
+        style: DesktopChrome.metadata(color: grid.AppPalette.textSecondary),
       ),
     ),
   );
@@ -1533,7 +1521,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     });
     return [
       for (final (key, label, views) in groups) ...[
-        _groupHeading(key, label, views.length),
+        _groupHeading(key, label),
         for (final id in [for (final v in views) v.id])
           ValueListenableBuilder<int>(
             key: ValueKey('super-machine-row-$id'),
