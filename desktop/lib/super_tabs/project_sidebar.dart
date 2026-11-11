@@ -35,6 +35,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewSwarm,
     this.onRenameSwarm,
     this.onManage,
+    this.onInvite,
     this.onManageMachines,
     this.manageSelected = false,
     this.devicesSelected = false,
@@ -103,6 +104,12 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Opens Manage (Machines, Models, Devices, Swarm), the row at the foot.
   final VoidCallback? onManage;
+
+  /// Opens the Swarm's people, to invite someone: a row under the Swarm's name for its owner, the one person who may invite
+  /// (backend commands.ts, invite.create), and never in their Personal Swarm, which is theirs alone. People join a Swarm by
+  /// an invitation, and Manage people was the only way there (anh Dee, 2026-11-11: "it's quite difficult to invite people.
+  /// i have no idea where to find it. invite should be visible").
+  final VoidCallback? onInvite;
 
   /// Opens Manage on its Machines, where a computer in Your Machines is managed.
   final VoidCallback? onManageMachines;
@@ -297,8 +304,14 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your Team, Projects, then Top Teams; Manage
-  /// stays at the foot. Nothing else.
+  /// Whether this is the person's Personal Swarm, theirs alone (manage_page.dart, swarm_switcher.dart).
+  bool get _personal => switch (app) {
+    final app? => PersonalSwarm.of(app).id == controller.tabId,
+    null => false,
+  };
+
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Invite people for its owner, Your Team,
+  /// Projects, then Top Teams; Manage stays at the foot. Nothing else.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
@@ -315,6 +328,13 @@ class ProjectSidebar extends StatelessWidget {
         channels.isNotEmpty || projectStarts.isNotEmpty || controller.canWrite;
     return [
       ?switcher,
+      if (onInvite case final invite? when controller.isOwner && !_personal)
+        _iconRow(
+          key: 'project-sidebar-invite',
+          icon: AppIcons.userPlus,
+          name: 'Invite people',
+          onTap: invite,
+        ),
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
       if (projects) ...[
@@ -674,7 +694,13 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?leaderboard, ?agentStates, ?app?.swarmStarts]) {
+    // PersonalSwarm: which Swarm is the person's own decides Invite people, and it can be known only after the pane is drawn.
+    child: switch ([
+      ?leaderboard,
+      ?agentStates,
+      ?app?.swarmStarts,
+      if (app case final app?) PersonalSwarm.of(app),
+    ]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),

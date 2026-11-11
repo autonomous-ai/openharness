@@ -108,7 +108,12 @@ values to creation, search and desktop presenters; it is not a second palette.
 `DesktopDialogHeader` provides the shared title/dismiss anatomy.
 `DesktopPromptSurface` keeps form actions visible beneath scrolling content.
 `DesktopPill` is the selector/scope variant of the same control family.
-`AppMenuItem` is the ordinary context-menu row. `AppDropdown` is every
+`AppMenuItem` is the ordinary context-menu row. A row that stands somewhere
+says so in one word at its far end (`state`: `fails`, `not run`), 12 and faint,
+in the error ink when it failed, and in the active row's detail ink on blue; a
+`trailing` widget keeps its own colours and is not for a word of state. A
+dropdown's search finds a row by that word too.
+`AppDropdown` is every
 dropdown: however a click or a key opened it, the control that opened it holds
 focus, and Escape closes the menu from there and leaves focus on the control (on
 a submenu's own row it closes the submenu first). Controllers, keymaps, pending
@@ -753,6 +758,40 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   machine, its engines and the model: each engine is one row, `Claude Code`
   with `Current · 40% left` under it, for its machine's default account,
   the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
+- **Goal score** (`SwarmGoalScore`, `super_tabs/goal_score.dart`; in the
+  gallery; [design note](../../docs/design/2026-11-11-swarm-goal/README.md)).
+  A project that states its goal in `agents/GOAL.md` says how far it is in its
+  bar, 12 after the name's chevron: `Goal 41 of 60`, the milestones whose check
+  passes on the default branch out of those the file lists, in 12-point
+  metadata grey with tabular figures, as an agent's bar says where it runs. A
+  score is plain figures ([Numbers and rankings](#numbers-and-rankings)): no
+  ring, bar or chart, and no count of failures at rest. It is a dropdown that
+  stays plain text until hovered (rule 5): hover, focus or its open menu brings
+  `chevronDown` at 14 and the primary ink, and the chevron's room is kept at
+  rest. The name gives way before the score does. Its menu, 320 wide at most,
+  lists the milestones that do not pass yet, those that fail first, then those
+  not run, each in the file's order, with the row's state word (`fails` in the
+  error ink, `not run` faint); past 8 rows it opens on its search field, as
+  every dropdown does, and `fails` typed there leaves the rows that fail. A
+  milestone's name is the repository's text: a row and its tooltip show it
+  without control characters and the marks that turn a line's direction. A row
+  opens its check run on GitHub, only a page of github.com over https, or
+  `agents/GOAL.md` when nothing ran for it. Tab reaches the score, Enter opens
+  it, the arrows move among its rows and Enter opens one. With every milestone
+  passing it is text alone, with
+  no chevron and no menu; a project with no goal file, or no row in it, shows
+  nothing, and its bar is as it was. A read that fails keeps the last score,
+  and the menu's first line says why in the board's own words (`Sign in to
+  GitHub: run gh auth login.`; with no gh, `Install the GitHub CLI (gh) to see
+  the goal.`), in metadata grey; a score that is text alone says it in its
+  tooltip; with no earlier score nothing shows. Desktop reads it with `gh`
+  (`SwarmGitHub.goal`), by the REST calls the daemon makes and by its rules
+  (`cli/src/superTabs/goal.ts`), so the bar and the PM are told one number:
+  when the project's bar comes on screen, every five minutes while it stays,
+  and when the menu opens, each only on a reading older than a minute. An
+  answer that comes after a later read's is dropped. Nothing is read for a
+  project that is not shown, on a phone, or while the Swarm is out of sight.
+  `test/swarm_goal_score_test.dart` clicks through it.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -897,6 +936,7 @@ Top to bottom:
 
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover; its menu: Personal, your Swarms, Rename (one you may change), New Swarm
+ ⊕  Invite people             its owner only, never in Personal: opens the Swarm's people (Manage people), where a link, a domain or an invitation is made
  Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◌  Faye            starting  first: a New agent going on after its form closed, a grey face; a click opens nothing yet
  ◌  Ivy               failed  its start failed: `failed` in red; a click opens its form again with why, and Try again
@@ -930,6 +970,7 @@ Top to bottom:
 | Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it until its person clicks it: the click makes it an agent as Attach does (its own 1:1 chat opens, its terminal shows beside the chat) and the row is then the agent's. The row says `joining` while that goes on and waits, one join at a time; a refusal is said in a line at the foot and the next click finishes the join; a row of a computer that is off does nothing. |
 | Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). The Swarm's own first project (Personal) is not listed while it names no repository, except while its chat is open or has something unread; nothing of it is deleted. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
+| Invite people | `ProjectSidebar.onInvite` (`super_tabs/project_sidebar.dart`) | A quiet row with `AppIcons.userPlus`, right under the org name, for the Swarm's owner alone (only an owner invites: backend `commands.ts`, `invite.create`), and never in their Personal Swarm, which is theirs alone; it opens the Swarm's people (`showSuperTabSharing`). In sight, not in Manage: people join a Swarm by an invitation, and each brings their agents and computers (anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible"). |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
 The phone keeps its own rows. The browser draws this pane, as the Desktop does.

@@ -176,12 +176,12 @@ describe('what Harness says of the counts', () => {
       + 'If the work is done, tell your person.')
     expect(shortLine(['Ada'], numbers(), '14:00', null)).toContain('in the last 24 hours. The project states no goal: `harness super-tab goal` in your checkout writes agents/GOAL.md and the workflow that checks it. Open the next tasks')
     expect(shortLine(['Ada'], numbers(), '14:00', undefined)).toContain('in the last 24 hours. Open the next tasks')
-    expect(dayLine(numbers(), 'Wed 11 Nov', goal)).toMatch(/ and 3 in hand\. Goal: 41 of 60 checks pass on the main branch, 3 fail and 16 wait\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 2, passed: 2, failed: 0, waiting: 0 })).toMatch(/ Goal: 2 of 2 checks pass on the main branch\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 1, failed: 0, waiting: 0 })).toMatch(/ Goal: 1 of 1 check passes on the main branch\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 0, failed: 0, waiting: 1 })).toMatch(/ Goal: 0 of 1 check passes on the main branch, 0 fail and 1 waits\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 3, passed: 1, failed: 1, waiting: 1 })).toMatch(/ Goal: 1 of 3 checks pass on the main branch, 1 fails and 1 waits\.$/)
-    for (const none of [null, undefined]) expect(dayLine(numbers(), 'Wed 11 Nov', none)).toMatch(/ and 3 in hand\.$/)
+    expect(dayLine(numbers(), 'Wed 11 Nov', goal, '')).toMatch(/ and 3 in hand\. Goal: 41 of 60 checks pass on the main branch, 3 fail and 16 wait\.$/)
+    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 2, passed: 2, failed: 0, waiting: 0 }, '')).toMatch(/ Goal: 2 of 2 checks pass on the main branch\.$/)
+    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 1, failed: 0, waiting: 0 }, '')).toMatch(/ Goal: 1 of 1 check passes on the main branch\.$/)
+    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 0, failed: 0, waiting: 1 }, '')).toMatch(/ Goal: 0 of 1 check passes on the main branch, 0 fail and 1 waits\.$/)
+    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 3, passed: 1, failed: 1, waiting: 1 }, '')).toMatch(/ Goal: 1 of 3 checks pass on the main branch, 1 fails and 1 waits\.$/)
+    for (const none of [null, undefined]) expect(dayLine(numbers(), 'Wed 11 Nov', none, '')).toMatch(/ and 3 in hand\.$/)
   })
 
   it('tells the PM\'s person who still has nothing once the PM was told three times', () => {
@@ -192,11 +192,14 @@ describe('what Harness says of the counts', () => {
   })
 
   it('posts the day for the project\'s people', () => {
-    expect(dayLine(numbers(), 'Wed 11 Nov', undefined)).toBe('Harness, Wed 11 Nov, the last 24 hours: 12 pull requests landed (Pip 7, Kai 5) and 9 tasks closed. Now: 2 of 4 builders with nothing to do, 0 tasks open and 3 in hand.')
-    expect(dayLine(numbers({ builders: 0, free: [], landed: 94, landedBy: [['A', 50], ['B', 20], ['C', 10], ['D', 10], ['E', 3], ['F', 1]], closed: 1, open: 1, held: 0, more: true }), 'Wed 11 Nov', undefined))
+    expect(dayLine(numbers(), 'Wed 11 Nov', undefined, '')).toBe('Harness, Wed 11 Nov, the last 24 hours: 12 pull requests landed (Pip 7, Kai 5) and 9 tasks closed. Now: 2 of 4 builders with nothing to do, 0 tasks open and 3 in hand.')
+    expect(dayLine(numbers({ builders: 0, free: [], landed: 94, landedBy: [['A', 50], ['B', 20], ['C', 10], ['D', 10], ['E', 3], ['F', 1]], closed: 1, open: 1, held: 0, more: true }), 'Wed 11 Nov', undefined, ''))
       .toBe('Harness, Wed 11 Nov, the last 24 hours: 94 pull requests or more landed (A 50, B 20, C 10, D 10, E 3, others) and 1 task or more closed. Now: no builder is running, 1 task open and 0 in hand.')
-    expect(dayLine(numbers({ builders: 1, free: [], landed: 0, landedBy: [], closed: 2, open: -1 }), 'Thu 12 Nov', undefined)).toBe('Harness, Thu 12 Nov, the last 24 hours: 0 pull requests landed and 2 tasks closed. '
+    expect(dayLine(numbers({ builders: 1, free: [], landed: 0, landedBy: [], closed: 2, open: -1 }), 'Thu 12 Nov', undefined, '')).toBe('Harness, Thu 12 Nov, the last 24 hours: 0 pull requests landed and 2 tasks closed. '
       + 'Now: 0 of 1 builder with nothing to do, 0 tasks open and 3 in hand.')
+    // What the day's scoreboard says goes after what landed, before what is so now (scoreboard.ts).
+    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 2, passed: 2, failed: 0, waiting: 0 }, 'Trains: 4 landed.')).toBe('Harness, Wed 11 Nov, the last 24 hours: 12 pull requests landed (Pip 7, Kai 5) '
+      + 'and 9 tasks closed. Trains: 4 landed. Now: 2 of 4 builders with nothing to do, 0 tasks open and 3 in hand. Goal: 2 of 2 checks pass on the main branch.')
   })
 })
 
@@ -220,11 +223,13 @@ describe('the numbers, told as they are due', () => {
     const make = () => new PmNumbers({ send, file, now: () => clock.now, log })
     /** The project's goal, read when a line that says it is sent: one that cannot be read, unless a test gives another. */
     const goal = vi.fn(async (): Promise<Score | null> => { throw new Error('No goal is read in this test.') })
-    return { clock, sent, log, failing, tried, ids, file, make, numbers: make(), goal }
+    /** What the day's scoreboard says, read when the day is posted (scoreboard.ts): nothing, unless a test gives words. */
+    const board = vi.fn(async (): Promise<string> => '')
+    return { clock, sent, log, failing, tried, ids, file, make, numbers: make(), goal, board }
   }
   /** A pass every minute for [minutes], as the assigner makes them. */
   const passes = async (t: ReturnType<typeof setup>, minutes: number, counted: Numbers, pm = t.numbers) => {
-    for (let minute = 0; minute < minutes; minute++) { await pm.pass(PROJECT, counted, t.goal); t.clock.now += MINUTE }
+    for (let minute = 0; minute < minutes; minute++) { await pm.pass(PROJECT, counted, t.goal, t.board); t.clock.now += MINUTE }
   }
   const quiet = numbers({ landed: 0, landedBy: [], closed: 0 }), busy = { ...quiet, free: [] }
   const hows = (t: ReturnType<typeof setup>) => t.sent.map(([how]) => how)
@@ -342,7 +347,7 @@ describe('the numbers, told as they are due', () => {
     u.goal.mockResolvedValue(goal)
     await passes(u, 3 * 60 + 20, { ...quiet, landed: 1 })
     expect(u.sent.map(([how]) => how)).toEqual(['post', 'tell', 'tell', 'tell', 'say'])
-    expect(u.sent[0]![2]).toBe(dayLine({ ...quiet, landed: 1 }, 'Wed 11 Nov', goal))
+    expect(u.sent[0]![2]).toBe(dayLine({ ...quiet, landed: 1 }, 'Wed 11 Nov', goal, ''))
     expect(u.goal).toHaveBeenCalledTimes(4)
     // While a line waits to be tried again the goal is not read: every minute for hours, with its PM stopped (first review).
     const v = setup()
@@ -503,7 +508,7 @@ describe('the numbers, told as they are due', () => {
     await passes(late, 16, quiet)
     late.failing.clear()
     await passes(late, 20, quiet)
-    for (let minute = 0; minute < 16; minute++) { await elsewhere.numbers.pass({ ...PROJECT, projectId: 'other' }, quiet, elsewhere.goal); elsewhere.clock.now += MINUTE }
+    for (let minute = 0; minute < 16; minute++) { await elsewhere.numbers.pass({ ...PROJECT, projectId: 'other' }, quiet, elsewhere.goal, elsewhere.board); elsewhere.clock.now += MINUTE }
     expect(first.sent[0]![2]).not.toBe(late.sent[0]![2])
     expect(first.sent[0]![1]).toBe(late.sent[0]![1])
     expect(first.sent[1]![1]).not.toBe(first.sent[0]![1])
@@ -535,7 +540,7 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 2, landed)
     expect(t.sent).toEqual([])
     await passes(t, 3, landed)
-    expect(t.sent).toEqual([['post', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), dayLine(landed, 'Wed 11 Nov', undefined)]])
+    expect(t.sent).toEqual([['post', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), dayLine(landed, 'Wed 11 Nov', undefined, '')]])
     // Not again that day, by the same Harness or the next, nor when the clock is set back a day.
     await passes(t, 60, landed)
     await passes(t, 60, landed, t.make())
@@ -553,7 +558,7 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 1, landed)
     t.failing.clear()
     await passes(t, 2, { ...landed, closed: 10 })
-    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['post', dayLine(landed, 'Wed 11 Nov', undefined)], ['post', dayLine({ ...landed, closed: 10 }, 'Fri 13 Nov', undefined)]])
+    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['post', dayLine(landed, 'Wed 11 Nov', undefined, '')], ['post', dayLine({ ...landed, closed: 10 }, 'Fri 13 Nov', undefined, '')]])
     expect(t.sent[1]![1]).not.toBe(t.sent[0]![1])
     t.clock.now = new Date(2026, 10, 14, 9, 0).getTime()
     t.failing.set('post', new SuperTabHostError('OPERATION_REUSED', 'This operation was sent with other words.', 409))
@@ -562,20 +567,104 @@ describe('the numbers, told as they are due', () => {
     expect(kept(t).day).toBe('2026-11-14')
   })
 
+  it('reads the day\'s scoreboard only as the day is posted, once for the day however often the post is tried, and posts without one it cannot read', async () => {
+    const t = setup(new Date(2026, 10, 11, 8, 58).getTime()), landed = numbers({ free: [] })
+    t.board.mockResolvedValue('Trains: 4 landed.')
+    await passes(t, 2, landed)
+    expect(t.board).not.toHaveBeenCalled()
+    await passes(t, 3, landed)
+    expect(t.board).toHaveBeenCalledOnce()
+    expect(t.sent).toEqual([['post', expect.any(String), dayLine(landed, 'Wed 11 Nov', undefined, 'Trains: 4 landed.')]])
+    // A day with nothing to post reads none.
+    t.clock.now = new Date(2026, 10, 12, 9, 0).getTime()
+    await passes(t, 2, busy)
+    expect(t.board).toHaveBeenCalledOnce()
+    // A post the server did not take goes again with the scoreboard it was first made with: its reads are a hundred or more
+    // (scoreboard.ts), and are not made again at each try.
+    t.clock.now = new Date(2026, 10, 13, 9, 0).getTime()
+    t.failing.set('post', down)
+    await passes(t, 60, landed)
+    expect(t.tried.filter(how => how === 'post').length).toBeGreaterThan(4)
+    expect(t.board).toHaveBeenCalledTimes(2)
+    t.failing.clear()
+    await passes(t, 16, { ...landed, closed: 10 })
+    expect(t.board).toHaveBeenCalledTimes(2)
+    expect(t.sent.at(-1)![2]).toBe(dayLine({ ...landed, closed: 10 }, 'Fri 13 Nov', undefined, 'Trains: 4 landed.'))
+    // The next day's is read anew.
+    t.clock.now = new Date(2026, 10, 14, 9, 0).getTime()
+    t.board.mockResolvedValue('Trains: 5 landed.')
+    await passes(t, 1, landed)
+    expect(t.sent.at(-1)![2]).toBe(dayLine(landed, 'Sat 14 Nov', undefined, 'Trains: 5 landed.'))
+    // And never posted for another day: a post the server took on no try of its day is the next day's, with that day's scoreboard.
+    t.clock.now = new Date(2026, 10, 15, 9, 0).getTime()
+    t.failing.set('post', down)
+    await passes(t, 2, landed)
+    expect(t.board).toHaveBeenCalledTimes(4)
+    t.clock.now = new Date(2026, 10, 16, 9, 0).getTime()
+    t.failing.clear()
+    t.board.mockResolvedValue('Trains: 6 landed.')
+    await passes(t, 1, landed)
+    expect(t.board).toHaveBeenCalledTimes(5)
+    expect(t.sent.at(-1)![2]).toBe(dayLine(landed, 'Mon 16 Nov', undefined, 'Trains: 6 landed.'))
+    expect(kept(t).board).toBeUndefined()
+    // One that cannot be read is said once in the log, and the day is posted without it.
+    const u = setup(new Date(2026, 10, 11, 9, 0).getTime())
+    u.board.mockRejectedValue(new Error('GitHub did not answer.'))
+    await passes(u, 1, landed)
+    expect(u.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, '')])
+    expect(notes(u)).toEqual(['[super-tab] numbers: SCOREBOARD_UNREAD acme/app: GitHub did not answer.'])
+    u.clock.now += 24 * HOUR
+    u.board.mockRejectedValue('no words')
+    await passes(u, 1, landed)
+    expect(notes(u).at(-1)).toBe('[super-tab] numbers: SCOREBOARD_UNREAD acme/app: no words')
+  })
+
+  // Its review counted 3,000 requests a day with a server refusing the post and a daemon restarting each hour.
+  it('keeps what the scoreboard said with the project\'s record, so a daemon that restarts before the post is taken does not read it again', async () => {
+    const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
+    t.failing.set('post', down)
+    // That it is being read is written before the read: a daemon that stops in the middle of it finds that on its next start.
+    t.board.mockImplementation(async () => { expect(kept(t).board).toEqual({ day: '2026-11-11', words: '' }); return 'Trains: 4 landed.' })
+    await passes(t, 1, landed)
+    expect(t.board).toHaveBeenCalledOnce()
+    expect(kept(t).board).toEqual({ day: '2026-11-11', words: 'Trains: 4 landed.' })
+    // The next daemon, the same day: the post goes with those words, and nothing is read again.
+    t.failing.clear()
+    await passes(t, 1, landed, t.make())
+    expect(t.board).toHaveBeenCalledOnce()
+    expect(t.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, 'Trains: 4 landed.')])
+    expect(kept(t).board).toBeUndefined()
+    // One that stopped in the middle of the read posts the day without it.
+    const u = setup(new Date(2026, 10, 11, 9, 0).getTime())
+    writeFileSync(u.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '', board: { day: '2026-11-11', words: '' } } }))
+    await passes(u, 1, landed)
+    expect(u.board).not.toHaveBeenCalled()
+    expect(u.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, '')])
+    // What is kept of it that is not a day and its words is not kept; the rest of the record is.
+    for (const board of ['x', { day: 1, words: 'w' }, { day: '2026-11-11' }, null]) {
+      const v = setup(new Date(2026, 10, 11, 9, 0).getTime())
+      writeFileSync(v.file, JSON.stringify({ app: { typedAt: 5, told: 0, said: false, activity: 0, day: '', board } }))
+      v.failing.set('post', down)
+      await passes(v, 1, landed)
+      expect(v.board).toHaveBeenCalledOnce()
+      expect(kept(v)).toMatchObject({ typedAt: 5, board: { day: '2026-11-11', words: '' } })
+    }
+  })
+
   it('says each failure once among the last two hundred, and a memory it could not write', async () => {
     const t = setup(), landed = numbers({ free: [] })
     t.goal.mockResolvedValue(null)
     for (let n = 0; n <= 200; n++) {
       t.failing.set('post', new Error(`Failure ${n}.`))
-      await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal)
+      await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal, t.board)
     }
     expect(t.log).toHaveBeenCalledTimes(201)
     // The newest is still remembered; the first was forgotten, and is said again.
     t.clock.now += MINUTE
-    await t.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed, t.goal)
+    await t.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed, t.goal, t.board)
     expect(t.log).toHaveBeenCalledTimes(201)
     t.failing.set('post', new Error('Failure 0.'))
-    await t.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed, t.goal)
+    await t.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed, t.goal, t.board)
     expect(t.log).toHaveBeenCalledTimes(202)
     const u = setup()
     mkdirSync(u.file)
@@ -590,31 +679,42 @@ describe('the numbers, told as they are due', () => {
     try {
       const sent: string[] = []
       const ofNow = new PmNumbers({ file: t.file, send: async (_how, _project, _id, text) => { if (!sent.length) { sent.push(text); throw new Error('Not yet.') } sent.push(text) } })
-      await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal)
+      await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal, t.board)
       expect(warn).toHaveBeenCalledWith('[super-tab] numbers: NOT_SENT acme/app: Not yet.')
       vi.setSystemTime(NOW + MINUTE)
-      await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal)
-      expect(sent).toEqual(Array(2).fill(dayLine(numbers({ free: [] }), 'Wed 11 Nov', undefined)))
+      await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal, t.board)
+      expect(sent).toEqual(Array(2).fill(dayLine(numbers({ free: [] }), 'Wed 11 Nov', undefined, '')))
     } finally { vi.useRealTimers(); warn.mockRestore() }
   })
 
   it('keeps no more projects than it may, on disk and of the builders that wait, the ones longest untouched going first', async () => {
     const t = setup(), landed = numbers({ free: [] })
-    for (let n = 0; n < 205; n++) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal)
+    for (let n = 0; n < 205; n++) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal, t.board)
     expect(Object.keys(JSON.parse(readFileSync(t.file, 'utf8')))).toHaveLength(200)
     // The first is written again the next day, and so is no longer the oldest.
     t.clock.now += 24 * HOUR
-    for (const n of [5, 300]) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal)
+    for (const n of [5, 300]) await t.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, t.goal, t.board)
     const names = Object.keys(JSON.parse(readFileSync(t.file, 'utf8')))
     expect(names).toHaveLength(200)
     expect(names.slice(0, 1).concat(names.slice(-2))).toEqual(['project-7', 'project-5', 'project-300'])
     // Builders that wait are kept for the two hundred projects passed last: the one passed longest ago starts its wait again.
     const u = setup()
-    for (const n of [...Array.from({ length: 200 }, (_, n) => n), 0, 200]) await u.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, quiet, u.goal)
+    for (const n of [...Array.from({ length: 200 }, (_, n) => n), 0, 200]) await u.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, quiet, u.goal, u.board)
     u.clock.now += 15 * MINUTE
-    await u.numbers.pass({ ...PROJECT, projectId: 'project-0' }, quiet, u.goal)
+    await u.numbers.pass({ ...PROJECT, projectId: 'project-0' }, quiet, u.goal, u.board)
     expect(u.sent).toHaveLength(1)
-    await u.numbers.pass({ ...PROJECT, projectId: 'project-1' }, quiet, u.goal)
+    await u.numbers.pass({ ...PROJECT, projectId: 'project-1' }, quiet, u.goal, u.board)
     expect(u.sent).toHaveLength(1)
+    // A day's scoreboard is kept while its post is tried again, for the two hundred projects whose post failed last: the one
+    // before them reads its own again.
+    const v = setup(new Date(2026, 10, 11, 9, 0).getTime())
+    v.failing.set('post', down)
+    for (let n = 0; n <= 200; n++) await v.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, v.goal, v.board)
+    expect(v.board).toHaveBeenCalledTimes(201)
+    v.clock.now += MINUTE
+    await v.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed, v.goal, v.board)
+    expect(v.board).toHaveBeenCalledTimes(201)
+    await v.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed, v.goal, v.board)
+    expect(v.board).toHaveBeenCalledTimes(202)
   })
 })

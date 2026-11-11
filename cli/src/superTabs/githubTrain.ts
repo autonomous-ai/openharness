@@ -11,7 +11,8 @@
  * this repository into the base, whose body names the tip the train built and each member as `#N at <head>`; a red one is that
  * pull request closed with `Train, red:` in its title; a landed one is it merged, as a merge commit where the repository allows
  * one, so that GitHub marks each member merged under its own author. A daemon restart (each release is one, seven
- * on 2026-11-10) reads them back from GitHub. One train is open at a time.
+ * on 2026-11-10) reads them back from GitHub. One train is open at a time. One closed without landing says why in its title
+ * (ENDS), as a red one does: nothing else kept why, and the day's numbers count the trains lost by cause (scoreboard.ts).
  *
  * Anyone who can write to the repository can write that body, so before it lands a train is read from its branch: one merge
  * commit for each member the body names, the member's head its second parent, down to the base's tip (`holds`). That reads
@@ -41,7 +42,25 @@ const TRAIN_MAX = 20
 const TRAIN_WAIT_MS = 90 * 60_000
 /** How a train's title begins, before its members' numbers: the numbers a project's people read count them by it (pmNumbers.ts). */
 export const TRAIN_TITLE = 'Train: '
-const TITLE = TRAIN_TITLE, RED_TITLE = 'Train, red: '
+const TITLE = TRAIN_TITLE
+/** How a train closed without landing is titled, by why: its checks failed (which the split reads back, below), the base moved
+ *  under it, a pull request it carried was no longer ready at its head, or its checks did not finish in time. One closed for
+ *  any other reason (a second train, a branch that is not what the train built) keeps the title it was built with. */
+const ENDS = { red: 'Train, red: ', moved: 'Train, base moved: ', changed: 'Train, rider changed: ', late: 'Train, out of time: ' } as const
+/** Why a train closed without landing. */
+export type TrainEnd = keyof typeof ENDS | 'other'
+const RED_TITLE = ENDS.red
+/** A train's members as its title lists them: `#4 #5`. */
+const MEMBERS = /^#[1-9]\d{0,9}(?: #[1-9]\d{0,9})*$/
+
+/** Why a train closed without landing, as the [title] it was closed with says (`other` for the title it was built with, which a
+ *  landed one keeps too), or null for a title that is no train's. A title is anyone's to write: it is counted (scoreboard.ts),
+ *  and nothing lands or splits by it (genuine). */
+export function trainEnd(title: string): TrainEnd | null {
+  const end = (Object.keys(ENDS) as Array<keyof typeof ENDS>).find(key => title.startsWith(ENDS[key]))
+  const members = end ? title.slice(ENDS[end].length) : title.startsWith(TITLE) ? title.slice(TITLE.length) : ''
+  return MEMBERS.test(members) ? end ?? 'other' : null
+}
 const SHA = /^[0-9a-f]{40}$/
 /** A member as a train's body names it. Its readers are there for the note that it landed, which a restart must write the same. */
 const MEMBER = /^#([1-9]\d{0,9}) at ([0-9a-f]{40}), READ-OK by ([\w -]{1,200})$/
@@ -179,7 +198,7 @@ export class GitHubTrain<T extends TrainPull> {
   async carry(ready: readonly T[], waiting: ReadonlySet<string>): Promise<T[]> {
     const [train, ...others] = (await this.mine(this.pulls)).sort((a, b) => a.number - b.number)
     // One train at a time: a second would be tested on a base the first is about to move.
-    for (const other of others) await this.close(other, false, `#${train!.number} is open`)
+    for (const other of others) await this.close(other, 'other', `#${train!.number} is open`)
     if (train) { await this.attend(train, ready, waiting); return [] }
     // Nothing to carry: nothing more is read (the merger passes every 30 seconds).
     if (!ready.length) return []
@@ -203,20 +222,20 @@ export class GitHubTrain<T extends TrainPull> {
    *  ready at its head and what the base gained since changes nothing it tested. */
   private async attend(train: Train, ready: readonly T[], waiting: ReadonlySet<string>): Promise<void> {
     // Its branch is not at the tip its body says the train built: someone pushed to it, or wrote the body.
-    if (train.head !== train.tip) return this.close(train, false, 'its branch is not at the tip the train built')
+    if (train.head !== train.tip) return this.close(train, 'other', 'its branch is not at the tip the train built')
     // Nor at a tip this login never built, whatever its body and its parents say: its checks are not waited for.
-    if (!await this.marked(train.head)) return this.close(train, false, 'its tip is not one the train built')
+    if (!await this.marked(train.head)) return this.close(train, 'other', 'its tip is not one the train built')
     // What it was tested on is the base as it is: a run on a base that moved lands nothing, so it is not waited for. Not even
     // when the base gained only documentation: suites read some of it (scripts/ci-plan.py).
     const ahead = await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${train.head}`)
-    if (ahead.behind_by !== 0) return this.close(train, false, `${this.base} moved under it`)
+    if (ahead.behind_by !== 0) return this.close(train, 'moved', `${this.base} moved under it`)
     const checks = await this.host.checks(train.number, train.head)
-    if (checks.state === 'failed') return this.close(train, true, 'its checks failed')
+    if (checks.state === 'failed') return this.close(train, 'red', 'its checks failed')
     // No check of its own where a member had its own: CI has not started on it (Actions can take minutes to make a run), and
     // none at all would read as passed.
     const unstarted = checks.none && ready.some(pull => pull.checked && train.members.some(member => member.number === pull.number))
     if (checks.state === 'running' || unstarted) {
-      if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) await this.close(train, false, 'its checks did not finish in 90 min')
+      if (this.deps.now() - train.openedAt > TRAIN_WAIT_MS) await this.close(train, 'late', 'its checks did not finish in 90 min')
       return
     }
     // Read again right before landing: a HOLD since, a new head or a closed one, and the train is built again without it.
@@ -226,9 +245,10 @@ export class GitHubTrain<T extends TrainPull> {
       // started has not seen its checks hold still) keeps the train's green run, for as long as a train may wait.
       const waits = train.members.every((member, at) => riders[at] || waiting.has(`${member.number}@${member.head}`))
       if (waits && this.deps.now() - train.openedAt < TRAIN_WAIT_MS) return
-      return this.close(train, false, 'a pull request it carries is no longer ready at its head')
+      // One that only waited, until the train's own time ran out, changed nothing.
+      return this.close(train, waits ? 'late' : 'changed', 'a pull request it carries is no longer ready at its head')
     }
-    if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, false, 'its branch does not hold what its body names')
+    if (!await this.holds(train, String(object(ahead.merge_base_commit).sha ?? ''))) return this.close(train, 'other', 'its branch does not hold what its body names')
     // A merge commit where the repository allows one: each member's own commits reach the base, so GitHub marks each merged
     // under its author, and the work counts as theirs (shippingRead.ts). Squashed, the members are only closed and the one
     // commit is this login's. Else a squash, else a rebase, which takes no message. The next way is tried too when GitHub
@@ -240,7 +260,7 @@ export class GitHubTrain<T extends TrainPull> {
     for (method of ways) {
       // GitHub refuses a merge as the base moves, too: the next way is never sent onto a base the train was not tested on.
       if (reply && (await this.deps.reads.one(this.repo, `/repos/${this.repo}/compare/${this.base}...${train.head}`)).behind_by !== 0) {
-        return this.close(train, false, `${this.base} moved under it`)
+        return this.close(train, 'moved', `${this.base} moved under it`)
       }
       // Pinned to the head its checks passed: a push since is a 409, and nothing lands.
       reply = await this.sent('PUT', `/pulls/${train.number}/merge`, [200, 405],
@@ -349,7 +369,7 @@ export class GitHubTrain<T extends TrainPull> {
     const [train] = await this.mine([opened])
     if (!train) throw this.stop('TRAIN_UNREADABLE', `GitHub's answer to opening the train on ${branch} is not one the train reads.`)
     // Opened at another head than the tip built: someone pushed onto the branch between the last merge and here.
-    if (train.head !== tip) { await this.close(train, false, 'its branch is not at the tip the train built'); return [] }
+    if (train.head !== tip) { await this.close(train, 'other', 'its branch is not at the tip the train built'); return [] }
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} built on ${from.slice(0, 7)}: ${members.map(m => `#${m.number}`).join(' ')}`)
     return []
   }
@@ -381,9 +401,9 @@ export class GitHubTrain<T extends TrainPull> {
     return open.map(member => member.number)
   }
 
-  /** Closes [train]'s pull request, as red when its checks failed, and deletes its branch. */
-  private async close(train: Train, red: boolean, why: string): Promise<void> {
-    await this.sent('PATCH', `/pulls/${train.number}`, [200], { state: 'closed', ...red ? { title: `${RED_TITLE}${train.members.map(m => `#${m.number}`).join(' ')}` } : {} })
+  /** Closes [train]'s pull request, titled by why it [end]ed (ENDS), and deletes its branch. */
+  private async close(train: Train, end: TrainEnd, why: string): Promise<void> {
+    await this.sent('PATCH', `/pulls/${train.number}`, [200], { state: 'closed', ...end === 'other' ? {} : { title: `${ENDS[end]}${train.members.map(m => `#${m.number}`).join(' ')}` } })
     await this.drop(train.branch)
     this.deps.log(`[super-tab] train ${this.repo}#${train.number} closed: ${why}`)
   }
