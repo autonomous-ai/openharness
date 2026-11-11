@@ -563,8 +563,20 @@ export function startGateway(host: GatewayHost): StartedGateway {
         const identity = relayIdentityStore.getIdentity()
         const machines = vaultMachines()
         const plaintext = openVault(envelope, identity, new Set([...machines, b64e(identity.pub)]))
-        if (plaintext === null) return null
-        const sealedFor = new Set(Object.keys((envelope as { keys?: Record<string, unknown> }).keys ?? {}))
+        const sealedFor = new Set(Object.keys((envelope as { keys?: Record<string, unknown> } | null)?.keys ?? {}))
+        if (plaintext === null) {
+          // Signed by a key the log no longer holds, or sealed for none of the account's machines: no machine
+          // of the account will ever open it (one signed in again has a new key), so it is waited on by
+          // none. Said so, the connectors service writes its own connections over it. Not a way in for the
+          // backend: it could already drop the envelope, and what is written is sealed for the log's machines.
+          // A key still in the log, even one nobody has said is theirs yet (pending), may be confirmed and
+          // open it: waited on.
+          const inLog = new Set(devlog.list().members.filter((m) => m.kind === 'machine').map((m) => m.pub))
+          const sender = (envelope as { sender?: unknown } | null)?.sender
+          const senderInLog = typeof sender === 'string' && inLog.has(sender)
+          const openable = [...sealedFor].some((pub) => inLog.has(pub))
+          return senderInLog && openable ? null : { stranded: true as const }
+        }
         return { plaintext, complete: machines.every((pub) => sealedFor.has(pub)) }
       },
     },
