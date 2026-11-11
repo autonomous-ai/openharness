@@ -694,7 +694,13 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?leaderboard, ?agentStates, ?app?.swarmStarts]) {
+    // PersonalSwarm: which Swarm is the person's own decides Invite people, and it can be known only after the pane is drawn.
+    child: switch ([
+      ?leaderboard,
+      ?agentStates,
+      ?app?.swarmStarts,
+      if (app case final app?) PersonalSwarm.of(app),
+    ]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),

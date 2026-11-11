@@ -157,7 +157,7 @@ void main() {
     });
 
     // anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be
-    // visible". People join a Swarm by an invitation, and only its owner makes one (backend sharing.ts).
+    // visible". People join a Swarm by an invitation, and only its owner makes one (backend commands.ts, invite.create).
     testWidgets('Invite people sits under the Swarm\'s name for its owner, and '
         'opens its people', (tester) async {
       final invited = <String>[];
