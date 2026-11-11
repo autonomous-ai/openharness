@@ -29,6 +29,7 @@ import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './ti
 import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
+import { forgetRemovedPanes, recordRemovedPane } from './removedPanes.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -405,6 +406,9 @@ function dropRemovedRecord(state: SuperTabState, machineId: string, harnessId: s
   if (!state.removedSessions?.length) delete state.removedSessions
 }
 
+/** What becomes of a removed agent's session (removeAgent). */
+type LeavingSession = 'close' | 'keep' | 'closed'
+
 function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabState['closingSessions']>[number]) => boolean): void {
   state.closingSessions = state.closingSessions?.filter(keep)
   if (!state.closingSessions?.length) delete state.closingSessions
@@ -747,23 +751,27 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     project.pmChat = { id: openAgentChat(me, COORDINATOR_NAME) }
     return project.pmChat.id
   }
-  /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
-  /** [project] deleted with its own agents, its Lead included (their hosts close their sessions), its starts and machines' lists. */
-  const deleteWholeProject = (project: SwarmProject) => {
+  /** [project] deleted with its own agents, its Lead included, its starts and machines' lists; what becomes of their sessions is
+   *  [session] (removeAgent). */
+  const deleteWholeProject = (project: SwarmProject, session: LeavingSession) => {
     // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
     const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
       && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
-    for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
+    for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true, session })
     for (const start of state.starts ?? []) if (start.request.mainProjectId === project.id) delete start.request.mainProjectId
     // Members elsewhere whose main project it was have none now (spec: they ask their person again, build task 9).
     for (const target of state.agents) if (target.mainProjectId === project.id) delete target.mainProjectId
     deleteProject(state, actor, project.id, orphaned, context.now)
   }
-  const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
+  /** Takes [target] out of the Swarm. Only a confirmed delete or Stop has its host close its session ([session] 'close'); any
+   *  other removal leaves it running (anh Dee 2026-11-11: as closing a pane another tab still shows), recorded for its person so
+   *  their apps do not offer it to join ('keep', removedPanes.ts). 'closed': its host closed it already. */
+  const removeAgent = (target: Agent, { lead = false, session = 'keep' }: { lead?: boolean; session?: LeavingSession } = {}) => {
     // A person's removal stands: a record of this session must not bring it back when it reopens (closedAgents.ts).
     dropRemovedRecord(state, target.machineId, target.harnessId)
     if (!lead) protectLead(state, target.id, actor)
-    if (close) recordClosing(state, target)
+    if (session === 'close') recordClosing(state, target)
+    else if (session === 'keep') recordRemovedPane(state, target, context.now)
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
     for (const group of state.conversations) {
@@ -796,12 +804,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     return chatId
   }
   /** Takes a machine out of the Swarm with every agent on it (machine.remove, or its owner leaving): each agent is removed
-   *  like one agent, its pending starts fail, and a contributed machine stays paused and cleaning
+   *  like one agent (its session as [session] says), its pending starts fail, and a contributed machine stays paused and cleaning
    *  until its host deletes the Swarm's folders there — or leaves at once when that host is offline
    *  (spec 2026-10-23-remove-machine.md). */
   /** [keepFolders]: the machine's folders stay with the computer (machine.moved), so it leaves the list at once with no cleanup. */
-  const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string, lead = false,
-    keepFolders = false) => {
+  const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string,
+    { lead = false, keepFolders = false, session = 'keep' }: { lead?: boolean; keepFolders?: boolean; session?: LeavingSession } = {}) => {
     // Its row in each group names them, so no member row repeats it.
     for (const member of members) announcedRemovals.add(member.id)
     const pending = state.starts?.filter(s => s.request.machineId === machineId && !s.harnessId && !s.error) ?? []
@@ -817,7 +825,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       || (group.leadId && removed.has(group.leadId)) || (group.assignment && removed.has(group.assignment.agentId)))
       .map(group => ({ group, names: members.filter(a => group.agentIds.includes(a.id) || group.leadId === a.id || group.assignment?.agentId === a.id)
         .map(a => quotedName(a.displayName ?? a.name)), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
-    for (const target of members) removeAgent(target, { lead })
+    for (const target of members) removeAgent(target, { lead, session })
     if (pool) {
       // Paused, so routing in clients that do not know removals stops offering it too.
       pool.removal = { id: operationId, state: 'cleaning', requestedAt: new Date(context.now).toISOString() }
@@ -996,7 +1004,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'project.delete': {
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions. The Swarm's owner deletes one nobody owns (task #3073).
-      deleteWholeProject(deletableProject(state, actor, command.projectId))
+      deleteWholeProject(deletableProject(state, actor, command.projectId), 'close')
       break
     }
     case 'project.closeTab': {
@@ -1005,8 +1013,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // runs again on it, and archives instead.
       const project = closingTabProject(state, actor, command.projectId, command.tabOperation)
       const groups = state.conversations.filter(c => c.projectId === project.id || c.id === project.leadConversationId)
+      // Closing a tab is closing its views: its agents' sessions keep running (anh Dee 2026-11-11).
       if (groups.every(c => !c.lastMessageSequence)) {
-        deleteWholeProject(project)
+        deleteWholeProject(project, 'keep')
         result.outcome = 'deleted'
         break
       }
@@ -1086,7 +1095,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (cleaning || state.machines.some(m => m.machineId === command.machineId)) break
         if (command.unlessRemoved && state.removedMachines?.some(r => r.machineId === command.machineId)) break
       }
-      // Added again: no longer one its person took out.
+      // Added again: no longer one its person took out, nor are the sessions its removal took out with it (removedPanes.ts).
+      if (state.removedMachines?.some(r => r.machineId === command.machineId)) forgetRemovedPanes(state, command.machineId, () => true)
       if (state.removedMachines) {
         state.removedMachines = state.removedMachines.filter(r => r.machineId !== command.machineId)
         if (!state.removedMachines.length) delete state.removedMachines
@@ -1161,8 +1171,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'machine.remove': {
-      // Its owner takes the machine out with every Swarm agent on it, each removed like one agent (its host closes the
-      // session; a Product Manager refuses it, protectLead). A contributed machine then stays listed, paused, while its
+      // Its owner takes the machine out with every Swarm agent on it, each removed like one agent (its session keeps running;
+      // a Product Manager refuses it, protectLead). A contributed machine then stays listed, paused, while its
       // host deletes the Swarm's folders there (spec 2026-10-23-remove-machine.md); one with only shared agents goes at once.
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person removes a machine from the Swarm.', 403)
       const { pool, members } = ownedMachine(state, actor, command.machineId)
@@ -1191,7 +1201,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       for (const start of state.starts?.filter(s => s.request.machineId === command.machineId && !s.harnessId && !s.error && s.dispatched) ?? []) {
         start.error = MACHINE_REMOVED
       }
-      removeMachine(command.machineId, pool, members, machine => `Harness Team accounts are gone, so the one on ${machine} left the Swarm`, true, true)
+      removeMachine(command.machineId, pool, members, machine => `Harness Team accounts are gone, so the one on ${machine} left the Swarm`,
+        { lead: true, keepFolders: true, session: 'close' })
       dropClosing(state, c => c.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -1214,7 +1225,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const leaving = state.agents.filter(a => a.machineId === pool.machineId)
       const how = (machine: string) => `${machine} is signed in to another account now, so it left the Swarm under its old account`
       // The old account's agents stop first, Product Managers too: they ran under a login this computer no longer has.
-      removeMachine(pool.machineId, pool, leaving, how, true, true)
+      removeMachine(pool.machineId, pool, leaving, how, { lead: true, keepFolders: true, session: 'close' })
       const newOwner = state.people.find(p => p.id === move.to.ownerId)
       const until = new Date(context.now).toISOString()
       const existing = state.machines?.find(m => m.machineId === move.to.machineId && !m.removal)
@@ -1272,10 +1283,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Every machine leaves as its owner removing it would: its agents' sessions close and its host deletes the Swarm's
       // folders there. Product Managers go too.
       for (const pool of (state.machines ?? []).filter(m => !m.removal)) {
-        removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm when it was deleted`, true)
+        removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm when it was deleted`,
+          { lead: true, session: 'close' })
       }
       // Agents on no contributed machine (shared sessions), each with its session.
-      for (const target of [...state.agents]) if (state.agents.some(a => a.id === target.id)) removeAgent(target, { lead: true })
+      for (const target of [...state.agents]) if (state.agents.some(a => a.id === target.id)) removeAgent(target, { lead: true, session: 'close' })
       for (const start of state.starts ?? []) if (!start.harnessId && !start.error) start.error = 'Its Swarm was deleted.'
       state.deletion = { at: new Date(context.now).toISOString(), by: actor.userId, purgeAt: new Date(context.now + SWARM_DELETE_GRACE_MS).toISOString() }
       result.purgeAt = state.deletion.purgeAt
@@ -1353,6 +1365,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const agentId = stableId(command.machineId, command.harnessId)
         if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
         reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
+        // Added back by hand: its apps may add it by themselves again (removedPanes.ts).
+        forgetRemovedPanes(state, command.machineId, id => id === command.harnessId)
         state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId, regular: true,
           machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: addedName,
           configuration: command.configuration, configurationVersion: operationId })
@@ -1385,6 +1399,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
       // Added back by hand: what they chose now stands over what its removal kept.
       dropRemovedRecord(state, command.machineId, command.harnessId)
+      forgetRemovedPanes(state, command.machineId, id => id === command.harnessId)
       // Added back before its host closed it: the session stays open.
       if (!existing) dropClosing(state, c => c.machineId !== command.machineId || c.harnessId !== command.harnessId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
@@ -1928,7 +1943,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       const affected = actor.kind === 'person' ? state.conversations.filter(group => group.agentIds.includes(target.id)
         || group.leadId === target.id || group.assignment?.agentId === target.id) : []
-      removeAgent(target, { close: !hostStop })
+      // Only a Stop its person asked for closes the session; its host closed it already when it confirms (hostStop).
+      removeAgent(target, { session: forceStop ? 'close' : hostStop ? 'closed' : 'keep' })
       // A person's removal says so in each of its chats; its host's confirmed stop leaves the member row.
       if (affected.length) announcedRemovals.add(target.id)
       for (const group of affected) {
@@ -2009,7 +2025,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (command.userId === state.ownerId) fail('OWNER_REQUIRED', 'The owner cannot leave their Super Tab.')
       const member = person(state, command.userId)
-      // Their machines leave the way their owner removes one, so the Swarm's folders there are deleted too.
+      // Their machines leave the way their owner removes one, so the Swarm's folders there are deleted too. Their sessions keep
+      // running, theirs to stop; the records of them go with the person (removedPanes.ts).
       for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal) ?? []) {
         removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm with its owner`)
       }
