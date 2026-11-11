@@ -7,8 +7,10 @@
 //   BUDGET=250             the solver's milliseconds a solve (the product gives it 1,000)
 //   CASES=0.7:0.3:80,...   noise (sigma of a lognormal) : share of labels a size off : tasks in the day
 //   ONLY=fifo,priced0      the policies to run; the solver's rows take minutes, the others seconds
+//   CORES=8                a machine's cores (6 by default); AWAY=1.2 how much longer a task takes outside a builder's area
 //
-// Policies: fifo (first come, any free builder); solver (today's allocator); dispatch (the most weight for its minutes, and
+// Policies: fifo (first come, any free builder); solver (today's allocator); solver1 (the same, one task ahead of each
+// builder, not two); dispatch (the most weight for its minutes, and
 // nothing else); priced0 (the same, but a task another kind of builder does faster is left for one unless waiting costs more
 // than the extra work: "the rule" of the README); priced4 (a builder-minute also costs 4, in a task's weight); queue (it
 // costs what the builder's own area's queue loses meanwhile). Info: fixed (today's table of sizes and its guess of an
@@ -22,10 +24,12 @@ interface Task { id: string; arrive: number; label: Size; truth: Size; w: number
   builder?: string; given?: number; start?: number; end?: number }
 interface Builder { id: string; machine: string; home: string; current: Task | null; queue: Task[] }
 type Info = 'fixed' | 'learned' | 'oracle'
-type Policy = 'solver' | 'dispatch' | 'fifo' | 'priced0' | 'priced4' | 'queue'
+type Policy = 'solver' | 'solver1' | 'dispatch' | 'fifo' | 'priced0' | 'priced4' | 'queue'
 
 const PARTS = ['api', 'desktop', 'cli', 'docs'], MIX: Record<Size, number> = { s: 0.5, m: 0.35, l: 0.15 }
-const CORES = 6, TRUE_HOME = 0.6, TRUE_AWAY = 1.2
+// CORES=8 lets two large tasks share a machine, as the product does: it plans with a machine's cores (8 when unreported) but
+// checks none when a task is taken, so at 6 this model holds the solver's builder to a rule the product does not enforce.
+const CORES = Number(process.env.CORES ?? 6), TRUE_HOME = 0.6, TRUE_AWAY = Number(process.env.AWAY ?? 1.2)
 
 function rng(seed: number) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a)
   t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 } }
@@ -77,14 +81,16 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
   for (; tasks.some(t => !done(t, now)) && now < 60 * 24 * 7; now++) {
     for (const b of builders) if (b.current && b.current.end! <= now) b.current = null
     const open = tasks.filter(t => eligible(t, now))
-    if (policy === 'solver') {
+    // solver1 is today's solver with one task ahead of each builder instead of two (found by the design's first review).
+    const deep = policy === 'solver1' ? 1 : 2
+    if (policy === 'solver' || policy === 'solver1') {
       // As today (githubAssign.ts openWaiting): a task given ten minutes ago and not started goes back, once a task and builder,
       // while a builder that could take it has nothing given or in hand.
       for (const b of builders) for (const t of [...b.queue]) {
         if (now - t.given! < 10 || backs.has(`${t.id}:${b.id}`) || !builders.some(o => o !== b && !o.current && !o.queue.length)) continue
         backs.add(`${t.id}:${b.id}`); b.queue.splice(b.queue.indexOf(t), 1); delete t.builder; delete t.given; open.push(t)
       }
-      if (open.length && builders.some(b => (b.current ? 1 : 0) + b.queue.length < 2)) {
+      if (open.length && builders.some(b => (b.current ? 1 : 0) + b.queue.length < deep)) {
         const plan = (t: Task, pinned?: string): PlanTask => ({ id: t.id, minutes: Math.ceil(minutes(t)), needs: { cpu: SIZES[t.label].cpu, ram: 0, disk: 0 }, spend: {}, floor: 0, kind: 'build',
           part: t.part, weight: t.w, ready: 0, deps: [], independentOf: [], notBuilders: [], files: [], ...(pinned ? { pinned, queuedOn: pinned } : {}) })
         const problem: Problem = { now: 0, objective: 'weighted', switchCost: 30, accounts: [],
@@ -98,7 +104,7 @@ function run(seed: number, sigma: number, mislabel: number, n: number, policy: P
         last = solved.choice; solves++; steps += solved.iterations; asked += Math.min(200_000, 400 * problem.tasks.length)
         const read = { problem, open: new Map(builders.map(b => [b.id, (b.current ? 1 : 0) + b.queue.length])), free: new Set(open.map(t => t.id)), done: new Map(),
           builders: new Map(builders.map(b => [b.id, { id: b.id, name: b.id, label: b.id, machineId: b.machine, engine: 'claude' }])) }
-        for (const p of nextPicks(solved.plan, read as never)) { const t = byId.get(p.task)!, b = builders.find(x => x.id === p.builder)!; t.builder = b.id; t.given = now; b.queue.push(t) }
+        for (const p of nextPicks(solved.plan, read as never, deep)) { const t = byId.get(p.task)!, b = builders.find(x => x.id === p.builder)!; t.builder = b.id; t.given = now; b.queue.push(t) }
       }
       for (const b of builders) {
         if (b.current || !b.queue.length) continue
@@ -143,10 +149,10 @@ const avg = (xs: number[]) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.len
 
 const seeds = (process.env.SEEDS ?? '1,2,3,4,5').split(',').map(Number), budgetMs = Number(process.env.BUDGET ?? 250)
 const cases = (process.env.CASES ?? '0:0:160,0.7:0.3:160,1:0.3:160,0.7:0.3:80').split(',').map(c => c.split(':').map(Number) as [number, number, number])
-console.log(`12 builders on 6 machines, tasks arriving over 10 h, sizes ${JSON.stringify(MIX)}; solver budget ${budgetMs} ms; seeds ${seeds.join(',')}`)
+console.log(`12 builders on 6 machines of ${CORES} cores, away ${TRUE_AWAY}x, tasks arriving over 10 h, sizes ${JSON.stringify(MIX)}; solver budget ${budgetMs} ms; seeds ${seeds.join(',')}`)
 console.log('noise  mislabel tasks policy    info     weighted-flow  mean-flow  p0-flow  idle-builder-min  last-end  work-min  solves  %-of-search-steps-run')
 for (const [sigma, mislabel, n] of cases) {
-  for (const [policy, info] of ([['fifo', 'fixed'], ['solver', 'fixed'], ['dispatch', 'fixed'], ['priced0', 'fixed'], ['priced4', 'fixed'], ['queue', 'fixed'], ['solver', 'learned'], ['dispatch', 'learned'], ['priced0', 'learned'], ['priced4', 'learned'], ['queue', 'learned'], ['queue', 'oracle']] as Array<[Policy, Info]>).filter(([p]) => !process.env.ONLY || process.env.ONLY.split(',').includes(p))) {
+  for (const [policy, info] of ([['fifo', 'fixed'], ['solver', 'fixed'], ['solver1', 'fixed'], ['dispatch', 'fixed'], ['priced0', 'fixed'], ['priced4', 'fixed'], ['queue', 'fixed'], ['solver', 'learned'], ['dispatch', 'learned'], ['priced0', 'learned'], ['priced4', 'learned'], ['queue', 'learned'], ['queue', 'oracle']] as Array<[Policy, Info]>).filter(([p]) => !process.env.ONLY || process.env.ONLY.split(',').includes(p))) {
     const runs = seeds.map(seed => run(seed, sigma, mislabel, n, policy, info, budgetMs))
     const m = (key: keyof ReturnType<typeof run>) => avg(runs.map(r => r[key])).toFixed(0).padStart(8)
     console.log(`${String(sigma).padEnd(6)} ${String(mislabel).padEnd(8)} ${String(n).padEnd(5)} ${policy.padEnd(9)} ${info.padEnd(8)} ${m('weighted')}       ${m('mean')}   ${m('p0')}   ${m('idle')}          ${m('last')}  ${m('work')}  ${m('solves')}  ${m('searched')}`)
