@@ -43,7 +43,8 @@ in an agent that already runs, in every engine, with nothing added to its launch
 - A browser for an agent that is not running.
 - A Browser button anywhere but the Swarm chat: not in a regular tab, not in the terminal interface.
 - New browser tools. The commands are today's eleven tools.
-- Any change to the container, the image, the stream, the proxy, the device, challenge detection or the browser limit.
+- Any change to the container, the image, the proxy, the device, challenge detection or the browser limit. The stream
+  changes only in what the panel shows (The window fits the panel).
 - A Browser button for teammates or guests.
 
 ## Anti-goals (a failure even if it works)
@@ -141,6 +142,9 @@ in an agent that already runs, in every engine, with nothing added to its launch
     Swarm on the command's path. An agent in a regular tab is not refused; its person starts, sees and stops its
     browser through the Swarm chat's Browser button.
 17. **(Ken)** The stop line is `Your person stopped your browser.`
+18. **(Ken)** The browser fits the panel without changing the screen: the screen keeps the Device setting's size, so
+    `screen.width` never changes, and only Chrome's window follows the panel, as a person resizing a window that is
+    not maximized. The panel shows that window at 1:1. See The window fits the panel.
 
 ## Design
 
@@ -356,6 +360,32 @@ removes the container, the volume, the network, the secret and the settings.
 - `harness help agents` lists `harness browser --help` in one line, for an agent that looks.
 - **Nothing at launch.** The launch arguments and the Swarm's basics do not change.
 
+### The window fits the panel
+
+- **(Ken) Why not the screen.** Changing the X screen to the panel's size would give odd sizes (1137x843) and a
+  `screen.width` that changes mid-session, two signals bot checks weigh. A window's size changes all the time for
+  real people, so `innerWidth` following the panel is ordinary.
+- **The screen** stays the Device setting's size (`screen`, default 1920x1080), as today.
+- **The window.** Chrome's window sits at 0,0 and takes the panel's size in screen pixels, at least 1024x640 and at
+  most the screen. It is not maximized. Its size changes through the tool server's CDP connection
+  (`Browser.getWindowForTarget`, then `Browser.setWindowBounds`), not through the window manager.
+- **The request.** `agent_browser_window {agentId, width, height}` from Desktop, sealed beside `agent_browser_start`,
+  allowed for `mayOpenBrowser`, answered only while the browser is ready. The machine clamps the size; it is not
+  stored (Chrome keeps the window's last size in the profile). Any other asker, or a browser that is not ready: refused
+  by name, and the panel keeps showing what it has.
+- **When it is sent.** When the panel opens on a ready browser, and when the panel's size has stopped changing for
+  300 ms (a drag sends one request, at its end). Closing the panel sends nothing: the window keeps its last size.
+- **Two Desktops.** The last request wins. The other panel shows the same window and scales it to fit.
+- **What the panel shows.** The viewer page clips noVNC to the window's rectangle at 0,0 (`clipViewport`, no viewport
+  drag) at 1:1. When the window is smaller than the panel (the 1024x640 floor, or another Desktop's size), or the panel
+  is larger than the screen, it scales that rectangle to fit, as `scaleViewport` does today. The page learns the
+  window's size from the request's answer.
+- **The agent** is not told: its pages reflow as on any resize. A screenshot is of the page, at its new size.
+- **Failures.** A request that fails (`window_failed`: the CDP call did not answer in 5 s) is logged by name; the panel
+  keeps scaling the whole screen, as today, and tries again at the next resize.
+- **Cost.** One request per settled resize. The stream does not change: the rest of the screen is Chrome's backdrop and
+  sends almost nothing.
+
 ### Desktop
 
 - **New agent.** The Browser pill, its "Needs setup" line and its setup-on-Start step go. Create sends no `browser`.
@@ -512,7 +542,8 @@ Kept: every counter the first spec added. `agent_browser_enabled` still counts a
   `agent_browser_start_failed`. Nothing here adds load on the backend.
 - **Compatibility.**
   - Backend first (the counters' names), then CLI, then Desktop.
-  - Contracts are only extended: two requests for the apps, one for the CLI. `agent_create`'s `browser` and the
+  - Contracts are only extended: three requests for the apps (start, stop, window), one for the CLI. An older CLI
+    answers `agent_browser_window` `UNSUPPORTED`, and the panel scales the whole screen, as today. `agent_create`'s `browser` and the
     frame's `browser` keep their shapes.
   - A Desktop from the last 30 days against the new CLI: its checkbox still gives a browser; its button shows for a
     browser that is on; it has no Start or Stop.
@@ -590,7 +621,14 @@ built.
     during a `wait` ends that command with the stop line.
   - Unchanged but for how tools are called: the stream, the host that cannot be reached, the crash restart, Device,
     the proxy, the delete.
+- **The window** (service spec, fake tool server): `agent_browser_window` refused for a guest, a machine share and a
+  browser that is not ready; the size clamped to 1024x640 and to the screen; a CDP call that does not answer is
+  `window_failed`. Viewer page (`viewer.test.mjs`): clipped at 1:1 to the answered rectangle; scaled when the
+  rectangle is smaller than the panel or the panel larger than the screen. Real Podman: a window request changes
+  `window.innerWidth` and leaves `screen.width` as the Device setting.
 - **Flutter, clicking as a person does.**
+  - The window: opening the panel on a ready browser sends one window request with the panel's size; dragging the
+    divider sends one request after the drag ends; closing the panel sends none.
   - An agent with no browser: the Browser button is there; press it, see off; press Start, see the request, then
     starting, then the screen; the button shows running; press Stop, see the request, then off.
   - Started from the person's other Desktop: the frame turns ready, the panel stays closed, the button shows
