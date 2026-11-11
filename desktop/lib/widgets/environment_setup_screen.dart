@@ -789,7 +789,7 @@ class EnvironmentCheckList extends StatelessWidget {
             ),
           const _CheckSectionLabel('Harness components'),
           _CheckRow(
-            label: 'Managed Node 20+ & Harness CLI',
+            label: 'Managed Node 22+ & Harness CLI',
             detail: windows
                 ? r'%USERPROFILE%\.harness · harness version'
                 : '~/.harness/runtime · harness version',
