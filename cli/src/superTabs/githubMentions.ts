@@ -150,6 +150,8 @@ export class GitHubMentions {
   private offUntil = 0
   /** The last failure told, so each is logged once until it changes or clears. */
   private told = ''
+  /** What its person was told this computer's GitHub cannot do, by code and repository, until it can again. */
+  private readonly unable = new Set<string>()
   private readonly now: () => number
   private readonly log: (line: string) => void
 
@@ -160,6 +162,8 @@ export class GitHubMentions {
     relay: (tabId: string, operationId: string, command: Json) => Promise<unknown>
     /** Tells one agent something only it reads, in its chat with its person (an agent-only notice). */
     tell?: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
+    /** Says [text] to [agent]'s person, in its chat, not typed to the agent. */
+    say: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
     file: string
     now?: () => number
     log?: (line: string) => void
@@ -205,7 +209,7 @@ export class GitHubMentions {
     try {
       for (const [repo, watching] of repos) {
         if (this.waits.held(repo, this.now())) { held = true; continue }
-        try { await this.readRepo(repo, watching, memory, relays); this.waits.ok(repo) } catch (error) {
+        try { await this.readRepo(repo, watching, memory, relays); this.waits.ok(repo); this.unable.delete(`UNREADABLE ${repo}`) } catch (error) {
           // What was read but not handed on is read again next pass: an ETag kept now would answer it with a 304.
           this.reads.forget(repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
@@ -213,9 +217,12 @@ export class GitHubMentions {
           // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so), and what it owes goes then.
           const wait = this.waits.miss(repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
           this.tell(error instanceof GitHubStop ? error.code : 'RELAY_FAILED', `${repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
+          if (error instanceof GitHubStop && error.code === 'UNREADABLE') await this.unableTo(watching[0]!, 'UNREADABLE', repo)
         }
       }
       this.waits.ran()
+      this.unable.delete('GH_SIGNED_OUT ')
+      this.unable.delete('GH_MISSING ')
       if (!held) this.tell('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
@@ -223,6 +230,7 @@ export class GitHubMentions {
       const wait = error.code === 'BUSY' ? 0 : this.waits.stop(error.until - this.now())
       this.offUntil = this.now() + wait
       this.tell(error.code, `${error.message}${wait ? ` (again in ${waitWords(wait)})` : ''}`)
+      if (error.code === 'GH_SIGNED_OUT' || error.code === 'GH_MISSING') await this.unableTo(agents[0]!, error.code, '')
     } finally {
       for (const [repo, kept] of Object.entries(memory.repos)) if (!byRepo.has(repo) && this.now() - kept.usedAt > FORGET_MS) delete memory.repos[repo]
       this.save(memory)
@@ -478,6 +486,23 @@ export class GitHubMentions {
       if (this.refused.size > MAX_SEEN) this.refused.delete(this.refused.values().next().value!)
       this.log(`[super-tab] GitHub news for agents passed over one item · RELAY_REFUSED ${repo}#${number} (${error.code}): ${error.message.slice(0, 200)}`)
     }
+  }
+
+  /** Says to [agent]'s person, once until it can again, that this computer's GitHub cannot bring its agents their news, and how to
+   *  fix it: a teammate whose GitHub login cannot read the project's repository, or whose gh is not signed in, has agents that sit
+   *  with no task, and before this only the daemon's log said why (anh Dee, 2026-11-11: a first team uses the Swarm tomorrow).
+   *  Once a day at most across restarts: the backend takes each operation once. */
+  private async unableTo(agent: WatchedAgent, code: 'UNREADABLE' | 'GH_SIGNED_OUT' | 'GH_MISSING', repo: string): Promise<void> {
+    const key = `${code} ${repo}`
+    if (this.unable.has(key)) return
+    this.unable.add(key)
+    const text = code === 'UNREADABLE' ? `Your GitHub login can't read ${repo}, so your agents there get no tasks. Ask its owner to add you, `
+      + 'or sign in as someone who can: gh auth login'
+      : code === 'GH_SIGNED_OUT' ? 'GitHub isn\'t signed in on this computer, so your agents get no tasks. Sign in: gh auth login'
+      : 'GitHub CLI isn\'t installed on this computer, so your agents get no tasks. Install it from https://cli.github.com, then: gh auth login'
+    const day = new Date(this.now()).toISOString().slice(0, 10)
+    await this.deps.say(agent, `github-unable-${createHash('sha256').update(`${agent.agentId}\n${key}\n${day}`).digest('hex').slice(0, 40)}`, text)
+      .catch(error => this.log(`[super-tab] GitHub news could not tell ${agent.agentId}'s person: ${error instanceof Error ? error.message : String(error)}`))
   }
 
   private tell(code: string, detail: string): void {

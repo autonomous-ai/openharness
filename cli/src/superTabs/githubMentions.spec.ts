@@ -68,11 +68,51 @@ function setup(agents: WatchedAgent[] = [PIP], file = join(root, `memory-${files
   const log = vi.fn()
   const watched = vi.fn(async () => agents)
   const tell = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
-  const make = () => new GitHubMentions({ watched, get: github.get, relay, tell, file, now: () => clock.now, log })
-  return { github, clock, relay, tell, log, watched, file, make, mentions: make(), relayed: () => relay.mock.calls.map(([, , command]) => command) }
+  const say = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
+  const make = () => new GitHubMentions({ watched, get: github.get, relay, tell, say, file, now: () => clock.now, log })
+  return { github, clock, relay, tell, say, log, watched, file, make, mentions: make(), relayed: () => relay.mock.calls.map(([, , command]) => command) }
 }
 
 describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () => {
+  // A teammate's GitHub login that cannot read the project's repository, or a gh not signed in: its agents get no tasks, and its
+  // person is told why and how to fix it, once until it reads again.
+  it('tells the person once when this computer\'s GitHub login cannot read the repository, and again only after it could', async () => {
+    const f = setup()
+    f.github.state.missing.add('acme/app')
+    await f.mentions.tick()
+    f.clock.now += 60 * 60_000
+    await f.mentions.tick()
+    expect(f.say.mock.calls.map(([agent, , text]) => [agent.agentId, text])).toEqual([[PIP.agentId,
+      'Your GitHub login can\'t read acme/app, so your agents there get no tasks. Ask its owner to add you, or sign in as someone who can: gh auth login']])
+    f.github.state.missing.delete('acme/app')
+    f.clock.now += 60 * 60_000
+    await f.mentions.tick()
+    f.github.state.missing.add('acme/app')
+    f.clock.now += 60 * 60_000
+    await f.mentions.tick()
+    expect(f.say).toHaveBeenCalledTimes(2)
+    expect(f.tell).not.toHaveBeenCalled()
+  })
+
+  it('tells the person once when gh is not signed in on this computer, or not installed, and goes on when that cannot be said', async () => {
+    const f = setup()
+    f.github.state.signedOut = true
+    f.say.mockRejectedValueOnce(new Error('The backend did not answer.'))
+    await f.mentions.tick()
+    f.clock.now += 60 * 60_000
+    await f.mentions.tick()
+    expect(f.say.mock.calls.map(([, , text]) => text)).toEqual(['GitHub isn\'t signed in on this computer, so your agents get no tasks. Sign in: gh auth login'])
+    expect(f.log).toHaveBeenCalledWith(`[super-tab] GitHub news could not tell ${PIP.agentId}'s person: The backend did not answer.`)
+    f.github.state.signedOut = false
+    f.clock.now += 60 * 60_000
+    await f.mentions.tick()
+    const missing = setup()
+    missing.github.get = async () => { throw Object.assign(new Error('gh is not installed'), { code: 'GH_MISSING' }) }
+    await missing.make().tick()
+    expect(missing.say.mock.calls.map(([, , text]) => text)).toEqual(['GitHub CLI isn\'t installed on this computer, so your agents get no tasks. '
+      + 'Install it from https://cli.github.com, then: gh auth login'])
+  })
+
   it('relays nothing from before its first read, then a member\'s comment that names the agent, once', async () => {
     const f = setup()
     f.github.comments.push(comment(1, -60, 'Pip, an old ask.'))
