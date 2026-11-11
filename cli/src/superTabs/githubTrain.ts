@@ -33,7 +33,7 @@ type Json = Record<string, unknown>
 
 /** The branches the train builds on. Nothing else in a repository uses the prefix (AGENTS.md: "Never push to a `harness-train/`
  *  branch"), and the train writes and deletes no other ref. */
-const TRAIN_BRANCH = 'harness-train/'
+export const TRAIN_BRANCH = 'harness-train/'
 /** The most pull requests one train carries: the one of twenty that breaks it is found in five runs more. */
 const TRAIN_MAX = 20
 /** A train whose checks have not finished in this long, or whose member still waits, is closed and built again: while it is

@@ -259,7 +259,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // signature names its reader only when it names one of the team, and only a READ-OK the backend recorded is a read.
     team: async agent => new Set(list((await held().reads.read(agent.tabId, agent.agentId)).state.agents)
       .map(a => labelOf(String(a.displayName ?? a.name ?? a.id)))),
-    named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '', channel: '' }, comments),
+    named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '' }, comments),
   })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()

@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { claimant, GitHubNumbers, NUMBERS_CHECK_MS, NUMBERS_HOUR, numbersText, stepsOf } from './githubNumbers.js'
 import type { GitHubGet } from './githubRest.js'
+import { operationOf } from './pmNumbers.js'
+import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
-const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app', channel: 'lead' }
+const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
 const MIN = 60_000
 /** A time on 10 November 2026 on this computer's clock, the day the numbers are of. */
 const nov10 = (hour: number, minute = 0) => new Date(2026, 10, 10, hour, minute).getTime()
@@ -102,7 +104,7 @@ describe('posted once a day in the project\'s channel, as its PM', () => {
 
   /** acme/app on GitHub on 11 November: on the 10th Pip's #7 landed after Kai's READ-OK and Pip took its next task; Kai's #5 landed,
    *  listed first as GitHub lists the last changed first, and Kai took none since; Kai's #8 was closed. */
-  function setup() {
+  function setup(pulls?: Json[]) {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-numbers-')); folders.push(dir)
     let clock = nov10(23)
     const reads: string[] = []
@@ -111,7 +113,7 @@ describe('posted once a day in the project\'s channel, as its PM', () => {
       reads.push(path)
       if (fail.get) throw fail.get
       const url = new URL(`https://api.github.com${path}`)
-      const body = url.pathname === '/repos/acme/app/pulls' ? [pull(5, 'Kai', nov10(10, 30), nov10(11, 30)), pull(7, 'Pip', nov10(9), nov10(10)),
+      const body = url.pathname === '/repos/acme/app/pulls' ? pulls ?? [pull(5, 'Kai', nov10(10, 30), nov10(11, 30)), pull(7, 'Pip', nov10(9), nov10(10)),
         pull(8, 'Kai', nov10(11), null),
         pull(6, 'Pip', nov10(9) - 24 * 60 * MIN, nov10(9) - 23 * 60 * MIN)]
         : url.pathname === '/repos/acme/app/issues/7/comments' ? [said(nov10(9, 6), 'Kai, 09:06: READ-OK 1234567')]
@@ -139,7 +141,8 @@ describe('posted once a day in the project\'s channel, as its PM', () => {
     expect(t.post).toHaveBeenCalledOnce()
     const [project, operation, text] = t.post.mock.calls[0]!
     expect(project).toBe(PROJECT)
-    expect(operation).toBe('numbers-acme-app-2026-11-11')
+    // The operation of the day's post, as pmNumbers.ts posted its line under before.
+    expect(operation).toBe(operationOf(PROJECT, 'post', '2026-11-11'))
     expect(text.split('\n')).toEqual([
       'Numbers for Tue 10 Nov, from GitHub:',
       'Team · 2 landed · ready → first verdict 6 min (p90 6 min) · last READ-OK → landed 54 min · ready → landed 1 h · 100% landed within 3 h of opening'
@@ -154,7 +157,7 @@ describe('posted once a day in the project\'s channel, as its PM', () => {
     expect(t.get).toHaveBeenCalledTimes(read)
     t.at(nov10(48 + NUMBERS_HOUR)); await numbers.tick()
     expect(t.post).toHaveBeenCalledTimes(2)
-    expect(t.post.mock.calls[1]![1]).toBe('numbers-acme-app-2026-11-12')
+    expect(t.post.mock.calls[1]![1]).toBe(operationOf(PROJECT, 'post', '2026-11-12'))
   })
 
   it('posts once across a restart, from the day it kept, and reads a kept file it cannot use as none', async () => {
@@ -178,13 +181,59 @@ describe('posted once a day in the project\'s channel, as its PM', () => {
     t.fail.get = null
     t.fail.post = new Error('BACKEND_UNREACHABLE')
     t.at(nov10(24 + NUMBERS_HOUR, 30)); await numbers.tick()
+    const read = t.get.mock.calls.length
     t.at(nov10(24 + NUMBERS_HOUR, 40)); await numbers.tick()
     expect(t.post).toHaveBeenCalledTimes(2)
+    // Tried again in the same words, from what was read once.
+    expect(t.get).toHaveBeenCalledTimes(read)
+    expect(t.post.mock.calls[1]).toEqual(t.post.mock.calls[0])
     t.fail.post = null
     t.at(nov10(24 + NUMBERS_HOUR, 50)); await numbers.tick()
     t.at(nov10(24 + NUMBERS_HOUR, 60)); await numbers.tick()
     expect(t.post).toHaveBeenCalledTimes(3)
     expect(t.log).toHaveBeenCalledWith('[super-tab] posted acme/app\'s numbers for the day before 2026-11-11')
+    // A day never posted is not posted the next in its words: the next day's are worked out afresh, of the day before it.
+    const u = setup(), later = u.open()
+    u.fail.post = new Error('BACKEND_UNREACHABLE')
+    u.at(nov10(24 + NUMBERS_HOUR)); await later.tick()
+    u.at(nov10(48 + NUMBERS_HOUR)); await later.tick()
+    expect(u.post.mock.calls.map(([, , text]) => text.split('\n')[0])).toEqual(['Numbers for Tue 10 Nov, from GitHub:', 'Numbers for Wed 11 Nov, from GitHub:'])
+  })
+
+  it('is done with a day the server has, or refuses for good, and says a refusal once', async () => {
+    const t = setup(), numbers = t.open()
+    // Taken already: a try whose answer was lost, or the day's line from a Harness before this one.
+    t.fail.post = new SuperTabHostError('OPERATION_REUSED', 'This operation was sent with other words.', 409)
+    t.at(nov10(24 + NUMBERS_HOUR)); await numbers.tick()
+    t.at(nov10(24 + NUMBERS_HOUR, 10)); await numbers.tick()
+    expect(t.post).toHaveBeenCalledOnce()
+    expect(t.log).not.toHaveBeenCalled()
+    t.fail.post = new SuperTabHostError('REQUEST_BLOCKED', 'The request was blocked.', 403)
+    t.at(nov10(48 + NUMBERS_HOUR)); await numbers.tick()
+    t.at(nov10(48 + NUMBERS_HOUR, 10)); await numbers.tick()
+    expect(t.post).toHaveBeenCalledTimes(2)
+    expect(t.log).toHaveBeenCalledExactlyOnceWith('[super-tab] Daily numbers: REFUSED acme/app: The request was blocked.')
+    t.fail.post = null
+    t.at(nov10(72 + NUMBERS_HOUR)); await numbers.tick()
+    expect(t.post).toHaveBeenCalledTimes(3)
+  })
+
+  it('counts what a train carried as landed when the train merged, and no train as anyone\'s', async () => {
+    const train = (number: number, title: string, opened: number, merged: number | null) =>
+      pull(number, 'harness', opened, merged, { title, head: { ref: `harness-train/${number}` }, labels: [] })
+    // Pip's #11 and Kai's #12 rode a train that landed squashed at 12:00, which closed them; Pip's #13 rode one merged as a merge
+    // commit at 15:00, which GitHub marks merged, after a red one at 13:00. #14 was named by no train, and #15 by a red one.
+    const t = setup([train(20, 'Train: #11 #12 #14x', nov10(11, 40), nov10(12)), pull(11, 'Pip', nov10(10), null, { closed_at: iso(nov10(12, 1)) }),
+      pull(12, 'Kai', nov10(10, 30), null, { closed_at: iso(nov10(12, 1)) }), pull(14, 'Kai', nov10(10, 30), null, { closed_at: iso(nov10(12, 2)) }),
+      train(21, 'Train, red: #13 #15', nov10(12, 30), null), pull(15, 'Pip', nov10(10), null, { closed_at: iso(nov10(13, 30)) }),
+      train(22, 'Train: #13', nov10(14, 30), nov10(15)), pull(13, 'Pip', nov10(12), nov10(15))])
+    t.at(nov10(24 + NUMBERS_HOUR)); await t.open().tick()
+    expect(t.post.mock.calls[0]![2].split('\n')).toEqual([
+      'Numbers for Tue 10 Nov, from GitHub:',
+      'Team · 3 landed · ready → landed 2 h · 100% landed within 3 h of opening · 2 closed without landing',
+      'Pip: 2 landed · no task taken since its last landed',
+      'Kai: 1 landed · no task taken since its last landed',
+    ])
   })
 
   it('says a post the server refused in its own words, for a team with nobody away', async () => {

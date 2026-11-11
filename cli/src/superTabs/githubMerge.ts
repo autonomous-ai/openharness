@@ -109,8 +109,7 @@ const HOLD_LABEL = 'hold'
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
-/** A project whose PM runs here: its repository, its PM and the PM's Swarm, and its channel, the conversation the PM leads. */
-export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string; channel: string }
+export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string }
 
 /** Who the backend recorded as the writer of each of a project's GitHub comments [ids] (`issue:<id>`, at most 100), read as the
  *  project's PM through [ask], the backend's GET (backend superTabs/githubComments.ts). Ids with no record are left out. */
@@ -133,8 +132,7 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
     const repo = repositorySlug(object(project?.repository).repositoryUrl)
     if (repo && identifier(project?.id) && !found.has(repo)) {
-      found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id,
-        channel: row.ledConversationId })
+      found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id })
     }
   }
   return [...found.values()]

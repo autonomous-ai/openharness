@@ -1,7 +1,10 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { Crew } from './assign/crew.js'
+import { refusedForGood } from './githubMentions.js'
 import { ownVerdict, pullTalk, writersOf, type LedProject } from './githubMerge.js'
 import { GitHubReads, GitHubStop, PAGE, type GitHubGet } from './githubRest.js'
+import { TRAIN_BRANCH } from './githubTrain.js'
+import { operationOf } from './pmNumbers.js'
 import { object } from './wire.js'
 
 /**
@@ -12,7 +15,11 @@ import { object } from './wire.js'
  * ready to the first verdict, the last READ-OK to landed, ready to landed, landed within three hours of opening; and how long a
  * builder was free after one landed before it took its next task (the claim `harness super-tab take` posts, githubClaim.ts). Every
  * builder of the team has its line, one with nothing landed too. A builder is its person's one member of the project, so per
- * builder is per person.
+ * builder is per person. A pull request a train carried landed as the train merged (githubTrain.ts), and a train is no one's.
+ *
+ * It is the day's one post. pmNumbers.ts, which counts each pass of the assigner and tells the PM when work runs short, also
+ * posted a line for the day until this replaced it (2026-11-11); this goes under that line's operation (pmNumbers.ts
+ * operationOf), so a day it posted is not posted twice.
  */
 
 type Json = Record<string, unknown>
@@ -46,6 +53,9 @@ export class GitHubNumbers {
   private posted: Record<string, string>
   /** What was said of a failure today, once each, so a GitHub that stays down is not logged every ten minutes. */
   private said = { day: '', lines: new Set<string>() }
+  /** Each project's numbers, worked out once a day and kept until posted: a post tried again is the same words, and the day's
+   *  pull requests are not read again for it. */
+  private readonly texts = new Map<string, { day: string; text: string }>()
   private offUntil = 0
 
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>; get: GitHubGet
@@ -84,17 +94,32 @@ export class GitHubNumbers {
     const due = (await this.deps.projects()).filter(project => this.posted[project.repo] !== day)
     for (const project of due) {
       try {
-        await this.deps.post(project, `numbers-${project.repo.replace(/[^A-Za-z0-9]/g, '-')}-${day}`, await this.numbers(project, today))
-        this.posted[project.repo] = day
-        this.save()
+        const kept = this.texts.get(project.projectId)
+        const text = kept?.day === day ? kept.text : await this.numbers(project, today)
+        this.texts.set(project.projectId, { day, text })
+        await this.deps.post(project, operationOf(project, 'post', day), text)
+        this.done(project, day)
         this.log(`[super-tab] posted ${project.repo}'s numbers for the day before ${day}`)
       } catch (error) {
+        if (refusedForGood(error)) {
+          // The server has the day's post already (a try whose answer was lost, or the line a Harness before this one posted),
+          // or refuses it for what it says: either way it is not posted again that day.
+          if (error.code !== 'OPERATION_REUSED') this.once('REFUSED', `${project.repo}: ${reason(error)}`)
+          this.done(project, day)
+          continue
+        }
         this.reads.forget(project.repo)
         this.once(error instanceof GitHubStop ? error.code : 'NUMBERS_FAILED', `${project.repo}: ${reason(error)}`)
         // A stop of every repository this gh reads (signed out, out of requests): none is read again until it lifts.
         if (error instanceof GitHubStop && error.everywhere) { this.offUntil = error.until; return }
       }
     }
+  }
+
+  private done(project: LedProject, day: string): void {
+    this.texts.delete(project.projectId)
+    this.posted[project.repo] = day
+    this.save()
   }
 
   /** The day before [today]'s numbers for [project], as its channel reads them. */
@@ -104,9 +129,15 @@ export class GitHubNumbers {
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime()
     const crew = await this.deps.crew(project)
     const team = [...crew.builders.map(b => b.name), ...(crew.away ?? []).map(b => b.name)]
-    const closed = (await this.reads.current(repo, `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, PULL_PAGES))
-      .filter(pull => within(pull.closed_at, start, end))
-    const merged = closed.filter(pull => typeof pull.merged_at === 'string' && pull.merged_at)
+    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, PULL_PAGES)
+    // A train is Harness's, no builder's, and each pull request it carried landed as it merged: GitHub marks one merged by a
+    // merge commit, and one the train squashed is closed and named in the train's title (githubTrain.ts).
+    const train = (pull: Json) => String(object(pull.head).ref).startsWith(TRAIN_BRANCH)
+    const carried = new Map(pulls.filter(pull => train(pull) && pull.merged_at)
+      .flatMap(one => [...String(one.title).matchAll(/#([1-9]\d{0,9})\b/g)].map(found => [Number(found[1]), one.merged_at] as const)))
+    const own = pulls.filter(pull => !train(pull)).map(pull => pull.merged_at ? pull : { ...pull, merged_at: carried.get(Number(pull.number)) ?? null })
+    const merged = own.filter(pull => within(pull.merged_at, start, end))
+    const dropped = own.filter(pull => !pull.merged_at && within(pull.closed_at, start, end)).length
     const landed: Landed[] = []
     for (const pull of merged.slice(0, MAX_LANDED)) {
       const number = Number(pull.number)
@@ -120,7 +151,7 @@ export class GitHubNumbers {
         const name = claimant(comment), issue = Number(String(comment.issue_url).split('/').at(-1))
         return name && Number.isSafeInteger(issue) ? [{ name, at: Date.parse(String(comment.created_at)), issue }] : []
       })
-    return numbersText(new Date(start), team, landed.sort((a, b) => a.mergedAt - b.mergedAt), closed.length - merged.length, takes, merged.length > MAX_LANDED)
+    return numbersText(new Date(start), team, landed.sort((a, b) => a.mergedAt - b.mergedAt), dropped, takes, merged.length > MAX_LANDED)
   }
 
   private save(): void {
