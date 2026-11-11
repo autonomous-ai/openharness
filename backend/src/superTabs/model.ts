@@ -465,6 +465,9 @@ export interface SuperTabState {
   /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
    *  the ids of their own (visibleState). */
   removedMachines?: Array<{ machineId: string; contributorId: string }>
+  /** The projects deleted from this Swarm, by id (the request that created each) and when (ms), so the same request never makes
+   *  one again (commands.ts project.create): at most MAX_DELETED_PROJECTS, the newest; no reader gets it (visibleState). */
+  deletedProjects?: Array<{ id: string; at: number }>
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -771,7 +774,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // command may still load one. Nor `overlapAlerts`, which backends up to 1.4.68 (before S18) still wrote into the heads of
   // Swarms made after the wipe's cut-off; goes on or after 2026-12-12.
   const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, closingSessions: _closing,
-    removedSessions: _removed, overlapAlerts: _alerts, ...kept } = state as SuperTabState & { overlapAlerts?: string[] }
+    removedSessions: _removed, overlapAlerts: _alerts, deletedProjects: _deleted, ...kept } = state as SuperTabState & { overlapAlerts?: string[] }
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
   // ordinary people and agent syncs must never receive the note or its correlation fields.

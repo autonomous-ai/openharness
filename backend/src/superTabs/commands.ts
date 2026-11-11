@@ -98,6 +98,8 @@ export const startRequestSchema = z.object({
 const MAX_REMOVED_MACHINES = 64
 /** The most projects a Swarm holds. */
 export const MAX_PROJECTS = 100
+/** The most deleted projects a Swarm remembers, the newest (SuperTabState.deletedProjects). */
+export const MAX_DELETED_PROJECTS = 200
 
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
@@ -777,6 +779,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // Members elsewhere whose main project it was have none now (spec: they ask their person again, build task 9).
     for (const target of state.agents) if (target.mainProjectId === project.id) delete target.mainProjectId
     deleteProject(state, actor, project.id, orphaned, context.now)
+    // Asked for again by the same request, as Desktop asks for a repo's project on every computer of its person's, it stays
+    // deleted after its receipt is gone (30 days), as its receipt says before (store.ts).
+    state.deletedProjects = [...(state.deletedProjects ?? []).filter(d => d.id !== project.id), { id: project.id, at: context.now }].slice(-MAX_DELETED_PROJECTS)
   }
   /** Takes [target] out of the Swarm. Only a confirmed delete or Stop has its host close its session ([session] 'close'); any
    *  other removal leaves it running (anh Dee 2026-11-11: as closing a pane another tab still shows), recorded for its person so
@@ -981,6 +986,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'project.create': {
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person creates a project and chooses its lead.', 403)
+      // The request of a project deleted since: what its receipt answers while it is kept (store.ts), and after.
+      if (state.deletedProjects?.some(d => d.id === operationId)) fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
       if (state.paused) fail('PAUSED', 'New work is paused in this swarm.')
       const project = createProject(actor.userId, command.name, command.visibility, command.brief, command.process ?? 'full')
       result.projectId = project.id
