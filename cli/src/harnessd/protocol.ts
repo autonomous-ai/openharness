@@ -70,11 +70,9 @@ export type CoreMessage =
   /** Start-up is done and requests are being served (protocol 2) — or, with `safeMode`, start-up gave
    *  way to safe mode: the updater alone runs, waiting for a fix. */
   | { type: 'harnessd:ready'; safeMode?: string }
-  /** Sent every few seconds; a core that stops sending is hung. `loopDelayMs`, the longest the event loop
-   *  was held since the last one (protocol 2), is no longer sent: no master read it, and the monitor behind
-   *  it woke every process every 20 ms, 0.075% of a core each at rest (2026-11-11). Still accepted, from a
-   *  core or service of an older build under this master. */
-  | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number; loopDelayMs?: number }
+  /** Sent every few seconds; a core that stops sending is hung. An older build's beat also carries
+   *  `loopDelayMs`, which no master read; like any key not checked here, it is ignored. */
+  | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number }
   /** Start the process that runs this service (harnessd/services.ts `onDemand`): an experiment that is on now
    *  (protocol 3), the devices, models or the gateway, now that they are needed (protocol 4, and before
    *  `bound` too), or the viewers (protocol 5). A master from before ignores it, or finds that process already
@@ -126,7 +124,6 @@ export function isCoreMessage(value: unknown): value is CoreMessage {
       return message.safeMode === undefined || typeof message.safeMode === 'string'
     case 'harnessd:heartbeat':
       return typeof message.rssBytes === 'number' && typeof message.heapUsedBytes === 'number'
-        && (message.loopDelayMs === undefined || typeof message.loopDelayMs === 'number')
     case 'harnessd:want':
       return typeof message.service === 'string' && message.service.length > 0
     case 'harnessd:stop':
