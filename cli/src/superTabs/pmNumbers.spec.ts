@@ -199,30 +199,38 @@ describe('what Harness says of the counts', () => {
   // either (review of #4081). What the day's scoreboard says follows, apart: the day first, then its detail (scoreboard.ts).
   it('posts the day for the project\'s people, as a teammate would', () => {
     expect(dayLine(numbers(), undefined, '')).toBe('In the last day, 12 pull requests landed (Pip 7, Kai 5) and 9 tasks closed. '
-      + 'Now 2 of 4 builders are waiting for a task, no task is ready and 3 are in hand.')
+      + 'Now 2 of 4 builders are waiting for a task, no sized task is open and 3 are in hand.')
     expect(dayLine(numbers({ builders: 0, free: [], landed: 94, landedBy: [['A', 50], ['B', 20], ['C', 10], ['D', 10], ['E', 3], ['F', 1]], closed: 1, open: 1, held: 0, more: true }), undefined, ''))
       .toBe('In the last day, at least 94 pull requests landed (A 50, B 20, C 10, D 10, E 3, others) and at least 1 task closed. '
-        + 'Now no builder is running, 1 task is ready and none is in hand.')
+        + 'Now no builder is running, 1 sized task is open and none is in hand.')
     expect(dayLine(numbers({ builders: 1, free: [], landed: 0, landedBy: [], closed: 2, open: -1 }), undefined, ''))
-      .toBe('In the last day, no pull request landed and 2 tasks closed. Now no builder is waiting for a task, no task is ready and 3 are in hand.')
+      .toBe('In the last day, no pull request landed and 2 tasks closed. Now no builder is waiting for a task, no sized task is open and 3 are in hand.')
     expect(dayLine(numbers({ free: free('Ada'), landed: 3, landedBy: [['Pip', 3]], closed: 0, open: 2, held: 0 }), undefined, ''))
-      .toBe('In the last day, 3 pull requests landed (Pip 3) and no task closed. Now 1 of 4 builders is waiting for a task, 2 tasks are ready and none is in hand.')
+      .toBe('In the last day, 3 pull requests landed (Pip 3) and no task closed. Now 1 of 4 builders is waiting for a task, 2 sized tasks are open and none is in hand.')
     expect(dayLine(numbers({ landed: 15, landedBy: [['A', 5], ['B', 4], ['C', 3], ['D', 2], ['E', 1]] }), undefined, ''))
       .toMatch(/^In the last day, 15 pull requests landed \(A 5, B 4, C 3, D 2, E 1\) and 9 tasks closed\. /)
     // A day whose closed list was full may have more than it read: none read is not said as none.
     expect(dayLine(numbers({ landed: 0, landedBy: [], closed: 100, more: true }), undefined, ''))
       .toMatch(/^In the last day, no pull request we could see landed and at least 100 tasks closed\. /)
     expect(dayLine(numbers(), { total: 2, passed: 2, failed: 0, waiting: 0 }, 'Trains: 4 landed.')).toBe('In the last day, 12 pull requests landed (Pip 7, Kai 5) '
-      + 'and 9 tasks closed. Now 2 of 4 builders are waiting for a task, no task is ready and 3 are in hand. Goal: 2 of 2 checks pass on the main branch.'
+      + 'and 9 tasks closed. Now 2 of 4 builders are waiting for a task, no sized task is open and 3 are in hand. Goal: 2 of 2 checks pass on the main branch.'
       + '\n\nTrains: 4 landed.')
   })
 
-  // Through what is counted: two builders out of their subscriptions are neither waiting nor busy.
+  // Through what is counted: four builders out of their subscriptions are neither waiting nor busy.
+  // A sized task open is one Harness did not give: perhaps one no builder's machine can take ("needs: robot-arm"), which is no
+  // task ready (review of #4081).
+  it('says a sized task Harness did not give is open, not ready', () => {
+    const n = counts({ read: read({}, ['9']) })
+    expect(dayLine({ ...n, landed: 1, landedBy: [['Pip', 1]] }, undefined, ''))
+      .toMatch(/ Now 4 of 4 builders are waiting for a task, 1 sized task is open and none is in hand\.$/)
+  })
+
   it('says of builders out of their subscriptions only that none is waiting', () => {
     const n = counts({ short: crew().builders.map(builder => ({ name: builder.name, label: builder.label, why: 'quota' as const })) })
     expect(n.free).toEqual([])
     expect(dayLine({ ...n, landed: 1, landedBy: [['Pip', 1]] }, undefined, ''))
-      .toMatch(/ Now no builder is waiting for a task, no task is ready and none is in hand\.$/)
+      .toMatch(/ Now no builder is waiting for a task, no sized task is open and none is in hand\.$/)
   })
 })
 

@@ -186,20 +186,21 @@ export const toldLine = (names: readonly string[], n: Numbers): string => `${not
  *  there may be more than it held; none in a full list is "no pull request we could see". */
 const howMany = (count: number, what: string, more: boolean): string =>
   count ? `${more ? 'at least ' : ''}${counted(count, what)}` : `no ${what}${more ? ' we could see' : ''}`
-/** The verb after [howMany]'s words: "no task is", "1 task is", "3 tasks are". */
+/** The verb after a count: "no task is", "1 builder is", "3 are". */
 const isAre = (count: number): string => count > 1 ? 'are' : 'is'
 
 /** The day's numbers, for the project's people in its channel: what landed and closed, what is so now and how far its [goal]
  *  is, then apart what the day's scoreboard says ([board]: scoreboard.ts boardWords, or nothing). A builder waits for a task
  *  as [Numbers.free] counts it: one out of its subscription is neither waiting nor busy, and "every builder is busy" said it
- *  was (review of #4081). */
+ *  was. A sized task open is one Harness did not give, which may be one no builder's machine can take: open, never "ready"
+ *  (both reviews of #4081). */
 export const dayLine = (n: Numbers, goal: Goal, board: string): string => {
-  const ready = Math.max(0, n.open), waiting = n.free.length
+  const open = Math.max(0, n.open), waiting = n.free.length
   const by = n.landedBy.length ? ` (${n.landedBy.slice(0, NAMES_MAX).map(([name, count]) => `${name} ${count}`).join(', ')}${n.landedBy.length > NAMES_MAX ? ', others' : ''})` : ''
   const crew = !n.builders ? 'no builder is running'
     : waiting ? `${waiting} of ${counted(n.builders, 'builder')} ${isAre(waiting)} waiting for a task` : 'no builder is waiting for a task'
   return `In the last day, ${howMany(n.landed, 'pull request', n.more)} landed${by} and ${howMany(n.closed, 'task', n.more)} closed. `
-    + `Now ${crew}, ${howMany(ready, 'task', false)} ${isAre(ready)} ready and ${n.held || 'none'} ${isAre(n.held)} in hand.`
+    + `Now ${crew}, ${howMany(open, 'sized task', false)} ${isAre(open)} open and ${n.held || 'none'} ${isAre(n.held)} in hand.`
     + `${goal ? ` Goal: ${scored(goal)}.` : ''}${board ? `\n\n${board}` : ''}`
 }
 
