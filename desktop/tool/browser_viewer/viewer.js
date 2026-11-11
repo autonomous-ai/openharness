@@ -48,7 +48,8 @@ export function startViewer(RFB, win) {
   function report() {
     scheduled = false;
     if (!rfb) return;
-    // noVNC 1.7.0's own Websock: build.mjs pins the version.
+    // noVNC 1.7.0's own Websock: package.json pins the version exactly, and
+    // build.mjs fails on one that renames it.
     const consumed = received - rfb._sock.rQlen();
     if (consumed > reported) {
       post({ t: 'consumed', bytes: consumed - reported });

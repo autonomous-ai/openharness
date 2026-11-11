@@ -3,6 +3,7 @@
 // module, an import or a second file would not load on every native webview.
 // Run `npm ci && node build.mjs` here after changing viewer.js or a version.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
@@ -13,15 +14,21 @@ const output = new URL('../../assets/browser/browser_viewer.html', import.meta.u
 // hold. The flag is a live binding read only when encodings are sent, after
 // the handshake, so the probe resolves into it instead. Xvnc sends no H.264.
 const probe = 'supportsWebCodecsH264Decode = await _checkWebCodecsH264DecodeSupport();';
-// viewer.js wraps two of RFB's internals to clip to Chrome's window: a noVNC
-// that renames either fails here, not as a page that silently stops clipping.
-const internals = ['    _updateScale() {', 'this._display = new Display('];
+// viewer.js reads noVNC's internals: RFB's _updateScale and _display to clip
+// to Chrome's window, and its Websock's queue to ack what was drawn. A noVNC
+// that renames any fails here, not as a page that silently stops clipping or
+// stalls its stream.
+const internals = {
+  'rfb.js': ['    _updateScale() {', 'this._display = new Display(', 'this._sock = new Websock('],
+  'websock.js': ['    rQlen() {'],
+};
 const noVnc = {
   name: 'novnc',
   setup(b) {
-    b.onLoad({ filter: /novnc[\\/]core[\\/]rfb\.js$/ }, async ({ path }) => {
+    b.onLoad({ filter: /novnc[\\/]core[\\/](rfb|websock)\.js$/ }, async ({ path }) => {
       const source = readFileSync(path, 'utf8');
-      if (!internals.every((part) => source.includes(part))) throw new Error('noVNC changed RFB._updateScale or RFB._display; update viewer.js');
+      const parts = internals[basename(path)];
+      if (!parts.every((part) => source.includes(part))) throw new Error(`noVNC changed what viewer.js reads in ${basename(path)}; update viewer.js`);
       return { contents: source };
     });
     b.onLoad({ filter: /novnc[\\/]core[\\/]util[\\/]browser\.js$/ }, async ({ path }) => {
