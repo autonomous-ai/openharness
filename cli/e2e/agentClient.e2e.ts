@@ -399,7 +399,7 @@ describe('Harness for agents, end to end', () => {
   // for as long, and its first hook is as late: until then nothing could bind its conversation, as there.
   it.each([
     ['binds its conversation a few seconds in', 6_000, /^pong on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/],
-    ['never binds while the close waits', 120_000, /^pong on .+: closed\. It was still starting, so no conversation was kept\.\nNext: nothing; you have 0 open of 4\.$/],
+    ['never binds while the close waits', 120_000, /^pong on .+: closed\. It had not started a conversation, so none was kept\.\nNext: nothing; you have 0 open of 4\.$/],
   ] as const)('an agent closes a Codex it started a second ago, which %s', async (_, unboundMs, said) => {
     const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
     const { d } = await signedIn({ agents_start_agents: true }, { before: (d) => {
@@ -445,7 +445,7 @@ describe('Harness for agents, end to end', () => {
     expect(hello.result.instructions).toContain('Never give work to, or close, a harness you did not start')
     server.notify('notifications/initialized')
     const tools = (await server.request('tools/list')).result.tools.map((t: { name: string }) => t.name)
-    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_search', 'harness_machines', 'harness_start', 'harness_wait', 'harness_read', 'harness_settings', 'harness_close'])
 
     // An empty folder of its own: refused, with the project it can ask for instead.
     const scratch = join(d.root, 'tmp', 'mcp-scratch')
@@ -493,7 +493,7 @@ describe('Harness for agents, end to end', () => {
     await d.start()
     await until('Harness to allow its commands in Claude Code and Codex', () => existsSync(rules)
       && readFileSync(settings, 'utf8').includes('mcp__plugin_harness_harness__harness_send'), 30_000)
-    const tools = { whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
+    const tools = { whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send', tell: 'harness_tell' }
     const verbs = Object.keys(tools) as Array<keyof typeof tools>, launcher = join(d.env.HOME!, '.local', 'bin', 'harness')
     // The person's deny of `harness close` is theirs: no allow for it in either spelling (Claude Code does not count the
     // launcher's path as the same command). Its MCP tool is another tool, and is allowed by name. `harness --help`,
@@ -586,8 +586,9 @@ describe('Harness for agents, end to end', () => {
       return row?.sessionId && row.status === 'active' ? row : null
     }, 60_000, 500)
     client.close()
-    // Its pull request line is the account's other switch, still off: none.
-    expect(await commandsIn(d, String(held.tmuxPane))).not.toContain('--settings')
+    // Its pull request line is the account's other switch, still off: none. (`--settings` itself carries Claude Code's
+    // status line to every harness since #3451.)
+    expect(await commandsIn(d, String(held.tmuxPane))).not.toContain('"attribution"')
     // Turned off on another computer: this one hears desk_changed, and refuses again.
     relay.setExperiment('agents_start_agents', false)
     await kept(d, (settings) => settings.agentsStartAgents === false)
@@ -609,7 +610,7 @@ describe('Harness for agents, end to end', () => {
     const made = await client.request('agent_create', { engine: 'claude', cwd: folder('lead'), bypassPermission: true, name: 'lead' }, 90_000)
     expect(made.error, JSON.stringify(made)).toBeUndefined()
     const lead = await live('lead')
-    expect(await commandsIn(d, String(lead.tmuxPane))).not.toContain('--settings')
+    expect(await commandsIn(d, String(lead.tmuxPane))).not.toContain('"attribution"')
     // Every harness is told how to use Harness while the account lets agents start agents, the person's too.
     expect(await commandsIn(d, String(lead.tmuxPane))).toContain(`--append-system-prompt ${HARNESS_INSTRUCTIONS}`)
     const run = (...args: string[]) => harness(d, String(lead.tmuxPane), args)
@@ -619,7 +620,8 @@ describe('Harness for agents, end to end', () => {
     const kid = await live('kid')
     const kidCommand = await commandsIn(d, String(kid.tmuxPane))
     expect(kidCommand).toContain(HARNESS_INSTRUCTIONS)
-    expect(kidCommand).not.toContain('--settings')
+    expect(kidCommand).not.toContain('"attribution"')
+    expect(kidCommand).not.toContain('When you create or update a pull request')
 
     // Codex receives delegation instructions, without an instruction to mark PRs.
     expect((await run('new', 'codex', 'kidx', '--name', 'kidx', '--', 'hello kidx')).code).toBe(0)
@@ -636,7 +638,7 @@ describe('Harness for agents, end to end', () => {
       const row = await live('kid')
       const command = row.tmuxPane ? await commandsIn(d, String(row.tmuxPane)) : ''
       if (!command.includes(HARNESS_INSTRUCTIONS)) return null
-      expect(command).not.toContain('--settings')
+      expect(command).not.toContain('"attribution"')
       return row
     }, 60_000, 500)
 
@@ -648,7 +650,7 @@ describe('Harness for agents, end to end', () => {
     const quiet = await live('quiet')
     const command = await commandsIn(d, String(quiet.tmuxPane))
     expect(command).toContain('hello quiet')
-    expect(command).not.toContain('--settings')
+    expect(command).not.toContain('"attribution"')
 
     // Agents starting agents turned off: a harness is no longer told how.
     expect((await harness(d, '', ['settings', 'agents-start-agents', 'off'])).code).toBe(0)

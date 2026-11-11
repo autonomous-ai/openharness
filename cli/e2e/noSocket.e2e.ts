@@ -1,7 +1,7 @@
 /**
- * A data folder too deep for the daemon's local socket: a socket path has 96 bytes at most
- * (lib/localSocket.ts), so `<data>/daemon-<port>.sock` past that leaves the daemon serving on its port
- * alone. The services that run in processes of their own reach the core only through that socket, so the
+ * A data folder too deep for the daemon's local socket, under a home too deep as well: a socket path has 96 bytes at most
+ * (lib/localSocket.ts), so `<data>/daemon-<port>.sock` past that goes under `~/.harness/s/`, and a home too long for that
+ * too leaves the daemon serving on its port alone. The services that run in processes of their own reach the core only through that socket, so the
  * master runs them in the core's process instead, and every one still answers.
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { localSocketName, socketPathIn } from '../src/lib/localSocket.js'
 
 describe('a data folder too deep for the local socket', () => {
   let daemon: IsolatedDaemon | undefined
@@ -27,6 +28,10 @@ describe('a data folder too deep for the local socket', () => {
     expect(Buffer.byteLength(join(dataDir, 'daemon-18473.sock'))).toBeGreaterThan(96)
     const d = await IsolatedDaemon.create({ dataDir })
     daemon = d
+    // A short home would hold the socket instead (a CI runner's /tmp): one as deep as the data folder, inside the test's root.
+    d.env.HOME = join(d.root, 'home', 'a-home-folder-whose-path-is-longer-than-a-unix-socket-path-may-be')
+    mkdirSync(d.env.HOME, { recursive: true })
+    expect(socketPathIn(dataDir, localSocketName(d.port), d.env.HOME)).toBeNull()
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     // No socket to wait for: the port, and start-up done.
     await d.start({ ready: 'none' })

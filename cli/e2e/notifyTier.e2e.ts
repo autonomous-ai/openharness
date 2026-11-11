@@ -1,9 +1,8 @@
 /**
- * A finished turn's tier, decided by Harness's hosted Jev, on the real daemon signed in on the fake backend
- * with a phone paired on the fake relay (services/recaps.ts). The fake route validates the request as the
- * real one does (backend routes/jevRoute.ts: `state` is a record of at most four strings), so a state the
- * real route would refuse fails here too: on 2026-10-21 every decision in production was refused with a 400
- * and fell back to the duration rule, while a fixture that took anything said all was well.
+ * A finished turn's tier on the phone, on the real daemon signed in on the fake backend with a phone paired on the fake
+ * relay (services/recaps.ts). Fixed rules decide it, never a model: a harness agent's finished turn alerts
+ * (lib/notifyTier.ts, docs/superpowers/specs/2026-11-02-device-notify-no-jev-design.md, #2580). Harness's hosted Jev route is
+ * not asked, so nothing the person's agents said leaves the computer for it.
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -13,7 +12,7 @@ import { until } from './harness/daemon.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
 import { RelayPhone } from './harness/relayPhone.js'
 
-describe('a finished turn\'s tier, decided by Harness\'s Jev', () => {
+describe('a finished turn\'s tier, decided by Harness\'s rules', () => {
   let world: PhoneMachine | undefined
   let phone: RelayPhone | undefined
   afterEach(async () => {
@@ -22,13 +21,14 @@ describe('a finished turn\'s tier, decided by Harness\'s Jev', () => {
     world = undefined; phone = undefined
   })
 
-  it('asks the hosted route in the shape it takes, and the phone hears the tier Jev chose', async () => {
+  it('alerts the phone for a harness agent\'s finished turn by rule, and asks no hosted model', async () => {
     const w = await startPhoneMachine()
     world = w
     const { backend, machine } = w
     onTestFailed(() => { console.log(`---- daemon log\n${machine.daemon.log().split('\n').slice(-120).join('\n')}`) })
     const asked: Array<Record<string, any>> = []
-    backend.jev = (body) => { asked.push(body); return { tier: { choice: 'alert', probabilities: { alert: 0.9, list: 0.05, silent: 0.05 } } } }
+    // Answered as the route would, were it asked: it must not be.
+    backend.jev = (body) => { asked.push(body); return { tier: { choice: 'silent', probabilities: { alert: 0.05, list: 0.05, silent: 0.9 } } } }
     const desk = await LocalClient.connect(machine.daemon, { machineId: machine.machineId })
     const cwd = join(machine.daemon.projectsDir, 'tiered')
     mkdirSync(cwd, { recursive: true })
@@ -46,10 +46,7 @@ describe('a finished turn\'s tier, decided by Harness\'s Jev', () => {
     expect(phone.send('message', { agentId, content: 'ship it' })).toBe(true)
     expect((await summary).payload?.tier).toBe('alert')
 
-    expect(asked).toHaveLength(1)
-    const state = asked[0].state as Record<string, unknown>
-    expect(Object.keys(state).sort()).toEqual(['agent', 'recap', 'recent', 'turn'])
-    expect(Object.values(state).every((value) => typeof value === 'string')).toBe(true)
-    expect(machine.daemon.log()).toMatch(/\[recap\] notify · .* · alert · jev · p=alert=0\.90/)
+    expect(asked).toEqual([])
+    expect(machine.daemon.log()).toMatch(/\[recap\] notify · .* · alert · rule:turn · turn · /)
   })
 })
