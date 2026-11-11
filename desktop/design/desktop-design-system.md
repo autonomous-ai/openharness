@@ -749,15 +749,21 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agents says nothing of them.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   one thing: `Project settings…`, whose rows are Rename project, Project
-  details, Switch PM… and Delete Project. It has no Notifications: a channel
+  details, Product Manager and Delete Project. It has no Notifications: a channel
   is agent to agent only (anh Dee, 2026-11-09). Status, Pull requests, the
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted. Switch PM… opens a dialog of the
-  machine, its engines and the model: each engine is one row, `Claude Code`
-  with `Current · 40% left` under it, for its machine's default account,
-  the one account the server runs a PM on (`super_tabs/switch_pm.dart`).
+  archived, so no other way to them is wanted. Product Manager, for the
+  project's owner, shows its PM's name (`None` without one) and opens Choose PM
+  (`super_tabs/choose_pm.dart`; anh Dee, 2026-11-11: "the person chooses the PM
+  from their agents. Choosing again switches it. No new folders."): their own
+  agents, each a row with its face and name, the PM itself `Current` and
+  another project's PM `PM of web` at the right, neither chosen; then Cancel
+  and the blue `Choose`. Choosing sends `project.pm`: the agent becomes the
+  PM, the one before keeps running in Your Team, nothing is started, and the
+  PM's own chat opens. A refusal is said under the list. With no agents of
+  theirs, one line: `Start an agent in Your Team first.`
 - **Goal score** (`SwarmGoalScore`, `super_tabs/goal_score.dart`; in the
   gallery; [design note](../../docs/design/2026-11-11-swarm-goal/README.md)).
   A project that states its goal in `agents/GOAL.md` says how far it is in its
@@ -802,19 +808,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   id), before the PM is up. New project sends its task and files there and
   opens it. What the person sends there waits for the PM, and their newest
   message's receipt says `Waiting for the Product Manager` in muted grey with
-  a clock; a row the server wrote there (a start that failed) carries none. A
-  Personal start that failed says `Couldn’t start the Product Manager: <why>`
-  there instead, in red. Nothing goes to the channel.
-- **Start PM** (`SwarmPmStart`, `super_tabs/personal_lead_card.dart`; in the
-  gallery). A Personal project's empty channel with no PM shows one card above
+  a clock; a row the server wrote there (a start that failed) carries none.
+  Nothing goes to the channel.
+- **Choose PM** (`SwarmPmChoose`, `super_tabs/choose_pm.dart`; in the
+  gallery). A project's empty channel with no PM shows its owner one card above
   the agents-only line: one line, `This project has no Product Manager.`, and
-  the blue `Start PM` (`Starting…` while it starts). The click starts the PM on the
-  person's own computer, with Claude Code in the repo's folder (Codex when
-  Claude Code isn't there), and opens its chat. A start that failed says
-  `Couldn’t start the Product Manager: <why>` in the line, back in the channel
-  if its chat was still open, and Start PM tries again. With none of their
-  computers able to start it, the line says
-  `Can’t start a Product Manager: <why>` and there is no button.
+  the blue `Choose PM`, which opens Choose PM (Project menu above). Anyone else
+  sees the empty channel as it is.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
   see any agent to agent chat"; 2026-11-10: "channel chat here replaces the
   queue", "why not use tag? like in a group chat"). A project's channel is where
