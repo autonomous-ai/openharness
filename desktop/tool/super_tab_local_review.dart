@@ -100,13 +100,8 @@ Future<void> _review() async {
   debugPrint('review: account $accountId');
   await controller.refresh();
   debugPrint('review: refreshed, error ${controller.error}');
-  final project = controller.snapshot!.projects.first.id;
-  if (!controller.expandedProjects.contains(project)) {
-    controller.toggleProject(project);
-  }
-  if (query['open'] == 'pm') {
-    await controller.openPmChat(project);
-  } else if (query['group'] case final group?) {
+  // Swarm v4 has no separate PM chat to open: only a group named in the address is opened.
+  if (query['group'] case final group?) {
     await controller.select(group);
   }
   debugPrint('review: opened ${controller.selectedId}');
@@ -121,7 +116,6 @@ Future<void> _review() async {
       home: Scaffold(
         body: SuperTabView(
           controller: controller,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Local machine',

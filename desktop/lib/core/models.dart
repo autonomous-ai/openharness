@@ -99,8 +99,10 @@ class SharedHarness {
 /// keyed by — keeps them (`d11a1f3b-ca2a-44e9-…`). The same id, written two
 /// ways, and a plain `==` between them never matches. Anything comparing an id
 /// that crossed that boundary has to come through here.
-bool sameMachineId(String a, String b) =>
-    a.replaceAll('-', '').toLowerCase() == b.replaceAll('-', '').toLowerCase();
+bool sameMachineId(String a, String b) => machineIdKey(a) == machineIdKey(b);
+
+/// [id] as [sameMachineId] compares it, for a set or a map keyed by computers.
+String machineIdKey(String id) => id.replaceAll('-', '').toLowerCase();
 
 /// A whole machine another account shares with this one (backend lib/machineAccess.ts): its owner
 /// named this account's address ([via] `email`), or shared it with everyone at their domain and this
@@ -295,6 +297,64 @@ class ForkedFrom {
   }
 }
 
+/// The agent's own Chrome, as its daemon reports it (cli agentFrame.ts `browser`). Only values this build has words for are
+/// kept: a newer daemon's step or error is dropped rather than shown as a code.
+class AgentBrowser {
+  const AgentBrowser({required this.state, this.step, this.error});
+
+  /// `setup`, `starting`, `ready` or `failed`.
+  final String state;
+
+  /// During `setup`: `installing`, `starting_podman` or `building`.
+  final String? step;
+
+  /// During `failed`: one of [errors].
+  final String? error;
+
+  static const steps = {'installing', 'starting_podman', 'building'};
+  static const errors = {
+    'needs_setup',
+    'podman_install_failed',
+    'podman_manual',
+    'podman_old',
+    'podman_memory',
+    'state_unreadable',
+    'podman_down',
+    'image_failed',
+    'browser_stopped',
+    'profile_unwritable',
+    'proxy_failed',
+    'browser_limit',
+    'device_failed',
+  };
+
+  static AgentBrowser? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final state = raw['state'];
+    if (state is! String ||
+        !const {'setup', 'starting', 'ready', 'failed'}.contains(state)) {
+      return null;
+    }
+    final step = raw['step'], error = raw['error'];
+    return AgentBrowser(
+      state: state,
+      step: state == 'setup' && steps.contains(step) ? step as String : null,
+      error: state == 'failed' && errors.contains(error)
+          ? error as String
+          : null,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is AgentBrowser &&
+      state == other.state &&
+      step == other.step &&
+      error == other.error;
+  @override
+  int get hashCode => Object.hash(state, step, error);
+}
+
 /// Display-only fallbacks; never send these to a CLI as a user rename.
 const kUntitledPane = 'Untitled Pane';
 final _automaticHarnessName = RegExp(
@@ -429,12 +489,28 @@ class Agent {
   final String? engineIconHint;
   final String? codexHome;
 
+  /// The Claude account folder (`CLAUDE_CONFIG_DIR`) this agent runs in; null for the default account.
+  final String? claudeHome;
+
   /// Model observed in this session by the daemon, when available. Independent
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
 
   /// Effort reported with [modelName], never inferred from a model default.
   final String? modelEffort;
+
+  /// [modelName] as the engine names it (`claude-opus-5-5`), for a launch.
+  final String? modelId;
+
+  /// Where the engine's own tools work when that is not the pane's folder (OpenClaw's workspace),
+  /// so nobody reads the folder as the place its files change. Null from an engine that works in
+  /// the pane's folder and from an older daemon.
+  final String? workspace;
+
+  /// What stops this agent that only the person can fix, in the daemon's words (`namedState`:
+  /// `OpenClaw Gateway is not running. Start it with openclaw gateway.`). Null when nothing does,
+  /// and from an older daemon.
+  final String? namedState;
 
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
@@ -460,6 +536,14 @@ class Agent {
   /// Why the agent's model will not answer right now (`grid.note`), or null when nothing is wrong.
   final GridNote? gridNote;
   final String? parentAgentId;
+
+  /// `agent` when another agent started this harness, wherever that agent
+  /// runs; null when the person did (cli lib/agentFrame.ts `startedBy`).
+  final String? startedBy;
+
+  /// Started by the Swarm: by an agent, from no harness on this machine, as
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`).
+  bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
   AgentProject? get displayProject =>
@@ -469,6 +553,16 @@ class Agent {
   final DateTime? lastActivityAt;
   final DateTime? createdAt;
   final bool closeSupported;
+
+  /// Whether a person chose [name] (the daemon's `nameChosen`: they renamed the
+  /// agent), as against the name it was created with or the engine's session
+  /// title. Null from a daemon that does not say; only a true one is sent to
+  /// the Swarm (task #2920).
+  final bool? nameChosen;
+
+  /// What a message to it waits for now (the daemon's `waitingFor`): `engine` while its engine starts, else null. The daemon
+  /// sends the agent's frame again when it changes, so a client that reconnects reads it as it is.
+  final String? waitingFor;
   final String? closePlanState;
   final String? closePlanDetail;
 
@@ -504,6 +598,9 @@ class Agent {
   /// The URL of the harness's viewer for this agent, served on the agent's machine, or null
   /// when there is none (yet). A change means the viewer pane must navigate.
   final String? viewerUrl;
+
+  /// Its Browser, or null for an agent made without one or from an older daemon.
+  final AgentBrowser? browser;
 
   /// Why this remote viewer could not be forwarded, including old-daemon update guidance.
   final String? viewerError;
@@ -551,6 +648,10 @@ class Agent {
   /// agent that runs on a computer (docs/design/2026-10-11-cloud-agents.md).
   final AgentCloud? cloud;
 
+  /// Extra launch flags saved on the machine for this agent (`--chrome`, say), as words.
+  /// Empty from an older daemon or an agent with none.
+  final List<String> launchArgs;
+
   bool get isCloud => cloud != null;
 
   const Agent({
@@ -563,19 +664,26 @@ class Agent {
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.claudeHome,
     this.modelName,
     this.modelEffort,
+    this.modelId,
+    this.workspace,
+    this.namedState,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
     this.gridState,
     this.gridNote,
     this.parentAgentId,
+    this.startedBy,
     this.project,
     this.gitContext,
     this.lastActivityAt,
     this.createdAt,
     this.closeSupported = false,
+    this.nameChosen,
+    this.waitingFor,
     this.closePlanState,
     this.closePlanDetail,
     this.lastOpenedAt,
@@ -591,6 +699,7 @@ class Agent {
     this.dsh,
     this.dshName,
     this.viewerUrl,
+    this.browser,
     this.viewerError,
     this.viewerName,
     this.verdict,
@@ -601,6 +710,7 @@ class Agent {
     this.bypassPermission,
     this.namedAgent,
     this.cloud,
+    this.launchArgs = const [],
   });
 
   bool get isStopped => status == 'stopped';
@@ -728,14 +838,21 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      claudeHome: j['engine'] == 'claude'
+          ? _safeCodexHome(j['claudeHome'])
+          : null,
       modelName: model?.name,
       modelEffort: model?.effort,
+      modelId: model?.id,
+      workspace: _safeDetail(j['workspace']),
+      namedState: _safeDetail(j['namedState']),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
       gridState: GridSectionState.parse(grid?['state']),
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
+      startedBy: j['startedBy'] == 'agent' ? 'agent' : null,
       project: AgentProject.fromJson(j['project']),
       gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
@@ -745,6 +862,8 @@ class Agent {
           ? DateTime.tryParse(j['createdAt'] as String)
           : null,
       closeSupported: j['closeSupported'] == true,
+      nameChosen: j['nameChosen'] is bool ? j['nameChosen'] as bool : null,
+      waitingFor: j['waitingFor'] is String ? j['waitingFor'] as String : null,
       closePlanState:
           j['closePlan'] is Map &&
               const {'waiting', 'failed'}.contains(j['closePlan']['state'])
@@ -776,6 +895,7 @@ class Agent {
       dsh: _safeDsh(j['dsh']),
       dshName: _safeLabel(j['dshName']),
       viewerUrl: _safeViewerUrl(j['viewerUrl']),
+      browser: AgentBrowser.fromJson(j['browser']),
       viewerError: _safeDetail(j['viewerError']),
       viewerName: _safeLabel(j['viewerName']),
       verdict: AgentVerdict.fromJson(j['verdict']),
@@ -788,6 +908,12 @@ class Agent {
           : null,
       namedAgent: _safeNamedAgent(j['namedAgent']),
       cloud: j['location'] == 'cloud' ? AgentCloud.fromJson(j['cloud']) : null,
+      launchArgs: j['launchArgs'] is List
+          ? [
+              for (final w in j['launchArgs'] as List)
+                if (w is String) w,
+            ]
+          : const [],
     );
   }
 
@@ -808,19 +934,26 @@ class Agent {
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,
     codexHome: codexHome,
+    claudeHome: claudeHome,
     modelName: modelName,
     modelEffort: modelEffort,
+    modelId: modelId,
+    workspace: workspace,
+    namedState: namedState,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,
     gridState: gridState,
     gridNote: gridNote,
     parentAgentId: parentAgentId,
+    startedBy: startedBy,
     project: project,
     gitContext: gitContext ?? this.gitContext,
     lastActivityAt: lastActivityAt,
     createdAt: createdAt,
     closeSupported: closeSupported,
+    nameChosen: nameChosen,
+    waitingFor: waitingFor,
     closePlanState: clearClosePlan ? null : closePlanState,
     closePlanDetail: clearClosePlan ? null : closePlanDetail,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
@@ -836,6 +969,7 @@ class Agent {
     dsh: dsh,
     dshName: dshName,
     viewerUrl: viewerUrl,
+    browser: browser,
     viewerError: viewerError,
     viewerName: viewerName,
     verdict: verdict,
@@ -846,6 +980,7 @@ class Agent {
     bypassPermission: bypassPermission,
     namedAgent: namedAgent,
     cloud: cloud,
+    launchArgs: launchArgs,
   );
 
   /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
@@ -896,9 +1031,10 @@ class Agent {
     return RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(raw) ? raw : null;
   }
 
+  // A profile folder as the agent's own machine spells it, which may not be this one's: `/…`, or `C:\…` on Windows (#4183).
   static String? _safeCodexHome(Object? raw) {
     if (raw is! String ||
-        !raw.startsWith('/') ||
+        !(raw.startsWith('/') || RegExp(r'^[A-Za-z]:\\').hasMatch(raw)) ||
         raw.length > 4096 ||
         RegExp(r'[\x00-\x1f\x7f]').hasMatch(raw)) {
       return null;
@@ -986,6 +1122,7 @@ class AgentVerdict {
     this.errors = 0,
     this.warnings = 0,
     this.artifact,
+    this.preview,
     this.phases = const [],
     this.updatedAt,
   });
@@ -1000,6 +1137,10 @@ class AgentVerdict {
 
   /// Workspace-relative path of the primary thing to look at, when the harness named one.
   final String? artifact;
+
+  /// The page the agent serves itself on its machine (`http://127.0.0.1:5173/`), which the viewer shows
+  /// once it answers: the address its pages have there.
+  final String? preview;
 
   /// Where the work is, in order — at most twelve; empty when the harness
   /// names no phases, and then the header draws no strip.
@@ -1033,6 +1174,7 @@ class AgentVerdict {
       errors: _safeCount(raw['errors']),
       warnings: _safeCount(raw['warnings']),
       artifact: _safeText(raw['artifact'], 1024),
+      preview: _safeText(raw['preview'], 2048),
       phases: _phases(raw['phases']),
       updatedAt: updated is String ? DateTime.tryParse(updated) : null,
     );
@@ -1063,6 +1205,7 @@ class AgentVerdict {
       other.errors == errors &&
       other.warnings == warnings &&
       other.artifact == artifact &&
+      other.preview == preview &&
       listEquals(other.phases, phases) &&
       other.updatedAt == updatedAt;
 
@@ -1073,6 +1216,7 @@ class AgentVerdict {
     errors,
     warnings,
     artifact,
+    preview,
     Object.hashAll(phases),
     updatedAt,
   );
@@ -1215,6 +1359,7 @@ class AgentProject {
     required this.cwd,
     this.root,
     this.remote,
+    this.repository,
     this.branch,
     this.worktree = false,
     this.branchPending = false,
@@ -1223,6 +1368,12 @@ class AgentProject {
   final String cwd;
   final String? root;
   final String? remote;
+
+  /// The repository [remote] stands for when its host is an SSH alias
+  /// (`gh-work/acme/api` is `github.com/acme/api`, cli agentProject.ts
+  /// `aliasRepository`). Null when [remote] names its real host, and from an
+  /// older daemon.
+  final String? repository;
   final String? branch;
 
   /// In a linked worktree rather than the repository's own checkout.
@@ -1281,12 +1432,21 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
+      repository == other.repository &&
       branch == other.branch &&
       worktree == other.worktree &&
       branchPending == other.branchPending;
   @override
-  int get hashCode =>
-      Object.hash(name, cwd, root, remote, branch, worktree, branchPending);
+  int get hashCode => Object.hash(
+    name,
+    cwd,
+    root,
+    remote,
+    repository,
+    branch,
+    worktree,
+    branchPending,
+  );
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -1308,6 +1468,7 @@ class AgentProject {
       cwd: cwd,
       root: field('root'),
       remote: field('remote'),
+      repository: field('repository'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
       branchPending: raw['branchPending'] == true,

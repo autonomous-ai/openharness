@@ -38,6 +38,7 @@ pub fn shell_lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>>
 
 fn lines_with_actions(app: &App, kind: &PickerKind, id: &str, actions: bool) -> Vec<Line<'static>> {
     match kind {
+        PickerKind::Open { .. } if id.starts_with(crate::modal::OLDER_ROW) => vec![Line::raw("Harnesses in this folder not touched in the last 7 days."), Line::raw("Enter or a click shows or hides them. Search always finds them.")],
         PickerKind::Open { .. } if id.starts_with("session:") => session(app, id),
         PickerKind::Open { .. } if id.starts_with("external:") => external(app, id, actions),
         PickerKind::Open { .. } | PickerKind::Inbox | PickerKind::Route { .. } => {

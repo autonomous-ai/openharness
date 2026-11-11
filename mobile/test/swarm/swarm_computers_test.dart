@@ -1,5 +1,8 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/phone/agents_list_page.dart';
+import 'package:harness_mobile/swarm/swarm_agents.dart';
 import 'package:harness_mobile/swarm/swarm_computers.dart';
 
 import '../viewer_app_fixture.dart';
@@ -191,5 +194,122 @@ void main() {
 
     expect(listed, 1);
     expect(computers.rechecking, isFalse);
+  });
+
+  group("the person's agents, for the switcher's Agents row", () {
+    test('none known until the computers answer; then how many work', () async {
+      final rig = viewerApp();
+      addTearDown(rig.app.dispose);
+      final computers = AppSwarmComputers(rig.app);
+      addTearDown(computers.dispose);
+      expect(computers, isA<SwarmAgentsSource>());
+      final agents = computers.agents!;
+      expect(agents.working, isNull, reason: 'not answered yet');
+
+      rig.api.onMachines = () async => [remoteMachine('a', name: 'Studio')];
+      rig.conn('a').answers['agents_list'] = (_) => {
+        'agents': [
+          agentJson('one', name: 'Wren'),
+          agentJson('two', name: 'Ivy', engine: 'codex'),
+          agentJson('gone', terminal: false),
+        ],
+      };
+      await rig.app.bootstrap();
+      await settle();
+      rig.app.connectionStatusForTest('a', ConnectionStatus.connected);
+      await settle();
+
+      expect(agents.working, 0);
+
+      await push(rig, 'a', 'turn_started', {'agentId': 'two'});
+
+      expect(agents.working, 1);
+    });
+
+    test('tells when how many work changes, not at every change of the app; '
+        "and never tells Swarm's computers, whose change reads Swarms "
+        'again', () async {
+      final rig = await signedInWith({
+        'a': ['one', 'two'],
+      });
+      addTearDown(rig.app.dispose);
+      final computers = AppSwarmComputers(rig.app);
+      addTearDown(computers.dispose);
+      var told = 0, computersTold = 0;
+      computers.agents!.addListener(() => told++);
+      computers.addListener(() => computersTold++);
+
+      await push(rig, 'a', 'turn_started', {'agentId': 'one'});
+      expect(told, 1);
+
+      Map<String, dynamic> question() => {
+        'agentId': 'two',
+        'requestId': 'q1',
+        'questions': [
+          {
+            'q': 'Proceed?',
+            'options': ['Yes'],
+          },
+        ],
+      };
+      await push(rig, 'a', 'commander_question', question());
+      expect(told, 1, reason: 'one waits now; still one works');
+
+      var appTold = 0;
+      void counted() => appTold++;
+      rig.app.addListener(counted);
+      addTearDown(() => rig.app.removeListener(counted));
+      // Re-announced after a reconnect: the app tells, nothing changed.
+      await push(rig, 'a', 'commander_question', question());
+      await push(rig, 'a', 'turn_heartbeat', {'agentId': 'one'});
+      await settle();
+      expect(appTold, greaterThan(0), reason: 'the app did tell');
+      expect(told, 1, reason: 'still one working');
+
+      await push(rig, 'a', 'turn_ended', {'agentId': 'one'});
+      expect(told, 2);
+      expect(computers.agents!.working, 0);
+      expect(computersTold, 0);
+    });
+
+    test('gone with its computers: a change of the app after tells no one '
+        'and throws nothing', () async {
+      final rig = await signedInWith({
+        'a': ['one'],
+      });
+      addTearDown(rig.app.dispose);
+      final computers = AppSwarmComputers(rig.app);
+      final agents = computers.agents!;
+      computers.dispose();
+      expect(computers.agents, isNull, reason: 'none made after');
+
+      await push(rig, 'a', 'turn_started', {'agentId': 'one'});
+
+      expect(agents.working, 0, reason: 'as it was left');
+    });
+
+    testWidgets('opens every agent, the Agents list, over the page', (
+      tester,
+    ) async {
+      final rig = await tester.runAsync(() => signedInWith({'a': []}));
+      addTearDown(rig!.app.dispose);
+      final computers = AppSwarmComputers(rig.app);
+      addTearDown(computers.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => computers.agents!.openList(context),
+              child: const Text('Agents'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Agents'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AgentsListPage), findsOneWidget);
+    });
   });
 }

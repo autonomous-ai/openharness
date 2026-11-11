@@ -67,9 +67,17 @@ pub fn run_resolved(resolved: &Resolved, args: &[OsString]) -> io::Result<ExitSt
     Command::new(&resolved.node).arg(&resolved.cli_js).args(args).status()
 }
 
+/// [args] as `harness tui` takes them when this program runs as `hn.exe`.
+fn hn_args(exe: Option<&Path>, args: Vec<OsString>) -> Vec<OsString> {
+    let hn = exe.and_then(Path::file_stem).is_some_and(|stem| stem.eq_ignore_ascii_case("hn"));
+    if hn { std::iter::once(OsString::from("tui")).chain(args).collect() } else { args }
+}
+
 /// The program, given its own path and its arguments: node's exit code; 3 when the install does not resolve, 4 when
 /// node does not start.
 pub fn run(exe: io::Result<PathBuf>, args: Vec<OsString>) -> i32 {
+    // The same program as `hn.exe` beside it (install.ps1) is the terminal app's command, as `hn` is on a Mac.
+    let args = hn_args(exe.as_deref().ok(), args);
     let resolved = exe.ok().and_then(|exe| root_of(&exe)).ok_or_else(String::new).and_then(|root| resolve(&root));
     let Ok(resolved) = resolved else {
         eprintln!("{BROKEN}");
@@ -88,6 +96,17 @@ pub fn run(exe: io::Result<PathBuf>, args: Vec<OsString>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn as_hn_it_is_the_terminal_app() {
+        let words = |args: Vec<OsString>| args.into_iter().map(|a| a.into_string().unwrap()).collect::<Vec<_>>();
+        let given = vec![OsString::from("ls")];
+        assert_eq!(words(hn_args(Some(&Path::new("R").join("bin").join("hn.exe")), given.clone())), ["tui", "ls"]);
+        assert_eq!(words(hn_args(Some(Path::new("hn")), given.clone())), ["tui", "ls"]);
+        assert_eq!(words(hn_args(Some(Path::new("HN.EXE")), vec![])), ["tui"]);
+        assert_eq!(words(hn_args(Some(Path::new("harness.exe")), given.clone())), ["ls"]);
+        assert_eq!(words(hn_args(None, given)), ["ls"]);
+    }
 
     #[test]
     fn the_root_is_the_folder_above_the_programs_own() {

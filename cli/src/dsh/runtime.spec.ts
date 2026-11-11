@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,6 +16,9 @@ import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { HARNESS_INSTRUCTIONS, joinedInstructions } from '../lib/agentAttribution.js'
 import { env } from '../config/env.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 
 let root: string
 let ws: string
@@ -42,8 +45,10 @@ describe('portable harness adapters', () => {
   it('has a contract for every process engine, with no package allowlist', () => {
     expect(Object.keys(HARNESS_ADAPTERS)).toEqual(PROCESS_ENGINES)
     for (const engine of PROCESS_ENGINES) {
-      expect(compatibleHarnessEngines({ engine })[0]).toBe(engine)
-      expect(new Set(compatibleHarnessEngines({ engine }))).toEqual(new Set(PROCESS_ENGINES))
+      // OpenClaw reads no instructions from the workspace or a flag, so no harness runs on it, its own default included.
+      const harnessEngines = PROCESS_ENGINES.filter(other => other !== 'openclaw')
+      if (engine !== 'openclaw') expect(compatibleHarnessEngines({ engine })[0]).toBe(engine)
+      expect(new Set(compatibleHarnessEngines({ engine }))).toEqual(new Set(harnessEngines))
     }
     expect(compatibleHarnessEngines({})).toEqual([])
     expect(compatibleHarnessEngines({ kind: 'viewer', engine: 'claude' })).toEqual([])

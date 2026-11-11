@@ -1,10 +1,9 @@
 import type { Agent, AgentStart, Conversation, Person, SuperTabState } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
-import type { SwarmProject } from '../projects.js'
 
 /** The part collections a Swarm is stored in (docs/design/2026-10-26-swarm-state-parts.md, section 2). */
-export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
-export const PART_KINDS: readonly PartKind[] = ['head', 'member', 'agent', 'group', 'machine', 'start', 'progress']
+export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start'
+export const PART_KINDS: readonly PartKind[] = ['head', 'member', 'agent', 'group', 'machine', 'start']
 
 /** One stored part. `data` is null only on a tombstone read without its last data. */
 export interface Part<T = unknown> {
@@ -16,19 +15,18 @@ export interface Part<T = unknown> {
   changedAt: number
   /** A machine part's last write of its own reading alone, when there was one (change reads only). */
   readAt?: number
+  /** A machine part's last reading that changed more than its volatile fields, when there was one (change reads only). */
+  contentAt?: number
   deleted?: true
   dormant?: true
   ordinal: number
   data: T | null
 }
 
-/** A project as the head keeps it: its report progress lives in its own part. */
-export type HeadProject = Omit<SwarmProject, 'progress'>
-
 /** The head: everything in `SuperTabState` that is not one of the other parts. */
 export type HeadData = Omit<SuperTabState, 'people' | 'agents' | 'conversations' | 'parkedConversations' | 'starts' | 'machines'
-  | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'machineCleanups' | 'otherProjectsWork' | 'projects'
-  | 'groupCounter' | 'sequenceBase'> & { projects?: HeadProject[]
+  | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'removedSessions' | 'machineCleanups' | 'otherProjectsWork' | 'pmAccounts'
+  | 'groupCounter' | 'sequenceBase'> & {
     /** Which optional lists the state had, so an empty one comes back as `[]` and an absent one stays absent. */
     presentLists?: string[] }
 
@@ -46,19 +44,9 @@ export interface MachineData {
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
   closingSessions: Array<Omit<NonNullable<SuperTabState['closingSessions']>[number], 'machineId'>>
-  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string; buddyOnly?: true }>
-}
-
-/** One project's report watermark (section 3.6). Group sequences are per group; floors carry pre-split tab revisions. */
-export interface ProgressData {
-  /** When the project last went from clean to dirty. */
-  since: number
-  summarizedFloor: number
-  summarized: Record<string, number>
-  requestedFloor: number
-  requested: Record<string, number>
-  requestedAt?: number
-  requestMessageId?: string
+  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string }>
+  /** Absent on a part with none, as on every part from before it. */
+  removedSessions?: Array<Omit<NonNullable<SuperTabState['removedSessions']>[number], 'machineId'>>
 }
 
 export interface SwarmParts {
@@ -69,7 +57,6 @@ export interface SwarmParts {
   groups: Part<GroupData>[]
   machines: Part<MachineData>[]
   starts: Part<AgentStart>[]
-  progress: Part<ProgressData>[]
   /** The tab revision when the Swarm was split (0 for a Swarm born in parts). */
   sequenceBase: number
   visibilityEpoch: number

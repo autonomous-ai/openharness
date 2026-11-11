@@ -1,0 +1,107 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
+
+/// A panel's timer that runs only while the panel is on screen: its subtree not muted by
+/// [TickerMode] and the app not hidden. [Offstage] and [IndexedStack] don't mute anything, so what
+/// hides a panel with one also needs a [TickerMode] ([SuperTabPages]). Coming back redraws at once,
+/// so an age is never stale on screen (Quiet Swarm 6/6). Behind other windows that is nothing to
+/// redraw and nothing to read.
+mixin VisibleTick<T extends StatefulWidget>
+    on State<T>, WidgetsBindingObserver {
+  Duration? _every;
+  Timer? _tick;
+  bool _registered = false;
+  bool _appShown = true;
+  bool _onScreen = false;
+  bool _known = false;
+
+  /// Whether the panel can be seen now.
+  bool get onScreen => _onScreen;
+
+  /// Ticks every [every] while on screen. [onTick] redraws unless told otherwise.
+  void visibleTick(Duration every) {
+    _every = every;
+    _observe();
+    _restart();
+  }
+
+  /// Told when the panel leaves or returns, for what else it does on a timer.
+  void onScreenChanged(bool onScreen) {}
+
+  void onTick() {
+    if (mounted) setState(() {});
+  }
+
+  void _observe() {
+    if (_registered) return;
+    _registered = true;
+    WidgetsBinding.instance.addObserver(this);
+    final state = WidgetsBinding.instance.lifecycleState;
+    _appShown = state == null || _shows(state);
+  }
+
+  static bool _shows(AppLifecycleState state) =>
+      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+
+  void _restart() {
+    _tick?.cancel();
+    _tick = null;
+    final every = _every;
+    if (every != null && _onScreen) {
+      _tick = Timer.periodic(every, (_) => onTick());
+    }
+  }
+
+  void _settle(bool Function() now) {
+    final next = now();
+    final moved = _known && next != _onScreen;
+    _known = true;
+    _onScreen = next;
+    if (_every != null && (moved || _tick == null)) _restart();
+    if (!moved) return;
+    onScreenChanged(next);
+    if (next && mounted) setState(() {});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _observe();
+    final enabled = TickerMode.valuesOf(context).enabled;
+    _settle(() => enabled && _appShown);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appShown = _shows(state);
+    if (!mounted) return;
+    final enabled = TickerMode.valuesOf(context).enabled;
+    _settle(() => enabled && _appShown);
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    if (_registered) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+}
+
+/// The pages of one place, one showing. The hidden ones keep their state. An [IndexedStack] alone
+/// leaves their timers running, as it doesn't mute them.
+class SuperTabPages extends StatelessWidget {
+  const SuperTabPages({super.key, required this.index, required this.children});
+
+  final int index;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => IndexedStack(
+    index: index,
+    children: [
+      for (var i = 0; i < children.length; i++)
+        TickerMode(enabled: i == index, child: children[i]),
+    ],
+  );
+}

@@ -151,6 +151,8 @@ class ModelManagerTestApp extends AppNotifier {
   }
 
   bool localReadFails = false, actionReplyLost = false;
+  /// A refusal the daemon gives the local inventory for good (a computer shared with this account).
+  String? localRefusal;
   Completer<Map<String, dynamic>>? actionReply;
 
   /// Harness sign-ins started ([login]), and whether the next one lands — the browser completing it
@@ -197,6 +199,12 @@ class ModelManagerTestApp extends AppNotifier {
       return held.future;
     }
     if (localReadFails) throw StateError('offline');
+    if (localRefusal != null) {
+      throw WsRequestFailure(
+        responseType: 'grid_fleet_models_list',
+        code: localRefusal!,
+      );
+    }
     return inventoryFor(machineId);
   }
 

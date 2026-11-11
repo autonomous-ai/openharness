@@ -3,11 +3,12 @@
 //!
 //! The copy is started with `CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS |
 //! CREATE_NEW_PROCESS_GROUP`, and the host started first exits 0. A job that does not allow
-//! breakaway refuses that (`ERROR_ACCESS_DENIED`): a Harness pane's job is one (no
-//! `BREAKAWAY_OK`), and a daemon run from a pane starts its host inside it. Then the copy is
-//! started without breakaway, still detached from the console and its Ctrl+C, with a warning:
-//! the host stays in the job and may end with it (harnessd, sub-project B, starts the host
-//! outside any job in production). When no copy can be started at all, this process serves.
+//! breakaway refuses that (`ERROR_ACCESS_DENIED`): an SSH session's or a task's, and a Cygwin pane's
+//! (a pane's own job allows it, `job::breakaway_allowed`), and a daemon run from one starts its host
+//! inside it. Then the copy is started without breakaway, still detached from the console and its
+//! Ctrl+C, with a warning: the host stays in the job and may end with it (harnessd, sub-project B,
+//! starts the host outside any job in production). When no copy can be started at all, this process
+//! serves.
 //!
 //! The copy gets `--no-reexec`, so a copy still in a job (one that could not break away) does
 //! not start copies of its own.
@@ -129,7 +130,7 @@ mod tests {
 
     #[test]
     fn a_job_that_refuses_gets_a_detached_copy_and_a_warning() {
-        // A Harness pane's job has no BREAKAWAY_OK: the daemon in a pane starts its host there.
+        // An SSH session's or a task's job: the daemon in one starts its host there.
         let (left, flags, warnings) = run(true, &[Some(DENIED), None]);
         assert_eq!(left, Left::Detached);
         assert_eq!(flags, [CREATE_BREAKAWAY_FROM_JOB | DETACHED, DETACHED]);

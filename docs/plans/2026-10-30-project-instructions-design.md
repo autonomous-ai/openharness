@@ -80,7 +80,16 @@ lead is always the PM. A team cannot define "QA on the device", "Designer" or "d
 - Agents talking in a loop with nobody noticing, burning quota.
 - Losing what teams already set: rules, policy notes and custom role texts survive in the document, in their own words.
 
-## What the server still enforces: facts and access only
+## Phase-4 enforcement policy (superseded 2026-11-06)
+
+Dee's 2026-11-06 decision supersedes the facts/access-only policy below and the blanket refusal-removal
+requirements in this design: every rule a program can check belongs in code; project instructions keep judgment
+and project facts. Rule refusals may use plain code names again. Task #3591 narrows `removedRefusals.test.ts`
+to the retired role-registry codes, each with its reason; it adds no runtime refusals. The facts and access checks
+below remain required. The role registry remains retired. The inventory and removal notes below record the
+historical phase-4 implementation, not a ban on future rule enforcement.
+
+### Original phase-4 policy
 
 A start, assignment or message is refused only when it cannot happen or breaks an access rule:
 
@@ -112,8 +121,9 @@ Quota is information, not a gate.
   (otherwise it is refused with the current text, to merge and save again).
 - The PM edits it when a member asks; `askedBy` names the member, and no quoted message is needed (the `askedIn` check and
   `RULE_MESSAGE_MS` go).
-- Every save posts one line in the project chat with its summary ("Dee changed the instructions: Reviews run on Opus."),
-  so the team sees it without opening the document.
+- A save posts nothing in any chat (Dee and Ken, 2026-11-05, #3132): every save is a kept revision with its summary, who
+  wrote it and for whom, and the team reads and undoes a change in the Instructions history. (Until then each save posted
+  one line in the project chat; those older posts stay.)
 - Conflicts in content: when a request contradicts the document, the PM changes the document, says so and tells the
   author of the line it replaced. It never silently keeps both.
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -53,23 +55,24 @@ String superTabAgentName(SuperTabController c, SuperTabAgent agent) =>
     c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
 
 /// Who `@` offers in [group]: the people who read it, then its agents,
-/// filtered by [query]. Never the reader. Without [agents] (a thread its own
-/// Buddy session answers, where only that session hears a reply), people
-/// alone. [choose] puts the picked one in the text.
+/// filtered by [query]. Never the reader. [choose] puts the picked one in the
+/// text.
 List<SuperTabComposerChoice> superTabTagChoices(
   SuperTabController c,
   SuperTabConversation group,
   String query, {
   required String Function(String machineId) machineName,
   required void Function(String id, String name) choose,
-  bool agents = true,
 }) {
   final snapshot = c.snapshot;
   if (snapshot == null) return const [];
   final project = snapshot.projectFor(group.id);
   bool reads(SuperTabPerson person) => switch (group) {
+    // A person's chat with an agent of theirs: they and the agent alone read
+    // it (backend projects.ts readsAgentChat), with or without an audience
+    // sent, so nobody else is offered (audit finding 12 of task #4211).
+    _ when group.isAgentChat => false,
     SuperTabConversation(:final audience?) => audience.contains(person.id),
-    _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
     _ =>
       project == null ||
           !project.isPrivate ||
@@ -80,24 +83,22 @@ List<SuperTabComposerChoice> superTabTagChoices(
     (person) =>
         person.id != c.accountId &&
         reads(person) &&
-        person.username.contains(query),
+        (person.username.contains(query) ||
+            (person.name?.toLowerCase().contains(query) ?? false)),
   );
-  final offered = agents
-      ? snapshot.agents.where(
-          (agent) =>
-              group.agentIds.contains(agent.id) &&
-              // A thread's own session answers only there: nobody tags it.
-              agent.buddySession == null &&
-              '${superTabAgentName(c, agent)} ${agent.engine}'
-                  .toLowerCase()
-                  .contains(query),
-        )
-      : const <SuperTabAgent>[];
+  final offered = snapshot.agents.where(
+    (agent) =>
+        group.agentIds.contains(agent.id) &&
+        '${superTabAgentName(c, agent)} ${agent.engine}'.toLowerCase().contains(
+          query,
+        ),
+  );
   return [
     for (final person in people)
       (
-        label: person.username,
-        detail: null,
+        // Shown by the name they set, tagged by their username.
+        label: person.shownName,
+        detail: person.name == null ? null : '@${person.username}',
         choose: () => choose(person.id, person.username),
         leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
         kind: 'person',
@@ -280,5 +281,77 @@ class SuperTabTagBackspace extends TextInputFormatter {
       );
     }
     return newValue;
+  }
+}
+
+/// Whether an input method is composing in [value] (Telex, kana, jamo): the
+/// marked text is the input method's, and the box must not replace it.
+bool superTabComposing(TextEditingValue value) =>
+    value.composing.isValid && !value.composing.isCollapsed;
+
+/// The writes a chat box takes from the app rather than from typing: a draft
+/// saved elsewhere, a path taken back out. None replaces the box while an
+/// input method composes in it, where a fresh value would drop the marked
+/// range and the next diacritic would stack on text the input method no
+/// longer sees (task #3245). Such a write waits and runs once composing ends,
+/// worked out from the box's text then, with the caret kept.
+class SuperTabComposerWrites {
+  SuperTabComposerWrites(this.box) {
+    box.addListener(_moved);
+  }
+
+  final TextEditingController box;
+
+  /// The write waiting for composing to end.
+  String? Function(String current)? _waiting;
+  var _scheduled = false;
+
+  /// Puts what [next] makes of the box's text into the box: now, with the
+  /// caret at its end, or once composing ends, with the caret where it is.
+  /// [next] answers null when it no longer applies (another chat shown).
+  void write(String? Function(String current) next) {
+    if (superTabComposing(box.value)) {
+      _waiting = next;
+      return;
+    }
+    _waiting = null;
+    final text = next(box.text);
+    if (text == null || text == box.text) return;
+    box.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  /// Drops a waiting write: the box was replaced for another chat.
+  void cancel() => _waiting = null;
+
+  void dispose() {
+    _waiting = null;
+    box.removeListener(_moved);
+  }
+
+  void _moved() {
+    if (_waiting == null || _scheduled || superTabComposing(box.value)) {
+      return;
+    }
+    // After the edit that ended composing has been reported, so the draft
+    // [next] reads already holds what was committed.
+    _scheduled = true;
+    scheduleMicrotask(() {
+      _scheduled = false;
+      final next = _waiting;
+      if (next == null || superTabComposing(box.value)) return;
+      _waiting = null;
+      final text = next(box.text);
+      if (text == null || text == box.text) return;
+      final caret = box.selection.isValid
+          ? box.selection.extentOffset.clamp(0, text.length)
+          : text.length;
+      box.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: caret),
+      );
+    });
   }
 }

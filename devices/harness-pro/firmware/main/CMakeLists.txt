@@ -33,6 +33,7 @@ idf_component_register(
         "display/terminal.c"
         "display/scroll.c"
         "pod/home/ph_agent.c"
+        "pod/home/ph_avatar.c"
         "pod/home/ph_bubble.c"
         "pod/home/ph_chrome.c"
         "pod/home/ph_inbox.c"

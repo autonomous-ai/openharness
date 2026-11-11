@@ -2,6 +2,11 @@
  * git and gh for a Swarm agent doing another person's project work, through the Harness GitHub App
  * (docs/swarm-github-app.md) instead of this machine owner's own GitHub login.
  *
+ * Only for a session started with it before the App's removal, at every relaunch (lib/launchOverrides.ts): no new agent
+ * is started with it since (superTabs/start.ts), and the backend keeps issuing such a session's task token until
+ * 2026-12-10 (backend #3723), so it never loses push or gh mid-work. Delete on or after that date, with superTabs/github.ts,
+ * superTabs/gitCredential.ts and `harness git-credential`.
+ *
  * Everything reaches the agent as environment variables, because those survive what its shells do: Codex runs every
  * command in a login shell, Claude Code replays the person's startup files, and on a Mac both put Homebrew's folders
  * back in front of PATH, so a wrapper placed first on PATH would be passed over. So:
@@ -57,45 +62,6 @@ export function gitConfigParameters(helper: string, hooks: string, identity?: st
     ...(identity ? [['include.path', identity] as [string, string]] : []),
   ]
   return entries.map(([key, value]) => `${shellWord(key)}=${shellWord(value)}`).join(' ')
-}
-
-/**
- * The environment for the git a machine runs itself to prepare a Swarm agent's folder before the agent exists: the clone
- * and the fetch of the default branch (superTabs/projectFolder.ts), with [token], a read-only Harness GitHub App token for
- * the project's one repository. Nothing of the machine owner's git setup takes part: their global and system config are
- * not read (credential helpers, a rewrite of https to ssh, an http header), the helpers git has so far are emptied for
- * Harness's alone, ssh remotes of github.com go over https, and nothing prompts. The token is in this environment only,
- * read by the helper from `HARNESS_SWARM_GIT_TOKEN`, never written to disk or put on a command line.
- */
-export function swarmGitPrepareEnv(token: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  if (!TOKEN.test(token)) throw new Error('The Harness GitHub App token is not in the form GitHub gives.')
-  const env: NodeJS.ProcessEnv = { ...base }
-  // Config from the environment, a prompt program, or an ssh setup of the owner's would put their login back in.
-  for (const key of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) delete env[key]
-  for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_DIR', 'GIT_WORK_TREE',
-    ...SWARM_GITHUB_CLEAR_ENV]) delete env[key]
-  const helper = '!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=$HARNESS_SWARM_GIT_TOKEN"; }; f'
-  const entries: Array<[string, string]> = [
-    ['credential.helper', ''],
-    ['credential.https://github.com.helper', ''],
-    ['credential.https://github.com.helper', helper],
-    ['url.https://github.com/.insteadof', 'git@github.com:'],
-    ['url.https://github.com/.insteadof', 'ssh://git@github.com/'],
-    // Large files still arrive as git-lfs would bring them, when it is installed: its filter is in the global config skipped above.
-    ['filter.lfs.process', 'git-lfs filter-process'],
-    ['filter.lfs.clean', 'git-lfs clean -- %f'],
-    ['filter.lfs.smudge', 'git-lfs smudge -- %f'],
-  ]
-  return {
-    ...env,
-    GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_PARAMETERS: entries.map(([key, value]) => `${shellWord(key)}=${shellWord(value)}`).join(' '),
-    GIT_TERMINAL_PROMPT: '0',
-    GCM_INTERACTIVE: 'Never',
-    GIT_SSH_COMMAND: 'ssh -oBatchMode=yes -oConnectTimeout=20',
-    HARNESS_SWARM_GIT_TOKEN: token,
-  }
 }
 
 export function credentialHelperScript(input: { command: string; port: number; machineId: string; dataDir: string }): string {
@@ -168,20 +134,8 @@ const TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{19,4095}$/
 
 /** Who a session's commits are by, as the server names the Harness GitHub App's bot account; nothing else is written. */
 /** Who a Team account's commits are by: "Harness" (2026-11-02), or an older backend's name for the app's bot account. */
-const COMMIT_NAME = /^(?:Harness|[a-z0-9][a-z0-9-]{0,99}\[bot\])$/
-const COMMIT_EMAIL = /^[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com$/
-
-/**
- * Revoke a Harness GitHub App installation token with the token itself (GitHub's `DELETE /installation/token`): the
- * read-only one a machine cloned a teammate's project with, done with once the clone and the fetch are (local Team account
- * run, 2026-10-28: it stayed good for its hour). Best effort: a token GitHub does not revoke still expires within the hour.
- */
-export async function revokeGitHubToken(token: string, send: typeof fetch = fetch): Promise<void> {
-  if (!TOKEN.test(token)) return
-  const answer = await send('https://api.github.com/installation/token', { method: 'DELETE', signal: AbortSignal.timeout(10_000),
-    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness' } })
-  if (answer.status !== 204 && answer.status !== 401) throw new Error(`GitHub answered ${answer.status} to revoking the token`)
-}
+const COMMIT_NAME = /^(?:Harness by Autonomous|Harness|[a-z0-9][a-z0-9-]{0,99}\[bot\])$/
+const COMMIT_EMAIL = /^(?:noreply@autonomous\.ai|[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com)$/
 
 /** The session's gh login: [token] for github.com, or none. And, when given, the trailers its commits get and who they are
  *  by ([commitAs]: the app's bot account, which the server gives a Harness Team account, as it has no git identity of its
@@ -209,13 +163,14 @@ export function writeSessionGitHub(dir: string, token: string | null, trailers?:
 
 /**
  * The launch of a Swarm session that uses the app ([key]: its session label, `SwarmSkill.key`): its environment, and the
- * variables to clear from what it inherits. Writes the shared tools and the session's folder first. Null where it does not
- * apply: on Windows, whose git does not run these shell scripts, or for a key unfit for a path.
+ * variables to clear from what it inherits. Writes the shared tools and the session's folder first. Null for a key unfit
+ * for a path. On Windows, Git for Windows runs these shell scripts through its own sh: tried on Git 2.55, with a space in
+ * the path, for the helper, the hooks and the commit identity.
  */
-export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = defaultTools(), platform: NodeJS.Platform = process.platform):
+export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = defaultTools()):
   { env: Record<string, string>; clearEnv: string[] } | null {
   const dir = swarmGitHubSessionDir(tools.dataDir, key)
-  if (platform === 'win32' || !dir) return null
+  if (!dir) return null
   const { helper, hooks } = writeSwarmGitHubTools(tools)
   if (!existsSync(join(dir, 'gh', 'hosts.yml'))) writeSessionGitHub(dir, null)
   // Marked as just used: a start held before its session is registered must not look like a folder left behind

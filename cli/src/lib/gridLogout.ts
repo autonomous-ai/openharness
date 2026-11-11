@@ -60,7 +60,19 @@ export async function passThroughToGridLogout(args: string[]): Promise<GridLogou
     // Inherited stderr is a terminal, where grid would offer `grid update` for a binary the harness
     // pins — off, as for every child of this daemon (GRID_NO_UPDATE_CHECK_VAR in gridExec.ts).
     const command = gridCommand(binary, [GRID_LOGOUT_VERB, ...args])
-    const child = spawn(command.file, command.args, { stdio: 'inherit', env: gridChildEnv() })
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command.file, command.args, { stdio: 'inherit', env: gridChildEnv() })
+    } catch (error) {
+      // A synchronous start failure (Windows' application control answers UNKNOWN) is a sign-out that
+      // did not run, reported like any other, not a rejected promise the caller has to catch.
+      resolve({
+        ran: false,
+        exitCode: 1,
+        message: `Could not run \`${binary}\`: ${error instanceof Error ? error.message : String(error)}`,
+      })
+      return
+    }
     let settled = false
     const settle = (outcome: GridLogoutOutcome): void => { if (!settled) { settled = true; resolve(outcome) } }
 

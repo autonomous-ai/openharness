@@ -837,6 +837,41 @@ describe('a Harness session in place of SSO tokens', () => {
     ? { token: HNA, refreshToken: HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }
     : { token: 'tok_renewed', refreshToken: 'refresh_2', expiresIn: 3600 }
 
+  // Dee's open-at-once (reviews of #2617): a kept profile is trusted on the machine id being the signed-in account's.
+  describe('a machine lookup that outlives its sign-in', () => {
+    const swapped = { accessToken: 'tok_next', refreshToken: 'refresh_next', signInEpoch: 'next@2', signInAcct: 'acct-next' }
+
+    it('a sign-out and a new sign-in while it is out: the old answer writes nothing', async () => {
+      const root = tempRoot()
+      seedSession(root, { overrides: { signInEpoch: 'first@1', signInAcct: 'acct-first', machineId: 'm_first' } })
+      const backend = await fakeBackend({
+        resolveComputer: () => {
+          // What the new account's sign-in leaves on disk, before the old lookup's answer comes back.
+          seedSession(root, { overrides: { ...swapped, machineId: undefined } })
+          return { machine: { machineId: 'm_of_the_old_account' } }
+        },
+      })
+      const result = await runAsync(root, ['login', '--json'], backend.base)
+      expect(result.stdout + result.stderr).not.toContain('SSO session disappeared')
+      expect(sessionOnDisk(root)).toMatchObject(swapped)
+      expect(sessionOnDisk(root)).not.toHaveProperty('machineId')
+    }, 30_000)
+
+    it('the same sign-in, refreshed while it is out: the answer is kept', async () => {
+      const root = tempRoot()
+      seedSession(root, { overrides: { signInEpoch: 'first@1', machineId: 'm_first' } })
+      const backend = await fakeBackend({
+        resolveComputer: () => {
+          seedSession(root, { overrides: { signInEpoch: 'first@1', accessToken: 'tok_refreshed', refreshToken: 'refresh_refreshed', machineId: 'm_first' } })
+          return { machine: { machineId: 'm_new' } }
+        },
+      })
+      const result = await runAsync(root, ['login', '--json'], backend.base)
+      expect(result.status, result.stderr).toBe(0)
+      expect(sessionOnDisk(root)).toMatchObject({ accessToken: 'tok_refreshed', machineId: 'm_new', signInEpoch: 'first@1' })
+    }, 30_000)
+  })
+
   it('a sign-in from before the upgrade stays signed in, and its next renewal moves it to a Harness session', async () => {
     const root = tempRoot()
     // Exactly what today's CLI writes after an SSO sign-in from the desktop app, its access token about to run out.
@@ -860,8 +895,8 @@ describe('a Harness session in place of SSO tokens', () => {
     for (const token of [HNA, HNR, 'refresh_seeded', 'tok_seeded']) expect(result.stdout + result.stderr).not.toContain(token)
   })
 
-  it('a Harness session renews as one, asking for nothing more; a QR or team sign-in never asks', async () => {
-    for (const overrides of [{ refreshToken: HNR }, { method: 'qr', refreshToken: 'refresh_qr' }, { kind: 'team', refreshToken: `htr_${'c'.repeat(43)}` }]) {
+  it('a Harness session renews as one, asking for nothing more; a QR sign-in never asks', async () => {
+    for (const overrides of [{ refreshToken: HNR }, { method: 'qr', refreshToken: 'refresh_qr' }]) {
       const root = tempRoot()
       seedSession(root, { expiresInMs: 30_000, overrides })
       const backend = await fakeBackend({ routes: { '/api/auth/refresh': renewal } })

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
+import { stableId } from '../src/superTabs/model.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Roadmap Phase 3.7: the worker's hourly people rollup and minute billing sync read through an index that bounds them. A
@@ -9,6 +10,7 @@ import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let rollupPeople: typeof import('../src/services/ProductUsagePeopleRollupService.js')['rollupPeople']
+let turnMark: typeof import('../src/lib/dailyTracking.js')['turnMark']
 let billing: typeof import('../src/services/MachineBillingWorkerService.js')['machineBillingWorkerService']
 const DAY = 86_400_000
 const NOW = Date.parse('2026-10-29T08:00:00Z')
@@ -20,6 +22,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = uri
   rollupPeople = (await import('../src/services/ProductUsagePeopleRollupService.js')).rollupPeople
   billing = (await import('../src/services/MachineBillingWorkerService.js')).machineBillingWorkerService
+  turnMark = (await import('../src/lib/dailyTracking.js')).turnMark
 })
 afterAll(async () => {
   await (await import('../src/lib/prisma.js')).prisma.$disconnect()
@@ -42,6 +45,51 @@ describe('the hourly people rollup', () => {
     expect(rows[0]!.nreturned).toBe(3)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ dayUtc: 1/)
+  })
+})
+
+describe('a turn on a Mac, Swarm agent or own session', () => {
+  // `first`: the terminal it started in, whose id it keeps as its own after a rebind (superTabs/commands.ts agent.rebind).
+  const agentRow = (machineId: string, harnessId: string, deleted: boolean, first = harnessId) => ({ id: randomUUID(), tabId: randomUUID(), key: stableId(machineId, first),
+    version: 1, changedAt: new Date(NOW), deleted, ordinal: 1, data: { harnessId }, machineId, machineOwnerId: 'owner', contributorId: 'owner' })
+
+  it('tells a live Swarm agent from a removed one and from the same session id on another Mac', async () => {
+    await db.swarmAgent.createMany({ data: [agentRow('mac-a', 'live', false), agentRow('mac-a', 'removed', true)] })
+    expect(await turnMark('mac-a', 'live')).toEqual({ hosting: true })
+    expect(await turnMark('mac-a', 'removed')).toEqual({ worked: true })
+    expect(await turnMark('mac-b', 'live')).toEqual({ worked: true })
+    expect(await turnMark('mac-a', 'own-session')).toEqual({ worked: true })
+  })
+
+  it('follows a rebound Swarm agent to its current terminal, and leaves the one it left to the owner', async () => {
+    await db.swarmAgent.create({ data: agentRow('mac-r', 'new-terminal', false, 'first-terminal') })
+    expect(await turnMark('mac-r', 'new-terminal')).toEqual({ hosting: true })
+    expect(await turnMark('mac-r', 'first-terminal')).toEqual({ worked: true })
+  })
+
+  it('reads only the live agents of that machine, by the machine and deleted index', async () => {
+    await db.swarmAgent.createMany({ data: [agentRow('mac-p', 'a', false), agentRow('mac-p', 'one', false), agentRow('mac-p', 'gone', true),
+      ...Array.from({ length: 20 }, (_, i) => agentRow('mac-elsewhere', `other-${i}`, false))] })
+    const entries = await profiled(db, () => turnMark('mac-p', 'one'))
+    const rows = reads(entries, 'SwarmAgent', ['machineId', 'deleted'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ machineId: 1, deleted: 1/)
+  })
+
+  it('reads a row from before the hosting mark as not hosting, and a marked one as hosting, in the rollup', async () => {
+    const day = new Date(today - 5 * DAY)
+    const fields = { dayUtc: { $date: day.toISOString() }, surfaces: ['cli'], signupDay: { $date: day.toISOString() }, staff: false,
+      expiresAt: { $date: new Date(day.getTime() + 40 * DAY).toISOString() } }
+    await db.$runCommandRaw({ insert: 'product_usage_activity', documents: [
+      { ...fields, subject: 'before-hosting', worked: true },
+      { ...fields, subject: 'hosting', worked: false, hosting: true },
+    ] })
+    await rollupPeople(new Date(NOW))
+    const total = async (metric: string) => (await db.productUsageTotal.findUnique({ where: { dayUtc_metric: { dayUtc: day, metric } } }))?.value
+    expect(await total('people_hosting')).toBe(1)
+    expect(await total('people_working')).toBe(1)
+    expect(await total('people_active')).toBe(2)
   })
 })
 
@@ -69,64 +117,6 @@ describe('the minute billing sync', () => {
   })
 })
 
-describe('the nightly routing reflection', () => {
-  // Which projects it reads: a $group in Mongo over the evidence week index, never Prisma's groupBy (Lead, 10-30).
-  it('finds the projects with routed work in the last two weeks by the evidence week index, reading only those weeks', async () => {
-    const { reflectionCandidates } = await import('../src/lib/routingReflection.js')
-    const { weekStart } = await import('../src/superTabs/leaderboard/week.js')
-    const row = (tabId: string, projectId: string, week: number, kind: string) => ({ id: randomUUID(), tabId, projectId, engine: 'claude', model: 'opus',
-      kind, week: new Date(week), updatedAt: new Date(week) })
-    await db.superTabModelEvidence.createMany({ data: [
-      // Weeks long past, which a read not bounded by week examines too.
-      ...Array.from({ length: 20 }, (_, i) => row(`old-tab-${i}`, 'lead', weekStart(NOW - 60 * DAY), 'feature')),
-      row('tab-a', 'lead', weekStart(NOW), 'feature'), row('tab-a', 'lead', weekStart(NOW), 'docs'), row('tab-a', 'web', weekStart(NOW - 7 * DAY), 'fix'),
-    ] })
-    let candidates: Map<string, string[]> | undefined
-    const entries = await profiled(db, async () => { candidates = await reflectionCandidates(db, NOW) })
-    expect(candidates).toEqual(new Map([['tab-a', expect.arrayContaining(['lead', 'web'])]]))
-    expect(candidates!.get('tab-a')).toHaveLength(2)
-    const rows = reads(entries, 'SuperTabModelEvidence', ['week'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ week: 1/)
-  })
-
-  it('reads a Swarm’s failed starts of the last 7 days by its tabId+createdAt index', async () => {
-    const { failedStarts } = await import('../src/superTabs/costs/read.js')
-    const decision = (createdAt: number, outcome: string | null) => ({ id: randomUUID(), tabId: 'tab-f', conversationId: 'g1', record: {},
-      final: { kind: 'new', startId: randomUUID(), machineId: 'secret-mac', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, outcome, createdAt: new Date(createdAt) })
-    await db.superTabRouteDecision.createMany({ data: [
-      ...Array.from({ length: 20 }, () => decision(NOW - 30 * DAY, 'failed')),
-      decision(NOW - DAY, 'failed'), decision(NOW - 2 * DAY, 'done'), decision(NOW - 3 * DAY, null),
-    ] })
-    let found: Awaited<ReturnType<typeof failedStarts>> = []
-    const entries = await profiled(db, async () => { found = await failedStarts(db, 'tab-f', NOW - 7 * DAY) })
-    expect(found).toEqual([{ conversationId: 'g1', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: NOW - DAY }])
-    const rows = reads(entries, 'SuperTabRouteDecision', ['tabId', 'createdAt'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
-  })
-
-  it('reads a project’s reflection decisions by the decisions’ project index, never another project’s (review of #2276)', async () => {
-    const { reflectionDecisions } = await import('../src/superTabs/decisions.js')
-    const decision = (projectId: string, kind?: string) => ({ id: randomUUID(), tabId: 'tab-d', batchId: 'b', projectId, conversationId: 'c', personId: 'p',
-      askerAgentId: 'a', question: `${kind ?? 'Plain'}? Saving.`, options: ['Yes', 'No'], recommended: 0, unblocks: 'x', createdAt: new Date(NOW), ...kind ? { kind } : {} })
-    await db.superTabDecision.createMany({ data: [
-      ...Array.from({ length: 20 }, () => decision('other', 'routing-reflection')),
-      decision('lead'), decision('lead', 'routing-reflection'), decision('lead', 'routing-reflection'),
-    ] })
-    let found: Awaited<ReturnType<typeof reflectionDecisions>> = []
-    const entries = await profiled(db, async () => { found = await reflectionDecisions(db, 'tab-d', 'lead') })
-    expect(found).toHaveLength(2)
-    const rows = reads(entries, 'SuperTabDecision', ['tabId', 'projectId'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    // The project's decisions, its plain ones too: no other project's.
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, projectId: 1, createdAt: 1/)
-  })
-})
-
 describe('the pending-upload sweep', () => {
   it('reads only the unfinished uploads it removes, by the (purpose, createdAt) index', async () => {
     const { sweepPendingUploads } = await import('../src/lib/pendingUploadSweep.js')
@@ -149,5 +139,142 @@ describe('the pending-upload sweep', () => {
       expect(read.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ purpose: 1, createdAt: 1/)
       expect(read.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(Math.max(read.nreturned ?? 0, 2))
     }
+  })
+})
+
+describe('the operation receipts\' expiry (superTabs/operations.ts)', () => {
+  // Mongo's TTL monitor deletes by the expiry index's key, about once a minute: receipts past their 30 days, never a scan.
+  it('finds the receipts past their 30 days by the operation_expiry index, reading only those', async () => {
+    const { OPERATION_EXPIRY_MS } = await import('../src/superTabs/operations.js')
+    const row = (ageMs: number) => ({ id: randomUUID(), tabId: 'tab', actorKey: 'agent:a', requestHash: 'h', revision: 0, result: {}, createdAt: new Date(Date.now() - ageMs) })
+    await db.superTabOperation.createMany({ data: [...Array.from({ length: 40 }, () => row(DAY)), ...Array.from({ length: 3 }, () => row(40 * DAY))] })
+    const cutoff = new Date(Date.now() - OPERATION_EXPIRY_MS).toISOString()
+    const answer = await db.$runCommandRaw({ explain: { find: 'SuperTabOperation', filter: { createdAt: { $lt: { $date: cutoff } } } }, verbosity: 'executionStats' }) as
+      { queryPlanner: { winningPlan: unknown }; executionStats: { nReturned: number; totalDocsExamined: number } }
+    const winning = JSON.stringify(answer.queryPlanner.winningPlan)
+    expect(winning).toMatch(/"stage":"IXSCAN"/)
+    expect(winning).toMatch(/"indexName":"operation_expiry"/)
+    expect(answer.executionStats.nReturned).toBe(3)
+    expect(answer.executionStats.totalDocsExamined).toBe(3)
+  })
+})
+
+describe('the usage-receipt sweep\'s done check (lib/productUsageReceiptSweep.ts lastOldReceipt)', () => {
+  // backend/AGENTS.md rule 3: its hourly read while the rule is refused takes one key of the expiry index, never a scan of millions.
+  it('reads the newest old receipt by one key of the product_usage_expiry index', async () => {
+    const { lastOldReceipt } = await import('../src/lib/productUsageReceiptSweep.js')
+    const now = new Date('2026-11-02T03:00:00Z')
+    // New receipts (4-day life) and old ones (36-day life): a read the index does not bound examines them all.
+    await db.productUsageReceipt.createMany({ data: [
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `new-${i}`, expiresAt: new Date(now.getTime() + (i % 4) * DAY), life: 4 })),
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `old-${i}`, expiresAt: new Date(now.getTime() + (6 + i) * DAY) })),
+    ] })
+    let newest: Date | null = null
+    const entries = await profiled(db, async () => { newest = await lastOldReceipt(db, now) })
+    expect(newest).toEqual(new Date(now.getTime() + 35 * DAY))
+    const rows = reads(entries, 'product_usage_receipts', ['expiresAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ expiresAt: 1/)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('the read-mark sweep where the expiry is refused (superTabs/readMarks.ts sweepReadMarks)', () => {
+  // backend/AGENTS.md rule 3: every 30 s, one chunk of the oldest marks by the read_mark_expiry index, then exactly those by _id
+  // (#2923: a delete on both _id and the range was planned on the range's index and examined every match).
+  it('reads one chunk of the oldest marks by read_mark_expiry and deletes them by _id, examining only those', async () => {
+    const { READ_MARK_EXPIRY_MS, sweepReadMarks } = await import('../src/superTabs/readMarks.js')
+    const now = new Date(NOW)
+    const mark = (n: number, ageMs: number) => ({ id: `plan-mark-${n}`, tabId: 'tab-plan', personId: 'p', conversationId: `c${n}`, sequence: 1,
+      updatedAt: new Date(NOW - ageMs) })
+    // 40 live marks and 10 past 180 days: a read the index does not bound examines them all.
+    await db.superTabReadMark.createMany({ data: [...Array.from({ length: 40 }, (_, i) => mark(i, DAY)),
+      ...Array.from({ length: 10 }, (_, i) => mark(100 + i, READ_MARK_EXPIRY_MS + (i + 1) * DAY))] })
+    let removed = 0
+    const entries = await profiled(db, async () => { removed = await sweepReadMarks(db, now, 4) })
+    expect(removed).toBe(4)
+    const [found] = reads(entries, 'SuperTabReadMark', ['updatedAt'], ['_id'])
+    expect(found?.planSummary, JSON.stringify(plan(entries))).toMatch(/IXSCAN \{ updatedAt: 1/)
+    expect(found!.keysExamined, JSON.stringify(plan([found!]))).toBeLessThanOrEqual(5)
+    expect(found!.docsExamined, JSON.stringify(plan([found!]))).toBeLessThanOrEqual(4)
+    const [removal] = reads(entries, 'SuperTabReadMark', ['_id', 'updatedAt'])
+    expect(removal?.planSummary, JSON.stringify(plan(entries))).toMatch(/IXSCAN \{ _id: 1/)
+    expect(removal!.docsExamined, JSON.stringify(plan([removal!]))).toBeLessThanOrEqual(4)
+  })
+})
+
+describe('the hourly unused-upload sweep', () => {
+  // Ken's prod scan of 11-04 (#2676): Performance Advisor suggested an index for it. The sweep's claim reads uploads by
+  // `usedBy` and `proposedBy` (both null), `purpose` and age; its remove step reads the uploads it took by `usedBy` alone.
+  // One index starting with `usedBy` bounds both; a used upload, the most of them, is never examined.
+  it('reads only the unused day-old uploads, and then only the ones it took, by the usedBy index', async () => {
+    const { sweepUnsentAttachments } = await import('../src/lib/attachmentSweep.js')
+    const upload = (createdAt: number, fields: Record<string, unknown> = {}) => ({ id: randomUUID(), tabId: 'tab-u', conversationId: 'c', actorKey: 'a',
+      name: 'f.png', mime: 'image/png', size: 1, objectKey: `k-${randomUUID()}`, createdAt: new Date(createdAt), ...fields })
+    await db.superTabAttachment.createMany({ data: [
+      // Sent files, a week old: a read not bounded by `usedBy` examines them all.
+      ...Array.from({ length: 20 }, () => upload(NOW - 7 * DAY, { usedBy: `message-${randomUUID()}` })),
+      upload(NOW - 7 * DAY, { proposedBy: 'proposal-1' }), upload(NOW - 60_000),
+      upload(NOW - 2 * DAY), upload(NOW - 3 * DAY),
+    ] })
+    const deleted: string[] = []
+    const store = { delete: async (key: string) => { deleted.push(key) } }
+    const entries = await profiled(db, () => sweepUnsentAttachments(db, { store } as never, new Date(NOW), { chunk: 100, chunks: 1, pauseMs: 0 }))
+    expect(deleted).toHaveLength(2)
+    const claims = reads(entries, 'SuperTabAttachment', ['usedBy', 'proposedBy', 'createdAt']).filter(e => e.op === 'query')
+    expect(claims, JSON.stringify(plan(claims))).toHaveLength(1)
+    expect(claims[0]!.nreturned).toBe(2)
+    expect(claims[0]!.docsExamined, JSON.stringify(plan(claims))).toBeLessThanOrEqual(2)
+    expect(claims[0]!.planSummary, JSON.stringify(plan(claims))).toMatch(/IXSCAN \{ usedBy: 1, proposedBy: 1, purpose: 1, createdAt: 1/)
+    const taken = reads(entries, 'SuperTabAttachment', ['usedBy'], ['proposedBy']).filter(e => e.op === 'query')
+    expect(taken, JSON.stringify(plan(taken))).toHaveLength(1)
+    expect(taken[0]!.docsExamined, JSON.stringify(plan(taken))).toBeLessThanOrEqual(2)
+    expect(taken[0]!.planSummary, JSON.stringify(plan(taken))).toMatch(/IXSCAN \{ usedBy: 1/)
+  })
+})
+
+describe('the delivery re-push pass (superTabs/deliveryRepush.ts, task #2800)', () => {
+  // Every 15 s for every Swarm: it must read the queued deliveries alone, by the (status, _id) index, never the finished
+  // ones that make up almost all of the collection.
+  it('reads only the queued deliveries, by the status index, and tells each of their agents', async () => {
+    const { repushQueuedDeliveries } = await import('../src/superTabs/deliveryRepush.js')
+    const row = (status: string, agentId: string) => ({ id: randomUUID(), tabId: 'repush-tab', conversationId: 'c', messageId: randomUUID(), agentId,
+      machineId: 'repush-machine', membershipGeneration: 'g', authorKind: 'person', authorId: 'p', authorGeneration: 'g', status })
+    await db.superTabDelivery.createMany({ data: [...Array.from({ length: 40 }, () => row('delivered', 'done')), row('claimed', 'busy'),
+      ...['a1', 'a1', 'a2'].map(agent => row('queued', agent))] })
+    const told: unknown[] = []
+    const entries = await profiled(db, () => repushQueuedDeliveries(db, waiting => { told.push(waiting) }, Date.now() + 60_000))
+    expect(told).toHaveLength(2)
+    expect(told).toEqual(expect.arrayContaining([{ machineId: 'repush-machine', tabId: 'repush-tab', agentId: 'a1' },
+      { machineId: 'repush-machine', tabId: 'repush-tab', agentId: 'a2' }]))
+    const read = plan(reads(entries, 'SuperTabDelivery', ['status']))
+    expect(read).toHaveLength(1)
+    expect(read[0]!.plan).toMatch(/^IXSCAN \{ status: 1, _id: 1 \}/)
+    expect(read[0]!.docsExamined).toBe(3)
+  })
+})
+
+describe('the time checks\' pass', () => {
+  // Task #3385: every 30 s the worker picks the Swarms to check by their groups awake and active this week, on the
+  // [dormant, lastActivityAt] index: never every group of every Swarm.
+  it('reads only the groups awake and active in the last week, by the activity index', async () => {
+    const { timeCheckSwarms, TIME_CHECK_QUIET_MS } = await import('../src/superTabs/timeChecks.js')
+    const group = (tabId: string, at: number, dormant: boolean) => ({ id: randomUUID(), tabId, key: randomUUID(), version: 1, changedAt: new Date(at),
+      ordinal: 1, data: {}, agentIds: [], dormant, lastActivityAt: new Date(at) })
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, (_, i) => group(`asleep-${i}`, NOW - DAY, true)),
+      ...Array.from({ length: 20 }, (_, i) => group(`old-${i}`, NOW - TIME_CHECK_QUIET_MS - DAY, false)),
+      group('busy', NOW - 60_000, false), group('busy', NOW - 120_000, false), group('quiet', NOW - 3 * DAY, false),
+    ] })
+    let tabs: string[] = []
+    const entries = await profiled(db, async () => { tabs = await timeCheckSwarms(db, NOW) })
+    // Newest first; other tests' groups may be there too.
+    expect(tabs.filter(t => t === 'busy' || t === 'quiet' || t.startsWith('asleep-') || t.startsWith('old-'))).toEqual(['busy', 'quiet'])
+    const awake = await db.swarmGroup.count({ where: { dormant: false, lastActivityAt: { gte: new Date(NOW - TIME_CHECK_QUIET_MS) } } })
+    const rows = reads(entries, 'SwarmGroup', ['dormant', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ dormant: 1, lastActivityAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(awake)
   })
 })

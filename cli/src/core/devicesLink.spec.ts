@@ -253,7 +253,7 @@ describe('the devices\' Swarm card requests to the Super Tab service', () => {
     expect((await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: [] })).echoed).toEqual({ action: 'cardsWanted', on: true, include: [] })
   })
 
-  it('passes a swarmBuddy dial\'s buddy flag and its side (cardSide), as it passes the other card requests', async () => {
+  it('passes a swarmBuddy dial\'s buddy flag, as it passes the other card requests', async () => {
     const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
     const core = fakeCore()
     core.superTabRequest = superTabRequest
@@ -264,6 +264,10 @@ describe('the devices\' Swarm card requests to the Super Tab service', () => {
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: true })
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: 'yes' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1' })
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 7 })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
-    expect((await devices.answer('super_tabs', { action: 'cardSide', tabId: 't1', side: 'buddy', leadId: 'l1', text: 'x' })).echoed).toEqual({ action: 'cardSide', tabId: 't1', side: 'buddy' })
+    // An older dial's words may still name a thread (swarmThread, #2756): it is not passed on (task #3908).
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'b0', thread: 'm9', threaded: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'b0' })
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', thread: null })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+    // An older dial's side is no request any more (task #3908): it reaches the service as an unknown action.
+    expect((await devices.answer('super_tabs', { action: 'cardSide', tabId: 't1', side: 'buddy', leadId: 'l1', text: 'x' })).echoed).toEqual({ action: 'cardSide', tabId: 't1', leadId: 'l1' })
   })
 })

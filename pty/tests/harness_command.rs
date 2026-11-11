@@ -51,6 +51,18 @@ fn install(root: &Path, node: &Path) -> PathBuf {
     command(root)
 }
 
+/// Runs [command]. A copy just written can be "busy" on Linux for a moment: a test beside this one forked while the copy's
+/// file was still open for writing, and that child holds it until it execs (ETXTBSY, seen in PR CI).
+fn output_of(command: &mut Command) -> std::process::Output {
+    for _ in 0..50 {
+        match command.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => std::thread::sleep(std::time::Duration::from_millis(20)),
+            other => return other.unwrap(),
+        }
+    }
+    command.output().unwrap()
+}
+
 macro_rules! require_node {
     () => {
         match node() {
@@ -71,7 +83,7 @@ fn passes_every_argument_through_untouched_from_the_callers_folder_and_environme
     let exe = install(dir.path(), &node);
     let work = tempfile::tempdir().unwrap();
     let args = ["send", "a&b", "say \"hi\" & echo pwned > x", "%OS%", "50%", "x^y", "wow!", "two words", "", "a\\\\\"b", "|<>"];
-    let out = Command::new(&exe).args(args).current_dir(work.path()).env("HARNESS_COMMAND_TEST", "seen").output().unwrap();
+    let out = output_of(Command::new(&exe).args(args).current_dir(work.path()).env("HARNESS_COMMAND_TEST", "seen"));
     assert!(out.status.success(), "{out:?}");
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["args"], serde_json::json!(args));
@@ -87,16 +99,30 @@ fn exits_with_the_clis_exit_code() {
     let dir = tempfile::tempdir().unwrap();
     let exe = install(dir.path(), &node);
     for code in [0, 1, 7, 255] {
-        let status = Command::new(&exe).arg(format!("exit={code}")).output().unwrap().status;
+        let status = output_of(Command::new(&exe).arg(format!("exit={code}"))).status;
         assert_eq!(status.code(), Some(code));
     }
+}
+
+/// The same program by the name `hn` is the terminal app: install.ps1 copies it to `bin\hn.exe`.
+#[test]
+fn named_hn_it_runs_harness_tui() {
+    let node = require_node!();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path(), &node);
+    let hn = exe.with_file_name(if cfg!(windows) { "hn.exe" } else { "hn" });
+    fs::copy(&exe, &hn).unwrap();
+    let out = output_of(Command::new(&hn).args(["list-sessions", "-F", "#S"]));
+    assert!(out.status.success(), "{out:?}");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["args"], serde_json::json!(["tui", "list-sessions", "-F", "#S"]));
 }
 
 #[test]
 fn a_broken_install_says_so_in_one_sentence_and_exits_3() {
     let dir = tempfile::tempdir().unwrap();
     let exe = command(dir.path());
-    let out = Command::new(&exe).arg("version").output().unwrap();
+    let out = output_of(Command::new(&exe).arg("version"));
     assert_eq!(out.status.code(), Some(3));
     assert_eq!(String::from_utf8_lossy(&out.stderr).trim_end(), BROKEN);
     assert!(out.stdout.is_empty());
@@ -115,7 +141,7 @@ fn a_node_that_cannot_start_exits_4() {
     fs::create_dir_all(root.join("cli").join("1.2.3")).unwrap();
     fs::write(root.join("cli").join("1.2.3").join("cli.js"), b"").unwrap();
     fs::write(root.join("cli").join("current"), "1.2.3\r\n").unwrap();
-    let out = Command::new(command(root)).arg("version").output().unwrap();
+    let out = output_of(Command::new(command(root)).arg("version"));
     assert_eq!(out.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&out.stderr).contains("could not start its Node runtime"), "{out:?}");
 }

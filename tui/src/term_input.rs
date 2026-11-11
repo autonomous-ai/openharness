@@ -134,26 +134,126 @@ fn parse_osc11(body: &str) -> Option<String> {
     None
 }
 
+enum Got { Closed, Nothing, Bytes(usize) }
+
+/// The terminal's bytes, or nothing within a wait of so many milliseconds (negative: as long as it takes).
+#[cfg(unix)]
+struct Source { _tty: Option<std::fs::File>, fd: i32 }
+
+#[cfg(unix)]
+impl Source {
+    fn open() -> Option<Source> {
+        use std::os::fd::AsRawFd;
+        let tty = if std::io::IsTerminal::is_terminal(&std::io::stdin()) { None } else { std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok() };
+        let fd = tty.as_ref().map(AsRawFd::as_raw_fd).unwrap_or_else(|| std::io::stdin().as_raw_fd());
+        Some(Source { _tty: tty, fd })
+    }
+
+    fn next(&mut self, buf: &mut [u8], timeout: i32) -> Got {
+        loop {
+            let mut pfd = libc::pollfd { fd: self.fd, events: libc::POLLIN, revents: 0 };
+            let n = unsafe { libc::poll(&mut pfd, 1, timeout) };
+            if n < 0 { if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted { continue } return Got::Closed }
+            if n == 0 { return Got::Nothing }
+            let n = unsafe { libc::read(self.fd, buf.as_mut_ptr().cast(), buf.len()) };
+            return if n <= 0 { Got::Closed } else { Got::Bytes(n as usize) };
+        }
+    }
+}
+
+/// A Windows console's input as the same bytes: asked for as VT sequences (ENABLE_VIRTUAL_TERMINAL_INPUT), which it hands over
+/// as UTF-16 through ReadConsoleW. ReadFile gives no non-ASCII at all on older consoles. Other records in its queue (a focus
+/// change, a key's release, a resize, which main.rs looks for) would hold a read up with nothing to return, so they go first.
+#[cfg(windows)]
+struct Source { handle: windows_sys::Win32::Foundation::HANDLE, _console: Option<std::fs::File>, high: Option<u16> }
+
+// SAFETY: a console handle, used by this reader thread alone.
+#[cfg(windows)]
+unsafe impl Send for Source {}
+
+#[cfg(windows)]
+impl Source {
+    fn open() -> Option<Source> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{ENABLE_EXTENDED_FLAGS, ENABLE_VIRTUAL_TERMINAL_INPUT, SetConsoleMode};
+        let (handle, console) = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            (std::io::stdin().as_raw_handle(), None)
+        } else {
+            let file = std::fs::OpenOptions::new().read(true).write(true).open("CONIN$").ok()?;
+            (file.as_raw_handle(), Some(file))
+        };
+        // Line, echo and Ctrl-C processing off, as enable_raw_mode left them; quick edit off, so a click is the program's.
+        // SAFETY: a console handle held for as long as this value.
+        if unsafe { SetConsoleMode(handle as _, ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_EXTENDED_FLAGS) } == 0 { return None }
+        Some(Source { handle: handle as _, _console: console, high: None })
+    }
+
+    fn next(&mut self, buf: &mut [u8], timeout: i32) -> Got {
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Console::{INPUT_RECORD, KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW, ReadConsoleW};
+        use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+        let wait = if timeout < 0 { INFINITE } else { timeout as u32 };
+        let mut units = [0u16; 2048];
+        // SAFETY: every buffer is as long as said, and the handle lives as long as self.
+        unsafe {
+            loop {
+                match WaitForSingleObject(self.handle, wait) {
+                    WAIT_OBJECT_0 => {}
+                    WAIT_TIMEOUT => return Got::Nothing,
+                    _ => return Got::Closed,
+                }
+                let mut record: INPUT_RECORD = std::mem::zeroed();
+                let mut count = 0u32;
+                if PeekConsoleInputW(self.handle, &mut record, 1, &mut count) == 0 { return Got::Closed }
+                if count == 0 { continue }
+                let key = u32::from(record.EventType) == KEY_EVENT && record.Event.KeyEvent.bKeyDown != 0;
+                if !key {
+                    if ReadConsoleInputW(self.handle, &mut record, 1, &mut count) == 0 { return Got::Closed }
+                    continue
+                }
+                let mut read = 0u32;
+                // A third of the bytes: each unit is at most three in UTF-8.
+                let room = (units.len()).min(buf.len() / 3) as u32;
+                if ReadConsoleW(self.handle, units.as_mut_ptr().cast(), room, &mut read, std::ptr::null()) == 0 { return Got::Closed }
+                if read == 0 { continue }
+                let written = utf16_to_utf8(&mut self.high, &units[..read as usize], buf);
+                if written > 0 { return Got::Bytes(written) }
+            }
+        }
+    }
+}
+
+/// UTF-16 units into UTF-8, keeping a high surrogate that ended the last read for the next.
+#[cfg(any(windows, test))]
+fn utf16_to_utf8(high: &mut Option<u16>, units: &[u16], out: &mut [u8]) -> usize {
+    let mut all: Vec<u16> = Vec::with_capacity(units.len() + 1);
+    all.extend(high.take());
+    all.extend_from_slice(units);
+    if all.last().is_some_and(|unit| (0xD800..0xDC00).contains(unit)) { *high = all.pop(); }
+    let mut at = 0;
+    for decoded in char::decode_utf16(all) {
+        let c = decoded.unwrap_or(char::REPLACEMENT_CHARACTER);
+        if at + c.len_utf8() > out.len() { break }
+        at += c.encode_utf8(&mut out[at..]).len();
+    }
+    at
+}
+
 /// Blocking reader thread. The initial queries never delay drawing or shell startup;
 /// terminal replies can arrive after ordinary input and do not become keystrokes.
 pub fn read(keys: tokio::sync::mpsc::UnboundedSender<crate::event::Event>) {
-    use std::os::fd::AsRawFd;
-    let tty = if std::io::IsTerminal::is_terminal(&std::io::stdin()) { None } else { std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok() };
-    let fd = tty.as_ref().map(AsRawFd::as_raw_fd).unwrap_or_else(|| std::io::stdin().as_raw_fd());
+    let Some(mut source) = Source::open() else { return };
     let mut decoder = Decoder::default();
     let mut last = Instant::now();
     let mut buf = [0u8; 8192];
     loop {
-        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
-        let n = unsafe { libc::poll(&mut pfd, 1, decoder.poll_timeout(last.elapsed())) };
-        if n < 0 { if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted { continue } break }
-        let items = if n == 0 {
-            if last.elapsed() >= ESCAPE_DELAY { decoder.escape() } else { Vec::new() }
-        } else {
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 { break }
-            last = Instant::now();
-            decoder.push(&buf[..n as usize], n as usize == buf.len())
+        let items = match source.next(&mut buf, decoder.poll_timeout(last.elapsed())) {
+            Got::Closed => break,
+            Got::Nothing => if last.elapsed() >= ESCAPE_DELAY { decoder.escape() } else { Vec::new() },
+            Got::Bytes(n) => {
+                last = Instant::now();
+                decoder.push(&buf[..n], n == buf.len())
+            }
         };
         for item in items {
             let event = match item {

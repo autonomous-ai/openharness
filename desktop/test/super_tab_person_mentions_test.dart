@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/profile_sheet.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -38,7 +37,7 @@ void main() {
   final picker = find.byKey(const ValueKey('super-composer-completions'));
 
   ConversationServer swarm() {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     server.state['people'] = [
       {'id': 'owner', 'email': 'river@autonomous.ai', 'role': 'owner'},
       {'id': 'ken', 'email': 'ken15@autonomous.ai', 'role': 'collaborator'},
@@ -76,7 +75,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -174,10 +172,8 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-      final server = swarm()
-        ..tag('message-1', text: '@river can you try it?', leadId: 'dee');
-      server.mentions.last['leadName'] = 'dee';
-      final c = await show(tester, server, brightness: brightness);
+      final server = swarm();
+      await show(tester, server, brightness: brightness);
       await tester.tap(composer);
       await tester.enterText(composer, 'Please check @');
       await tester.pumpAndSettle();
@@ -189,21 +185,6 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-notifications')));
       await tester.pumpAndSettle();
       await shot(tester, 'notification-${brightness.name}');
-      unawaited(
-        showSuperTabProfile(tester.element(find.byType(SuperTabView)), c),
-      );
-      await tester.pumpAndSettle();
-      await shot(tester, 'profile-${brightness.name}');
-      server.refuse = {'code': 'USERNAME_TAKEN', 'message': 'ken15 is taken.'};
-      await tester.enterText(
-        find.byKey(const ValueKey('super-username-field')),
-        'ken15',
-      );
-      await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('super-username-save')));
-      await tester.pumpAndSettle();
-      expect(find.text('ken15 is taken.'), findsOneWidget);
-      await shot(tester, 'profile-taken-${brightness.name}');
     }, skip: shots == null);
   }
 }

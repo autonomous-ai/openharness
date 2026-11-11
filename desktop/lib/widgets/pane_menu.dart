@@ -46,8 +46,8 @@ Future<T?> showPaneMenu<T>({
   bool Function()? shouldRestoreFocus,
   bool Function(Offset position)? ownsPointer,
   bool focusFirst = true,
-  double minWidth = 340,
-  double maxWidth = 540,
+  double minWidth = 240,
+  double maxWidth = 320,
 }) {
   assert(
     (children == null) != (body == null),
@@ -124,6 +124,30 @@ Future<T?> showPaneMenu<T>({
   onOpen?.call(entry, () => close(null));
   overlayState.insert(entry);
   return completer.future;
+}
+
+/// A right-click menu at [at]: the same panel and rows as every dropdown, in an
+/// overlay so the click that dismisses it still lands where it was aimed.
+Future<T?> showContextMenuAt<T>({
+  required BuildContext context,
+  required Offset at,
+  required List<Widget> Function(void Function(T?) close) children,
+  double width = 240,
+}) {
+  final overlayWidth = MediaQuery.sizeOf(context).width;
+  return showPaneMenu<T>(
+    context: context,
+    position: RelativeRect.fromLTRB(
+      at.dx,
+      at.dy,
+      overlayWidth - at.dx - width,
+      0,
+    ),
+    minWidth: width,
+    maxWidth: width,
+    focusFirst: false,
+    children: children,
+  );
 }
 
 class _PaneMenuSurface extends StatelessWidget {
@@ -465,7 +489,7 @@ class PaneMenuRow extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             // Regular, stated by the style rather than inherited: a PopupMenuItem's default text
             // style is heavier than this menu wants, which read as every row being emphasised.
-            style: AppType.mono(color: AppColors.text),
+            style: AppType.body(color: AppColors.text),
           ),
         ),
         if (detail.isNotEmpty) ...[const SizedBox(width: 12), meta(detail)],
@@ -511,7 +535,7 @@ class PaneMenuRow extends StatelessWidget {
 /// The row's own inset from the menu edge, and the padding inside its highlight. A section header
 /// carries their SUM as a left inset, so header text sits exactly above the row text it heads.
 const double kPaneMenuInset = 6;
-const double kPaneMenuRowPadding = 8;
+const double kPaneMenuRowPadding = 10;
 
 /// A row's leading mark, when it has one. Not reserved on rows that do not.
 const double kPaneMenuMarkSize = 14;

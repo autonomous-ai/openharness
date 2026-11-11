@@ -1,0 +1,71 @@
+{
+  "tools": [
+    {
+      "name": "browser_navigate",
+      "description": "Open a URL in the current tab of your Browser, a Chrome your person can also see and use.",
+      "inputSchema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] }
+    },
+    {
+      "name": "browser_back",
+      "description": "Go back one page in the current tab.",
+      "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "browser_snapshot",
+      "description": "Read the current page as an accessibility tree. Interactive elements carry refs such as e12 for the other tools.",
+      "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "browser_click",
+      "description": "Click the element with this ref from the last snapshot.",
+      "inputSchema": { "type": "object", "properties": { "ref": { "type": "string" } }, "required": ["ref"] }
+    },
+    {
+      "name": "browser_type",
+      "description": "Type text into the element with this ref, replacing what it holds. With submit, press Enter after.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "ref": { "type": "string" }, "text": { "type": "string" }, "submit": { "type": "boolean" } },
+        "required": ["ref", "text"]
+      }
+    },
+    {
+      "name": "browser_press",
+      "description": "Press a key or a chord, such as Enter, Escape, ArrowDown or Control+A.",
+      "inputSchema": { "type": "object", "properties": { "key": { "type": "string" } }, "required": ["key"] }
+    },
+    {
+      "name": "browser_select",
+      "description": "Choose options, by value or label, in the select element with this ref.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "ref": { "type": "string" }, "values": { "type": "array", "items": { "type": "string" } } },
+        "required": ["ref", "values"]
+      }
+    },
+    {
+      "name": "browser_scroll",
+      "description": "Scroll the page by dy pixels; negative scrolls up.",
+      "inputSchema": { "type": "object", "properties": { "dy": { "type": "number" } }, "required": ["dy"] }
+    },
+    {
+      "name": "browser_screenshot",
+      "description": "See the current tab as a JPEG image.",
+      "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "browser_tabs",
+      "description": "List, open, switch to or close tabs. index is a tab's number from list; close without it closes the current tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "action": { "type": "string", "enum": ["list", "new", "select", "close"] }, "index": { "type": "integer" } },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "browser_wait",
+      "description": "Wait until text appears on the page, or for ms milliseconds. At most 30000 ms.",
+      "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "ms": { "type": "integer", "maximum": 30000 } } }
+    }
+  ]
+}

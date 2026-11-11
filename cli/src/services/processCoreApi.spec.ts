@@ -15,25 +15,25 @@ it('grants typed deliveries only in its connected service namespace and refuses 
   expect(await api.turns.leaseDeliveries('worker', {})).toBe(false)
   expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
 })
+
+it('asks the core what holds a delivery from its pane, and hears nothing from a core that cannot say', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ hold: 'team_waiting_draft' }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBe('team_waiting_draft')
+  expect(ask).toHaveBeenCalledWith('delivery_hold', { agentId: 'agent-1', deliveryId: 'team:service:superTabs:d1' })
+  ask.mockResolvedValueOnce({ hold: null })
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+  ask.mockResolvedValueOnce({ error: 'UNKNOWN_QUERY' })
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+  expect(await processCoreApi('/data', 'superTabs').turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+})
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
-  it('validates native observation pages and never advances a cursor on an unavailable core', async () => {
-    const cursor = { epoch: 'fixture-observation-epoch', sequence: 0 }, page = { cursor, observations: [], gap: false }
-    const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ page }))
-    const api = processCoreApi('/data', 'worker', { ask })
-    expect(await api.transcripts.nativeTurns!('native')).toEqual(page)
-    expect(ask).toHaveBeenLastCalledWith('native_turns', { agentId: 'native' })
-    expect(await api.transcripts.nativeTurns!('native', cursor)).toEqual(page)
-    expect(ask).toHaveBeenLastCalledWith('native_turns', { agentId: 'native', cursor })
-    ask.mockResolvedValueOnce({ page: { ...page, observations: [{}] } })
-    expect(await api.transcripts.nativeTurns!('native', cursor)).toBeNull()
-    ask.mockRejectedValueOnce(new Error('Disconnected'))
-    expect(await api.transcripts.nativeTurns!('native', cursor)).toBeNull()
-    expect(await processCoreApi('/data', 'worker').transcripts.nativeTurns!('native')).toBeNull()
-  })
   it('accepts only the requested native creation receipt from the core', async () => {
     const id = 'creation-fixture-1234', observation = { creationId: id, state: 'cancelled' }
     const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ observation }))
@@ -68,19 +68,6 @@ describe('the core API a light service runs on in its own process', () => {
     }
     ask.mockRejectedValueOnce(new Error('offline'))
     expect(await api.usage!(target)).toBeNull()
-  })
-  it('reads an agent’s usage fresh through the core, validated, and nothing without a core', async () => {
-    expect(await processCoreApi('/data', 'superTabs').usageFresh!('a')).toBeNull()
-    const ask = vi.fn(async (_type: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ value: { totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' } }))
-    const api = processCoreApi('/data', 'superTabs', { ask })
-    expect(await api.usageFresh!('a')).toEqual({ totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' })
-    expect(ask).toHaveBeenCalledWith('agentUsageFresh', { agentId: 'a' })
-    for (const answer of [{}, { error: 'STALE_USAGE_TARGET' }, { value: { totalTokens: -1 } }]) {
-      ask.mockResolvedValueOnce(answer)
-      expect(await api.usageFresh!('a')).toBeNull()
-    }
-    ask.mockRejectedValueOnce(new Error('offline'))
-    expect(await api.usageFresh!('a')).toBeNull()
   })
   it('answers the agents from what the core last said, by agent id or session id', () => {
     const live = [agent('a1'), agent('a2')]

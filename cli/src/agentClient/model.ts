@@ -2,6 +2,7 @@
  * What the agent verbs show, as pure functions of what the daemon answers (docs/design/2026-10-11-agent-client.md):
  * a harness's row in `harness ps`, which harness a name means, and its last turn from a page of its transcript.
  */
+import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
 import { engineName } from '../messages/model.js'
 import type { Ledger, LedgerMember } from './ledger.js'
 
@@ -15,6 +16,8 @@ export interface Frame {
   status?: string
   activity?: { state?: string } | null
   tmuxPane?: string | null
+  /** Where it runs: a PTY host's pane is named by its instance and pane (Windows). */
+  terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } | null
   project?: { cwd?: string; root?: string; branch?: string | null; worktree?: boolean } | null
   createdAt?: string
   updatedAt?: string
@@ -112,10 +115,16 @@ export function stateOf(frame: Frame): State {
  * or one Harness does not know. Matching active harnesses only made an agent the person, with the person's right to
  * close anything, whenever the daemon listed it offline for a moment (found by e2e/agentClient.e2e.ts). A stopped
  * harness keeps no pane (`toStoppedProject`), so an old pane number never matches one.
+ *
+ * A pane on Windows is named `<instance>:%N` (HARNESS_PANE), and `tmuxPane` holds only its %N, which restarts in every PTY
+ * host. So it is matched on the frame's runtime: comparing it with `tmuxPane` found no harness on Windows at all, and every
+ * agent there read as a person.
  */
 export function callerOf(frames: Frame[], pane: string | undefined, machineId: string): Caller | null {
   if (!pane) return null
-  const on = frames.filter((f) => f.tmuxPane === pane)
+  const pty = PTY_HOST_PANE.exec(pane)
+  const on = frames.filter((f) => f.tmuxPane === pane
+    || !!pty && f.terminal?.runtimes?.some(r => r.backend === 'ptyhost' && r.instance === pty[1] && r.paneId === pty[2]))
   const frame = on.find((f) => f.status === 'active') ?? on.filter(isAgent).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
   if (!frame || !isAgent(frame)) return null
   return { machineId, agentId: frame.id, name: frame.name || frame.id.slice(0, 8), engine: frame.engine ?? '', ...(frame.startedBy === 'agent' || frame.parentAgentId ? { startedByAgent: true } : {}) }

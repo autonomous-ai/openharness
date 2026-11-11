@@ -509,7 +509,7 @@ class _ApiEditorState extends State<_ApiEditor> {
         labelText: label,
         hintText: hint,
         labelStyle: AppType.caption(color: AppPalette.textSecondary),
-        hintStyle: AppType.body(color: AppPalette.textFaint),
+        hintStyle: AppType.monoLabel(color: AppPalette.textFaint),
         filled: true,
         fillColor: AppPalette.windowBg,
         suffixIcon: secret

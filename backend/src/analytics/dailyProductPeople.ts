@@ -25,11 +25,12 @@ export function dailyProductPeople(rows: Row[], days: number, now: Date) {
     definitions: {
       population: 'People whose account shares product usage, staff excluded. A lower bound for all users.',
       active: 'Any signed-in client reached Harness that UTC day; an app left open across midnight counts on both days.',
-      working: 'At least one agent turn started that day. Prefer working retention: it is not inflated by open apps.',
+      working: 'At least one agent turn their own session started that day. Prefer working retention: it is not inflated by open apps or by Swarm agents on their Mac.',
+      hosting: 'At least one Swarm agent turn ran on a Mac they own that day. A daily count, with no returns.',
       returns: 'Dn: in the cohort on day C and back on C+n (same surface for a surface cohort). null until C+n has ended.',
     },
     daily: dayList.filter(day => get(day, 'people_active') !== null).map(day => ({
-      day, active: get(day, 'people_active'), working: get(day, 'people_working'), new: get(day, 'people_new'),
+      day, active: get(day, 'people_active'), working: get(day, 'people_working'), hosting: get(day, 'people_hosting'), new: get(day, 'people_new'),
       staff: get(day, 'people_staff_active'),
       surfaces: Object.fromEntries(ACTIVITY_SURFACES.map(s => [s, get(day, `people_active_${s}`)])),
     })),

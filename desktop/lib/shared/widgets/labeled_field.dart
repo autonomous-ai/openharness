@@ -61,12 +61,10 @@ InputDecoration labeledFieldDecoration(String hint, {Color? fill}) {
       borderRadius: radius,
       borderSide: BorderSide.none,
     ),
+    // No focus line: a focused field has its caret.
     focusedBorder: OutlineInputBorder(
       borderRadius: radius,
-      // The one rim a field earns: macOS rings the focused control in the
-      // accent, and without it a focused field is indistinguishable from an
-      // idle one.
-      borderSide: BorderSide(color: AppPalette.accent, width: 1.5),
+      borderSide: BorderSide.none,
     ),
   );
 }

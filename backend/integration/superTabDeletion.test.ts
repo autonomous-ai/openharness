@@ -11,6 +11,8 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SwarmChanged } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore, type Attachments } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { machineSwarms } from '../src/superTabs/swarmRows.js'
 import { SuperTabError } from '../src/superTabs/model.js'
@@ -20,7 +22,6 @@ import { sweepSwarms } from '../src/superTabs/sweeps.js'
 import { sweepThreadMarks } from '../src/superTabs/readMarks.js'
 import { sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
-import { archiveFinishedGroups } from '../src/superTabs/archive.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { rosterRows } from './hostRows.test-support.js'
 
@@ -62,7 +63,8 @@ function world(start = 1_800_000_000_000) {
 /** A Swarm with a member, a pending invitation, a message, a file, and a host's machine running its Product Manager and a worker. */
 async function swarm(w: ReturnType<typeof world>, name = 'Lampos') {
   const tab = (await w.store.create(owner, randomUUID(), name, 'public')).id
-  const execute = (command: Command, as = owner) => w.store.execute(as, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, as = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, as)
+    : w.store.execute(as, tab, { operationId: randomUUID(), command })
   for (const u of [member, host]) {
     const invitation = await execute({ type: 'invite.create', email: u.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, u)
@@ -73,8 +75,10 @@ async function swarm(w: ReturnType<typeof world>, name = 'Lampos') {
   await execute({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'PM', configuration: config, lead: true }, host)).result.agentId)
   const worker = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false }, host)).result.agentId)
-  const hello = String((await execute({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })).result.messageId)
-  await w.store.upload(member, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) })
+  // The PM's message and file: only agents post in a project's channel (agentsOnly.test.ts).
+  const hello = String((await w.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'hello',
+    replyTo: null, recipientIds: [] } }, lead)).result.messageId)
+  await w.store.upload(host, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) }, lead)
   return { tab, execute, machineId, lead, worker, hello }
 }
 
@@ -95,13 +99,11 @@ describe('deleting a Swarm', () => {
     const w = world(), f = await swarm(w)
     for (const who of [owner, member, host]) expect(await listed(w, who)).toContain(f.tab)
     expect((await w.store.invitations(invitee)).map(i => i.tabId)).toContain(f.tab)
-    expect((await w.store.workspaceList(owner)).workspaces.flatMap(o => o.swarms.map(s => s.id))).toContain(f.tab)
     w.changed.length = 0
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })
 
     for (const who of [owner, member, host]) expect(await listed(w, who)).not.toContain(f.tab)
     expect((await w.store.invitations(invitee)).map(i => i.tabId)).not.toContain(f.tab)
-    expect((await w.store.workspaceList(owner)).workspaces.flatMap(o => o.swarms.map(s => s.id))).not.toContain(f.tab)
     // Every person's apps are told at once, and its observer sockets check again.
     expect(new Set(w.changed.filter(c => c.tabId === f.tab).flatMap(c => c.userIds))).toEqual(new Set([owner.sub, member.sub, host.sub]))
     expect(w.access).toContain(f.tab)
@@ -122,7 +124,7 @@ describe('deleting a Swarm', () => {
   it('is refused alike to a member, its agents and a made-up agent, and to anyone for the owner\'s Personal Swarm', async () => {
     const w = world(), f = await swarm(w)
     const del = { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Lampos' } as Command }
-    for (const [who, as] of [[member, undefined], [host, f.lead], [host, f.worker], [host, 'ffffffffffffffffffffffff']] as const) {
+    for (const [who, as] of [[member, undefined], [invitee, undefined], [host, f.lead], [host, f.worker], [host, 'ffffffffffffffffffffffff']] as const) {
       expect(await refusal(() => w.store.execute(who, f.tab, { ...del, operationId: randomUUID() }, as))).toEqual(MISSING)
     }
     expect(await listed(w, member)).toContain(f.tab)
@@ -130,6 +132,22 @@ describe('deleting a Swarm', () => {
     expect(await refusal(() => w.store.execute(owner, personal, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Personal' } })))
       .toEqual({ code: 'PERSONAL_SWARM', status: 409, unreachable: false })
     expect(await listed(w, owner)).toContain(personal)
+  })
+
+  it('marks only the reader\'s own Personal Swarm on the list', async () => {
+    const w = world(), f = await swarm(w)
+    const mine = (await w.store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const theirs = (await w.store.create(member, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const marks = async (who: AuthUser) => Object.fromEntries((await w.store.list(who)).tabs.map(t => [t.id, 'personal' in t ? t.personal : undefined]))
+    expect(await marks(owner)).toMatchObject({ [mine]: true, [f.tab]: undefined })
+    expect(await marks(member)).toMatchObject({ [theirs]: true, [f.tab]: undefined })
+    expect(Object.keys(await marks(member))).not.toContain(mine)
+    // The route reads the list through SwarmReads (GET /api/super-tabs/list), which must mark it too: #3200 marked only the
+    // store's list, so the dial never saw a Personal Swarm.
+    const read = async (who: AuthUser) => Object.fromEntries((await w.reads.list(who)).tabs.map(t => [t.id, 'personal' in t ? t.personal : undefined]))
+    expect(await read(owner)).toMatchObject({ [mine]: true, [f.tab]: undefined })
+    expect(await read(member)).toMatchObject({ [theirs]: true, [f.tab]: undefined })
+    expect(Object.keys(await read(member))).not.toContain(mine)
   })
 
   it('stops its agents through their host and releases the machine, whose host still confirms both', async () => {
@@ -199,7 +217,6 @@ describe('the purge', () => {
     expect(await purgeDeletedSwarms(db, files, w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS - 1)).toMatchObject({ waiting: 0 })
     expect(await db.superTab.count({ where: { id: gone.tab } })).toBe(1)
     expect(await db.superTabMessage.count({ where: { tabId: gone.tab } })).toBeGreaterThan(0)
-
     expect(await purgeDeletedSwarms(db, files, w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS)).toMatchObject({ waiting: 0 })
     expect(Object.entries(await counts(gone.tab)).filter(([, n]) => n > 0)).toEqual([])
     expect(await db.superTab.count({ where: { id: gone.tab } })).toBe(0)
@@ -236,32 +253,6 @@ describe('the purge', () => {
 
 // Security review 2 of #2457: what a deleted Swarm must keep, refuse or skip while it waits for its restore or its purge.
 describe('while a Swarm is deleted', () => {
-  const workspaceOf = async (w: ReturnType<typeof world>, tab: string) => (await w.store.read(owner, tab)).state.workspaceId!
-
-  it('a restore leaves out whoever lost the Workspace meanwhile', async () => {
-    const w = world(), f = await swarm(w)
-    const workspaceId = await workspaceOf(w, f.tab)
-    await f.execute({ type: 'swarm.delete', name: 'Lampos' })
-    // The member loses the Workspace, and no removal has reached this Swarm (a removal still open, say).
-    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${member.sub}` }, data: { removedAt: new Date(), removedBy: owner.sub } })
-    await f.execute({ type: 'swarm.restore' })
-    expect((await w.store.read(owner, f.tab)).state.people.map(p => p.id)).not.toContain(member.sub)
-    expect(await listed(w, member)).not.toContain(f.tab)
-    expect(await listed(w, host)).toContain(f.tab)
-  })
-
-  it('a Workspace removal takes the person out of a deleted Swarm too, so coming back to the Workspace does not bring them back', async () => {
-    const w = world(), f = await swarm(w)
-    const workspaceId = await workspaceOf(w, f.tab)
-    await f.execute({ type: 'swarm.delete', name: 'Lampos' })
-    expect(await w.store.workspaces.remove(owner, workspaceId, member.sub)).toEqual({ userId: member.sub, pending: 0 })
-    expect(await db.swarmMember.findUnique({ where: { id: `${f.tab}:${member.sub}` }, select: { deleted: true } })).toEqual({ deleted: true })
-    // Back in the Workspace before the restore: still not back in this Swarm.
-    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${member.sub}` }, data: { removedAt: null, removedBy: null, purgeAt: null } })
-    await f.execute({ type: 'swarm.restore' })
-    expect((await w.store.read(owner, f.tab)).state.people.map(p => p.id)).not.toContain(member.sub)
-    expect(await listed(w, member)).not.toContain(f.tab)
-  })
 
   it('the hourly invitation sweep never writes it back onto an invitee\'s list, and the list never shows it', async () => {
     const w = world(), f = await swarm(w)
@@ -281,9 +272,9 @@ describe('while a Swarm is deleted', () => {
     expect((await w.store.invitations(late)).map(i => i.tabId)).not.toContain(f.tab)
   })
 
-  it('keeps everyone\'s thread follows and chat settings through the hourly sweeps, and a restore brings them back', async () => {
+  it('keeps everyone\'s thread marks and chat settings through the hourly sweeps, and a restore brings them back', async () => {
     const w = world(), f = await swarm(w)
-    await w.reads.followThread(member, f.tab, 'lead', f.hello, true)
+    await w.reads.markThreadRead(member, f.tab, 'lead', f.hello, 1)
     await w.reads.setChatNotify(member, f.tab, 'lead', 'all')
     const kept = async () => [await db.superTabThreadMark.count({ where: { tabId: f.tab } }), await db.superTabChatSetting.count({ where: { tabId: f.tab } })]
     expect(await kept()).toEqual([1, 1])
@@ -299,7 +290,9 @@ describe('while a Swarm is deleted', () => {
     const w = world(), tab = (await w.store.create(owner, randomUUID(), 'Racing', 'public')).id
     const invitation = await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' } })
     await w.store.execute(member, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    // The member's post read the Swarm before the delete committed, and writes after it.
+    // The member's new project read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
+    // in no project channel, agentsOnly.test.ts, and no command opens a task in v4.)
+    const groups = await db.swarmGroup.count({ where: { tabId: tab } })
     let deleted = false
     const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (deleted) return
@@ -307,21 +300,24 @@ describe('while a Swarm is deleted', () => {
       await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Racing' } })
     }), () => w.clock.now)
     expect(await refusal(() => racing.execute(member, tab, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: 'lead', text: 'after the delete', replyTo: null, recipientIds: [] } }))).toEqual(MISSING)
+      command: { type: 'project.create', name: 'After the delete', visibility: 'public', brief: '' } }))).toEqual(MISSING)
     expect(deleted).toBe(true)
-    expect(await db.superTabMessage.count({ where: { tabId: tab, text: 'after the delete' } })).toBe(0)
+    expect(await db.swarmGroup.count({ where: { tabId: tab } })).toBe(groups)
   })
 
-  /** A Swarm with an archived group whose reports are all summarized (so it may sleep), a finished start past its keeping,
-   *  a decision still waiting in that finished group, and a group finished weeks ago with a merged pull request; deleted or
+  /** A Swarm with a group archived by hand (so it may sleep), a finished start past its keeping,
+   *  and a group finished weeks ago with a merged pull request; deleted or
    *  not. Each background job changes the live one, so a check on the deleted one can fail (re-check 2 of #2457). */
   async function quietSwarm(w: ReturnType<typeof world>, name: string, deleted: boolean) {
     const f = await swarm(w, name)
     const group = String((await f.execute({ type: 'conversation.create', title: 'Old work', brief: 'Done long ago.',
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true })
-    const progress = await db.swarmProgress.findUniqueOrThrow({ where: { id: `${f.tab}:lead` } })
-    await db.swarmProgress.update({ where: { id: progress.id }, data: { data: { ...(progress.data as object), summarizedFloor: 1e9 } } })
+    // An archived group sleeps at once now (task #3593); this test is about the sweep, so it is put back awake, as the sweep finds one
+    // archived before the sweep existed.
+    const slept = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: group } } })
+    const { dormant: _dormant, ...awake } = slept.data as unknown as Record<string, unknown>
+    await db.swarmGroup.update({ where: { id: slept.id }, data: { dormant: false, data: awake as object } })
     const prGroup = String((await f.execute({ type: 'conversation.create', title: 'Merged work', brief: 'Merged.',
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     await db.superTabThreadBackfill.deleteMany({ where: { id: f.tab } })
@@ -329,7 +325,7 @@ describe('while a Swarm is deleted', () => {
     // Written as the records of work finished weeks ago would be.
     const old = new Date(w.clock.now - 30 * 24 * 60 * 60 * 1000)
     const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: prGroup } } })
-    await db.swarmGroup.update({ where: { id: row.id }, data: { workFinished: true, lastActivityAt: old,
+    await db.swarmGroup.update({ where: { id: row.id }, data: { lastActivityAt: old,
       data: { ...(row.data as object), assignment: { id: 'a1', agentId: 'gone', status: 'done', assignedAt: new Date(0).toISOString() },
         pullRequestUrls: [`https://github.com/example/${name}/pull/1`] } } })
     await db.swarmStart.create({ data: { id: `${f.tab}:start-old`, tabId: f.tab, key: 'start-old', version: 1, changedAt: old, ordinal: 0,
@@ -337,8 +333,6 @@ describe('while a Swarm is deleted', () => {
       data: { id: 'start-old', creationId: 'c', actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: 'g', machineOwnerId: host.sub,
         hostGrant: null, error: 'It failed long ago.', request: { conversationId: 'lead', machineId: f.machineId, engine: 'codex', name: 'Builder', cwd: '/repo',
           worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } } })
-    await db.superTabDecision.create({ data: { id: `${f.tab}:decision`, tabId: f.tab, batchId: 'b', projectId: 'lead', conversationId: group,
-      personId: owner.sub, askerAgentId: f.lead, question: 'Ship it?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Shipping', createdAt: old } })
     return { ...f, group }
   }
 
@@ -348,22 +342,17 @@ describe('while a Swarm is deleted', () => {
     const state = async (f: typeof live) => ({
       asleep: (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: f.group } } })).dormant,
       startKept: !(await db.swarmStart.findUniqueOrThrow({ where: { id: `${f.tab}:start-old` } })).deleted,
-      decisionWaits: !(await db.superTabDecision.findUniqueOrThrow({ where: { id: `${f.tab}:decision` } })).answeredAt,
       backfilled: !!await db.superTabThreadBackfill.count({ where: { id: f.tab } }),
     })
-    expect(await state(live)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
-    expect(await state(gone)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
+    expect(await state(live)).toEqual({ asleep: false, startKept: true, backfilled: false })
+    expect(await state(gone)).toEqual({ asleep: false, startKept: true, backfilled: false })
 
-    // The archive pass first: the sleep sweep's write would make the merged group look recently active.
-    const read: string[] = []
-    await archiveFinishedGroups(db, w.store, { state: async url => { read.push(url); return 'merged' }, done: async () => {} }, w.clock.now)
+    // Swarm v4's jobs (worker.ts): no task archive or decision sweep runs any more.
     await sweepSwarms(db, later)
-    await w.store.withdrawEndedDecisions()
     await backfillThreads(db, w.clock.now)
 
-    expect(await state(live)).toEqual({ asleep: true, startKept: false, decisionWaits: false, backfilled: true })
-    expect(await state(gone)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
-    expect(read).toEqual(['https://github.com/example/Live/pull/1'])
+    expect(await state(live)).toEqual({ asleep: true, startKept: false, backfilled: true })
+    expect(await state(gone)).toEqual({ asleep: false, startKept: true, backfilled: false })
   })
 })
 
@@ -383,7 +372,7 @@ describe('the purge, everywhere', () => {
     const w = world(), gone = await swarm(w, 'Gone'), kept = await swarm(w, 'Kept')
     await gone.execute({ type: 'swarm.delete', name: 'Gone' })
     const targets = SWARM_KEYED.filter(t => !NOT_SWARMS.has(t.model))
-    expect(targets.length).toBeGreaterThan(30)
+    expect(targets.length).toBeGreaterThan(20)
     for (const tabId of [gone.tab, kept.tab]) {
       // An attachment record names its stored file, outside the Swarm's folder here: the record goes, no file is touched.
       for (const t of targets) {
@@ -410,13 +399,8 @@ describe('the purge, everywhere', () => {
     expect(keptBefore.length).toBe(targets.length + 1)
   })
 
-  it('reads the due Swarms, an owner\'s deleted list and a Workspace\'s deleted Swarms by their indexes', async () => {
+  it('reads the due Swarms and an owner\'s deleted list by their indexes', async () => {
     const w = world(), f = await swarm(w)
-    // Someone in this Swarm alone, so removing them from the Workspace touches no other test's Swarms.
-    const leaver = user(6, 'leaver')
-    await db.user.upsert({ where: { id: leaver.sub }, create: { id: leaver.sub, externalId: `fixture-${leaver.sub}`, email: leaver.email, autonomousEnv: 'prod' }, update: {} })
-    const invitation = await f.execute({ type: 'invite.create', email: leaver.email, role: 'viewer', conversationId: 'lead' })
-    await f.execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, leaver)
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })
     const plans = async (read: () => Promise<unknown>) => {
       await db.$runCommandRaw({ profile: 2 })
@@ -429,11 +413,6 @@ describe('the purge, everywhere', () => {
     }
     expect(await plans(() => w.store.deletedList(owner))).toEqual(['IXSCAN { autonomousEnv: 1, ownerId: 1, _id: 1 }'])
     expect(await plans(() => purgeDeletedSwarms(db, null, w.clock.now))).toEqual(['IXSCAN { purgeAt: 1 }'])
-    // A Workspace removal reads the person's Swarms by the member index and the Workspace's deleted ones by its own.
-    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: f.tab }, select: { workspaceId: true } })).workspaceId!
-    const removal = await plans(async () => expect(await w.store.workspaces.remove(owner, workspaceId, leaver.sub)).toEqual({ userId: leaver.sub, pending: 0 }))
-    expect(removal).toEqual(expect.arrayContaining(['IXSCAN { autonomousEnv: 1, memberIds: 1, _id: 1 }', 'IXSCAN { autonomousEnv: 1, workspaceId: 1 }']))
-    expect(removal.filter(plan => !plan.startsWith('IXSCAN'))).toEqual([])
   })
 
   it('never lets Swarms it cannot finish hold back one newly due', async () => {

@@ -34,7 +34,11 @@ void main() {
       const prefs = AppearancePrefs();
       expect(prefs.uiFamily, isNull);
       expect(prefs.uiSize, 14);
-      expect(prefs.shadeInactivePanes, isFalse);
+      expect(prefs.panes.style, PaneStyle.comfortable);
+      expect(prefs.panes.fade, PaneFade.off);
+      expect(prefs.panes.highlightActive, isTrue);
+      expect(prefs.panes.autobalanceSplits, isTrue);
+      expect(prefs.panes.focusFollowsMouse, isFalse);
       expect(prefs.autoRenameTabs, isFalse);
       // Legacy fields remain readable, but no longer control app typography.
     });
@@ -127,6 +131,20 @@ void main() {
       await store.setUiSize(19);
       // The window has to repaint on the click, not on the disk.
       expect(store.value.uiSize, 19);
+    });
+  });
+
+  group('Fade inactive panes', () {
+    test('the shortcut turns the fade on from the default Off', () async {
+      final store = AppearancePrefsStore(storage: _FakeStore());
+      await store.load();
+      expect(store.value.shadeInactivePanes, isFalse);
+
+      await store.setShadeInactivePanes(true);
+      expect(store.value.panes.fade, PaneFade.surfaceAndContent);
+
+      await store.setShadeInactivePanes(false);
+      expect(store.value.panes.fade, PaneFade.off);
     });
   });
 

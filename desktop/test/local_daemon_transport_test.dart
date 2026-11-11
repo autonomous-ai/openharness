@@ -13,6 +13,13 @@ import 'package:harness/ws/ws_conn.dart';
 
 const _computerId = '0123456789abcdef0123456789abcdef';
 
+/// "No socket can exist" is the macOS and Linux data folder too long for one. Windows has no such
+/// case: every local route goes over the daemon's proven pipe, and the credential is never shown to
+/// a port (`LocalDaemonTransport.tcpHeaders`, CLI `localCredentialHeaders`, audit W1).
+final Object _portCredentialSkip = Platform.isWindows
+    ? 'macOS and Linux only: Windows reaches the daemon over its pipe and never sends the credential to a port'
+    : false;
+
 /// A stand-in daemon: `/api/status`, `/api/auth/me` and the local WebSocket,
 /// on whatever [HttpServer] it is given, counting what reached it.
 class _Daemon {
@@ -135,10 +142,42 @@ void main() {
         '/srv/h/daemon-18474.sock',
       );
       expect(defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: true), isNull);
+      // Too long for a socket: under the home folder, by the folder's hash, the
+      // same hash as the CLI's (pinned for `/x` in cli localSocket.spec.ts).
+      expect(
+        defaultDaemonSocketPath(
+          18473,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+        ),
+        matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
+      );
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/${'x' * 100}'}, isWindows: false),
         isNull,
       );
+    });
+
+    test('a long folder\'s socket matches the CLI\'s hash', () {
+      // sha256('/' + 'x' * 100)[0..16], as cli/src/lib/localSocket.ts computes it.
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+        ),
+        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    test('a long folder with no HOME still has a socket to fail on, so the port is not allowed', () {
+      final path = defaultDaemonSocketPath(
+        1,
+        environment: {'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+        isWindows: false,
+      );
+      expect(path, isNotNull);
+      expect(File(path!).existsSync(), isFalse);
     });
 
     test('is never looked for under flutter test', () {
@@ -169,7 +208,7 @@ void main() {
       );
     });
 
-    test('goes with REST over the port, never down the socket', () async {
+    test('never goes down the socket, and never to the port once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
       final transport = LocalDaemonTransport(
@@ -188,16 +227,37 @@ void main() {
       await unix.close();
       daemons.remove(unix);
       if (File(socketPath).existsSync()) File(socketPath).deleteSync();
-      expect(await api.me(), {'via': 'tcp'});
-      expect(tcp.credentials.last, credential);
+      // The port's listener stands for another account that took it (audit H1).
+      await expectLater(api.me(), throwsA(anything));
+      expect(tcp.hits, isEmpty);
+      expect(tcp.credentials, isEmpty);
     });
 
-    test('goes with the local WebSocket over the port', () async {
+    test('goes with REST over the port where no socket can exist', () async {
       final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(credential: () => credential);
+      final api = ApiClient(
+        config: configFor(tcp),
+        session: AuthSession(),
+        localTransport: transport,
+      );
+
+      expect(await api.me(), {'via': 'tcp'});
+      expect(tcp.credentials.last, credential);
+    }, skip: _portCredentialSkip);
+
+    test('is not offered to a port while a socket can exist', () {
       final transport = LocalDaemonTransport(
         candidate: socketPath,
         credential: () => credential,
-      )..useTcp();
+      );
+      expect(transport.portAllowed, isFalse);
+      expect(transport.tcpHeaders(), isEmpty);
+    });
+
+    test('goes with the local WebSocket over the port where no socket can exist', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(credential: () => credential);
       final conn = WsConn(
         wsBaseUrl: 'wss://unused.example',
         autonomousEnv: 'prod',
@@ -218,7 +278,7 @@ void main() {
 
       expect(tcp.selects, 1);
       expect(tcp.credentials, [credential]);
-    });
+    }, skip: _portCredentialSkip);
   });
 
   group('discovery', () {
@@ -239,7 +299,9 @@ void main() {
       expect(tcp.hits, isEmpty);
     });
 
-    test('falls back to the port when there is no socket', () async {
+    test('finds no daemon, and asks no port, when the socket is gone', () async {
+      // The port's listener stands for another account: after a reboot it holds the
+      // port until this user logs in, and could answer anything (audit H1).
       final tcp = await start(_Daemon.tcp());
       final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final endpoint = await LocalCliDiscovery(
@@ -248,15 +310,28 @@ void main() {
         transport: transport,
       ).discover();
 
+      expect(endpoint, isNull);
+      expect(transport.socketPath, isNull);
+      expect(tcp.hits, isEmpty);
+    });
+
+    test('asks the port where no socket can exist', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport();
+      final endpoint = await LocalCliDiscovery(
+        config: configFor(tcp),
+        identity: LocalMachineIdentity(computerIdFile: identityFile),
+        transport: transport,
+      ).discover();
+
       expect(endpoint, isNotNull);
       expect(endpoint!.socketPath, isNull);
-      expect(transport.socketPath, isNull);
       expect(tcp.hits, ['/api/status']);
     });
   });
 
   group('REST', () {
-    test('goes over the socket, and back to the port once it is gone', () async {
+    test('goes over the socket, and fails as a daemon that is down once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
       final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
@@ -273,7 +348,58 @@ void main() {
       daemons.remove(unix);
       // Closing the server removes its socket file; make sure nothing is left to dial.
       if (File(socketPath).existsSync()) File(socketPath).deleteSync();
-      expect(await api.me(), {'via': 'tcp'});
+      await expectLater(api.me(), throwsA(anything));
+      expect(tcp.hits, isEmpty);
+      expect(transport.socketPath, isNull);
+    });
+
+    // A daemon that stops while this app's kept-alive connection is in use: what that request fails
+    // with depends on which side saw the close first (on Linux the reused connection is reset, and
+    // dart:io reports that as an HttpException, not a SocketException). Once the socket file is
+    // gone, any failure on it is the daemon being down.
+    test('fails as a daemon that is down when a kept connection breaks as it stops', () async {
+      final tcp = await start(_Daemon.tcp());
+      final server = await ServerSocket.bind(
+        InternetAddress(socketPath, type: InternetAddressType.unix),
+        0,
+      );
+      addTearDown(server.close);
+      var asked = 0;
+      server.listen((socket) {
+        var heard = '';
+        socket.listen((data) async {
+          // A request may arrive in pieces: count whole ones (a GET ends at its blank line).
+          heard += latin1.decode(data);
+          final whole = '\r\n\r\n'.allMatches(heard).length;
+          if (whole == asked) return;
+          asked = whole;
+          if (asked == 1) {
+            const body = '{"success":true,"data":{"via":"unix"}}';
+            socket.write(
+              'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
+              'content-length: ${body.length}\r\n\r\n$body',
+            );
+            return;
+          }
+          // Stopping: its socket file goes, and the connection breaks mid-answer.
+          File(socketPath).deleteSync();
+          await server.close();
+          socket.write('\x00\r\n\r\n');
+          await socket.flush();
+          socket.destroy();
+        });
+      });
+      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final api = ApiClient(
+        config: configFor(tcp),
+        session: AuthSession(),
+        localTransport: transport,
+      );
+
+      expect(await api.me(), {'via': 'unix'});
+      await expectLater(api.me(), throwsA(anything));
+      expect(asked, 2);
+      expect(tcp.hits, isEmpty);
       expect(transport.socketPath, isNull);
     });
 
@@ -345,15 +471,15 @@ void main() {
       expect(tcp.selects, 0);
     });
 
-    test('falls back to the port when the socket is not there', () async {
+    test('never dials the port when the socket is not there', () async {
       final tcp = await start(_Daemon.tcp());
       final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();
-      await until(() => tcp.selects > 0);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
-      expect(tcp.selects, 1);
+      expect(tcp.selects, 0);
       expect(transport.socketPath, isNull);
     });
   });

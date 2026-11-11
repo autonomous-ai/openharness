@@ -10,7 +10,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
-import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_devices_page.dart';
 import 'package:harness_mobile/swarm/swarm_machines.dart';
 
 import 'swarm_machines_test.dart' show machinePool;
@@ -47,7 +47,7 @@ void main() {
     }
   });
 
-  testWidgets('machine drawer and sheet in both phone themes', (tester) async {
+  testWidgets('machine list and sheet in both phone themes', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
@@ -108,12 +108,11 @@ void main() {
             debugShowCheckedModeBanner: false,
             theme: buildAppTheme(brightness: brightness),
             builder: (_, child) => SwarmScope(notifier: host, child: child!),
-            home: const SwarmPage(),
+            // The Swarm's machines are on Your devices (Lead, 10-29): the drawer that held them is gone.
+            home: const SwarmDevicesPage(),
           ),
         ),
       );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('swarm-menu')));
       await tester.pumpAndSettle();
       Future<void> capture(String name) => tester.runAsync(() async {
         final image =
@@ -125,7 +124,7 @@ void main() {
             .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
-      await capture('drawer');
+      await capture('devices');
       await tester.tap(find.byKey(const ValueKey('swarm-machine-$tab-mac-1')));
       await tester.pumpAndSettle();
       await capture('hardware');

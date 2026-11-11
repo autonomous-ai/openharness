@@ -23,9 +23,12 @@ class SuperTabComposerChips extends StatelessWidget {
     builder: (context, _) => files.isEmpty
         ? const SizedBox.shrink()
         : Padding(
-            padding: const EdgeInsets.only(
-              bottom: grid.AppDesktop.controlGap,
-              right: grid.AppDesktop.controlGap,
+            // The text's edges; the field keeps its own air below them.
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.composerSide,
+              grid.AppDesktop.composerTop,
+              grid.AppDesktop.composerSide,
+              0,
             ),
             child: NewHarnessAttachmentChips(
               attachments: files,

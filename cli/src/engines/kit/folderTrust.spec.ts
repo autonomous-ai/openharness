@@ -1,11 +1,19 @@
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { recordAcceptanceIn, recordTrustIn, trustsIn } from './folderTrust.js'
+import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './folderTrust.js'
+
+/** Whether this account may link to a file: Windows lets it only with Developer Mode or as an administrator (Window of Tim,
+ *  #3815), and a person there with neither has no such link to write through. */
+const canLinkFiles = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'file-link-'))
+  try { writeFileSync(join(dir, 'f'), ''); symlinkSync(join(dir, 'f'), join(dir, 'l'), 'file'); return true } catch { return false }
+  finally { rmSync(dir, { recursive: true, force: true }) }
+})()
 
 // The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
 // claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
@@ -15,6 +23,12 @@ const codexTrusts = (path: string, codexHome?: string | null) => trustsIn(codex.
 const preTrustCodexProject = (cwd: string, codexHome?: string | null) => recordTrustIn(codex.trust!, join(launchCodexHome(codexHome), codex.trust!.file), cwd)
 
 describe('preTrustClaudeProject', () => {
+  it('leaves a missing file missing, for a machine Claude Code never ran on', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    expect(recordTrustIn(claude.trust!, join(home, '.claude.json'), '/w')).toBe('skipped')
+    expect(readdirSync(home)).toEqual([])
+  })
+
   it('records trust for a new folder the way Claude Code does, keeping everything else', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     writeFileSync(join(home, '.claude.json'), JSON.stringify({ numStartups: 4, projects: { '/old': { allowedTools: ['Bash'], hasTrustDialogAccepted: true } } }))
@@ -60,7 +74,7 @@ describe('preTrustClaudeProject', () => {
     }
   })
 
-  it('writes through a symlinked ~/.claude.json instead of replacing the link', () => {
+  it.runIf(canLinkFiles)('writes through a symlinked ~/.claude.json instead of replacing the link', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     mkdirSync(join(home, 'dotfiles'))
     writeFileSync(join(home, 'dotfiles', 'claude.json'), JSON.stringify({ projects: {} }))
@@ -145,7 +159,7 @@ describe('preTrustCodexProject', () => {
     expect(preTrustCodexProject(cwd, join(home, '.codex'))).toBe('already')
   })
 
-  it('writes through a symlinked config.toml instead of replacing the link', () => {
+  it.runIf(canLinkFiles)('writes through a symlinked config.toml instead of replacing the link', () => {
     const home = codexHome()
     mkdirSync(join(home, 'dotfiles'))
     mkdirSync(join(home, '.codex'))
@@ -284,22 +298,21 @@ describe('the config each engine actually reads', () => {
   })
 })
 
-// Claude Code's "Yes, I accept" for full mode writes this key to its user settings (2.1.310); a Swarm Lead on the Mac
-// Studio waited there before its first turn (2026-10-26).
-describe('full mode\'s warning accepted as the engine records it', () => {
-  const key = claude.bypassAcceptance!.key
+// Claude Code's first-run screens, finished, write this key to `.claude.json`; recorded as the phone sets an Intern 3 up.
+describe('the engine\'s first-run screens recorded as it records them', () => {
+  const key = claude.onboarding!.key
   it('adds the key to the settings, keeping everything else, once', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), 'settings.json')
-    writeFileSync(file, JSON.stringify({ theme: 'dark', hooks: { Stop: [] } }))
+    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), '.claude.json')
+    writeFileSync(file, JSON.stringify({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' } }))
     expect(recordAcceptanceIn(file, key)).toBe('accepted')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'dark', hooks: { Stop: [] }, skipDangerousModePermissionPrompt: true })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' }, hasCompletedOnboarding: true })
     expect(recordAcceptanceIn(file, key)).toBe('already')
   })
 
-  it('creates missing settings, its folder too, holding the key alone', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), '.claude', 'settings.json')
+  it('creates a missing file, its folder too, holding the key alone', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), 'config', '.claude.json')
     expect(recordAcceptanceIn(file, key)).toBe('accepted')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ skipDangerousModePermissionPrompt: true })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ hasCompletedOnboarding: true })
     expect(recordAcceptanceIn(file, key)).toBe('already')
   })
 
@@ -308,6 +321,34 @@ describe('full mode\'s warning accepted as the engine records it', () => {
     for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
       writeFileSync(file, text)
       expect(recordAcceptanceIn(file, key)).toBe('skipped')
+      expect(readFileSync(file, 'utf8')).toBe(text)
+    }
+  })
+})
+
+// The phone setting up a computer asks Claude Code's theme and full mode first, and reads whether they are answered (owner,
+// 2026-11-06).
+describe('first-run answers read and the theme recorded', () => {
+  it('reads a key as answered only when it is true in a readable object', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'answered-')), file = join(folder, '.claude.json')
+    expect(acceptedIn(file, 'hasCompletedOnboarding')).toBe(false)
+    for (const [text, answered] of [['{not json', false], ['[]', false], ['{"hasCompletedOnboarding":false}', false],
+      ['{"hasCompletedOnboarding":"yes"}', false], ['{"hasCompletedOnboarding":true}', true]] as const) {
+      writeFileSync(file, text)
+      expect(acceptedIn(file, 'hasCompletedOnboarding')).toBe(answered)
+    }
+  })
+
+  it('sets the theme the person picked, keeping everything else, and creates a missing file holding it alone', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'theme-')), file = join(folder, '.claude.json')
+    expect(recordSettingIn(file, 'theme', 'light')).toBe('recorded')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'light' })
+    writeFileSync(file, JSON.stringify({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' } }))
+    expect(recordSettingIn(file, 'theme', 'light')).toBe('recorded')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'light', oauthAccount: { emailAddress: 'a@b.c' } })
+    for (const text of ['{not json', '[]']) {
+      writeFileSync(file, text)
+      expect(recordSettingIn(file, 'theme', 'light')).toBe('skipped')
       expect(readFileSync(file, 'utf8')).toBe(text)
     }
   })

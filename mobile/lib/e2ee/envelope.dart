@@ -39,6 +39,8 @@ const Set<String> encryptedDownTypes = {
   // refuses them unsealed (E2EE_REQUIRED) — without them the switch could never start.
   'agent_handoff_prepare',
   'agent_close',
+  // Then which harness took over (`AppNotifier._reportReplacement`): a `MACHINE_REQUESTS` type too.
+  'agent_handoff_complete',
   // Delete Harness (`AppNotifier.purgeAgent`): reviewed, then deleted under that review. A
   // `MACHINE_REQUESTS` type in the CLI, refused unsealed (E2EE_REQUIRED).
   'agent_purge',
@@ -46,6 +48,11 @@ const Set<String> encryptedDownTypes = {
   'agent_update',
   'agent_files',
   'agent_read_file',
+  // An agent's instructions file, read and saved from another of the owner's
+  // computers (CLI services/projects.ts): the text is the person's own, so the
+  // relay sees none of it. `MACHINE_REQUESTS` types in the CLI.
+  'agent_instructions_read',
+  'agent_instructions_write',
   'fs_list_dir',
   'project_preview',
   // The branches of a folder on that machine, for the New Harness form

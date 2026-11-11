@@ -17,7 +17,8 @@ import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 // The 80-character limit on a fork's name counts what a person sees, as the desktop's does.
-import 'package:flutter/widgets.dart' show StringCharacters;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleListener, StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
@@ -52,6 +53,8 @@ import '../logging/startup_trace.dart';
 import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
+import '../notify/push_channel.dart';
+import '../notify/push_tokens.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
@@ -223,6 +226,24 @@ class AgentCreationAttempt {
   String? _outcome;
   String? _agentId;
 
+  /// The machine's code for the refusal this attempt ended on, if it did.
+  String? _refusal;
+
+  /// The launch model the machine refused, so the agent runs its engine's
+  /// own (Desktop's `launchModelRefused`); null when it took it or none was
+  /// asked for.
+  ({String model, String? effort})? get launchModelRefused => _launchRefused;
+  ({String model, String? effort})? _launchRefused;
+
+  /// After the machine refused a launch model before launching anything: the
+  /// request may be sent again without it.
+  void _retryWithoutLaunchModel(({String model, String? effort}) refused) {
+    _launchRefused = refused;
+    _finished = false;
+    _outcome = null;
+    _refusal = null;
+  }
+
   bool get awaitingConfirmation => _awaitingConfirmation;
 
   /// The machine holds this request before starting anything (an engine it is installing), so it
@@ -278,6 +299,15 @@ class _AgentChange {
   /// The handoff was settled (the record written, or confirmed empty), so a retry reads nothing.
   bool contextLoaded = false;
 
+  /// The machine prepared the handoff under this switch's id (`agent_handoff_prepare`), so its
+  /// close names the switch — a Swarm Product Manager's machine stops it only for that switch
+  /// (cli superTabs/leadSwitch.ts). Never set by the older machines' `agent_recent` road.
+  bool handoffPrepared = false;
+
+  /// The machine recorded which harness took over (`agent_handoff_complete`), so a retry of this
+  /// switch reports nothing again.
+  bool replacementReported = false;
+
   /// The switch is held on the handoff, with the old agent still running: only the same engine
   /// carries it on.
   bool handoffHeld = false;
@@ -307,6 +337,23 @@ class MachineState {
   // connect. The CLI owns E2EE entirely now; this is just "is trust established yet", not a
   // crypto/pairing state the app has any data for.
   bool needsLink = false;
+
+  /// When this machine was first refused while the account's device key log named no key for it:
+  /// a computer that signed in a moment ago and has not put its key in yet, not one to pair by
+  /// hand. Null otherwise ([AppNotifier] `_awaitMachineKey`).
+  DateTime? keyAwaitedSince;
+
+  /// How long a machine with no key in the log is shown as connecting before its password form.
+  static const keyAwaitLimit = Duration(minutes: 3);
+
+  /// Refused only because its key is not in the log yet, and not for long: the screen says it is
+  /// connecting, never "locked" (owner, 2026-11-03: Intern 3, set up from this very phone, sat on
+  /// Unlock with a QR and a password it never needed, while its slow Wi-Fi kept its key out).
+  bool get awaitingKey =>
+      needsLink &&
+      keyAwaitedSince != null &&
+      DateTime.now().difference(keyAwaitedSince!) < keyAwaitLimit;
+
   List<Agent> agents = [];
 
   /// True while [agents] came from the last run's cache rather than from this
@@ -569,6 +616,10 @@ class AppNotifier extends ChangeNotifier {
       upload.cancel('account changed');
     }
     _swarmUploadsGoing.clear();
+    for (final write in _swarmWritesGoing) {
+      write.cancel('account changed');
+    }
+    _swarmWritesGoing.clear();
     // The copies large chat files were kept in went with the chats that held them.
     unawaited(clearSwarmPickerCopies());
     _profileInFlight = null;
@@ -1268,6 +1319,7 @@ class AppNotifier extends ChangeNotifier {
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
+    PushTokens? pushTokens,
     MachineCache? machineCache,
     KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
@@ -1314,6 +1366,9 @@ class AppNotifier extends ChangeNotifier {
     this.cliLogin = cliLogin ?? this.viewer.login;
     this.peerLinks = peerLinks ?? this.viewer.links;
     _groupSyncOverride = groupSync;
+    // A teammate's agent in a Harness Team account on this person's Mac is not their news.
+    agentNotices.inTeamAccount = (ref) =>
+        stateOf(ref.machineId)?.machine.sessionKind == 'team';
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
     this.productMeasurement =
@@ -1337,6 +1392,7 @@ class AppNotifier extends ChangeNotifier {
     addListener(_syncProductMeasurement);
     unawaited(_measurementContext());
     _initDeviceLog();
+    _initPush(pushTokens, paneLayoutStore);
   }
 
   /// Which build this phone's reports come from ([ProductMeasurement.context]): the public release
@@ -1771,6 +1827,9 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
+        // The session ended while the app was closed (revoked from another device): the OS stops
+        // delivering this account's pushes to the phone. The backend drop fails without a session.
+        if (_push case final push?) unawaited(push.forgetIfTold(api));
         currentUser = null;
         status = AppStatus.unauthenticated;
         notifyListeners();
@@ -1956,6 +2015,28 @@ class AppNotifier extends ChangeNotifier {
     return load;
   }
 
+  /// Saves the signed-in person's own account name (Profile, task #2655) and shows it at once; answers why it was
+  /// refused, in one short line, or null once saved. As the desktop's (`setAccountName`, #2917).
+  Future<String?> setAccountName(String name) async {
+    final revision = _authRevision;
+    try {
+      final me = await api.updateMe(name: name);
+      if (me == null || !_authWorkCurrent(revision)) return null;
+      final profile = CurrentUserProfile.fromMe(me);
+      // Another account's answer is not this one's name: the next profile read settles it.
+      if (currentUser?.id != null && profile.id != currentUser?.id) return null;
+      currentUser = profile;
+      notifyListeners();
+      return null;
+    } on ApiException catch (error) {
+      // A backend from before the route.
+      if (error.status == 404) return 'Update Harness to change your name.';
+      return error.message;
+    } catch (_) {
+      return 'Your name was not saved. Try again.';
+    }
+  }
+
   Future<void> _readProfile(int revision) async {
     try {
       final me = await api.me();
@@ -1974,6 +2055,7 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_deviceLog?.signedInAs(id));
           _keepAccount(id);
         }
+        _syncPush();
         notifyListeners();
       }
     } catch (error) {
@@ -2021,6 +2103,9 @@ class AppNotifier extends ChangeNotifier {
     // who had just pressed Sign out. The sign-out finishes the job itself.
     if (_leftByHand) return;
     _invalidateAuthWork();
+    // As on a sign-out here ([_endSession]): no lock-screen notice of this account after it. The
+    // backend drop fails without a session; the OS one still stops delivery.
+    if (_push case final push?) unawaited(push.forget(api));
     currentUser = null;
     signingIn = false;
     signInProvider = null;
@@ -2335,6 +2420,12 @@ class AppNotifier extends ChangeNotifier {
         await log.leave().timeout(const Duration(seconds: 5));
       } catch (_) {}
     }
+    // So does where to push to it: no notice of this account reaches a phone signed out of it.
+    if (_push case final push?) {
+      try {
+        await push.forget(api).timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
     final revision = _invalidateAuthWork();
     signingIn = false;
     signInProvider = null;
@@ -2421,6 +2512,8 @@ class AppNotifier extends ChangeNotifier {
     _forgetAllTrustSettles();
     _stopDeafPoll();
     _groupSyncedAt.clear();
+    _keyWatch?.cancel();
+    _keyWatch = null;
   }
 
   void _onLocalFailure(String machineId, int code, String reason) {
@@ -2460,6 +2553,7 @@ class AppNotifier extends ChangeNotifier {
     machine.needsLink = true;
     machine.agentLoadStatus = AgentLoadStatus.needsLink;
     launchMeasurement?.waiting(LaunchWait.locked);
+    unawaited(_awaitMachineKey(machine));
     // …unless the log already vouches for it and this phone's key is new to it: then the machine
     // has only not read that key yet — see [_redialOnceVouched].
     unawaited(_redialOnceVouched(machine.machine.machineId));
@@ -2599,6 +2693,57 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Re-reads the log while a machine waits for its key to land ([MachineState.awaitingKey]), in
+  /// case its `device_keys_changed` reaches nobody, and turns the machine to its password form once
+  /// the wait is over. Null while no machine waits.
+  Timer? _keyWatch;
+
+  @visibleForTesting
+  Duration keyWatchEvery = const Duration(seconds: 10);
+
+  /// A machine just refused for want of trust ([_markNeedsLink]) whose key the log does not hold:
+  /// most likely one that signed in a moment ago and has not put its key in yet (its daemon could
+  /// not reach the backend: Intern 3 on a slow Wi-Fi, 2026-11-03). It reads as connecting, and the
+  /// log is read again until the key lands ([_redialNewlyTrusted] dials it then) or
+  /// [MachineState.keyAwaitLimit] runs out. A machine whose key the log holds refused this phone
+  /// for another reason: its password form, as before.
+  Future<void> _awaitMachineKey(MachineState machine) async {
+    final machineId = machine.machine.machineId;
+    if (_deviceLog == null || await _holdsMachineKey(machineId)) return;
+    if (_disposed || !machine.needsLink) return;
+    // Kept across refusals: the wait is from the first, not reset by every redial.
+    machine.keyAwaitedSince ??= DateTime.now();
+    _armKeyWatch();
+    notifyListeners();
+  }
+
+  /// Starts [_keyWatch] unless it runs already — or the app is in a pocket, where nobody is looking
+  /// ([handleAppPaused]): [handleAppResumed] starts it then ([_resumeBackgroundPolls]).
+  void _armKeyWatch() {
+    if (_pausedAt != null) return;
+    _keyWatch ??= Timer.periodic(keyWatchEvery, (_) => _watchAwaitedKeys());
+  }
+
+  void _watchAwaitedKeys() {
+    var waiting = false;
+    for (final state in machineStates.values) {
+      if (state.keyAwaitedSince == null) continue;
+      if (!state.needsLink) {
+        state.keyAwaitedSince = null;
+        continue;
+      }
+      if (state.awaitingKey) waiting = true;
+    }
+    if (waiting) {
+      unawaited(_deviceLog?.refresh());
+    } else {
+      _keyWatch?.cancel();
+      _keyWatch = null;
+    }
+    // Every tick: the one past the limit is what turns a machine from connecting to locked.
+    if (!_disposed) notifyListeners();
+  }
+
   /// Dial [machineId] again from scratch: a refused connection is closed for good, so it is closed
   /// and replaced.
   void _redial(String machineId) {
@@ -2686,6 +2831,7 @@ class AppNotifier extends ChangeNotifier {
       _swarmRefused.remove(machineId);
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
+      machine.keyAwaitedSince = null;
       // Let in: a later refusal is a new story ([_redialOnceVouched], [_settleTrust]).
       _vouchedRedials.remove(machineId);
       _forgetTrustSettle(machineId);
@@ -2949,6 +3095,8 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (_offlineRetryTimers.containsKey(machineId)) return;
+    // In a pocket, nothing polls: [handleAppResumed] starts it again ([_resumeBackgroundPolls]).
+    if (_pausedAt != null) return;
     _offlineRetryTimers[machineId] = Timer.periodic(
       offlineRetryInterval,
       (_) => unawaited(_pollOfflineMachine(machineId)),
@@ -2969,6 +3117,9 @@ class AppNotifier extends ChangeNotifier {
 
   void _startAgentSyncTimer(String machineId) {
     if (_agentSyncTimers.containsKey(machineId)) return;
+    // A machine that connects while the app is in a pocket has its first list read all the same
+    // ([_onConnectionStatus]); its safety net waits for the app to come back ([_resumeBackgroundPolls]).
+    if (_pausedAt != null) return;
     _agentSyncTimers[machineId] = Timer.periodic(
       agentSyncInterval,
       (_) => _agentSyncTick(machineId, DateTime.now()),
@@ -3262,6 +3413,7 @@ class AppNotifier extends ChangeNotifier {
           prev.status != agent.status ||
           prev.terminalAvailable != agent.terminalAvailable ||
           prev.terminalUnavailableReason != agent.terminalUnavailableReason ||
+          prev.namedState != agent.namedState ||
           // A row's stats line (`sheet_agent_lines.dart`) — the desktop
           // compares these three too.
           prev.tokensUsed != agent.tokensUsed ||
@@ -3460,6 +3612,64 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('devices: could not save the dismissal: $error');
       _failedDismissals.addAll([...?pubs, ?pub]);
     }
+  }
+
+  // -- where to push to this phone (notify/push_tokens.dart) ---------------------------------------
+
+  /// Null in a test and in the sample, which never reach the OS, and on the web, which has no push.
+  PushTokens? _push;
+  AppLifecycleListener? _pushLifecycle;
+
+  void _initPush(PushTokens? given, PaneLayoutStore? paneLayoutStore) {
+    final push = _push =
+        given ??
+        (kIsWeb || kUnderTest || paneLayoutStore == null
+            ? null
+            : PushTokens(
+                channel: PushChannel(),
+                storage: paneLayoutStore.storage,
+                allowed: () => noticesEnabled(agentNotices.system),
+              ));
+    if (push == null) return;
+    // Before the shell is up, so the push that launched the app is waiting for it as a tapped
+    // notice is.
+    push.channel.listen(
+      onOpened: (data) => openPushed(data, agentNotices.system),
+      onChanged: _syncPush,
+    );
+    if (agentNotices.system case final LocalSystemNotices notices) {
+      notices.onAllowed = _syncPush;
+      // Android: the channels a push is drawn on, before the first can arrive (task #3248).
+      unawaited(notices.preparePush());
+    }
+    // Back from the phone's Settings, where notices may have been turned on or off.
+    _pushLifecycle = AppLifecycleListener(onResume: _syncPush);
+  }
+
+  /// The keys of this app's pushes still in the notification centre (notify/push_channel.dart):
+  /// none where there is no push.
+  Future<Set<String>> pushesShown() async =>
+      await _push?.channel.shown() ?? const {};
+
+  /// Tells the backend where to push to this phone while signed in: once the account is known, when
+  /// notices are allowed, when the OS hands over a new address, and back in the app.
+  void _syncPush() {
+    final push = _push;
+    final account = swarmAccountId;
+    if (push == null || _disposed || _signingOut != null || account == null) {
+      return;
+    }
+    final revision = _authRevision;
+    unawaited(
+      push.sync(
+        account: account,
+        api: api,
+        current: () =>
+            _authWorkCurrent(revision) &&
+            _signingOut == null &&
+            status == AppStatus.authenticated,
+      ),
+    );
   }
 
   void _initDeviceLog() {
@@ -6224,6 +6434,13 @@ class AppNotifier extends ChangeNotifier {
     try {
       return await _conn(machineId)
           .request('os_device', payload: payload, timeout: timeout);
+    } on WsRequestFailure catch (failure) {
+      // The computer answered and refused: its own code (BUSY, WRONG_PASSWORD…) and sentence, for
+      // the page to show. Only no answer at all is UNAVAILABLE.
+      return {
+        'error': failure.code,
+        if (failure.message != null) 'message': failure.message,
+      };
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -6432,9 +6649,14 @@ class AppNotifier extends ChangeNotifier {
   /// refuses stands, being about this person; with no answer, or one that says nothing of them
   /// ([_swarmReadTriesMachine]), the read goes on through a machine as below.
   ///
-  /// A command, and a read going on, is forwarded by one of the account's own machines with its
-  /// session (`super_tabs`, `action: backend`, cli/src/superTabs/service.ts): the machine checks
-  /// that this connection is its owner's, and the backend what that account may read.
+  /// Writes also go straight to the backend with the phone's sign-in. Only unavailable transport
+  /// or server responses fall back to a machine; write refusals stand. In-flight writes are
+  /// cancelled on account change, including bearer-refresh retries. The unchanged body keeps
+  /// each command's operation ID across every path.
+  ///
+  /// A fallback uses one of the account's own machines with its session (`super_tabs`,
+  /// `action: backend`, cli/src/superTabs/service.ts): the machine checks that this connection
+  /// is its owner's, and the backend what that account may read or write.
   ///
   /// A refusal is asked again through each other machine that is up, one after another, up to
   /// [_swarmAsksPerCall] in all. One that answers shows the refusals before it were those
@@ -6461,17 +6683,17 @@ class AppNotifier extends ChangeNotifier {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    if (method == 'GET') {
-      final revision = _authRevision;
-      void stillThisAccount() {
-        if (!_authWorkCurrent(revision)) {
-          throw const SuperTabFailure(
-            'ACCOUNT_CHANGED',
-            'The account changed. Open Swarm again.',
-          );
-        }
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
       }
+    }
 
+    if (method == 'GET') {
       try {
         final value = await api.swarmRead(path);
         stillThisAccount();
@@ -6486,13 +6708,37 @@ class AppNotifier extends ChangeNotifier {
         _swarmReadGoesOn(error);
       }
     }
+    if (method == 'POST') {
+      final cancel = CancelToken();
+      _swarmWritesGoing.add(cancel);
+      try {
+        final value = await api.swarmWrite(path, body: body, cancel: cancel);
+        stillThisAccount();
+        return value;
+      } on SuperTabFailure catch (refusal) {
+        stillThisAccount();
+        // A write refusal belongs to this person. Never retry an expired
+        // sign-in, denied access or rate limit with a machine's credentials.
+        if (refusal.statusCode != 0 && refusal.statusCode < 500) rethrow;
+      } catch (_) {
+        stillThisAccount();
+      } finally {
+        _swarmWritesGoing.remove(cancel);
+      }
+      appLog.warn(
+        'swarm',
+        'Swarm write could not reach the backend, asking a machine',
+      );
+    }
     var machine = _swarmMachine() ?? await _swarmMachineBack();
+    stillThisAccount();
     if (machine == null) throw _swarmNoComputer();
     final asked = <MachineState>{}, refused = <MachineState>[];
     SuperTabFailure? lost;
     late Object failure;
     late StackTrace trace;
     while (machine != null) {
+      stillThisAccount();
       asked.add(machine);
       try {
         final value = await _swarmRequestVia(machine, method, path, body);
@@ -6516,6 +6762,7 @@ class AppNotifier extends ChangeNotifier {
               ? await _swarmMachineBack(except: asked)
               : null);
     }
+    stillThisAccount();
     if (lost != null) throw lost;
     if (machine == null &&
         failure is SuperTabFailure &&
@@ -6549,7 +6796,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
-  /// sign-in ([ApiClient.uploadSwarmAttachment]), not through a machine as [swarmRequest] goes — the
+  /// sign-in ([ApiClient.uploadSwarmAttachment]), with no machine fallback — the
   /// backend takes a chat file only from the client, and a machine forwards only JSON. An answer
   /// that lands after the account changed is dropped, and a sign-out or another sign-in stops the
   /// upload where it is ([_invalidateAuthWork]).
@@ -6598,6 +6845,9 @@ class AppNotifier extends ChangeNotifier {
       _swarmUploadsGoing.remove(going);
     }
   }
+
+  /// JSON writes cancelled before another account can refresh or retry them.
+  final _swarmWritesGoing = <CancelToken>{};
 
   /// The chat file uploads of this sign-in on their way ([swarmUpload]).
   final _swarmUploadsGoing = <CancelToken>{};
@@ -6724,7 +6974,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// Asks the account's own computer [machineId] a Swarm question of its own
   /// (`super_tabs`), such as preparing a Buddy's folder there
-  /// (`prepareContribution`, as the desktop's `prepareBuddyMachine` asks it).
+  /// (`prepareContribution`).
   /// A refusal throws; so does an account change while it was asked.
   Future<Map<String, dynamic>> swarmAskComputer(
     String machineId,
@@ -6926,6 +7176,17 @@ class AppNotifier extends ChangeNotifier {
     AgentCreationAttempt? attempt,
     String? prompt,
     String? name,
+
+    /// A Swarm agent's role and skill mode for the machine's Swarm skill
+    /// (Desktop's `swarmRole`, `swarmSkillMode`): sent for Claude Code and
+    /// Codex only.
+    String? swarmRole,
+    String? swarmSkillMode,
+
+    /// The model and effort it starts on, as Desktop's Lead starts (`model`,
+    /// `effort`). A machine that refuses them before starting anything gets
+    /// the request again without them ([AgentCreationAttempt.launchModelRefused]).
+    ({String model, String? effort})? launchModel,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
     final task = prompt?.trim();
@@ -6954,8 +7215,14 @@ class AppNotifier extends ChangeNotifier {
       'codexHome': ?codexHome,
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
+      if (engine == 'claude' || engine == 'codex') ...{
+        'swarmRole': ?swarmRole,
+        'swarmSkillMode': ?swarmSkillMode,
+      },
+      'model': ?launchModel?.model,
+      'effort': ?launchModel?.effort,
     };
-    final created = _create(
+    Future<String?> ask() => _create(
       machineId,
       choices,
       swarmId: swarmId,
@@ -6963,6 +7230,22 @@ class AppNotifier extends ChangeNotifier {
       newDeskTab: newDeskTab,
       attempt: creation,
     );
+    final created = launchModel == null
+        ? ask()
+        : ask().then<String?>((error) {
+            if (error == null ||
+                !_launchModelRefusals.contains(creation._refusal)) {
+              return error;
+            }
+            // Refused before anything launched: the same request without them,
+            // so the agent starts on its engine's own model rather than not at
+            // all (Desktop's createAgent).
+            choices
+              ..remove('model')
+              ..remove('effort');
+            creation._retryWithoutLaunchModel(launchModel);
+            return ask();
+          });
     if (task == null || task.isEmpty) return created;
     // A task typed into New Harness is a message sent to a session too: the onboarding's first
     // message, if it is still waiting for one (`terminal_page.dart` counts every other send).
@@ -7165,6 +7448,12 @@ class AppNotifier extends ChangeNotifier {
     }
     return null;
   }
+
+  /// A machine's refusals of a launch model, made before anything launched.
+  static const _launchModelRefusals = {
+    'LAUNCH_MODEL_UNSUPPORTED',
+    'INVALID_LAUNCH_MODEL',
+  };
 
   String _creationFailureMessage(
     String code,
@@ -7427,8 +7716,10 @@ class AppNotifier extends ChangeNotifier {
         'SESSION_OPEN_IN_TERMINAL',
         'SESSION_BUSY_IN_TERMINAL',
         'SESSION_STOP_FAILED',
+        ..._launchModelRefusals,
       };
       if (refusedBeforeLaunch.contains(failure.code)) {
+        creation._refusal = failure.code;
         return creation._complete(
           _creationFailureMessage(
             failure.code,
@@ -7481,6 +7772,7 @@ class AppNotifier extends ChangeNotifier {
       case 'failed':
         final failure = result['failure'];
         if (failure is! Map || failure['code'] is! String) return unconfirmed;
+        creation._refusal = failure['code'] as String;
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,
@@ -8821,6 +9113,18 @@ class AppNotifier extends ChangeNotifier {
   static bool canChangeAgent(Agent agent) =>
       agent.engine != null && agent.dsh == null && agent.engine != 'terminal';
 
+  /// Whether the terminal's menu offers Change agent on [agent] of [machineId]: an agent it can
+  /// switch ([canChangeAgent]), on this person's own machine while it is online, as the desktop's
+  /// pane header does. Another account's shared machine answers the handoff for its owner alone
+  /// (cli superTabs/leadSwitch.ts), so the switch could never go through from here.
+  bool offersChangeAgent(String machineId, Agent agent) {
+    final machine = machineStates[machineId];
+    return canChangeAgent(agent) &&
+        machine != null &&
+        !machine.machine.shared &&
+        machine.nodeOnline != false;
+  }
+
   /// The engines a harness can be switched to, in the desktop picker's order: OpenCode first, the
   /// rest by name. The current one is listed too, as the one it is on.
   static List<String> agentChangeEngines() {
@@ -8846,6 +9150,12 @@ class AppNotifier extends ChangeNotifier {
   /// 2. The old agent is saved and stopped (`agent_close`, `now`). Never before step 1: a switch
   ///    that cannot carry the conversation leaves the old agent running.
   /// 3. The new agent starts in the same folder, in the same permission mode where it has one.
+  /// 4. The machine is told which harness took over (`agent_handoff_complete`), best effort.
+  ///
+  /// Steps 1 to 4 share one id: the handoff's `changeId`, the close's (only once step 1 prepared
+  /// the handoff), the start's `creationId` and the report's. A Swarm Product Manager's machine
+  /// stops it only for a close that names the switch it prepared (otherwise LEAD_PROTECTED), and
+  /// finds its new session by that id (#2493).
   ///
   /// One switch per harness at a time. Choosing the same engine again while one runs joins it;
   /// once one fails it is carried on by the same choice, receipt and all, until it is safe to drop
@@ -8864,6 +9174,13 @@ class AppNotifier extends ChangeNotifier {
     }
     if (source.engine == engine) {
       return Future.value(AgentChangeResult(agentId: agentId));
+    }
+    if (machine.machine.shared) {
+      return Future.value(
+        const AgentChangeResult(
+          error: 'Only the person whose machine runs this agent can change it.',
+        ),
+      );
     }
     if (!canChangeAgent(source) || !allEngines.any((e) => e.id == engine)) {
       return Future.value(
@@ -8992,7 +9309,13 @@ class AppNotifier extends ChangeNotifier {
     change.preservingViews = true;
     if (!latest.isStopped && !change.closed) {
       _logChange(change, 'saving and stopping the old agent');
-      final refused = await _closeAgentNow(machineId, latest);
+      // Named only after its handoff was prepared under this id: a Swarm Product Manager's machine
+      // checks the two belong to one switch, and refuses its close otherwise (LEAD_PROTECTED).
+      final refused = await _closeAgentNow(
+        machineId,
+        latest,
+        changeId: change.handoffPrepared ? change.creation._id : null,
+      );
       if (refused != null) {
         change.preservingViews = false;
         return AgentChangeResult(error: refused);
@@ -9038,6 +9361,20 @@ class AppNotifier extends ChangeNotifier {
         error: target!.launchDetail ?? 'The new agent could not start.',
       );
     }
+    // Before the switch is let go: while it is reported, choosing an agent again joins this one
+    // rather than starting a second harness off the stopped one. Unreported, a Swarm Product
+    // Manager's machine never takes the new session in and closes it once its time is up (cli
+    // superTabs/host.ts, SWITCH_ADOPT_MS), so the switch is not done until it is: choosing again
+    // reports it, as the desktop does.
+    if (!change.replacementReported) {
+      if (!await _reportReplacement(machineId, change, nextId)) {
+        return const AgentChangeResult(
+          error: 'The new agent started. Choose it again to finish the switch.',
+        );
+      }
+      change.replacementReported = true;
+      if (!live()) return inactive;
+    }
     _agentChanges.remove((machineId, source.id));
     unawaited(agentPreference.select(change.engine));
     String? notice;
@@ -9049,6 +9386,50 @@ class AppNotifier extends ChangeNotifier {
           : agentSwitchNoHistoryHint(from, to);
     }
     return AgentChangeResult(agentId: nextId, notice: notice);
+  }
+
+  /// Tells the machine which harness took over (`agent_handoff_complete`), the desktop's
+  /// replacement report, so a Swarm keeps the same agent on the new session (`agent.rebind`).
+  /// Whether it is done: recorded, or a machine too old to take one (`UNSUPPORTED`), as the
+  /// desktop counts it. A refusal or no answer in time is logged, and the switch waits for it.
+  Future<bool> _reportReplacement(
+    String machineId,
+    _AgentChange change,
+    String replacementId,
+  ) async {
+    try {
+      final reply = await _conn(machineId).request(
+        'agent_handoff_complete',
+        payload: {
+          'agentId': change.source.id,
+          'replacementId': replacementId,
+          'changeId': change.creation._id,
+          'targetEngine': change.engine,
+        },
+        timeout: const Duration(seconds: 5),
+      );
+      final recorded = reply['ok'] == true;
+      _logChange(
+        change,
+        recorded
+            ? 'the machine recorded the replacement'
+            : 'the replacement report was not confirmed',
+      );
+      return recorded;
+    } on WsRequestFailure catch (failure) {
+      if (failure.code == 'UNSUPPORTED') {
+        _logChange(change, 'the machine takes no replacement report');
+        return true;
+      }
+      _logChange(
+        change,
+        'the replacement report was refused (${failure.code})',
+      );
+      return false;
+    } catch (error) {
+      _logChange(change, 'the replacement report was not answered ($error)');
+      return false;
+    }
   }
 
   /// Fills [change]'s handoff for the new agent, or says why the switch must not go on — the
@@ -9104,6 +9485,7 @@ class AppNotifier extends ChangeNotifier {
         ..handoffEmpty = accepted.prompt == null
         ..handoffFailed = false
         ..contextLoaded = true
+        ..handoffPrepared = true
         ..handoffHeld = false;
       return null;
     } on WsRequestFailure catch (failure) {
@@ -9183,9 +9565,14 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// ⚠️ **A lost reply never sends a second Stop.** The machine's own list is read instead, and only
   /// a harness it lists as stopped, the same one, counts as closed.
-  Future<String?> _closeAgentNow(String machineId, Agent agent) async {
-    const notChanged =
-        'Could not save and stop this conversation. Its agent has not been changed.';
+  ///
+  /// [changeId]: the switch whose handoff the machine prepared — see
+  /// [_AgentChange.handoffPrepared].
+  Future<String?> _closeAgentNow(
+    String machineId,
+    Agent agent, {
+    String? changeId,
+  }) async {
     final machine = machineStates[machineId];
     final revision = _authRevision;
     try {
@@ -9196,13 +9583,13 @@ class AppNotifier extends ChangeNotifier {
           'sessionId': agent.sessionId ?? '',
           'createdAt': agent.createdAt!.toUtc().toIso8601String(),
           'mode': 'now',
+          'changeId': ?changeId,
         },
         // Saving the conversation and letting the engine exit can take seconds on the machine.
         timeout: const Duration(seconds: 30),
       );
       if (result['closed'] == true) return null;
-      final detail = result['detail'];
-      return detail is String && detail.isNotEmpty ? detail : notChanged;
+      return closeRefusalMessage(result['error'], result['detail']);
     } on WsRequestFailure catch (failure) {
       appLog.info(
         'agents',
@@ -9211,8 +9598,7 @@ class AppNotifier extends ChangeNotifier {
       if (failure.code == 'AGENT_CHANGED') {
         return 'The conversation changed. Reopen Change agent.';
       }
-      final detail = failure.detail;
-      return detail != null && detail.isNotEmpty ? detail : notChanged;
+      return closeRefusalMessage(failure.code, failure.detail);
     } catch (error) {
       appLog.warn(
         'agents',
@@ -9243,6 +9629,27 @@ class AppNotifier extends ChangeNotifier {
 
   static const _closeUnconfirmed =
       'Could not confirm the close. Check the machine connection and try again.';
+
+  /// What Change agent says when the machine will not save and stop the old agent: the machine's
+  /// own [detail] when it sends one, as the desktop does; otherwise the CLI's sentence for [code]
+  /// (lib/closeAgentService.ts), never the bare code. A Swarm Product Manager's machine refuses
+  /// any close but its prepared switch's (LEAD_PROTECTED), and a second switch while one runs
+  /// (LEAD_SWITCHING).
+  @visibleForTesting
+  static String closeRefusalMessage(Object? code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'LEAD_PROTECTED' =>
+            'This harness is the Product Manager of a Swarm project. '
+                'Delete its project first to stop it.',
+          'LEAD_SWITCHING' =>
+            'This Product Manager is already switching its agent. '
+                'Wait for it to finish.',
+          _ =>
+            'Could not save and stop this conversation. '
+                'Its agent has not been changed.',
+        };
 
   /// How long a lost close waits for its socket to come back before it reads the machine's list.
   static const _closeRecheckReady = Duration(seconds: 15);
@@ -11242,6 +11649,41 @@ class AppNotifier extends ChangeNotifier {
     // The zoo too, for the same reason: a `zoo_changed` sent while the phone
     // was in a pocket reached nobody.
     if (status == AppStatus.authenticated) unawaited(zoo.refresh());
+    // Only back from a pocket: a moment on the app switcher (`inactive`) stopped nothing.
+    if (pausedAt != null && status == AppStatus.authenticated) {
+      _resumeBackgroundPolls();
+    }
+  }
+
+  /// Back from a pocket: the periodic reads [handleAppPaused] stopped start again, each with one
+  /// read now — and never a second beside a read this return already makes.
+  ///
+  /// - **Agent lists**, per connected machine: the safety net's tick, at once. It reads now a list
+  ///   older than its interval and waits for a fresher one to come due ([_agentSyncTick]) — a list
+  ///   costs the machine a second or two of the queue its keystrokes wait in. A socket lost while
+  ///   away is not connected yet, and reads its whole list when it is ([_onConnectionStatus]).
+  /// - **An offline machine something waits on**: its poll, unless the machine list is being read
+  ///   again already ([_rereadMachinesWhileDeaf], above), which answers the same question.
+  /// - **The key watch**: only started again — the device log was just read ([handleAppResumed]'s
+  ///   `ensureRegistered`).
+  void _resumeBackgroundPolls() {
+    final now = DateTime.now();
+    for (final machine in machineStates.values.toList()) {
+      final machineId = machine.machine.machineId;
+      if (machine.connectionStatus == ConnectionStatus.connected) {
+        _startAgentSyncTimer(machineId);
+        _agentSyncTick(machineId, now);
+      }
+      if (machine.nodeOnline == false &&
+          machine.pendingOfflineAgentId != null &&
+          !_offlineRetryTimers.containsKey(machineId)) {
+        _startOfflineRetry(machine);
+        if (_machineReread == null) unawaited(_pollOfflineMachine(machineId));
+      }
+    }
+    if (machineStates.values.any((m) => m.keyAwaitedSince != null)) {
+      _armKeyWatch();
+    }
   }
 
   /// The app went into a pocket: stop the reads that only make sense in front
@@ -11260,6 +11702,10 @@ class AppNotifier extends ChangeNotifier {
     _pausedAt ??= DateTime.now();
     _desk.pause();
     _stopDeafPoll();
+    // And every other read on a timer: Android keeps an app in a pocket running, and it would go on
+    // asking — the agent lists, an offline machine, the device log while a key is awaited. A read
+    // already under way still lands. [handleAppResumed] starts them again ([_resumeBackgroundPolls]).
+    _pauseBackgroundPolls();
     // A socket waiting on a machine that is off stops dialling it while nobody is looking;
     // [handleAppResumed]'s reconnectAll asks again the moment the phone is back
     // ([WsConn.pauseParkedRecheck]).
@@ -11274,6 +11720,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// When the app last went into the background ([handleAppPaused]); null while it is in front.
   DateTime? _pausedAt;
+
+  /// [handleAppPaused]'s half of [_resumeBackgroundPolls]: the timers go, what they counted stays
+  /// (timeouts, a poll in flight) — a pocket is not the machine going.
+  void _pauseBackgroundPolls() {
+    for (final timer in _agentSyncTimers.values) {
+      timer.cancel();
+    }
+    _agentSyncTimers.clear();
+    for (final hold in _agentSyncHolds.values) {
+      hold.cancel();
+    }
+    _agentSyncHolds.clear();
+    for (final timer in _offlineRetryTimers.values) {
+      timer.cancel();
+    }
+    _offlineRetryTimers.clear();
+    _keyWatch?.cancel();
+    _keyWatch = null;
+  }
 
   /// How long the app has to have been away before [handleAppResumed] stops trusting an open
   /// socket that heard nothing from its machine in that time.
@@ -11454,11 +11919,17 @@ class AppNotifier extends ChangeNotifier {
 
   /// Read the machine list again because something other than the person asked; reads under way are
   /// shared, and a failure is left to the next one.
+  ///
+  /// [rereadMachines] is the same read, for a screen that watches the list.
   void _rereadMachines() {
     _machineReread ??= refreshMachines()
         .catchError((Object _) {})
         .whenComplete(() => _machineReread = null);
   }
+
+  /// The machine list read again, joining a read already under way — for a screen waiting on a
+  /// computer to join, back in front, beside [handleAppResumed]'s own read (`ComputerWatch`).
+  void rereadMachines() => _rereadMachines();
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -11499,6 +11970,8 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     sessionPreviews.dispose();
+    _pushLifecycle?.dispose();
+    _push?.channel.close();
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();

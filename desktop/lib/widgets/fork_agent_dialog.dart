@@ -284,7 +284,7 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
               controller: controller,
               focusNode: focus,
               readOnly: _locked,
-              style: DesktopChrome.text(size: 14),
+              style: DesktopChrome.text(size: 13),
               cursorColor: DesktopChrome.accent,
               textAlignVertical: TextAlignVertical.center,
               minLines: task ? 3 : 1,
@@ -297,8 +297,8 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
                     ? 'What should the fork work on?'
                     : 'Harness name',
                 hintStyle: DesktopChrome.text(
-                  size: 14,
-                  color: DesktopChrome.muted,
+                  size: 13,
+                  color: DesktopChrome.hint,
                 ),
                 isDense: true,
                 filled: true,

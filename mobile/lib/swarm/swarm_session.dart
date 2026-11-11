@@ -5,20 +5,21 @@ import 'package:flutter/widgets.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 import '../notify/system_notices.dart';
-import '../phone/voice_input_controller.dart';
+import '../phone/voice_recorder.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_activity.dart';
-import 'swarm_buddy_list.dart';
+import 'swarm_activity_feed.dart';
 import 'swarm_chat_peeks.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_choices.dart';
-import 'swarm_dictation.dart';
 import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_prefs.dart';
 import 'swarm_inbox.dart';
+import 'swarm_kept.dart';
 import 'swarm_mark_all.dart';
+import 'swarm_message_reads.dart';
 import 'swarm_notices.dart';
-import 'swarm_profile.dart';
 import 'swarm_request.dart';
 import 'swarm_start.dart';
 
@@ -39,7 +40,9 @@ class SwarmSession extends ChangeNotifier {
     this.markAllHold = swarmMarkAllHold,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
+    SwarmKeptStore? kept,
     SwarmTold? told,
+    DateTime Function()? now,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
@@ -47,36 +50,42 @@ class SwarmSession extends ChangeNotifier {
          pollInterval: pollInterval,
          homeCache: homeCache,
          readMarks: readMarks,
+         keptStore: kept,
        ),
        home = SwarmHomePrefs(accountId: accountId, store: readMarks) {
     _announcer = SwarmAnnouncer(
       notices,
       quiet: (_) => !swarmLocalNotices || _screens > 0,
+      muted: (need) =>
+          inbox.reader(need.swarmId)?.notifyOf(need.conversationId) ==
+          SwarmNotify.muted,
       told: told,
+      now: now,
     );
     _chatNotices = SwarmChatNotices(_announcer);
     inbox
       ..onArrived = announce
       ..onSwarmRead = _swarmRead
       ..addListener(_needsChanged);
+    // Its feeds tell of new replies with no screen open.
+    activity = SwarmActivity(this);
   }
 
   final String accountId;
   final SwarmInbox inbox;
 
-  /// The project and Buddy chats read for Activity and Buddies, a few at a
-  /// time ([SwarmChatPeeks]).
+  /// The project chats read for Activity, a few at a time ([SwarmChatPeeks]).
   final peeks = SwarmChatPeeks();
 
-  /// Activity, in place of Needs you: its filters, counts and handled rows.
-  /// Made when a screen first asks for it.
-  SwarmActivity get activity => _activity ??= SwarmActivity(this);
-  SwarmActivity? _activity;
+  /// Messages read one at a time: quoted originals and what message links
+  /// point at ([SwarmMessageReads]), dropped with the session.
+  final messageReads = SwarmMessageReads();
 
-  /// Buddies: the person's own Buddy in each project, with its chat's last
-  /// message. Made when a screen first asks for it.
-  SwarmBuddyList get buddyList => _buddyList ??= SwarmBuddyList(this);
-  SwarmBuddyList? _buddyList;
+  /// Activity, in place of Needs you: its filters, counts and handled rows.
+  /// Made with the session: its feeds read each Swarm's replies when the
+  /// Activity digest moves, whether a screen shows them or not, so the reply
+  /// a thread rang the person for is told ([announceReply]).
+  late final SwarmActivity activity;
 
   /// What the person chose for Home on this phone: the projects pinned and
   /// the one Swarm shown. A Swarm the account no longer has takes its own.
@@ -125,7 +134,7 @@ class SwarmSession extends ChangeNotifier {
   late final SwarmChatNotices _chatNotices;
   int _screens = 0;
   final _watching = <String, int>{};
-  final _held = <String, ({int choice, Timer timer})>{};
+  final _held = <String, ({int? choice, Timer timer})>{};
 
   /// Needs whose held answer was dropped unsent: their card says so until
   /// another answer is held.
@@ -136,7 +145,11 @@ class SwarmSession extends ChangeNotifier {
   /// watches every few seconds. Behind, nothing is. Going behind sends a
   /// held Mark all read at once: the app may not come back to send it.
   set foreground(bool value) {
-    if (!value) _markAll?.commit();
+    if (!value) {
+      _markAll?.commit();
+      // The app going behind may be its last moment.
+      unawaited(inbox.kept.flush());
+    }
     _foreground = value;
     inbox.shown = value;
     _show();
@@ -148,6 +161,25 @@ class SwarmSession extends ChangeNotifier {
 
   /// Posts [need]'s notice, unless a Swarm screen is up.
   void announce(SwarmNeed need) => _announcer.announce(need);
+
+  /// Posts the notice of [entry], a new reply in Swarm [swarmId] in a thread
+  /// the person is in, unless a Swarm screen is up.
+  void announceReply(String swarmId, SwarmActivityEntry entry) {
+    final snapshot = inbox.reader(swarmId)?.snapshot;
+    _announcer.announceReply(
+      swarmId: swarmId,
+      entry: entry,
+      project: snapshot?.projectFor(entry.conversationId)?.name ?? '',
+    );
+  }
+
+  /// Swarm [swarmId]'s Activity as [feed] lists it now: the notices of
+  /// replies read since, or no longer listed, go. Not while it is unread
+  /// from the server, failed, or read again from nothing.
+  void repliesListed(String swarmId, SwarmActivityFeed feed) {
+    if (!feed.fromServer || !feed.loaded || feed.error != null) return;
+    _announcer.repliesRead(swarmId, feed.items);
+  }
 
   /// Swarms read whose decisions and tags are still being read: what the
   /// read missed is counted once they are ([_countReads]).
@@ -210,13 +242,28 @@ class SwarmSession extends ChangeNotifier {
   /// The option held for [need], while its Undo window runs.
   int? held(SwarmDecisionNeed need) => _held[need.key]?.choice;
 
+  /// Whether anything is held for [need]: an answer, or leaving it.
+  bool holding(SwarmDecisionNeed need) => _held.containsKey(need.key);
+
+  /// [need] is held to be left to its coordinator, while its Undo window runs.
+  bool heldDelegate(SwarmDecisionNeed need) {
+    final held = _held[need.key];
+    return held != null && held.choice == null;
+  }
+
   /// [need]'s held answer was dropped before it was sent: it left the list
   /// meanwhile (the Swarm read again in full) and came back.
   bool dropped(SwarmDecisionNeed need) => _dropped.contains(need.key);
 
   /// Answers [need] with option [choice] once [undoWindow] has passed,
   /// unless [undo] takes it back first.
-  void hold(SwarmDecisionNeed need, int choice) {
+  void hold(SwarmDecisionNeed need, int choice) => _hold(need, choice);
+
+  /// Leaves [need] to its coordinator once [undoWindow] has passed, unless
+  /// [undo] takes it back first, as an answer is held.
+  void holdDelegate(SwarmDecisionNeed need) => _hold(need, null);
+
+  void _hold(SwarmDecisionNeed need, int? choice) {
     if (_disposed) return;
     // Off the list since it was asked (answered elsewhere, or access taken
     // away): there is nothing to answer.
@@ -243,10 +290,15 @@ class SwarmSession extends ChangeNotifier {
     }
   }
 
-  void _send(SwarmDecisionNeed need, int choice) {
+  void _send(SwarmDecisionNeed need, int? choice) {
     if (_disposed) return;
     notifyListeners();
-    unawaited(inbox.asks(need.swarmId)?.answer(need.decision, choice));
+    final asks = inbox.asks(need.swarmId);
+    unawaited(
+      choice == null
+          ? asks?.delegate(need.decision)
+          : asks?.answer(need.decision, choice),
+    );
   }
 
   void _needsChanged() {
@@ -294,9 +346,9 @@ class SwarmSession extends ChangeNotifier {
       held.timer.cancel();
     }
     _held.clear();
-    _activity?.dispose();
-    _buddyList?.dispose();
+    activity.dispose();
     peeks.dispose();
+    messageReads.dispose();
     inbox.removeListener(_needsChanged);
     _announcer.clear();
     inbox.dispose();
@@ -319,17 +371,21 @@ class SwarmHost extends ChangeNotifier {
     this.computers,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
-    this.uploadAvatar,
+    SwarmKeptStore? kept,
     this.voice,
-    this.dictation,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device(),
-       readMarks = readMarks ?? HarnessFileStore.shared {
+       readMarks = readMarks ?? HarnessFileStore.shared,
+       kept = kept ?? SealedSwarmKeptStore.device() {
     account.addListener(_update);
     this.features.addListener(_update);
     computers?.addListener(_computersChanged);
     _update();
   }
+
+  /// Where the session's drafts and unsent posts are kept, sealed; cleared when
+  /// the account leaves or Swarm is turned off, not while it is being read.
+  final SwarmKeptStore kept;
 
   /// The signed-in account's id; null while nobody is.
   final String? Function() accountId;
@@ -359,19 +415,10 @@ class SwarmHost extends ChangeNotifier {
   /// and how far it was read, under the account and the Swarm.
   final LocalKeyValueStore readMarks;
 
-  /// Sends an avatar photo with the phone's own sign-in; null where none can
-  /// go, and only the built-in pictures are offered.
-  final SwarmAvatarUpload? uploadAvatar;
-
-  /// A new voice input for a chat's mic, which owns and disposes it — the
-  /// terminal's speech-to-text; null where none can be heard, and the
+  /// A new microphone for a chat's voice messages (swarm_voice.dart), which
+  /// the chat owns and disposes; null where none can be heard, and the
   /// composer has no mic.
-  final VoiceInputController Function()? voice;
-
-  /// The phone's own speech recognizer, which shows a chat's words as they
-  /// are said; null where there is none, and the mic records and has [voice]
-  /// transcribe the take.
-  final SwarmDictation? dictation;
+  final VoiceRecorder Function()? voice;
 
   SwarmSession? session;
   bool _foreground = true;
@@ -395,6 +442,11 @@ class SwarmHost extends ChangeNotifier {
     session?.foreground = value;
   }
 
+  /// Notices the person was already shown by a push while the app was away,
+  /// by their keys and slots: never posted again, and a thread a push still
+  /// shows gets no notice of its own ([SwarmTold.pushesShown]).
+  void toldElsewhere(Iterable<String> keys) => _told.pushesShown(keys);
+
   /// A computer may have come up: a Swarm waiting for one reads at once.
   void _computersChanged() {
     session?.inbox.computerUp();
@@ -417,7 +469,10 @@ class SwarmHost extends ChangeNotifier {
       // Swarm off with no session to end: its switch is read before the first
       // frame, so this is known, and what an earlier run kept goes. A missing
       // account is not: the signed-in shell is up before the account is read.
-      if (!on && wasOn != false) unawaited(homeCache.clear());
+      if (!on && wasOn != false) {
+        unawaited(homeCache.clear());
+        unawaited(kept.clear());
+      }
       // No session either way, but [accountComing] may have moved with it.
       if (wasOn != null && on != wasOn) notifyListeners();
       return;
@@ -427,7 +482,14 @@ class SwarmHost extends ChangeNotifier {
       unawaited(homeCache.clear());
       swarmForgetAvatarImages();
     }
+    final hadSession = session != null;
+    // What it was still writing goes first: the clear comes after it.
     session?.dispose();
+    // The same account still being read is no leaving: what it wrote waits.
+    if (hadSession &&
+        (!on || id != null || !(accountReading?.call() ?? false))) {
+      unawaited(kept.clear());
+    }
     session = id == null
         ? null
         : (SwarmSession(
@@ -437,6 +499,7 @@ class SwarmHost extends ChangeNotifier {
             notices: notices,
             homeCache: homeCache,
             readMarks: readMarks,
+            kept: kept,
             told: _told,
           )..foreground = _foreground);
     notifyListeners();
@@ -477,13 +540,6 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
           ?.accountComing ??
       false;
 
-  /// How an avatar photo goes up ([SwarmHost.uploadAvatar]); null outside
-  /// the shell or where none can.
-  static SwarmAvatarUpload? uploadAvatarOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<SwarmScope>()
-      ?.notifier
-      ?.uploadAvatar;
-
   /// The account's computers ([SwarmHost.computers]); null outside the shell
   /// or where none were handed in.
   static SwarmComputers? computersOf(BuildContext context) => context
@@ -491,15 +547,8 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       ?.notifier
       ?.computers;
 
-  /// How a chat's mic makes its voice input ([SwarmHost.voice]); null
+  /// How a chat's mic makes its microphone ([SwarmHost.voice]); null
   /// outside the shell or where none can be heard.
-  static VoiceInputController Function()? voiceOf(BuildContext context) =>
+  static VoiceRecorder Function()? voiceOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SwarmScope>()?.notifier?.voice;
-
-  /// The phone's own recognizer for a chat's mic ([SwarmHost.dictation]);
-  /// null outside the shell or where there is none.
-  static SwarmDictation? dictationOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<SwarmScope>()
-      ?.notifier
-      ?.dictation;
 }

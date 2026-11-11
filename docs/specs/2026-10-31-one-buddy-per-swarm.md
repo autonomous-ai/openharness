@@ -42,16 +42,16 @@ member from the start, as today's chats are.
 | Folder | Buddy home folder: one read-only worktree per project whose repository is on this machine | A read-only worktree of *X*'s checkout, as today |
 | Wide mode (#2310) | As today | Off |
 | Posts | Its own chat only | Its own thread only |
-| Proposes to a PM | Never | Only to *X*'s PM, for its person's message in its thread |
+| Proposes to a PM | To any project's PM its person reads, naming it | Only to *X*'s PM, for its person's message in its thread |
 
-So the only Buddy that can write anything outside the person's own chat is a project session, and it has never read
-anything but *X* and its person's own words.
+So a Buddy writes outside the person's own chat only by a proposal: a project session's has never read anything but *X*
+and its person's own words, and the main Buddy's goes out only for a message its person wrote asking for it (Scholes, 11-02).
 
-**Every write into a project comes only from that project's session** (River, 10-31). A Buddy's writes today are a post
+**Every write into a project but a proposal comes only from that project's session** (River, 10-31). A Buddy's writes today are a post
 or reaction in its own chat and a proposal; every other command is refused (`requireBuddyCommand`). With one Buddy:
 
-- The main Buddy and a plain session write nowhere but the person's own chat: a post, reaction, proposal, file upload or
-  task (`group.create`, `work.*`, `person.tell`, decisions) aimed at any project is refused.
+- The main Buddy and a plain session write nowhere but the person's own chat and the proposal their person asks for: a post,
+  reaction or task (`group.create`, `work.*`, `person.tell`, decisions) aimed at any project is refused.
 - A project-*X* session writes its own thread, and into *X* only a proposal to *X*'s PM ("Proposal from Wren, on
   quang's behalf") with its files. A post in *X*'s chat or a workgroup, a reaction there, or anything aimed at another
   project is refused.
@@ -88,6 +88,9 @@ choice, as when they post in a project chat themselves.
   repository folder, so they run in project sessions; the main Buddy reads files with Read, Grep and Glob.
 - Before each delivery, the host compares the folder with the projects its person reads now and removes a worktree that
   is no longer listed, so a lost project's code leaves the folder before the Buddy's next turn.
+- Each worktree follows its project's default branch (Scholes, 11-02): at every start, and at a delivery when the last pass
+  was an hour ago, the worktree fetches that one branch and moves when it has no changes. `project-copies.txt` in the home
+  folder says which revision each copy is at and whether it may be behind. A copy that cannot move stays as it is.
 - A project session runs in a worktree of its project's checkout, exactly as today's Buddy does.
 
 **Staying within one context in a Swarm with many projects** (River, 10-31). The main Buddy reads on demand and preloads
@@ -105,8 +108,11 @@ nothing beyond a short index:
 
 Enforced by the server, not by the Buddy's good behaviour:
 
-- `buddy.propose` from the main Buddy or a plain session: refused, `BUDDY_PROPOSE_SESSION` ("Start a New session in that
-  project to send it to its PM."). From a project session: its project's PM only; `ownerMessageId` must be its person's
+- `buddy.propose` from the main Buddy or a plain session (Scholes, 11-02; it was refused until then, and people relayed its
+  proposals by hand): names a `projectId` its person reads now, or is refused like one that does not exist; one owner's
+  message, in its chat and not in a session's thread, sends one proposal; files its person sent outside a session's thread,
+  or, by its CLI, only from that project's folder. The server writes a line in its person's chat for each one it sends,
+  waking nobody, so they hear of it whatever the Buddy says. From a project session: its project's PM only; `ownerMessageId` must be its person's
   message **in its own thread**; files only from its own worktree or sent by its person **in that thread**.
 - A project session's reads are checked as its person's, limited to *X*: the project chat, *X*'s workgroups, its own
   thread. Every other id (another project's group, a message in the main chat, another session's thread, a private chat,
@@ -117,7 +123,8 @@ Enforced by the server, not by the Buddy's good behaviour:
 - No wide mode for project sessions: wide mode reads the person's home, which may hold another project's clone. Ruling.
   Why: there is no reliable list of every clone on a machine. Cost if wrong: a project session can't read prod logs or
   CI itself; the person asks the main Buddy and pastes what matters into the thread.
-- Proposal text and files are still checked by the guard's secret and "summaries only" checks.
+- Proposal text and files are still checked by the guard's secret check, and a main Buddy's, plain session's or wide Buddy's
+  by its "summaries only" check too.
 - News (replies to the person's proposals, tags, shipped work) goes to the main Buddy, which posts only in the person's
   own chat.
 - The PM's private lines (`person.tell`, delegated decisions) go to the one chat, marked with their project:
@@ -283,9 +290,9 @@ openharness and I'll send it from there." (skill text).
 - Old history: an old per-project chat still reads for its person and is listed in Earlier chats; a message there from
   an old client reaches an *X* project session, and the PM's *X* lines land in both chats.
 - Writes: each write path above is refused from the main Buddy, a plain session and an *X* session aiming at *Y* or at
-  *X*'s chat directly; only an *X* session's proposal lands in *X*.
+  *X*'s chat directly; only a proposal lands in *X*.
 - No carrying: a project-X session reading project Y's group, the main chat, another thread or a main-Buddy root is
-  refused like a made-up id; its proposal lands only in X; the main Buddy's proposal is refused; a file from the main
+  refused like a made-up id; its proposal lands only in X; the main Buddy's proposal lands only in the project it names, which its person reads; a file from the main
   chat on an X proposal is refused.
 - Access: after the person is removed from X, X's sessions end, the main Buddy's reads of X are refused, X's PM lines
   are hidden, and X's worktree leaves the Buddy home before the next delivery.

@@ -79,6 +79,11 @@ final agentDrag = ValueNotifier<AgentDragRef?>(null);
 /// a pane drag offers the other tiles to trade places with.
 final paneDragging = ValueNotifier<PaneDragRef?>(null);
 
+/// Where the pointer is while a pane is carried, in global coordinates. A drop
+/// target's own offset is the ghost's corner, not the hand, and which edge of a
+/// pane is meant depends on the hand.
+final paneDragPointer = ValueNotifier<Offset?>(null);
+
 /// Small, quiet glyphs with a stable mouse and keyboard target. Pane controls
 /// share the close button's emphasis without adding a row of button chrome.
 class PaneHeaderButton extends StatelessWidget {

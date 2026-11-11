@@ -37,6 +37,7 @@ abstract final class AppIcons {
   static const arrowUp = LucideIcons.arrowUp400;
   static const arrowDown = LucideIcons.arrowDown400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
+  static const atSign = LucideIcons.atSign400;
   static const bell = LucideIcons.bell400;
   static const bellOff = LucideIcons.bellOff400;
   static const bellRing = LucideIcons.bellRing400;
@@ -65,6 +66,10 @@ abstract final class AppIcons {
   static const circleMinus = LucideIcons.circleMinus400;
   static const circlePlus = LucideIcons.circlePlus400;
   static const circleSlash = LucideIcons.circleSlash400;
+
+  /// The Lead choice in New agent: a person in a ring, as a Lead wears its
+  /// gold ring; the crown is only the leaderboard's number one (task #4461).
+  static const circleUser = LucideIcons.circleUser400;
   static const circleX = LucideIcons.circleX400;
   static const clipboardPaste = LucideIcons.clipboardPaste400;
   static const clock = LucideIcons.clock400;
@@ -105,6 +110,7 @@ abstract final class AppIcons {
   static const fileText = LucideIcons.fileText400;
   static const fileType = LucideIcons.fileType400;
   static const film = LucideIcons.film400;
+  static const flag = LucideIcons.flag400;
   static const flaskConical = LucideIcons.flaskConical400;
   static const folder = LucideIcons.folder400;
   static const folderKanban = LucideIcons.folderKanban400;
@@ -121,6 +127,7 @@ abstract final class AppIcons {
   static const hourglass = LucideIcons.hourglass400;
   static const house = LucideIcons.house400;
   static const imagePlus = LucideIcons.imagePlus400;
+  static const inbox = LucideIcons.inbox400;
   static const info = LucideIcons.info400;
   static const keyboard = LucideIcons.keyboard400;
   static const laptop = LucideIcons.laptop400;
@@ -134,11 +141,16 @@ abstract final class AppIcons {
   static const logOut = LucideIcons.logOut400;
   static const maximize = LucideIcons.maximize400;
   static const menu = LucideIcons.menu400;
+
+  /// The Windows workspace's app-menu button: one vertical frame line with its
+  /// shortcut notch, the drawing the owner picked for the tab strip.
+  static const galleryVerticalEnd = LucideIcons.galleryVerticalEnd400;
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
   static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
+  static const mic = LucideIcons.mic400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;
@@ -152,6 +164,8 @@ abstract final class AppIcons {
   static const panelLeft = LucideIcons.panelLeft400;
   static const panelLeftClose = LucideIcons.panelLeftClose400;
   static const panelLeftOpen = LucideIcons.panelLeftOpen400;
+  static const panelRightClose = LucideIcons.panelRightClose400;
+  static const panelRightOpen = LucideIcons.panelRightOpen400;
   static const panelsTopLeft = LucideIcons.panelsTopLeft400;
   static const pause = LucideIcons.pause400;
   static const pencil = LucideIcons.pencil400;
@@ -180,11 +194,14 @@ abstract final class AppIcons {
   static const shieldOff = LucideIcons.shieldOff400;
   static const slidersHorizontal = LucideIcons.slidersHorizontal400;
   static const smartphone = LucideIcons.smartphone400;
+  static const tablet = LucideIcons.tablet400;
   static const smartphoneNfc = LucideIcons.smartphoneNfc400;
   static const snowflake = LucideIcons.snowflake400;
   static const sparkles = LucideIcons.sparkles400;
   static const square = LucideIcons.square400;
   static const squareCheck = LucideIcons.squareCheck400;
+  static const crown = LucideIcons.crown400;
+  static const squareKanban = LucideIcons.squareKanban400;
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;

@@ -397,7 +397,7 @@ class AutomaticHooksTests(unittest.TestCase):
 
     def test_runtime_must_stay_frozen_while_distro_packages_may_change(self):
         old, new = probe(), probe(True)
-        old['packages']['nodejs'], new['packages']['nodejs'] = '22.1-1', '22.2-1'
+        old['packages']['nodejs'], new['packages']['nodejs'] = '24.1-1', '24.2-1'
         validate_transition(old, new)
         new['runtime']['runtime_json_sha256'] = 'changed-runtime'
         with self.assertRaises(AssertionError):

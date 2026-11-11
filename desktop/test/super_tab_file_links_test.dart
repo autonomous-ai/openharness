@@ -65,7 +65,7 @@ void main() {
   late List<Uri> drawn;
   late Map<String, Uint8List> pictures;
   late Future<bool> Function(Uri) browser;
-  late ImageProvider Function(Uri) image;
+  late ImageProvider Function(AttachmentImage) image;
 
   setUp(() {
     opened = [];
@@ -78,7 +78,8 @@ void main() {
       opened.add(url);
       return true;
     };
-    attachmentImage = (url) {
+    attachmentImage = (picture) {
+      final url = picture.url;
       drawn.add(url);
       return MemoryImage(pictures[url.toString()] ?? Uint8List(3));
     };
@@ -93,7 +94,6 @@ void main() {
     home: Scaffold(
       body: SuperTabView(
         controller: controller,
-        onInvite: () {},
         onAddAgent: (_) {},
         onOpenTerminal: (_) {},
         machineName: (_) => 'Test Mac',
@@ -471,7 +471,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(server.fileLinkReads, hasLength(1));
       expect(opened, [Uri.parse(_signed('p1', 'shot.png', sig: 'later'))]);
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byKey(const ValueKey('super-image-close')));
       await tester.pumpAndSettle();
       await close(tester, c);
     });

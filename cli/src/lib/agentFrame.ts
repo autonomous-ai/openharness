@@ -30,10 +30,11 @@ import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunchWire.js'
 import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
-import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
+import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 /**
  * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
@@ -55,6 +56,12 @@ export type AgentFrame = {
   userId: string
   name: string
   /**
+   * Whether a person chose `name` (they renamed the agent), as against the name it was created with or its session
+   * title (registry.ts, `isNameChosen`). A client sends only a chosen name to the Swarm (task #2920). Absent from a
+   * daemon before it: a client reads that as "unknown" and sends nothing.
+   */
+  nameChosen: boolean
+  /**
    * What the agent is on, in its own words — the session title (Claude Code's, Codex's), cleaned;
    * null when there is none or it is the name already. It is usually the name too (registry.ts,
    * projectDisplayName), but not once the person renames the agent, and a client searching for
@@ -67,6 +74,9 @@ export type AgentFrame = {
   closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
   identityHold?: string
+  /** What stops the agent that only the person can fix, in words for them (the spec's named states, OpenClaw's);
+   *  absent when nothing does. The daemon's own waits stay in `identityHold` and are never shown. */
+  namedState?: string
   createdAt: string
   updatedAt: string
   /**
@@ -84,8 +94,14 @@ export type AgentFrame = {
   terminal: { available: boolean; primary: string; runtimes: RegisteredSession['runtimes'] }
   engine: RegisteredSession['engine']
   selectedModel: string | null
+  /** The folder the engine's own tools run in when it is not the pane's (OpenClaw's workspace); absent when none. */
+  workspace?: string
   grid: GridFrameBlock | null
   codexHome: string | null
+  /** The Claude profile folder (CLAUDE_CONFIG_DIR) this agent launched against; absent or null for the default account. */
+  claudeHome?: string | null
+  /** The extra launch words the owner saved for this agent (`agent_restart`'s `launchArgs`); absent when it has none. */
+  launchArgs?: string[]
   /** The workspace as its SCM describes it, with `kind` (`git`, or `none` for a folder no SCM claims);
    *  every other field is exactly what `agentProject` reports (scm/types.ts). */
   project: ScmDescription | null
@@ -137,6 +153,11 @@ export type AgentFrame = {
   /** The engine's named agent (`agent_create`'s `agent`); `namedAgent` on the wire so an agent
    *  object never carries a key called `agent`. */
   namedAgent: string | null
+  /** What a message sent to it waits for before it is typed: `engine` while its engine's reader starts (lib/sessionInput.ts),
+   *  as `message_waiting` said once; null when nothing. A window that connects meanwhile reads it here. */
+  waitingFor: 'engine' | null
+  /** Its sandboxed browser (AgentBrowserFrame); absent for an agent created without Browser. */
+  browser?: AgentBrowserFrame
 }
 
 /** What the daemon knows about an agent's DSH — looked up by the caller, never here. */
@@ -150,12 +171,24 @@ export interface AgentDshContext {
   verdict: DshVerdict | null
 }
 
+/**
+ * An agent's sandboxed browser, as the agent browser service says it (services/agentBrowser.ts): `step` only while it is
+ * set up, `error` only once it failed. It never carries the browser's settings.
+ */
+export interface AgentBrowserFrame {
+  state: 'setup' | 'starting' | 'ready' | 'failed'
+  step?: string
+  error?: string
+}
+
 /** What the caller knows and this module deliberately does not look up for itself. */
 export interface AgentFrameContext {
   /** Evaluated after asynchronous projection, so old snapshots cannot revive work. */
   activity?: () => ActivityFrame | null
   /** The runtime profile's answer for this session, or null when there is none. */
   selectedModel: string | null
+  /** The engine's own workspace, from its runtime profile; absent or null when it has none. */
+  workspace?: string | null
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
   terminalAvailable: boolean
   tokenUsage?: AgentTokenUsage | null
@@ -164,6 +197,10 @@ export interface AgentFrameContext {
   /** What the models service says of the grid the agent is on (core/api.ts `ModelsPort.annotation`): from
    *  memory, never I/O. Absent when the caller has none to give, and then the frame says nothing of it. */
   gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
+  /** What a message to the agent waits for now (core/input.ts); absent, nothing. Read as the frame is built. */
+  waitingFor?: () => 'engine' | null
+  /** The agent's browser; absent for an agent without one, and then the frame has no `browser`. */
+  browser?: AgentBrowserFrame
 }
 
 /**
@@ -201,10 +238,11 @@ function frameTitle(s: RegisteredSession): string | null {
  * of the two.
  */
 const gitContexts = new SessionGitContextReader()
+const NAMED_STATES = new Set<string>(Object.values(OPENCLAW_STATES))
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation }: AgentFrameContext,
+  { selectedModel, workspace, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // The git context is git's own display projection and keeps reading git directly; the frame's
   // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
@@ -222,6 +260,7 @@ export async function agentFrame(
     sessionId: s.sessionId,
     userId: '',
     name: projectDisplayName(s),
+    nameChosen: isNameChosen(s),
     title: frameTitle(s),
     status: s.active ? 'active' : 'offline',
     activity: contextActivity?.() ?? null,
@@ -229,6 +268,7 @@ export async function agentFrame(
     closeSupported: true,
     launch: s.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
+    ...(s.identityHold && NAMED_STATES.has(s.identityHold) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase
@@ -245,6 +285,9 @@ export async function agentFrame(
     terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
     engine: s.engine,
     selectedModel,
+    // A label for OpenClaw, whose tools run in its own workspace rather than the pane's folder. Absent means no
+    // label: no other engine has one, and clients show nothing without it.
+    ...(workspace ? { workspace } : {}),
     // Where this agent's inference actually goes, so a client can tell which agents a newly picked
     // grid has left behind. Read off the live process by discovery; carries no credential. Null is
     // a real answer ("on no grid") and must be sent as one — omitting the key would make every push
@@ -257,6 +300,8 @@ export async function agentFrame(
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
     // `grid: null` is above.
     codexHome: s.codexHome ?? null,
+    claudeHome: s.claudeHome ?? null,
+    ...(s.launchArgs?.length ? { launchArgs: [...s.launchArgs] } : {}),
     project,
     gitContext,
     // All five are real answers when null, for the reason the module doc gives: a frame that omits
@@ -274,5 +319,8 @@ export async function agentFrame(
     permissionMode: s.permissionMode ?? null,
     bypassPermission: s.bypassPermission ?? null,
     namedAgent: s.agent ?? null,
+    waitingFor: waitingFor?.() ?? null,
+    // Absent, never null, for an agent without a browser: the only agents a browser is drawn for are those that have one.
+    ...(browser ? { browser } : {}),
   }
 }

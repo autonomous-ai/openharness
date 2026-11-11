@@ -25,17 +25,14 @@ bool config_load_muted(void);
 bool config_save_muted(bool muted);
 
 // Local Habitat experiments: bit 0 = legacy focus face, bit 2 = quiet reactions,
-// bit 3 = straight title (default: curved), bit 4 = do not follow the desktop companion.
+// bit 3 = straight title (default: curved), bit 4 = reserved (was: do not follow the desktop companion).
 //
 // BIT 1 IS RETIRED, NOT FREE. It was rim scrolling — drag a finger around the bezel — and devices in
 // the field still hold it set. A new preference given that bit would inherit their answer, so the
-// next one takes bit 4.
+// next one takes bit 5. BIT 4 IS RESERVED TOO: the companion switch that held it is gone, but a device may hold
+// it set; do not reuse it.
 uint8_t config_load_habitat_options(void);
 bool config_save_habitat_options(uint8_t options);
-
-// Stable character id. Missing values use the image's default; the UI validates ids.
-uint8_t config_load_habitat_character(uint8_t fallback);
-bool config_save_habitat_character(uint8_t character);
 
 // The voice language the dial captures in. The daemon PROPOSES one from the computer's locale on every
 // `welcome`; once the user has picked here, this wins — the person holding the dial may well speak
@@ -47,11 +44,6 @@ void config_save_voicelang(const char *lang);
 // before this one did): the text follows the finger. True: the view does.
 bool config_load_scroll_reversed(void);
 void config_save_scroll_reversed(bool reversed);
-
-// Which way a horizontal swipe walks the carousel. False (the default): a swipe left goes to the NEXT
-// agent in the list. True: it goes to the previous one.
-bool config_load_swipe_reversed(void);
-void config_save_swipe_reversed(bool reversed);
 
 // Factory reset (BOOT held at power-on, or Settings → Reset): forget all of the above.
 bool config_clear_all(void);

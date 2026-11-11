@@ -7,19 +7,19 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { buddyNames, SuperTabStore, transaction } from '../src/superTabs/store.js'
-import { buddyChatId } from '../src/superTabs/buddies.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
+import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
+import { HeldParts } from '../src/superTabs/parts/held.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
-import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
+import { weekStart } from '../src/superTabs/leaderboard/week.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, queryShape } from './bench/profile.js'
 
 // Prod's slow log (2026-10-28): SwarmGroup reads spent ~200 ms each planning. Prisma sends its filters as $expr, and a filter
@@ -53,7 +53,7 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A Swarm on two machines of the owner's: a Lead with a digest due, a worker running work on the other, a finished
+/** A Swarm on two machines of the owner's: a Lead, a worker running work on the other, a finished
  *  conversation, a second project and a third with no conversations; then QUIET_LEAD and QUIET_OTHER quiet conversations,
  *  the n-th last active n days ago (mod 28), and OPEN open ones without work. */
 async function scene() {
@@ -68,19 +68,16 @@ async function scene() {
   const empty = s.run({ type: 'project.create', name: 'Empty', visibility: 'public', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const done = s.group('Done work')
   // A Reviewer kept for more work, in the conversations that go quiet below: the Lead's poll reads those (store.ts fullDeliveries).
   const reviewer = s.add('reviewer-harness', done, false, ownerActor, machineId, owner.sub)
   s.edit(state => {
-    state.projects![0]!.digest = { time: '00:00', timeZone: 'UTC' }
     Object.assign(state.agents.find(a => a.id === reviewer)!, { role: 'reviewer', workDecision: 'keep' })
   })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: 700, messages: [] })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700, messages: [] }, MIGRATED)
   const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId, key: done } }))!
   const bulk = (prefix: string, n: number, projectId: string, dormant: boolean) => Array.from({ length: n }, (_, i) => {
     const key = `${prefix}${String(i).padStart(3, '0')}`
@@ -91,8 +88,10 @@ async function scene() {
   await db.swarmGroup.createMany({ data: [...quietLead, ...quietOther, ...open] })
   // Every project's Lead conversation: a host's light load always reads them (parts/light.ts).
   const leadConversations = state.projects!.map(p => p.leadConversationId)
-  const active = [...leadConversations, web, done, ...open.map(r => r.key)]
-  return { tabId, machineId, lead, worker, reviewer, web, done, other, empty, quietLead, quietOther, leadConversations, active }
+  // The PM's own chat with its person (Swarm v4) is open as any chat is.
+  const agentChats = state.conversations.filter(c => c.kind === 'agent-chat').map(c => c.id)
+  const active = [...leadConversations, ...agentChats, web, done, ...open.map(r => r.key)]
+  return { tabId, machineId, lead, worker, reviewer, web, done, other, empty, quietLead, quietOther, leadConversations, agentChats, active }
 }
 
 /** One read as the profiler saw it: its command and every getMore (they share a query hash). */
@@ -167,7 +166,8 @@ describe('hot SwarmGroup reads name their index and read only what they return (
       const loaded = await db.$transaction(tx => parts.loadLight(tx, s.tabId, { groups: 'working', agentIds: [s.worker], groupIds: [s.done], machines: false }))
       groups = loaded.groups.map(g => g.key)
     })
-    expect(groups.sort()).toEqual([...s.leadConversations, s.web, s.done].sort())
+    // And each PM's own chat with its person (Swarm v4), where its derived chatId points.
+    expect(groups.sort()).toEqual([...s.leadConversations, ...s.agentChats, s.web, s.done].sort())
     expect(reads.length).toBeGreaterThan(0)
     expectIndexed(reads)
     const docs = reads.reduce((n, r) => n + r.docsExamined, 0)
@@ -182,6 +182,52 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectIndexed(reads)
     // Its working worker's private chats are read through that worker's conversations: here only its running one.
     expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(groups.length + 1)
+  })
+
+  it('a machine\'s next report reads its conversations\' columns through the same indexes, and whole only those that changed (B3)', async () => {
+    const held = new HeldParts()
+    const observed = () => db.$transaction(tx => parts.loadObserved(tx, s.tabId, s.machineId, held))
+    const groups = (await observed()).groups.map(g => g.key)
+    const quiet = await profiled(observed)
+    expectIndexed(quiet)
+    // No more examined than a whole read examines, and no conversation read whole: nothing changed.
+    expect(quiet.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(quiet)).toBeLessThanOrEqual(groups.length + 1)
+    expect(where(quiet, ['key']).filter(r => !mentions(r.shape, 'dormant'))).toEqual([])
+    await db.swarmGroup.update({ where: { id: `${s.tabId}:${s.web}` }, data: { version: { increment: 1 }, changedAt: new Date() } })
+    const changed = await profiled(observed)
+    expectIndexed(changed)
+    // The changed one alone, by key.
+    const whole = changed.filter(r => r.bytes > 0 && mentions(r.shape, 'key') && !mentions(r.shape, 'dormant'))
+    expect(whole.map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { tabId: 1, key: 1 }'], 1]])
+  })
+
+  it('the read cache\'s next delta reads keys and versions through the changes index, and whole by id only what moved (#2783)', async () => {
+    const held: parts.DeltaRows = new Map()
+    // Every row of the scene: its writes are dated at the fixture's time.
+    const since = 0
+    const delta = () => db.$transaction(tx => parts.loadDelta(tx, s.tabId, since, ['group'], held))
+    const first = await delta()
+    expect(first.parts.length).toBeGreaterThan(0)
+    const quiet = await profiled(delta)
+    expectIndexed(quiet)
+    expect(where(quiet, ['_id'])).toEqual([])
+    await db.swarmGroup.update({ where: { id: `${s.tabId}:${s.web}` }, data: { version: { increment: 1 }, changedAt: new Date() } })
+    const changed = await profiled(delta)
+    expectIndexed(changed)
+    expect(where(changed, ['_id']).map(r => [r.plans, r.returned]), JSON.stringify(changed)).toEqual([[['IXSCAN { _id: 1 }'], 1]])
+    expectOnlyReturned(where(changed, ['_id']))
+  })
+
+  it('a read past 101 conversations comes in one reply, with no getMore, however many a Swarm has (#2839)', async () => {
+    let keys: string[] = []
+    const reads = await profiled(async () => {
+      keys = (await parts.loadGroups(db, s.tabId, 'project', { projectId: { $in: ['lead', null] }, dormant: true })).map(g => g.key)
+    })
+    expect(keys.length).toBeGreaterThan(101)
+    expectIndexed(reads)
+    const ops = (await db.$runCommandRaw({ aggregate: 'system.profile', cursor: {}, pipeline: [{ $match: { ns: { $regex: '\\.SwarmGroup$' } } },
+      { $group: { _id: '$op', n: { $sum: 1 } } }] }) as unknown as { cursor: { firstBatch: Array<{ _id: string; n: number }> } }).cursor.firstBatch
+    expect(Object.fromEntries(ops.map(o => [o._id, o.n]))).toEqual({ command: 1 })
   })
 
   it('a command loads the Swarm\'s open conversations and those it names, each read through its index', async () => {
@@ -208,56 +254,7 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectOnlyReturned(reads)
   })
 
-  it('the mentions panel reads a tagged quiet conversation by id, never every quiet conversation', async () => {
-    const tagged = s.quietLead[3]!.key
-    await db.superTabMention.create({ data: { id: `${s.tabId}-tag`, tabId: s.tabId, personId: owner.sub, projectId: 'lead', conversationId: tagged,
-      messageId: `${s.tabId}-tagged`, authorAgentId: s.lead, createdAt: new Date(Date.now() - 60_000) } })
-    let listed: Array<{ conversationId: string }> = []
-    const reads = await profiled(async () => { listed = (await store.mentions(owner, s.tabId, 'waiting')).mentions })
-    expect(listed.map(m => m.conversationId)).toEqual([tagged])
-    expectIndexed(reads)
-    expectOnlyReturned(reads)
-    // The open conversations and the tagged one, at most: never the Swarm's QUIET_LEAD + QUIET_OTHER quiet ones.
-    expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(s.active.length + 1)
-  })
-
-  it('a person\'s decisions read the quiet conversations they wait in by id', async () => {
-    const quiet = s.quietLead[4]!.key
-    await db.superTabDecision.create({ data: { id: `${s.tabId}-ask`, tabId: s.tabId, batchId: 'b', projectId: 'lead', conversationId: quiet, personId: owner.sub,
-      askerAgentId: s.lead, question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(MIGRATED) } })
-    const state = parts.reassemble(await db.$transaction(tx => parts.loadActive(tx, s.tabId)))
-    const actor = { kind: 'person' as const, userId: owner.sub, email: owner.email }
-    let count = 0, listed: Array<{ conversationId: string }> = []
-    const reads = await profiled(async () => {
-      count = (await db.$transaction(tx => decisionsWaiting(tx, s.tabId, state, actor))).count
-      listed = (await db.$transaction(tx => listDecisions(tx, s.tabId, state, actor, 'open'))).decisions
-    })
-    expect(count).toBe(1)
-    expect(listed.map(d => d.conversationId)).toEqual([quiet])
-    expect(reads.length).toBeGreaterThan(0)
-    expectIndexed(reads)
-    expectOnlyReturned(reads)
-  })
-
   // Folded from #1964: a later page started at no bound, so each page read every newer quiet conversation again.
-  it('a Buddy rename or add reads the names chosen in the Swarm\'s Buddy chats by key, quiet ones included, and nothing else (review of #2094)', async () => {
-    const state = parts.reassemble(await db.$transaction(tx => parts.loadActive(tx, s.tabId)))
-    const me = state.people.find(p => p.id === owner.sub)!
-    const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.done } }))!
-    const key = buddyChatId(s.other, me)
-    await db.swarmGroup.create({ data: { ...row, id: `${s.tabId}:${key}`, key, kind: 'buddy', projectId: s.other, dormant: true,
-      data: { ...row.data as object, id: key, kind: 'buddy', projectId: s.other, title: 'Fern', buddyName: 'Fern' } } })
-    let names: unknown
-    // The other tests count this Swarm's quiet conversations: the chat goes once read.
-    const reads = await profiled(async () => { names = await db.$transaction(tx => buddyNames(tx, s.tabId, state)) })
-      .finally(() => db.swarmGroup.delete({ where: { id: `${s.tabId}:${key}` } }))
-    expect(names).toEqual([{ conversationId: key, name: 'Fern' }])
-    expect(reads).toHaveLength(1)
-    expect(reads[0]!.plans.join(), JSON.stringify(reads)).toContain('tabId: 1, key: 1')
-    expectIndexed(reads)
-    expectOnlyReturned(reads)
-  })
-
   it('each page of a project\'s quiet conversations reads the 50 it returns, newest activity first', async () => {
     const order = [...s.quietLead].sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime() || (a.key < b.key ? 1 : -1))
     const pages: string[][] = []
@@ -278,26 +275,15 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     const recent = (rows: typeof s.quietLead) => rows.filter(r => r.lastActivityAt.getTime() >= since).map(r => r.key).sort()
     for (const [projectId, expected] of [['lead', recent(s.quietLead)], [s.other, recent(s.quietOther)], [s.empty, []]] as const) {
       let found: string[] = []
-      const reads = await profiled(async () => { found = (await db.$transaction(tx => recentDormantGroups(tx, s.tabId, projectId, since))).map(g => g.id).sort() })
+      const reads = await profiled(async () => { found = (await db.$transaction(tx => recentDormantGroups(tx, DIRECT, s.tabId, projectId, since))).map(g => g.id).sort() })
       expect(found).toEqual(expected)
       expect(reads).toHaveLength(1)
       expectIndexed(reads)
-      expect(reads[0]!.docsExamined, `${projectId} ${JSON.stringify(reads)}`).toBeLessThanOrEqual(expected.length)
+      // The read cache holds the board's groups from the Monday its window starts in (cachePatch.ts boardRule, task #2674): Mongo
+      // examines those, at most six days more than the window, and the read keeps the window.
+      const held = [...s.quietLead, ...s.quietOther].filter(r => r.lastActivityAt.getTime() >= weekStart(since) && (projectId === 'lead' ? s.quietLead : projectId === s.other ? s.quietOther : []).includes(r)).length
+      expect(reads[0]!.docsExamined, `${projectId} ${JSON.stringify(reads)}`).toBeLessThanOrEqual(held)
     }
-  })
-
-  it('a Lead\'s poll with a digest due reads the quiet conversations its project finished since the last one by index, and none for its agents', async () => {
-    clock = MIGRATED + 60_000
-    const expected = s.quietLead.filter(r => r.lastActivityAt.getTime() >= clock - DAY).length
-    const all = await profiled(() => store.deliveries(owner, s.tabId, s.lead))
-    const reads = where(all, ['tabId', 'dormant', 'lastActivityAt', 'projectId'])
-    expect(reads).toHaveLength(1)
-    expectIndexed(reads)
-    expect(reads[0]!.returned).toBe(expected)
-    expect(reads[0]!.docsExamined, JSON.stringify(reads)).toBeLessThanOrEqual(expected)
-    // It reads no quiet conversation for its project's agents, its kept Reviewer's included: only loaded tasks' active work
-    // keeps an agent from being idle, and the server stops none (tidy.ts idleNotices; project instructions, phase 4).
-    expect(where(all, ['tabId', 'dormant', 'agentIds'])).toEqual([])
   })
 
   it('the host\'s wake check finds a change that concerns its machine, reading only the conversations changed since the cursor', async () => {
@@ -446,7 +432,7 @@ describe('a hot read whose index the database lacks', () => {
 
     it('the read cache\'s own transaction runs again without it and answers', async () => {
       const loaded = await removed(() => readLight(db, DIRECT, s.tabId, { groups: 'working', agentIds: [s.worker] }))
-      expect(loaded.groups.map(g => g.key).sort()).toEqual([...s.leadConversations, s.web].sort())
+      expect(loaded.groups.map(g => g.key).sort()).toEqual([...s.leadConversations, ...s.agentChats, s.web].sort())
     })
   })
 })

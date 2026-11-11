@@ -63,7 +63,7 @@ extern void pro_voice_test_step(int step);
 #define TEST_STEP(n) ((void)0)
 #endif
 
-void pro_voice_begin(const char *agent_id)
+void pro_voice_begin(const char *agent_id, bool face)
 {
     bool expected = false;
     if (!atomic_compare_exchange_strong(&s_starting, &expected, true)) return;   // another begin is mid-flight
@@ -87,7 +87,7 @@ void pro_voice_begin(const char *agent_id)
     portEXIT_CRITICAL(&s_mux);
     atomic_store(&s_waiting, false);
     TEST_STEP(4);
-    const bool started = pro_rec_start(agent_id, lang, upload);   // unavailable, or the last clip is still finishing
+    const bool started = pro_rec_start(agent_id, face, lang, upload);   // unavailable, or the last clip is still finishing
     TEST_STEP(5);
     if (!started) atomic_store(&s_open, false);
     atomic_store(&s_starting, false);

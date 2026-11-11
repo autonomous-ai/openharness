@@ -2,47 +2,50 @@
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
  */
+import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
-import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
-import { decisionsWaiting } from '../decisions.js'
-import { readMarks, readThreadMarks, writeReadMark, writeThreadFollow, writeThreadMark } from '../readMarks.js'
-import { activityDigest, listActivity, markActivityRead, type ActivityItem } from '../activity.js'
+import { agentOnly, author, fail, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
+import { logger } from '../../utils/logger.js'
+import { lowerReadMark, readMarkRows, readThreadMarks, writeReadMark, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
-import type { CacheView } from '../cache.js'
-import { readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
-import { migrateSwarm } from '../migration/migrate.js'
+import { sizeOf, type CacheView } from '../cache.js'
+import { readAccess, readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
-import { canReadGroup, readConversation, readProject } from '../projects.js'
-import { isBuddyReader } from '../buddies.js'
-import { workspacesRequired } from '../workspaceStore.js'
+import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
-import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
+import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
+import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
-import { AvatarLinks } from '../avatarLinks.js'
+import { derivedEtag, marksOf } from './derivedEtag.js'
+import { READ_FORMAT, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
-import { seedThreadMarks } from './threadMarkSeeds.js'
 import { memberSwarms } from '../swarmRows.js'
+import { isPersonalSwarm } from '../deletion.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
+/** What the group rows one-group reads keep may take, counted as their JSON size (SwarmReads.groupRows). */
+export const GROUP_ROWS_BYTES = 8 * 1024 * 1024
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
 const MACHINE_READS_MS = 15_000
-type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>]
+/** The format and deletion metadata can be reused briefly: a deletion takes effect on each pod within this window. */
+export const SWARM_ROW_READS_MS = 3_000
+const MAX_SWARM_ROW_READS = 2_000
+type SwarmRow = { format: number | null; deletedAt: Date | null }
+type SwarmRowRead = { at: number; read: Promise<SwarmRow | null> }
+type MachineReads = Record<string, string>
 
 /** The conversations the reader can read now, a dormant one read by id included. */
 function readableGroups(read: Read): Set<string> {
@@ -51,16 +54,28 @@ function readableGroups(read: Read): Set<string> {
 }
 
 /** The reader's marks of the conversations and threads they can read now: a mark never names a conversation the reader has
- *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent). */
-function readableMarks(read: Read, marks: Map<string, number>, threads: Map<string, Map<string, number>>, settings: Map<string, NotifyLevel> = new Map()):
-  Pick<Derived, 'readMarks' | 'threadMarks' | 'chatSettings'> {
+ *  lost. Only in a person's read; nothing for an agent. A read with no thread marks says none (`threadMarks` absent), and one
+ *  with no mark their Mark unread moved last none either (`unreadMarks` absent). */
+function readableMarks(read: Read, marks: ReadMarkRow[], threads: Map<string, Map<string, number>>, settings: Map<string, NotifyLevel> = new Map()):
+  Pick<Derived, 'readMarks' | 'unreadMarks' | 'threadMarks' | 'chatSettings'> {
   if (read.actor.kind !== 'person') return {}
   const readable = readableGroups(read)
+  const kept = marks.filter(mark => readable.has(mark.conversationId))
+  const unreadMarks = Object.fromEntries(kept.filter(mark => mark.lowered).map(mark => [mark.conversationId, mark.sequence]))
   const threadMarks = Object.fromEntries([...threads].filter(([id]) => readable.has(id)).map(([id, held]) => [id, Object.fromEntries(held)]))
   const chatSettings = Object.fromEntries([...settings].filter(([id]) => readable.has(id)))
-  return { readMarks: Object.fromEntries([...marks].filter(([id]) => readable.has(id))),
+  return { readMarks: Object.fromEntries(kept.map(mark => [mark.conversationId, mark.sequence])), ...(Object.keys(unreadMarks).length ? { unreadMarks } : {}),
     ...(Object.keys(threadMarks).length ? { threadMarks } : {}), ...(Object.keys(chatSettings).length ? { chatSettings } : {}) }
 }
+
+/** A reply's `derived` with its etag, or only the reader's marks when `held` is still the etag of the summary (task #2906). */
+function stamped(derived: Derived): { derived: Derived; derivedEtag: string }
+function stamped(derived: Derived, held: string | undefined): { derived: Derived | ReaderMarks; derivedEtag: string; derivedUnchanged?: true }
+function stamped(derived: Derived, held?: string) {
+  const etag = derivedEtag(derived)
+  return held === etag ? { derived: marksOf(derived), derivedEtag: etag, derivedUnchanged: true as const } : { derived, derivedEtag: etag }
+}
+
 
 /** A change poll's light base (parts/light.ts): the same for every reader of a Swarm, so one load per stamp serves them all. */
 const LIGHT = { groups: 'working' } as const
@@ -83,14 +98,14 @@ export class SwarmReads {
   private readonly db: PrismaClient
   private readonly now: () => number
   /** Reads the store's own database, on its clock unless given one (tests). */
-  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
+  constructor(private readonly store: SuperTabStore, options: { now?: () => number } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
-    this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
   }
-  private readonly avatarLinks: AvatarLinks | null
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
   private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
+  /** The small format/deletion row for each Swarm, held briefly per process. */
+  private readonly swarmRows = new Map<string, SwarmRowRead>()
 
   async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
     const t0 = this.now()
@@ -98,10 +113,9 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
-        ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
-        derived: { ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
-          await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) } }
+        ...view.parts, progress: [],
+        ...stamped({ ...view.derived, ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
+          await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
   }
 
@@ -123,53 +137,59 @@ export class SwarmReads {
       return [...seen.runningHarnessIds, ...seen.stoppedHarnessIds, ...Object.keys(seen.harnessProgress ?? {}), ...(seen.stoppedReservations ?? []).map(r => r.harnessId)]
         .map(harnessId => stableId(pool.machineId, harnessId))
     }))].filter(id => !covered.has(id)).sort()
-    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed)) : []
+    // Patched from each change (cachePatch.ts startsOfRule, spec 2026-11-02 poll cost), not loaded again after every bump.
+    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed),
+      startsOfRule(listed)) : []
     const taken = new Set([...held, ...fresh.map(s => s.key)])
     return [...fresh, ...named.filter(s => !taken.has(s.key))]
   }
 
-  /** The reader's avatar links (avatarLinks.ts), only ever in a member's read: issued afresh each time, never stored. */
-  private async withAvatars(view: ReaderView, now: number): Promise<Derived> {
-    if (!this.avatarLinks) return view.derived
-    const seen = new Set(Object.keys(view.derived.agents))
-    const avatars = await this.avatarLinks.forReader(view.state, view.state.agents.filter(a => seen.has(a.id)), now)
-    return Object.keys(avatars).length ? { ...view.derived, avatars } : view.derived
+  /** Every machine the reader sees, whole: what a client that asks for lines in its changes reads when it needs more than liveness. */
+  async machineReadings(user: AuthUser, tabId: string, asAgentId?: string): Promise<MachineReadings> {
+    const t0 = this.now()
+    return this.read(user, tabId, async (tx, cached) => {
+      const base = await readLight(tx, cached, tabId, LIGHT)
+      const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {}, async () => base)
+      return { format: READ_FORMAT, serverTime: t0, machines: read.view.parts.machines }
+    })
   }
 
-  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string): Promise<Changes> {
+  /** `derivedEtag`: the etag of the summary the client holds (derivedEtag.ts); while it still matches, the reply leaves the
+   *  summary out and sends only the reader's moved marks. */
+  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string,
+    options: { lightMachines?: boolean; derivedEtag?: string } = {}): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
       // derive values. The base is one per Swarm and stamp, whoever reads: the Lead conversations, running work, unfinished
-      // starts and the like, and no progress parts (the feed sends changed ones). Open decisions count their conversations
-      // themselves (decisions.ts).
+      // starts and the like.
       const base = await readLight(tx, cached, tabId, LIGHT)
       const from = readCursor(cursor, base.visibilityEpoch, t0)
       // Reloading readers still pass the access check first, as every read does.
       if ('reload' in from) { await this.load(tx, cached, user, tabId, asAgentId, t0, {}, async () => base); return from }
       // Without asAgentId the reader is a person (store.ts actor), whose marks moved since the cursor go out with this reply.
       const person = asAgentId ? null : user.sub
-      const [changed, tagged, marks, threadMarks, settings] = await Promise.all([readChanged(tx, cached, tabId, from.since),
-        person ? waitingTagConversations(tx, tabId, person, t0) : [],
-        person ? readMarks(tx, tabId, person, from.since) : new Map<string, number>(),
+      const [changed, marks, threadMarks, settings] = await Promise.all([readChanged(tx, cached, tabId, from.since),
+        person ? readMarkRows(tx, tabId, person, from.since) : [],
         person ? readThreadMarks(tx, tabId, person, from.since) : new Map<string, Map<string, number>>(),
         person ? readChatSettings(tx, tabId, person, from.since) : new Map<string, NotifyLevel>()])
       // Starts: only unfinished ones whole in the base, then the poll's own.
       const extra = await this.pollStarts(tx, cached, tabId, base, changed)
-      // Each reader's own conversations, held one by one (cachedReads.ts readLightGroups): those of their waiting tags, which
-      // their count reads (mentions.ts), and those its starts are in, so a start the poll sends or a machine still lists is
+      // Each reader's own conversations, held one by one (cachedReads.ts readLightGroups): those its starts are in, so a start the poll sends or a machine still lists is
       // read against its conversation, quiet or not, and its readers alone learn of it. So is a conversation whose read mark
       // moved, so the mark goes only to a reader who can still read it.
       const held = new Set(base.groups.map(g => g.key))
-      const named = [...new Set([...tagged, ...[...changed.filter(p => p.kind === 'start'), ...extra].map(p => (p.data as AgentStart).request.conversationId),
-        ...marks.keys(), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
+      const named = [...new Set([...[...changed.filter(p => p.kind === 'start'), ...extra].map(p => (p.data as AgentStart).request.conversationId),
+        ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
+      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor),
-        derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) } }
+        epoch: read.parts.visibilityEpoch, ...sent, progress: [],
+        ...stamped({ ...read.view.derived, ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
+
 
   async dormant(user: AuthUser, tabId: string, page: { projectId?: string; before?: string }, asAgentId?: string): Promise<DormantGroups> {
     return this.read(user, tabId, async (tx, cached) => {
@@ -194,14 +214,79 @@ export class SwarmReads {
         before = { lastActivityAt: Date.parse(last.data!.lastActivityAt!), key: last.key }
       }
       const seen = readable.some(p => p.data!.task?.requires) ? seenMachineIds(visibleState(state, actor, this.now())) : new Set<string>()
-      const buddy = isBuddyReader(state, actor)
-      return { groups: readable.map(p => envelope(p, groupView({ ...buddy ? groupForBuddy(p.data!) : p.data!, dormant: true }, seen))),
+      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }, seen))),
         next: more ? encodeDormantPage(readable.at(-1)!) : null }
     })
   }
 
+  /** One conversation by id as the reader may read it (design 4.5). Identical reads in flight on this process share one answer:
+   *  the same sign-in, agent, Swarm and conversation get the same one (task #2875: many agents' hosts may ask at once). */
   async group(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
-    return { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
+    const key = JSON.stringify([tabId, conversationId, asAgentId ?? null, user])
+    const running = this.groupReads.get(key)
+    if (running) return running
+    const read = this.oneGroup(user, tabId, conversationId, asAgentId).finally(() => this.groupReads.delete(key))
+    this.groupReads.set(key, read)
+    return read
+  }
+  /** The one-group reads running now, by everything their answer depends on (group). */
+  private readonly groupReads = new Map<string, Promise<OneGroup>>()
+  /** The group rows one-group reads read last, by Swarm and key, least recently read first, within GROUP_ROWS_BYTES: the
+   *  next read of one asks for its data only when its version moved (parts/load.ts loadGroupUnless). */
+  private readonly groupRows = new Map<string, Part<GroupData>>()
+  private groupRowBytes = 0
+  private keepGroupRow(row: string, part: Part<GroupData> | null): void {
+    const old = this.groupRows.get(row)
+    if (old) { this.groupRows.delete(row); this.groupRowBytes -= sizeOf(old) }
+    if (part) { this.groupRows.set(row, part); this.groupRowBytes += sizeOf(part) }
+    for (const [oldest, held] of this.groupRows) {
+      if (this.groupRowBytes <= GROUP_ROWS_BYTES) break
+      this.groupRows.delete(oldest)
+      this.groupRowBytes -= sizeOf(held)
+    }
+  }
+
+  /**
+   * One conversation from its own row by key and the parts its read check reads: the head, members and agents (cachedReads.ts
+   * readAccess), and for an agent stored with no project its active conversations (agentProjectId). Never the whole Swarm: its
+   * cached base and machines were refreshed from the Swarm's change feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
+   * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
+   * an agent's 1:1 chat. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
+   * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
+   * on every agent's project; so does an awake group stored without a number, which a whole read numbers after every other.
+   */
+  private async oneGroup(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
+    const answer = await this.read(user, tabId, async (tx, cached): Promise<OneGroup | null> => {
+      const row = `${tabId}\u0000${conversationId}`
+      const [access, found] = await Promise.all([readAccess(tx, cached, tabId), parts.loadGroupUnless(tx, tabId, conversationId, this.groupRows.get(row))])
+      this.keepGroupRow(row, found)
+      if (found?.data?.task?.requires?.machines?.length) return null
+      // An awake group stored without a number (111 on prod, 11-04) is numbered by a whole read after every other one
+      // (model.ts numberConversations, in visibleState): the whole read answers it. A project's chat and Leads have none.
+      if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
+        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
+      const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
+      const context = target && !target.projectId ? await parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }) : []
+      // The conversation itself whole; another only as the light row the checks read, once.
+      const held = new Set(found ? [found.key] : [])
+      const groups = [...found ? [found] : [], ...context.filter(g => !held.has(g.key) && !!held.add(g.key))]
+      const state = parts.reassemble({ ...access, groups, machines: [], starts: [] }, { share: true })
+      const actor = await this.store.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      if (!found) return unavailable()
+      // A quiet group passes the same read check as on the dormant list. No required machines here, so no reader's view of
+      // machines changes what it shows (model.ts withSeenRequirement).
+      if (found.dormant) {
+        if (!canReadGroup(state, actor, found.data!)) return unavailable()
+        return { group: envelope(found, groupView({ ...found.data!, dormant: true }, new Set())) }
+      }
+      // An awake one as a whole-Swarm read lists it (views.ts readerView): a kind this release knows, never the removed Leads.
+      const group = state.conversations.find(c => c.id === conversationId)
+      if (!group || isLeads(group) || !canReadGroup(state, actor, group)) return unavailable()
+      return { group: envelope(found, groupView(group, new Set())) }
+    })
+    return answer ?? { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
   }
 
   /** One conversation the reader can read, with the Swarm's state it was checked against. */
@@ -214,24 +299,28 @@ export class SwarmReads {
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
       if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
-        const data = isBuddyReader(view.state, actor) ? groupForBuddy(dormant.data!) : dormant.data!
-        return { group: envelope(dormant, groupView({ ...data, dormant: true }, seenIn(view.parts))), state: view.state }
+        return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true }, seenIn(view.parts))), state: view.state }
       }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
   }
 
   /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
-   *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
-   *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
-   *  mark of its own gets one at the old mark (threadMarkSeeds.ts), so the inbox and Threads still count it. */
+   *  person reading as themselves has marks: an agent is refused before anything is written. */
   async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    const { group, state } = await this.readGroup(user, tabId, conversationId)
-    const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
-    const held = await this.db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, user.sub) }, select: { sequence: true } })
-    await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
-    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now }) }
+    const { group } = await this.readGroup(user, tabId, conversationId)
+    const next = Math.min(sequence, group.data!.lastMessageSequence)
+    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now: this.now() }) }
+  }
+
+  /** The person's Mark unread from the message at `sequence`: their mark of a conversation they can read goes to just before it,
+   *  never forward (readMarks.ts lowerReadMark), and never past the conversation's newest message. Checked as markRead: only a
+   *  person reading as themselves, and every chat they cannot read is the same refusal. A reply only in a thread keeps its thread's
+   *  mark. */
+  async markUnread(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
+    const { group } = await this.readGroup(user, tabId, conversationId)
+    const target = Math.min(sequence - 1, group.data!.lastMessageSequence)
+    return { sequence: await lowerReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: target, now: this.now() }) }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
@@ -241,31 +330,13 @@ export class SwarmReads {
    *  an unreadable conversation or project included, is the same refusal. Only a person reading as themselves has marks. */
   async markThreadRead(user: AuthUser, tabId: string, conversationId: string, threadId: string, sequence: number): Promise<{ sequence: number }> {
     const newest = await this.readableThread(user, tabId, conversationId, threadId)
-    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
-      now: this.now() }) }
-  }
-
-  /** Stores the person's Follow (true), Unfollow (false) or neither (null) of thread `threadId` (readMarks.ts writeThreadFollow),
-   *  checked as markThreadRead checks a thread mark: every miss is the same refusal, and only a person reading as themselves
-   *  follows. */
-  async followThread(user: AuthUser, tabId: string, conversationId: string, threadId: string, follow: boolean | null): Promise<{ follow: boolean | null }> {
-    await this.readableThread(user, tabId, conversationId, threadId)
-    return { follow: await writeThreadFollow(this.db, { tabId, personId: user.sub, conversationId, threadId, follow, now: this.now() }) }
+    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest), now: this.now() }) }
   }
 
   /** The newest message sequence of a conversation whose thread `threadId` the person reads (markThreadRead's checks). */
   private async readableThread(user: AuthUser, tabId: string, conversationId: string, threadId: string): Promise<number> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const unavailable = () => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
-    const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
-    const actor = await this.store.actor(this.db, user, state)
-    let newest: number
-    try {
-      newest = readConversation(state, actor, conversationId).lastMessageSequence
-    } catch (error) {
-      if (error instanceof SuperTabError && error.status === 404) unavailable()
-      throw error
-    }
+    const newest = (await this.readableChat(user, tabId, conversationId)).conversation.lastMessageSequence
     const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: threadId, tabId, conversationId } },
       { $project: { source: 1, recipientIds: 1, thread: 1 } }])
     const root = found && { id: found._id as string, source: found.source ?? null, recipientIds: (found.recipientIds as string[] | undefined) ?? [], thread: found.thread }
@@ -281,31 +352,21 @@ export class SwarmReads {
   /** Stores the person's notification setting for a conversation they can read (chatSettings.ts), checked as a read mark is:
    *  every miss is the same refusal, and only a person reading as themselves has settings. */
   async setChatNotify(user: AuthUser, tabId: string, conversationId: string, notify: NotifyLevel): Promise<{ notify: NotifyLevel }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.group(user, tabId, conversationId)
     return { notify: await writeChatSetting(this.db, { tabId, personId: user.sub, conversationId, notify, now: this.now() }) }
   }
 
-  /** The person's Activity in this Swarm (activity.ts): replies to their messages and reactions to them, those they can read
-   *  now. A person reading as themselves only. */
-  async activity(user: AuthUser, tabId: string): Promise<{ items: ActivityItem[]; more: boolean }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    const { state } = await this.store.readLoad(user, tabId)
+  /** Conversation `conversationId` and the Swarm's state, for a person reading as themselves who reads it: every conversation
+   *  they cannot read, or that does not exist, is the same refusal. The Swarm is read with that conversation alone. */
+  private async readableChat(user: AuthUser, tabId: string, conversationId: string): Promise<{ state: SuperTabState; conversation: Conversation }> {
+    const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.store.actor(this.db, user, state)
-    author(state, actor)
-    if (actor.kind !== 'person') return fail('FORBIDDEN', 'Only a person has Activity.', 403)
-    return await listActivity(this.db, tabId, state, actor, this.now())
-  }
-
-  /** Marks the person's Activity made at or before `through` read on every device, never past now. */
-  async markActivityRead(user: AuthUser, tabId: string, through: string): Promise<{ marked: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    const { state } = await this.store.readLoad(user, tabId)
-    const actor = await this.store.actor(this.db, user, state)
-    author(state, actor)
-    if (actor.kind !== 'person') return fail('FORBIDDEN', 'Only a person has Activity.', 403)
-    const now = this.now()
-    return { marked: await markActivityRead(this.db, tabId, actor.userId, Math.min(Date.parse(through), now), now) }
+    try {
+      return { state, conversation: readConversation(state, actor, conversationId) }
+    } catch (error) {
+      if (error instanceof SuperTabError && error.status === 404) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      throw error
+    }
   }
 
   /** A person's own thread marks (an agent has none), every one or those moved since `since`. */
@@ -314,82 +375,95 @@ export class SwarmReads {
   }
 
   /** A person's own read marks (an agent has none), every one or those moved since `since`. */
-  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<Map<string, number>> {
-    return actor.kind === 'person' ? readMarks(tx, tabId, actor.userId, since) : new Map()
+  private async marksOf(tx: PrismaClient, tabId: string, actor: Actor, since?: number): Promise<ReadMarkRow[]> {
+    return actor.kind === 'person' ? readMarkRows(tx, tabId, actor.userId, since) : []
   }
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
    *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
-  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number): Promise<Leaderboard> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
     const now = this.now(), start = readableWeek(week, now)
-    return this.read(user, tabId, async (tx, cached) => {
+    const began = performance.now()
+    const result = await this.read(user, tabId, async (tx, cached) => {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state)
       readProject(state, actor, projectId)
-      const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
-      const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      const names = await profileNames(tx, state.people.map(p => p.id))
-      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now, names })
+      // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
+      const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
+      const load = async () => {
+        const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
+        const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
+        // Names change rarely and show on a board: read on the secondary (task #2970).
+        const names = await profileNames(this.store.replica, state.people.map(p => p.id))
+        const visible = visibleState(state, actor, now)
+        // Count only agents this reader sees, keeping ownership before presentation redaction.
+        const agentIds = new Set(visible.agents.map(a => a.id))
+        const visibleAgents = state.agents.filter(a => agentIds.has(a.id))
+        const machines = (visible.machines ?? [])
+          .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
+        return leaderboard({ state, groups, machines, visibleAgents, projectId, week: start, now, period, allProjects: readable, names })
+      }
+      // Access is resolved afresh above, even when the aggregate is held. Include the current audience in the key.
+      return allProjects && !period
+        ? weeklyBoard(cached, tabId, JSON.stringify([actor, readable]), projectId, start, now, load)
+        : load()
     })
+    const elapsedMs = performance.now() - began
+    if (allProjects && !period && elapsedMs > 100) logger.warn('[weekly-leaderboard] slow read', { elapsedMs: Math.round(elapsedMs) })
+    return result
   }
 
-  /** The waiting tags of each listed Swarm, as `/:tabId/mentions` and a Swarm's own state count them (readable conversations
-   *  only), so Desktop reads one list instead of one mentions call per Swarm (roadmap 2.5). One match over the page's
-   *  Swarms (swarmsWithTags) finds those with any tag at all; only those load their state to check what the person may still read. A Swarm
-   *  whose count cannot be told here is left out, and the client asks it itself. */
-  private async mentionCounts(user: AuthUser, tabIds: string[]): Promise<Map<string, { count: number; digest: string }>> {
-    const counts = new Map<string, { count: number; digest: string }>()
-    if (!tabIds.length) return counts
-    const tagged = await this.db.superTabMention.aggregateRaw({ pipeline: swarmsWithTags(tabIds, user.sub, this.now()) }) as unknown as Array<{ _id: string }>
-    const withTags = new Set(tagged.map(row => row._id))
-    const actor = { kind: 'person', userId: user.sub, email: user.email } as const
-    for (const tabId of tabIds) {
-      if (!withTags.has(tabId)) { counts.set(tabId, { count: 0, digest: mentionsDigest([]) }); continue }
-      try {
-        const { state } = await this.store.readLoad(user, tabId)
-        await this.store.actor(this.db, user, state)
-        counts.set(tabId, await waitingMentions(this.db, tabId, state, actor, this.now()))
-      } catch { /* Not countable here: the client reads this Swarm's own mentions. */ }
-    }
-    return counts
-  }
-
-  async list(user: AuthUser, after?: string, withMentions = false): Promise<SwarmList> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+  async list(user: AuthUser, after?: string): Promise<SwarmList> {
+    // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
+    if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
-    // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
-    const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
-    const current = new Set((workspaceIds.length ? await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
-      select: { workspaceId: true } }) : []).map(m => m.workspaceId))
-    const page = rows.slice(0, 100).filter(r => r.workspaceId ? current.has(r.workspaceId) : !workspacesRequired())
-    // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
-    const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
-    const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
-    const ids = page.filter(r => r.format === 2).map(r => r.id)
+    // A Swarm still in one row is from before the parts: it is never served, and the wipe removes it (migration/wipeJob.ts).
+    const page = rows.slice(0, 100).filter(r => r.format === 2)
+    const ids = page.map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
     // Each Swarm's newest change through the read cache, at its stamp: a list every few seconds no longer recomputes it.
     const [heads, newest] = await Promise.all([transaction(this.db, tx => parts.loadChanged(tx, ids, new Date(0), ['head'])),
       this.store.view(ids).then(view => readLastChangedAts(this.db, view, ids))])
-    const mentions = withMentions ? await this.mentionCounts(user, page.map(r => r.id)) : undefined
     return { tabs: page.map(row => {
-      const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
-      const tags = mentions?.get(row.id)
-      return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
-        ...tags ? { mentionsWaiting: tags.count, mentionsDigest: tags.digest } : {} }
+      const head = heads.get(row.id)![0]!.data as { name: string; paused: boolean }
+      // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
+      // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
+      const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
+      return { id: row.id, name: head.name, ownerId: row.ownerId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
+        ...personal ? { personal: true as const } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
   /** Runs a read, outside any transaction: its parts come through the read cache at the stamps `body` is given (cache.ts),
-   *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). A Swarm still in one row is migrated
-   *  first, as a safety net for one the job did not see (design 6.1), and answers 503 while that cannot be done. */
+   *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: PrismaClient, view: CacheView) => Promise<T>): Promise<T> {
-    // The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it.
-    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
-    // A deleted Swarm reads as one that does not exist (deletion.ts).
-    if (!row || row.deletedAt) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
-    if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
+    const row = await this.swarmRow(user, tabId)
+    // A deleted Swarm reads as one that does not exist (deletion.ts), and so does one still in one row: it is from before the
+    // parts, and the wipe removes it (migration/wipeJob.ts).
+    if (!row || row.deletedAt || row.format !== 2) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
     return body(this.db, await this.store.view([tabId]))
+  }
+
+  /** The row's format and deletion only, never its other fields. */
+  private swarmRow(user: AuthUser, tabId: string): Promise<SwarmRow | null> {
+    const now = this.now(), key = JSON.stringify([user.autonomousEnv, tabId])
+    const kept = this.swarmRows.get(key)
+    if (kept && now >= kept.at && now - kept.at < SWARM_ROW_READS_MS) return kept.read
+    if (kept) this.swarmRows.delete(key)
+    // Entries are inserted in time order, so an expired prefix is enough to clear old Swarms on each request.
+    for (const [old, entry] of this.swarmRows) {
+      if (now >= entry.at && now - entry.at < SWARM_ROW_READS_MS) break
+      this.swarmRows.delete(old)
+    }
+    const entry: SwarmRowRead = { at: now, read: this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv },
+      select: { format: true, deletedAt: true } }) }
+    this.swarmRows.set(key, entry)
+    while (this.swarmRows.size > MAX_SWARM_ROW_READS) this.swarmRows.delete(this.swarmRows.keys().next().value!)
+    // A missing row or a failed read is not held: a newly created Swarm and a recovered database answer on the next request.
+    entry.read.then(row => { if (!row && this.swarmRows.get(key) === entry) this.swarmRows.delete(key) }, () => {
+      if (this.swarmRows.get(key) === entry) this.swarmRows.delete(key)
+    })
+    return entry.read
   }
 
   private async load(tx: PrismaClient, cached: CacheView, user: AuthUser, tabId: string, asAgentId: string | undefined, t0: number, opts: LoadOptions,
@@ -397,33 +471,25 @@ export class SwarmReads {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [[teamMachines, otherWorkspaceMachines, machineVersions], counts, newest] = await Promise.all([
-      this.machineLookups(state),
-      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor),
-        activityDigest(tx, tabId, actor.userId, t0)]) : undefined,
-      readLastChangedAt(tx, cached, tabId),
-    ])
-    return { parts: loaded, actor, lastChangedAt: newest,
-      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
-        ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
-          decisionsDigest: counts[1].digest, activityDigest: counts[2] } : {}) }, state) }
+    const [machineVersions, newest] = await Promise.all([this.machineLookups(state), readLastChangedAt(tx, cached, tabId)])
+    const view = readerView(loaded, actor, t0, { machineVersions }, state)
+    return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 
-  /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the
+  /** The CLI version each of the Swarm's machines' daemons last connected with (store.ts): the
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
-   *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
+   *  MACHINE_READS_MS. A start's dispatch still looks up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
-    if (!state.machines?.length) return Promise.resolve([[], [], {}])
+    if (!state.machines?.length) return Promise.resolve({})
     const now = this.now()
-    const key = JSON.stringify([state.id, state.environment, state.workspaceId ?? null, state.machines.map(m => m.machineId).sort()])
+    const key = JSON.stringify([state.id, state.environment, state.machines.map(m => m.machineId).sort()])
     const kept = this.machineReads.get(key)
     if (kept && now >= kept.at && now - kept.at < MACHINE_READS_MS) return kept.read
     for (const [old, entry] of this.machineReads) {
       if (now >= entry.at && now - entry.at < MACHINE_READS_MS) break
       this.machineReads.delete(old)
     }
-    const entry = { at: now, read: Promise.all([this.store.machineFacts(this.db, state), this.store.otherWorkspaceMachines(this.db, state)])
-      .then(([facts, other]): MachineReads => [facts.team, other, facts.versions]) }
+    const entry = { at: now, read: this.store.machineVersions(this.db, state) }
     this.machineReads.delete(key)
     this.machineReads.set(key, entry)
     // A failed lookup is never reused.

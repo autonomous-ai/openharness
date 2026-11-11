@@ -715,6 +715,10 @@ void pod_model_link(pod_model_t *m, bool up) {
         m->want_n = 0;
         m->swarm_ids = false;
         m->focus_pending = false;
+        m->side_press = POD_SIDE_NONE;
+        m->side_press_swarm[0] = 0;
+        for (int i = 0; i < SWARMS_CARD_MAX; i++)   // the Buddy's dot is the device's own: a new link starts without one
+            for (int j = 0; j < SWARM_LEADS_MAX; j++) m->swarms[i].leads[j].buddy_unread = false;
     }
     m->revision++;
 }
@@ -767,6 +771,10 @@ void pod_model_supertab_ids(pod_model_t *m, const char (*ids)[ID_MAX], int n) {
         if (!ids[i][0] || memchr(ids[i], 0, ID_MAX) == NULL || want_idx(m, ids[i]) >= 0) continue;
         memcpy(m->want[m->want_n++], ids[i], ID_MAX);
     }
+    // A Swarm off the list is access lost as often as not (removed from its project, signed out on the Mac), and no read frame comes: its Notices rows hold chat
+    // text and the project's name, so they go with it. A listed Swarm keeps its rows, its card here or not (the frame may be on its way).
+    for (int i = m->unread_count - 1; i >= 0; i--)
+        if (m->unread[i].tab[0] && want_idx(m, m->unread[i].tab) < 0) unread_drop(m, i);
     int k = 0;   // keep the listed ones, free the rest
     for (int i = 0; i < m->swarm_n; i++) {
         if (want_idx(m, m->swarms[i].id) < 0) {
@@ -806,7 +814,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         m->swarm_n++;
     }
     pod_swarm_t *d = &m->swarms[at];
-    struct { pod_recap_state_t recap; char *text; uint32_t text_at; } carry[SWARM_LEADS_MAX];
+    struct { pod_recap_state_t recap; char *text; uint32_t text_at; bool buddy_unread; } carry[SWARM_LEADS_MAX];
     memset(carry, 0, sizeof carry);
     const int ln = s->lead_n > SWARM_LEADS_MAX ? SWARM_LEADS_MAX : s->lead_n;
     for (int j = 0; j < ln; j++) {
@@ -814,7 +822,13 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         if (k < 0) continue;
         pod_lead_t *ol = &d->leads[k];   // taken over: the old copy no longer owns the text
         carry[j].recap = ol->recap; carry[j].text = ol->text; carry[j].text_at = ol->text_at;
+        carry[j].buddy_unread = ol->buddy_unread;   // the device's own mark: no frame sets or clears it
         ol->text = NULL;
+        if (strcmp(ol->chat_id, s->leads[j].chat_id)) {   // another chat: the old message is not its message
+            free(carry[j].text);
+            carry[j].text = NULL; carry[j].text_at = 0;
+            if (carry[j].recap != POD_RECAP_NONE) carry[j].recap = POD_RECAP_LOADING;   // asked for (open): "…" until the daemon pushes the new chat's
+        }
     }
     for (int j = 0; j < d->lead_n; j++) lead_free_text(&d->leads[j]);   // the ones that left
     *d = *s;
@@ -825,16 +839,22 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         l->text = carry[j].text;
         l->recap = carry[j].recap;
         l->text_at = carry[j].text_at;
+        l->buddy_unread = carry[j].buddy_unread;
         l->since_at_ms = now_ms;
     }
+    // The same for a Lead that left this Swarm. The same id in another Swarm is another row's business.
+    for (int i = m->unread_count - 1; i >= 0; i--)
+        if (!strcmp(m->unread[i].tab, d->id) && pod_model_lead_index(d, m->unread[i].agent) < 0) unread_drop(m, i);
+    if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, s->id)) { m->side_press = POD_SIDE_NONE; m->side_press_swarm[0] = 0; }   // the daemon has answered
     m->revision++;
 }
 
-void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none) {
+void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none) {
     const pod_swarm_t *s = pod_model_swarm(m, tab);
     const int j = pod_model_lead_index(s, lead);
     if (j < 0) return;
     pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
+    if (chat_id && chat_id[0] && l->chat_id[0] && strcmp(chat_id, l->chat_id)) return;   // a reply for a chat the face has left (both name one)
     if (l->recap == POD_RECAP_NONE) return;   // a Lead nobody asked for or has left: a late reply would only sit there stale
     lead_free_text(l);
     l->text_at = at;
@@ -867,8 +887,37 @@ void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead)
     m->revision++;
 }
 
+void pod_model_side_press(pod_model_t *m, const char *swarm_id, pod_side_t side, uint32_t now_ms) {
+    pod_model_clock(m, now_ms);
+    m->side_press = side;
+    m->side_press_ms = m->clock_ms;
+    pod_copy_str(m->side_press_swarm, sizeof m->side_press_swarm, side == POD_SIDE_NONE || !swarm_id ? "" : swarm_id);
+    m->revision++;
+}
+
+pod_side_t pod_model_side_shown(const pod_model_t *m, const pod_swarm_t *sw) {
+    pod_side_t side = sw->side;
+    if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, sw->id) && (uint32_t)(m->clock_ms - m->side_press_ms) < POD_SIDE_PRESS_MS) side = m->side_press;
+    return side == POD_SIDE_BUDDY ? POD_SIDE_BUDDY : POD_SIDE_PM;
+}
+bool pod_model_no_buddy(const pod_model_t *m, const pod_swarm_t *sw, const pod_lead_t *l) {
+    return l->buddies && !l->has_buddy && pod_model_side_shown(m, sw) == POD_SIDE_BUDDY;
+}
+uint32_t pod_model_side_press_left_ms(const pod_model_t *m, const pod_swarm_t *sw) {
+    if (m->side_press == POD_SIDE_NONE || strcmp(m->side_press_swarm, sw->id)) return 0;
+    const uint32_t gone = m->clock_ms - m->side_press_ms;
+    return gone < POD_SIDE_PRESS_MS ? POD_SIDE_PRESS_MS - gone : 0;
+}
+bool pod_model_buddy_mark(pod_model_t *m, const char *tab, const char *lead, bool unread) {
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(m, tab);
+    const int j = sw ? pod_model_lead_index(sw, lead) : -1;
+    if (j < 0 || sw->leads[j].buddy_unread == unread) return false;
+    sw->leads[j].buddy_unread = unread;
+    return true;
+}
+
 void pod_model_supertab_focus(pod_model_t *m, const char *tab, const char *lead) {
-    if (!tab || !*tab || !lead || !*lead) return;
+    if (!tab || !*tab || !lead) return;   // an empty lead is kept: the Swarm opens on the Lead last shown there
     pod_copy_str(m->focus_tab, sizeof m->focus_tab, tab);
     pod_copy_str(m->focus_lead, sizeof m->focus_lead, lead);
     m->focus_pending = true;
@@ -999,6 +1048,26 @@ void pod_model_unread_ask(pod_model_t *m, const char *agent, const char *name, c
     if (i >= 0) m->unread[i].ask = true;
 }
 
+void pod_model_swarm_notice(pod_model_t *m, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t now_ms) {
+    if (!tab || !*tab || !lead || !*lead) return;
+    const pod_swarm_t *sw = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(sw, lead);
+    if (j < 0) return;
+    char project[CABLE_NAME_MAX];
+    pod_copy_str(project, sizeof project, sw->leads[j].project);
+    pod_model_unread_add(m, lead, project, text, -1, now_ms);
+    pod_unread_t *u = &m->unread[0];   // add puts it on top
+    pod_copy_str(u->tab, sizeof u->tab, sw->id);
+    pod_copy_str(u->chat_id, sizeof u->chat_id, chat_id);
+}
+
+bool pod_model_swarm_notice_read(pod_model_t *m, const char *tab, const char *lead, const char *chat_id) {
+    int i = unread_idx(m, lead);
+    if (i < 0 || !tab || strcmp(m->unread[i].tab, tab) || strcmp(m->unread[i].chat_id, chat_id ? chat_id : "")) return false;
+    unread_drop(m, i);
+    return true;
+}
+
 int pod_notice_count(const pod_model_t *m) {
     int n = 0;
     for (int i = 0; i < m->agent_count; i++) n += pod_model_eff(m, &m->agents[i]) == POD_ASKING;
@@ -1011,6 +1080,14 @@ int pod_notice_count(const pod_model_t *m) {
 
 void pod_model_unread_clear(pod_model_t *m) {
     m->unread_count = 0;
+    m->revision++;
+}
+
+void pod_model_unread_clear_agents(pod_model_t *m) {   // a Swarm notice (tab set) is not in a notif.replace list: it stays
+    int k = 0;
+    for (int i = 0; i < m->unread_count; i++)
+        if (m->unread[i].tab[0]) m->unread[k++] = m->unread[i];
+    m->unread_count = k;
     m->revision++;
 }
 

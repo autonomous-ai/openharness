@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
-import { processProbe, runningPane, systemTmuxPaths } from './callerPane.js'
+import { processProbe, runningPane, systemTmuxPaths, windowsRunningPane } from './callerPane.js'
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
@@ -58,9 +58,43 @@ it('is no pane for a person\'s terminal outside tmux, nor for a command detached
   expect(runningPane({}, probe({ ancestors: chain(900, 1) }), 'darwin')).toEqual({})
 })
 
-it('keeps TMUX_PANE as it is on Windows, which has no tmux to check it against', () => {
-  expect(runningPane({ TMUX_PANE: '%7' }, probe({ panes: null, ancestors: null }), 'win32')).toEqual({ pane: '%7' })
-  expect(runningPane({}, probe(), 'win32')).toEqual({})
+describe('windowsRunningPane', () => {
+  const UNPROVEN = 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.'
+  const row = (pid: number, parentPid: number, startMarker: string, executable = 'node.exe') => ({ pid, parentPid, startMarker, executable, args: '' })
+  const table = (...rows: ReturnType<typeof row>[]) => async () => rows
+
+  it('gives the pane a command names, with its parents to hold it to', async () => {
+    const read = table(row(900, 700, 'w:30'), row(700, 600, 'w:20', 'claude.exe'), row(600, 1, 'w:10', 'harness-pty.exe'))
+    expect(await windowsRunningPane('p1:%3', read, 900)).toEqual({ pane: 'p1:%3', ancestors: [900, 700, 600] })
+  })
+
+  it('refuses a command under the PTY host that names no pane, whatever the case of its file name', async () => {
+    for (const host of ['harness-pty.exe', 'HARNESS-PTY.EXE', 'C:\\Users\\me\\.harness\\runtime\\pty\\1\\harness-pty.exe']) {
+      expect(await windowsRunningPane(undefined, table(row(900, 600, 'w:30'), row(600, 1, 'w:10', host)), 900)).toEqual({ refused: UNPROVEN })
+    }
+  })
+
+  it('takes a command outside any pane for a person\'s terminal', async () => {
+    expect(await windowsRunningPane(undefined, table(row(900, 800, 'w:30'), row(800, 1, 'w:10', 'powershell.exe')), 900)).toEqual({})
+  })
+
+  // Windows gives a freed pid to the next process and never reparents: a Builder's pid must not pass for a parent long gone.
+  it('ends the chain at a parent that started after its child', async () => {
+    const read = table(row(900, 700, 'w:30'), row(700, 600, 'w:99', 'claude.exe'), row(600, 1, 'w:10', 'harness-pty.exe'))
+    expect(await windowsRunningPane('p1:%3', read, 900)).toEqual({ pane: 'p1:%3', ancestors: [900] })
+    expect(await windowsRunningPane(undefined, read, 900)).toEqual({})
+  })
+
+  it('survives a loop in the table', async () => {
+    expect(await windowsRunningPane('p1:%3', table(row(900, 700, 'w:30'), row(700, 900, 'w:30')), 900))
+      .toEqual({ pane: 'p1:%3', ancestors: [900, 700] })
+  })
+
+  it('cannot prove a named pane with no table, or a table without this command', async () => {
+    expect(await windowsRunningPane('p1:%3', async () => null, 900)).toEqual({ refused: UNPROVEN })
+    expect(await windowsRunningPane('p1:%3', table(row(800, 1, 'w:10')), 900)).toEqual({ refused: UNPROVEN })
+    expect(await windowsRunningPane(undefined, async () => null, 900)).toEqual({})
+  })
 })
 
 // The second review of #2087: the real tmux and ps outputs, read as they come, and the late finding's three ways to leave

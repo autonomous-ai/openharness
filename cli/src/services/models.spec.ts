@@ -23,6 +23,7 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
+import { linkClaudeProfile, listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels, swarmLaunchTarget } from './models.js'
@@ -96,7 +97,13 @@ vi.mock('../lib/apiModels.js', () => ({
   refreshApiFor: vi.fn(() => (override: unknown) => ({ override, apiBase: 'https://api.example.test/v1' })),
   apiTargetAnswer: vi.fn(async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' })),
 }))
+vi.mock('../lib/claudeProfiles.js', async (importOriginal) => ({
+  profileId: (await importOriginal<typeof import('../lib/claudeProfiles.js')>()).profileId,
+  listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude' }))),
+  linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked' } } : { error: 'INVALID_PATH' })),
+}))
 vi.mock('../lib/codexProfiles.js', () => ({
+  defaultCodexHome: () => '/home/me/.codex',
   listCodexProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ path, label: 'Codex' }))),
   linkCodexProfile: vi.fn((path: string) => (path ? { path, label: 'Linked' } : { error: 'INVALID_PATH' })),
 }))
@@ -108,7 +115,7 @@ vi.mock('../dsh/installed.js', async (importOriginal) => ({
 /** The Model Manager's local models: what the service built it with, and its list and act. */
 const local = vi.hoisted(() => ({
   options: {} as Record<string, any>,
-  list: vi.fn(async (_grid: string | null, _force?: boolean): Promise<Record<string, unknown>> => ({ models: [], busy: false, observedAt: 'now' })),
+  list: vi.fn(async (_grid: string | null, _force?: boolean, _scan?: boolean): Promise<Record<string, unknown>> => ({ models: [], busy: false, observedAt: 'now' })),
   act: vi.fn(async (_grid: string | null, _modelId: unknown, _action: string): Promise<Record<string, unknown>> => ({})),
   communityGrid: vi.fn(async (): Promise<string | null> => 'Omagrid'),
   servedApps: vi.fn(async (_grid: string): Promise<string[]> => []),
@@ -718,12 +725,15 @@ describe('the models service', () => {
           const { core, ask } = setup([], named)
           expect(await ask('grid_fleet_models_list')).toEqual({ models: [], busy: false, observedAt: 'now', gridSetupNeeded: true })
           expect(access.ensure).not.toHaveBeenCalled()
-          expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', false)
+          expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', false, true)
           expect(core.clients.gridModelsChanged).not.toHaveBeenCalled()
           // Asked to, it reads afresh; still nothing set up.
           await ask('grid_fleet_models_list', { refresh: true })
-          expect(local.list).toHaveBeenLastCalledWith('kelvin-1a2b3c4d', true)
+          expect(local.list).toHaveBeenLastCalledWith('kelvin-1a2b3c4d', true, true)
           expect(access.ensure).not.toHaveBeenCalled()
+          // A Swarm machine reading (`scan: false`) reads without starting a scan of other apps' models.
+          await ask('grid_fleet_models_list', { scan: false })
+          expect(local.list).toHaveBeenLastCalledWith('kelvin-1a2b3c4d', false, false)
         } finally {
           vi.mocked(signedInGridEmail).mockReturnValue('me@example.com')
         }
@@ -737,7 +747,7 @@ describe('the models service', () => {
         expect(answer).not.toHaveProperty('gridSetupNeeded')
         expect(answer).not.toHaveProperty('gridSetupError')
         // Read fresh: the catalog was unreachable a moment ago.
-        expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true)
+        expect(local.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true, true)
         expect(core.clients.gridModelsChanged).toHaveBeenCalledOnce()
       })
 
@@ -937,10 +947,14 @@ describe('the models service', () => {
         expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
       })
 
-      it('codex_profiles_list: the folders this machine offers, with the ones the asker has seen; a failed scan is said', async () => {
+      it('codex_profiles_list: the folders this machine lists, with the ones the asker has seen; a failed scan is said', async () => {
         const { ask } = setup()
-        expect(await ask('codex_profiles_list', { observedPaths: ['/home/me/.codex-work', 7] })).toEqual({ profiles: [{ path: '/home/me/.codex-work', label: 'Codex' }] })
-        expect(listCodexProfiles).toHaveBeenLastCalledWith(['/home/me/.codex-work'])
+        const { core } = setup()
+        const id = (path: string) => profileId(core.daemon.machineId(), 'codex', path)
+        expect(await ask('codex_profiles_list', { observedPaths: ['/home/me/.codex-work', 7] })).toEqual({ profiles: [{ path: '/home/me/.codex-work', label: 'Codex', id: id('/home/me/.codex-work') }] })
+        // The default Codex home answers with the one id of the default account, marked default.
+        expect(await ask('codex_profiles_list', { observedPaths: ['/home/me/.codex'] })).toEqual({ profiles: [{ path: '/home/me/.codex', label: 'Codex', id: id('default'), default: true }] })
+        expect(listCodexProfiles).toHaveBeenLastCalledWith(['/home/me/.codex'])
         expect(await ask('codex_profiles_list')).toEqual({ profiles: [] })
         vi.mocked(listCodexProfiles).mockImplementationOnce(() => { throw new Error('unreadable') })
         expect(await ask('codex_profiles_list')).toEqual({ error: 'CODEX_PROFILES_FAILED' })
@@ -956,6 +970,38 @@ describe('the models service', () => {
         expect(await ask('codex_profile_link', { path: '/home/me/.codex-work' })).toEqual({ error: 'INTERNAL' })
         expect(log).toHaveBeenCalledWith('[backend] dispatch codex_profile_link failed:', expect.any(Error))
         log.mockRestore()
+      })
+
+      // F9: offering an account to the Swarm went with Desktop's accounts page. A Desktop of the last 30 days may still ask, and is
+      // told no account is offered; nothing is kept.
+      it('swarm_account_offer: offers nothing and keeps nothing, and says so', async () => {
+        const { ask } = setup()
+        for (const payload of [{ engine: 'claude', path: '/p', offered: true }, { engine: 'codex', path: '/p', offered: false }, { engine: 'claude', path: 42 }]) {
+          expect(await ask('swarm_account_offer', payload)).toEqual({ offered: false, ignored: true })
+        }
+      })
+
+      it('the Claude and Codex profile requests answer OWNER_REQUIRED to a guest', async () => {
+        const { requests } = setup()
+        for (const type of ['claude_profiles_list', 'claude_profile_link', 'codex_profiles_list', 'codex_profile_link', 'swarm_account_offer']) {
+          expect(await requests[type]!({ path: '/x' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+        }
+      })
+
+      it('claude_profiles_list: the folders this machine lists under its own machine id; a failed scan is said', async () => {
+        const { ask, core } = setup()
+        expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude' }] })
+        expect(listClaudeProfiles).toHaveBeenLastCalledWith(['/home/me/.claude-work'], { machineId: core.daemon.machineId() })
+        expect(await ask('claude_profiles_list')).toEqual({ profiles: [] })
+        vi.mocked(listClaudeProfiles).mockImplementationOnce(() => { throw new Error('unreadable') })
+        expect(await ask('claude_profiles_list')).toEqual({ error: 'CLAUDE_PROFILES_FAILED' })
+      })
+
+      it('claude_profile_link: links the folder and answers the profile, or why not', async () => {
+        const { ask, core } = setup()
+        expect(await ask('claude_profile_link', { path: '/home/me/.claude-work' })).toEqual({ profile: { id: 'p', path: '/home/me/.claude-work', label: 'Linked' } })
+        expect(await ask('claude_profile_link', { path: 42 })).toEqual({ error: 'INVALID_PATH' })
+        expect(linkClaudeProfile).toHaveBeenLastCalledWith('', core.daemon.machineId())
       })
     })
   })

@@ -46,11 +46,7 @@ const HAND_MADE: Array<[string, Record<string, unknown>]> = [
   ['product_usage_activity', { key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true }],
   ['harness_sessions', { key: { expiresAt: 1 }, name: 'harness_session_expiry', expireAfterSeconds: 30 * DAY }],
   ['SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: 120 }],
-  ['SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: 30 * DAY }],
-  ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
-  ...['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']
-    .map(c => [c, { key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
-  ['SwarmWorkspaceInvitation', { key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 }],
+  ...['SwarmHead', 'SwarmGroup', 'SwarmStart'].map(c => [c, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
 ]
 
 async function buildHandMade(db: PrismaClient): Promise<void> {
@@ -70,7 +66,7 @@ async function seed(db: PrismaClient): Promise<void> {
     const rows = Array.from({ length: Math.min(5000, GROUPS - i) }, (_, j) => {
       const n = i + j, tabId = `tab-${n % SWARMS}`
       return { _id: `${tabId}:g${n}`, tabId, key: `g${n}`, version: 1, changedAt: { $date: at.toISOString() }, deleted: false, ordinal: n, projectId: `p${n % 7}`,
-        kind: null, archived: false, dormant: n % 3 === 0, agentIds: [`a${n % 50}`], messageSeq: n % 100, reportSeq: 0, workFinished: n % 2 === 0,
+        kind: null, archived: false, dormant: n % 3 === 0, agentIds: [`a${n % 50}`], messageSeq: n % 100,
         lastActivityAt: { $date: new Date(at.getTime() - n * 1000).toISOString() }, hostMachineIds: [], data: { title: `Group ${n}`, brief: payload } }
     })
     await db.$runCommandRaw({ insert: 'SwarmGroup', documents: rows as never })

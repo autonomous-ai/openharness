@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import './lib/connectWait.js'
+import './config/startHome.js'
 import './config/loadEnv.js'
 import { runDevicesCommand } from './devices/client.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
@@ -49,8 +51,7 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
-import { revokeHarnessRefresh } from './team/handoff.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -70,14 +71,15 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
-import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
-import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, servedFolderDeps } from './lib/localSocket.js'
+import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
+import { nodeRow, readNodeStatus, type NodeStatus } from './lib/nodeStatus.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
+import { ownProcessGroup } from './lib/windows/noWindow.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
 import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
@@ -107,6 +109,24 @@ import { privacyCommand } from './lib/privacyCommand.js'
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
 
+
+/** `harness start --help`: the start options alone (`harness --help` lists them among the rest). */
+const START_HELP = `harness start — start the Harness daemon on this computer, using the saved sign-in
+
+Usage: harness start [options]
+
+  -f, --foreground       run the daemon in the FOREGROUND (for a supervisor; logs to stdout)
+  --repair               also re-verify the managed Node runtime and repoint the launcher at it
+  --if-down              start only if it is not running and \`harness stop\` has not stopped it
+                         (what Windows's scheduled task runs; quiet otherwise)
+  --at-logon             with --if-down: the sign-in task's start, first forgets a \`harness stop\`
+  --restart              stop the daemon that is running for this data folder and start it over
+                         (without it, a running daemon is never replaced by a start that has no
+                         sign-in of its own)
+  --device-dump[=<file>] record every frame to/from the paired Autonomous device, decrypted
+  -h, --help             print this and exit; nothing is started
+
+The data folder is ~/.harness/cli/data under the HOME this runs with (or ADAPTER_DATA_DIR).`
 
 function usage(exitCode = 0): never {
   // An agent is pointed to its own help first (agentClient/help.ts); one that asks gets it before the rest.
@@ -143,6 +163,9 @@ Machine:
   harness start --repair       also re-verify the managed Node runtime and repoint the launcher at it
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
+  harness start --restart      stop the daemon that is running and start it over (a start with no sign-in of its own
+                               never replaces a running daemon without it)
+  harness start --help         the start options; starts nothing
   harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
                                since the computer started (what Windows's scheduled task runs; quiet otherwise).
                                --at-logon (the sign-in task's start) first forgets a \`harness stop\`
@@ -162,6 +185,8 @@ Machine:
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
+  harness swarm [list|status|machines|agents|starts]
+                               the Swarm as you read it: people, machines, agents, starts
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -176,7 +201,8 @@ Machine:
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
   harness route [--send] -- <w>  which harness words belong to, or new work; --send types them into an idle one (programs-reply)
-                               new, ps, show, wait, watch, tell, reply, route and close take --machine <name> for another of your
+  harness resume <name>        open a closed harness again, with its conversation, for a program to reply to (programs-reply)
+                               new, ps, show, wait, watch, tell, reply, route, resume and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
@@ -297,8 +323,8 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   if (!machineId) throw new Error('Backend did not return a machine id for this computer')
   // Refresh can atomically replace the session while this request is in flight. Always merge the
   // machine id into the newest file, under the lock, so a stale caller never rolls its rotated refresh
-  // token back nor writes over a signed-out mark.
-  const next = await updateAuthSession((latest) => latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: Date.now() })
+  // token back nor writes over a signed-out mark; and only into the sign-in it was asked for.
+  const next = await recordMachineId(machineId, current.signInEpoch)
   if (!next) throw new Error('SSO session disappeared while resolving this computer')
   return next
 }
@@ -380,8 +406,6 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
-    // A Harness Team sign-in (team/): this computer runs its own Swarm agents and reaches no other computer.
-    ...(latest?.kind ? { kind: latest.kind } : {}),
     // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
@@ -389,7 +413,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   else if (signInAgain) {
     console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
   } else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -609,7 +633,7 @@ async function loginCommand(
       const stopped = stop !== null && stop.pid !== null
       const replaced = readAuthSession()?.refreshToken
       const outcome = await signIn()
-      // The sign-in this one replaced ends on the server too, as `harness team on` ends the one it replaces.
+      // The sign-in this one replaced ends on the server too.
       if (outcome.signedIn && replaced && readAuthSession()?.refreshToken !== replaced) await endSignInOnServer(replaced, 'the previous sign-in')
       // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
       return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
@@ -1062,7 +1086,7 @@ function promptForCallbackUrl(redirectUri: string): {
 function openInBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
   try {
-    const child = spawn(cmd, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' })
+    const child = spawn(cmd, [url], { stdio: 'ignore', ...ownProcessGroup(), shell: process.platform === 'win32' })
     child.on('error', () => { /* no browser here (headless/ssh) — the printed URL is the fallback */ })
     child.unref()
   } catch { /* ignore */ }
@@ -1099,7 +1123,7 @@ async function runningDaemonPid(underLock: boolean = false): Promise<number | nu
  * the very value the backend binds a machine to at login) — so a later sign-in ADOPTS this machine
  * rather than replacing it.
  */
-async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false, atLogon: boolean = false): Promise<void> {
+async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false, atLogon: boolean = false, restart: boolean = false): Promise<void> {
   // The scheduled task's start (Windows, lib/startIfDown.ts): nothing to do is the usual answer, and it is quiet. The
   // logon task's (`--at-logon`) forgets a `harness stop` first; the five-minute task's honours it.
   if (ifDown) {
@@ -1134,9 +1158,13 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
       // there, with `auth status` naming the new machine and the socket serving the old one. Asked
       // of the daemon itself; one that cannot answer (still booting, mid-update) is trusted as before.
       const serving = (await runningDaemonStatus())?.machineId
+      // `--restart` is the person asking for it: stopped whatever it serves, and started over below.
+      if (restart) {
+        console.log(`machine running (pid ${running}) — restarting it (--restart)`)
+        await stopDaemonOrExit()
       // Signed out, the daemon serves this computer under its own id and there is no account to be on
       // the wrong one of — `wantedDaemonIdentity` is the same answer `restartDaemonForIdentity` uses.
-      if (!serving || serving === wantedDaemonIdentity()) {
+      } else if (!serving || serving === wantedDaemonIdentity()) {
         // `--repair` still does its provisioning here: it touches the managed runtimes, never the
         // bundle, and the live daemon picks a grid laid down now up on its next resolve (see
         // repairManagedRuntimes). Without this, a new pin could only be followed by a restart.
@@ -1144,9 +1172,16 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
         console.log(`machine already running (pid ${running}) — it auto-reconnects.`)
         console.log('  check: harness status   ·   stop: harness stop   ·   update now: harness update')
         process.exit(0)
+      } else if (!session) {
+        // Nothing on disk says this daemon is on the wrong account: this start has only its own computer id, which a
+        // run under another HOME always differs from. A daemon is never replaced on that evidence.
+        console.error(`machine already running (pid ${running}) as another account — not replacing it: this start has no sign-in of its own.`)
+        console.error('  check: harness status   ·   replace it: harness start --restart')
+        process.exit(1)
+      } else {
+        console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
+        await stopDaemonOrExit()
       }
-      console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
-      await stopDaemonOrExit()
     }
     // Windows, the task registered: it starts the master, as the task would at logon; not under the spawn lock,
     // which its own `harness start --if-down` takes (lib/platformDaemon.ts startThroughTask).
@@ -1359,7 +1394,7 @@ const SIGN_OUT_REVOKE_TIMEOUT_MS = 5_000
  */
 async function endSignInOnServer(refreshToken: string | undefined, which = 'this sign-in'): Promise<void> {
   if (!/^(hnr|htr)_/.test(refreshToken ?? '')) return
-  const ended = await revokeHarnessRefresh((path, body) => postJson(path, body, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)), refreshToken)
+  const ended = await postJson('/api/auth/revoke', { refreshToken }, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)).then(() => true, () => false)
   if (!ended) console.log(`Could not end ${which} on the server; it can no longer be used from here, and ends on its own after 90 days unused.`)
 }
 
@@ -1448,7 +1483,7 @@ async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
 async function runningDaemonStatus(): Promise<{
   version: string; sessions: number; machineId: string | null; connected: boolean
   backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean | null
-  dataDir: string | null; authDir: string | null
+  dataDir: string | null; authDir: string | null; node: NodeStatus | null
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
@@ -1470,6 +1505,7 @@ async function runningDaemonStatus(): Promise<{
       signedIn: typeof status?.signedIn === 'boolean' ? status.signedIn : null,
       dataDir: typeof status?.dataDir === 'string' ? status.dataDir : null,
       authDir: typeof status?.authDir === 'string' ? status.authDir : null,
+      node: readNodeStatus(body),
     }
   } catch {
     return null
@@ -1486,6 +1522,8 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  /** The daemon's Node, as it reports it; `status` shows it, and an older daemon sends none. */
+  node?: NodeStatus | null
   /** Who keeps the daemon running, when launchd or systemd does (`harness service install`). */
   supervisor?: string
   connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
@@ -1503,6 +1541,7 @@ function printInfoBlock(opts: {
   if (machineName) console.log(row('machine', machineName))
   if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
+  if (opts.node) console.log(row('node', nodeRow(opts.node)))
   console.log(row('backend', opts.connection.signedIn ? opts.connection.backendUrl ?? 'unknown · daemon not answering' : 'not signed in · harness login'))
   console.log(row('account', opts.connection.autonomousEnv ?? 'unknown · older daemon'))
   if (opts.connection.dataDir) console.log(row('state', tildify(opts.connection.dataDir)))
@@ -1780,6 +1819,8 @@ function clearAdapterState(): void {
         if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
       }
     } catch { /* no such directory */ }
+    // A folder too long for a socket keeps its sockets here.
+    rmSync(shortSocketFolder(dir), { recursive: true, force: true })
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
   else rmSync(dataDir, { recursive: true, force: true })
@@ -2650,6 +2691,7 @@ async function status(): Promise<void> {
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
     version: daemonStatus?.version ?? VERSION,
+    node: daemonStatus?.node,
     // Read from disk, not the daemon: it answers the same with the daemon stopped.
     // Signed out, devlog.json is the last account's copy: claiming membership from it would be wrong.
     // It is left on disk at logout on purpose: clearing it would drop the freeze and the rollback
@@ -2714,13 +2756,14 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
 import { computerUseCommand } from './agentClient/computerUse.js'
+import { browserMcpCommand } from './agentClient/browserMcp.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2757,19 +2800,12 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
 /** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
 const swarmCommands = () => import('./superTabs/command.js')
 
-/** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
- *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
-function unlessBuddy(run: () => Promise<number>): Promise<number> {
-  return swarmCommands().then(({ buddyRefusal }) => buddyRefusal())
-    .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
-}
-
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
     break
   case 'send':
-    unlessBuddy(() => sendCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   // A pane's BROWSER script asking whether a phone takes the page (agentClient/openUrl.ts). Not for people.
   case 'open-url':
@@ -2797,9 +2833,13 @@ switch (cmd) {
     process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
+  case 'browser-mcp':
+    // A Browser agent's MCP server (lib/browserMcpArgs.ts): an engine starts it, never a person.
+    browserMcpCommand().then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'mcp': {
-    const pane = process.env.TMUX_PANE
-    mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
+    const pane = sendPane(process.env)
+    mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) }).then(code => { process.exitCode = code }).catch(onError)
     break
   }
   case 'show':
@@ -2811,8 +2851,11 @@ switch (cmd) {
   case 'route':
     routeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'resume':
+    resumeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'tell':
-    unlessBuddy(() => tellCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
+    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2821,7 +2864,7 @@ switch (cmd) {
     watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
-    unlessBuddy(() => closeCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
+    closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2831,12 +2874,9 @@ switch (cmd) {
   case 'super-tab':
     swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'buddy-read':
-    // A Buddy's read-only recipes (lib/buddyRecipes.ts), which its guard lets it run once its person approved them.
-    import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
   case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
+    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
     import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
@@ -2862,11 +2902,13 @@ switch (cmd) {
     logout().catch(onError)
     break
   case 'start': {
+    // Reading the options never starts, stops or touches anything.
+    if (flags.includes('--help') || flags.includes('-h')) { console.log(START_HELP); process.exit(0) }
     // `--device-dump[=<file>]`: the daemon (this process with -f, else the detached child, which inherits
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG)).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart')).catch(onError)
     break
   }
   case 'join':
@@ -2915,7 +2957,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+        connect: (url, headers) => new NewCommandSocket(url, { headers }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2942,7 +2984,7 @@ switch (cmd) {
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
-    unlessBuddy(() => newCommand({
+    newCommand({
       argv: rest,
       cwd: process.cwd(),
       home: homedir(),
@@ -2950,11 +2992,11 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
-    })).then((code) => { process.exitCode = code }).catch(onError)
+    }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
@@ -2964,7 +3006,7 @@ switch (cmd) {
     break
   case 'remote':
     remoteCommand({
-      tmuxPane: process.env.TMUX_PANE,
+      tmuxPane: sendPane(process.env),
       localMachineId: wantedDaemonIdentity(),
       port: daemonPort(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
@@ -3060,20 +3102,23 @@ switch (cmd) {
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
-  case 'team':
-    // Loaded only here (team/deps.ts). The daemon is stopped before a sign-in changes under it and started again on the
-    // new one; `launch` prints its status block and exits, so it is always the last step.
-    Promise.all([import('./team/command.js'), import('./team/deps.js')])
-      .then(([{ teamCommand }, { teamCommandDeps }]) => teamCommand(rest, teamCommandDeps({
-        stopDaemon: async () => (await stopDaemonOrExit()).pid !== null,
-        startDaemon: () => launch(false),
-        signIn: async (restart) => {
-          const outcome = await loginCommand(false, false, false, { method: 'ask' })
-          if (outcome.signedIn) await restartDaemonForIdentity(restart)
-          else if (restart) await launch(false)
-        },
-      })))
+  case 'swarm':
+    import('./swarm/command.js')
+      .then(({ swarmCommand }) => swarmCommand(rest, {
+        out: (line) => console.log(line),
+        err: (line) => console.error(line),
+        auth: controlPlaneAuth,
+        get: (path, headers) => requestJson('GET', path, undefined, headers),
+      }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)
+    import('./team/remove.js')
+      .then(async ({ removeTeamAccount, teamRemovalDeps }) => {
+        const result = await removeTeamAccount(teamRemovalDeps())
+        console.log(JSON.stringify(result))
+        process.exitCode = result.ok ? 0 : 1
+      }).catch(onError)
     break
   case 'reset':
     resetCommand().catch(onError)

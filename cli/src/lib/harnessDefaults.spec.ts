@@ -55,3 +55,12 @@ it("keeps the model a package pins, with the launch's approvals, and adds no eff
   // An empty name is no choice: the default applies.
   expect(JSON.parse(freshHarnessEnvironment('opencode', { OPENCODE_CONFIG_CONTENT: '{"model":""}' }).OPENCODE_CONFIG_CONTENT!).model).toBe(DEFAULT_HARNESS_MODEL)
 })
+
+it('pins no model on Harness OS: OpenCode starts on its own free model there, with the approvals', () => {
+  const mcp = { harnessd: { type: 'local', command: ['harness', 'pair', 'mcp'] } }
+  const result = JSON.parse(freshHarnessEnvironment('opencode', { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp }) }, false, 'auto', true).OPENCODE_CONFIG_CONTENT!)
+  expect(result).toEqual({ mcp, permission: 'allow' })
+  expect(JSON.parse(freshHarnessEnvironment('opencode', {}, false, 'ask', true).OPENCODE_CONFIG_CONTENT!)).toEqual({ permission: 'ask' })
+  // Every other computer keeps the default.
+  expect(JSON.parse(freshHarnessEnvironment('opencode', {}, false, 'auto', false).OPENCODE_CONFIG_CONTENT!).model).toBe(DEFAULT_HARNESS_MODEL)
+})

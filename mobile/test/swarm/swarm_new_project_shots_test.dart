@@ -11,16 +11,20 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
+import 'package:harness_mobile/swarm/swarm_file_picker.dart';
+import 'package:harness_mobile/swarm/swarm_new_repository.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 import 'swarm_new_project_fixture.dart';
 
 /// Review screenshots of + New project: Home's row, the sheet filled in, PM
-/// runs on, the brief written with the keyboard up, a long error (with the
+/// runs on, Agent, files attached under the brief (and +'s sheet), the
+/// brief written with the keyboard up, a long error (with the
 /// keyboard up too), a Product Manager that did not start, and no machine able to run
 /// one. On a 390-point and a 320-point phone in both phone themes, from
 /// made-up data only, to the folder `SWARM_NEW_PROJECT_SHOTS` names. The
@@ -172,13 +176,12 @@ void main() {
           await tester.pumpAndSettle();
         }
 
-        // Home: + New project, the last of Projects.
-        await tester.ensureVisible(key('swarm-new-project'));
-        await tester.pumpAndSettle();
+        // The Swarm switcher, with New project before Join or create.
+        await tap('swarm-title-button');
         await capture('home');
 
         // The sheet, its brief written and its machine picked.
-        await tap('swarm-new-project');
+        await tap('swarm-switch-new-project');
         await tester.enterText(
           key('swarm-new-project-brief'),
           'Let people start a project from the phone, with its Product '
@@ -190,6 +193,32 @@ void main() {
         await capture('machines');
         await tap('swarm-new-project-pick-machine-mac-studio');
         await capture('sheet');
+
+        // Agent: each engine with the model it gets.
+        await tap('swarm-new-project-agent');
+        await capture('agents');
+        await tap('swarm-new-project-back');
+
+        // Two files under the brief, then taken off again.
+        final picker = (files: pickSwarmFiles, copies: swarmPickerCopyFolders);
+        pickSwarmFiles = () async => [
+          for (final name in ['product-brief.pdf', 'build.log'])
+            XFile.fromData(
+              Uint8List.fromList(List.filled(48 * 1024, 1)),
+              name: name,
+              path: '/copies/$name',
+            ),
+        ];
+        swarmPickerCopyFolders = () async => const [];
+        await tap('swarm-new-project-attach');
+        await capture('attach');
+        await tap('swarm-attach-files');
+        await capture('files');
+        for (final name in ['product-brief.pdf', 'build.log']) {
+          await tap('swarm-outgoing-remove-$name');
+        }
+        pickSwarmFiles = picker.files;
+        swarmPickerCopyFolders = picker.copies;
 
         // The keyboard up while the brief is written: it and Create stay in
         // sight.
@@ -278,7 +307,8 @@ void main() {
         ];
         await host.session!.inbox.reader(tab)!.refresh();
         await tester.pumpAndSettle();
-        await tap('swarm-new-project');
+        await tap('swarm-title-button');
+        await tap('swarm-switch-new-project');
         await tap('swarm-new-project-machine');
         await capture('none');
 
@@ -368,7 +398,8 @@ void main() {
       // Home shows the paused Swarm alone, as Dee's did.
       host.session!.home.show(tab);
       await tester.pumpAndSettle();
-      await tap('swarm-new-project');
+      await tap('swarm-title-button');
+      await tap('swarm-switch-new-project');
       await tap('swarm-new-project-machine');
       await tap('swarm-new-project-pick-machine-mac-studio');
       await capture('paused-default');
@@ -389,6 +420,208 @@ void main() {
     await tester.binding.setSurfaceSize(null);
     tester.view.reset();
     AppTheme.palette.value = HarnessPalette.graphite;
+    AppTheme.brightness.value = Brightness.dark;
+  }, skip: shots == null);
+
+  // Task #3373: New project's New repository, its subpage, the sheet with it
+  // chosen, waiting for GitHub, and two of its lines (F4 before, F2 after).
+  testWidgets('New repository on a 390 point phone, in both phone themes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3;
+    tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
+    final opened = swarmOpenGitHub;
+    swarmOpenGitHub = (_) async => true;
+    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+      final brightness = palette.brightness;
+      AppTheme.palette.value = palette;
+      AppTheme.brightness.value = brightness;
+      for (final state in ['ready', 'not-installed']) {
+        final swarm =
+            NewProjectSwarm(
+                machines: [
+                  leadPool('mac-studio', name: 'Studio.local', slots: 3),
+                ],
+              )
+              ..ownerState = state
+              ..installUrl =
+                  'https://github.com/apps/harness/installations/new';
+        final features = ExperimentalFeaturesStore(
+          storage: MemoryKeyValueStore(),
+        )..value = {PhoneExperiment.swarm};
+        final host = SwarmHost(
+          accountId: () => me,
+          account: ValueNotifier<String?>(me),
+          request: newProjectBackend([swarm]).request,
+          notices: SilentSystemNotices(),
+          features: features,
+          readMarks: MemoryKeyValueStore(),
+        )..foreground = false;
+        final boundary = GlobalKey();
+        await tester.pumpWidget(
+          RepaintBoundary(
+            key: boundary,
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: buildAppTheme(brightness: brightness),
+              builder: (_, child) => SwarmScope(notifier: host, child: child!),
+              onGenerateRoute: (_) => CupertinoPageRoute<void>(
+                builder: (_) => SwarmPage(now: () => newProjectNow),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        Future<void> capture(String name) => tester.runAsync(() async {
+          final image =
+              await (boundary.currentContext!.findRenderObject()!
+                      as RenderRepaintBoundary)
+                  .toImage(pixelRatio: 3);
+          final png = await image.toByteData(format: ui.ImageByteFormat.png);
+          await File('$shots/new-repository-$name-${brightness.name}.png')
+              .writeAsBytes(png!.buffer.asUint8List());
+          image.dispose();
+        });
+        Finder key(String value) => find.byKey(ValueKey(value));
+        Future<void> tap(String k) async {
+          await tester.ensureVisible(key(k));
+          await tester.pumpAndSettle();
+          await tester.tap(key(k));
+          await tester.pumpAndSettle();
+        }
+
+        await tap('swarm-title-button');
+        await tap('swarm-switch-new-project');
+        await tester.enterText(
+          key('swarm-new-project-brief'),
+          'A notes app with sync between the phone and the Mac.',
+        );
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        await tap('swarm-new-project-machine');
+        await tap('swarm-new-project-pick-machine-mac-studio');
+        await tap('swarm-new-project-repository');
+        if (state == 'ready') await capture('list');
+        await tap('swarm-new-project-pick-new-repo');
+        await tester.enterText(key('swarm-new-repo-name'), 'notes-app');
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        if (state == 'not-installed') {
+          await capture('not-installed');
+        } else {
+          await capture('subpage');
+          await tap('swarm-new-repo-use');
+          await capture('sheet');
+          await tester.tap(key('swarm-new-project-create'));
+          for (var i = 0; i < 10; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          await capture('waiting');
+          swarm.finishCreation(swarm.projects.last['id'] as String, 'taken');
+          await host.session!.inbox.reader(tab)!.refresh();
+          await tester.pumpAndSettle();
+          await capture('taken');
+        }
+        await tester.pumpWidget(const SizedBox());
+        host.dispose();
+      }
+    }
+    swarmOpenGitHub = opened;
+    AppTheme.brightness.value = Brightness.dark;
+  }, skip: shots == null);
+
+  // Guide's review of #3204: New repository at 200% text with a long name,
+  // and the wait with GitHub not opened, in both phone themes.
+  testWidgets('New repository at 200% text with a long name', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3;
+    tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
+    final opened = swarmOpenGitHub;
+    swarmOpenGitHub = (_) async => false;
+    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+      final brightness = palette.brightness;
+      AppTheme.palette.value = palette;
+      AppTheme.brightness.value = brightness;
+      final swarm = NewProjectSwarm(
+        machines: [leadPool('mac-studio', name: 'Studio.local', slots: 3)],
+      )..ownerState = 'ready';
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final host = SwarmHost(
+        accountId: () => me,
+        account: ValueNotifier<String?>(me),
+        request: newProjectBackend([swarm]).request,
+        notices: SilentSystemNotices(),
+        features: features,
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      final boundary = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: const TextScaler.linear(2)),
+              child: SwarmScope(notifier: host, child: child!),
+            ),
+            onGenerateRoute: (_) => CupertinoPageRoute<void>(
+              builder: (_) => SwarmPage(now: () => newProjectNow),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> capture(String name) => tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/new-repository-200-$name-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+        image.dispose();
+      });
+      Finder key(String value) => find.byKey(ValueKey(value));
+      Future<void> tap(String k) async {
+        await tester.ensureVisible(key(k));
+        await tester.pumpAndSettle();
+        await tester.tap(key(k));
+        await tester.pumpAndSettle();
+      }
+
+      await tap('swarm-title-button');
+      await tap('swarm-switch-new-project');
+      await tap('swarm-new-project-machine');
+      await tap('swarm-new-project-pick-machine-mac-studio');
+      await tap('swarm-new-project-repository');
+      await tap('swarm-new-project-pick-new-repo');
+      await tester.enterText(
+        key('swarm-new-repo-name'),
+        'notes-app-with-sync-between-the-phone-and-the-mac',
+      );
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await capture('subpage');
+      await tap('swarm-new-repo-use');
+      await capture('sheet');
+      await tester.ensureVisible(key('swarm-new-project-create'));
+      await tester.tap(key('swarm-new-project-create'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.ensureVisible(key('swarm-new-project-open-github'));
+      await tester.pumpAndSettle();
+      await capture('waiting-not-opened');
+      await tester.pumpWidget(const SizedBox());
+      host.dispose();
+    }
+    swarmOpenGitHub = opened;
     AppTheme.brightness.value = Brightness.dark;
   }, skip: shots == null);
 }

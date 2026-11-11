@@ -126,6 +126,19 @@ describe('the empty id list check', () => {
     expect(lint(`function f(tx, ids) { const where = base, base = { id: { in: ids } }; return tx.user.findMany({ where }) }`)).toEqual(['base'])
   })
 
+  // Both reads production scanned with on 2026-11-04 had this form, and a list written in the call used to pass.
+  it('flags a list made only of spreads unless it is tested, and accepts a spread of a constant', () => {
+    expect(lint(`async function f(tx, rows) { return tx.machine.findMany({ where: { machineId: { in: [...new Set(rows.map(r => r.id))] } } }) }`)).toEqual(['[...new Set(rows.map(r => r.id))]'])
+    expect(lint(`async function f(tx, a, b) { return tx.user.findMany({ where: { id: { in: [...a, ...b] } } }) }`)).toEqual(['[...a, ...b]'])
+    expect(lint(`async function f(tx, rows) { return rows.length ? tx.machine.findMany({ where: { machineId: { in: [...new Set(rows.map(r => r.id))] } } }) : [] }`)).toEqual([])
+    expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { authMode: { in: [...BILLED_MODES] } } }) }`)).toEqual([])
+    expect(lint(`async function f(tx, a) { return tx.user.findMany({ where: { id: { in: ['fixed', ...a] } } }) }`)).toEqual([])
+  })
+
+  it('guards the receipts too', () => {
+    expect(lint(`async function f(tx, ids) { return tx.productUsageReceipt.findMany({ where: { id: { in: ids } } }) }`)).toEqual(['ids'])
+  })
+
   it('accepts a literal list, a constant and other models', () => {
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { authMode: { in: BILLED_MODES } } }) }`)).toEqual([])
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { sessionKind: { in: ['team', 'person'] } } }) }`)).toEqual([])

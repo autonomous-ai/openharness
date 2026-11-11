@@ -629,6 +629,14 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// A creation writes a durable receipt and flushes it to disk synchronously (lib/agentCreationReceipt.ts). On a busy
+// Linux runner a flush blocked for seconds and a creation case timed out at 5 s (#4363); macOS barely waits. This spec
+// checks what the socket says and counts, not durability (agentCreationReceipt.spec.ts does), so a flush returns at once.
+vi.mock('node:fs', async (real) => {
+  const fs = await real<typeof import('node:fs')>()
+  const fsyncSync = () => {}
+  return { ...fs, fsyncSync, default: { ...fs, fsyncSync } }
+})
 // Grid's set-up, which the models service asks for before a move onto a grid model: set up already here,
 // as on a machine that has used grid before. Never a real install or sign-in from a spec.
 vi.mock('./lib/gridAttach.js', async (real) => ({
@@ -1312,19 +1320,15 @@ describe('BackendSocket outbound queue', () => {
 
   it('answers usage_read with this machine\'s own readings, wrapped for the requester', async () => {
     // What goes back names what the person spends and on whose account, so it must leave encrypted.
-    // The usage service answers it (services/usage.ts), with a reader that never touches a real home,
-    // Keychain or network.
+    // The usage service answers it (services/usage.ts), with a Codex read that starts no codex.
     const socket = relaySocket('token')
+    const codex = { ok: true as const, accountId: null, primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: null }, secondary: null }
     const readings = [
-      {
-        provider: 'claude' as const,
-        account: 'k1',
-        outcome: 'answered' as const,
-        httpStatus: 200,
-        body: { seven_day: { utilization: 42 } },
-      },
+      expect.objectContaining({ provider: 'claude', outcome: 'unreachable', source: 'cli' }),
+      { provider: 'codex', account: null, outcome: 'answered', httpStatus: 200, source: 'cli',
+        body: { rate_limit: { primary_window: { used_percent: 42, limit_window_seconds: 18_000, reset_at: null } } } },
     ]
-    serveOn(socket, (host) => host.start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { read: async () => readings }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS))
+    serveOn(socket, (host) => host.start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { codex: async () => codex, now: Date.now, env: async () => ({}) }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -2875,6 +2879,51 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // Task #2800, review of #2977: the server renews the Swarm host's delivery push lease each minute.
+  it('hands the backend\'s __deliveries_lease to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: '__deliveries_lease', payload: {} } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: '__deliveries_lease' }]))
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__deliveries_lease', payload: {} } })
+    socket.handleLocalFrame('local:swarm', { type: '__deliveries_lease', payload: {} })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(1)
+    expect(frames.filter((f) => f.type === '__deliveries_lease')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
+  // Spec 2026-11-02-poll-cost Part 4.2: the server says a Lead's terminal request waits for this machine.
+  it('hands the backend\'s __terminal_waiting to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
+    // One that names no agent is no request.
+    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1' } } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: '__terminal_waiting', tabId: 'tab-1', agentId: 'agent-1' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
+    socket.handleLocalFrame('local:swarm', { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(1)
+    expect(frames.filter((f) => f.type === '__terminal_waiting')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   it('hands the backend\'s zoo_changed to the window as its own frame, and only the backend\'s', async () => {
     const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []
@@ -3411,6 +3460,17 @@ describe('agent_retarget clearGrid', () => {
     expect(reply?.payload?.error).toBe('INVALID_GRID')
     expect(seen).toHaveLength(0)
   })
+
+  // A fresh move served only the v3 Buddy's model switch (#3901): an older caller's `fresh` is taken and goes nowhere.
+  it('moves a request that still says fresh home as any other', async () => {
+    const { seen } = await retarget({ requestId: 'r', agentId: 'a1', clearGrid: true, fresh: true })
+    expect(seen).toEqual([{ agentId: 'a1', grid: null }])
+  })
+
+  it('moves a request that still says fresh onto a grid as any other', async () => {
+    const { seen } = await retarget({ requestId: 'r', agentId: 'a1', grid: WIRE_GRID, fresh: true })
+    expect(seen).toEqual([{ agentId: 'a1', grid: expect.objectContaining({ networkId: 'grid-abc' }) }])
+  })
 })
 
 /**
@@ -3665,6 +3725,15 @@ describe('a move onto a grid model asks models where it goes', () => {
     await d.done()
   })
 
+  it('moves onto a grid model or an API model with no fresh conversation, whatever the request says', async () => {
+    const d = daemon(vi.fn(async () => ({ target: TARGET })), vi.fn(async () => ({ target: API, apiBase: API.baseUrl })))
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa', fresh: true })).toMatchObject({ retargeted: true })
+    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: TARGET })
+    expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: 'vendor/model-a', fresh: true })).toMatchObject({ retargeted: true })
+    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: API })
+    await d.done()
+  })
+
   it('says why it cannot move, in models\' words, and moves nothing', async () => {
     const d = daemon(async () => ({ detail: 'no grid on this computer' }))
     expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa' }))
@@ -3758,6 +3827,16 @@ describe('the models lists pushed to the windows', () => {
     await socket.stop()
   })
 
+  // `agents_list`, the launch replies and the updates build frames here; only pushed frames carried it (E2E 2026-11-10).
+  it('carries the engine\'s own workspace in every frame it builds', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-ws', sessionId: 'agent:main:plain', engine: 'openclaw', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).workspace).toBeUndefined()
+    socket.workspaceProvider = (s) => (s.sessionId === 'agent:main:plain' ? '/root/.openclaw/workspace' : null)
+    expect((await socket.toProject(agent)).workspace).toBe('/root/.openclaw/workspace')
+    await socket.stop()
+  })
+
   it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {
     const socket = relaySocket('token')
     socket.models = () => MODELS_OFF
@@ -3784,9 +3863,9 @@ describe('the connect burst with no network', () => {
     // "offline" the whole time.
     const socket = relaySocket('token')
     bindAgentList(socket)
-    // A grid name that never comes, as a grid read that never lands; and a vendor that never answers, asked
+    // A grid name that never comes, as a grid read that never lands; and a Codex that never answers, asked
     // of the usage service beside models.
-    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { read: () => new Promise(() => {}) }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS)
+    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { codex: () => new Promise(() => {}), now: Date.now, env: async () => ({}) }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
@@ -4399,6 +4478,30 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     expect(core.terminals.open).not.toHaveBeenCalled()
   })
 
+  // Launch flags run as the owner: only the owner's own app may send them (core/agents/launches.ts decides from this).
+  it.each(['agent_restart', 'agent_resume'])('tells the launch provider whether a %s came from the owner\'s own app, never a device or an agent\'s own CLI', async type => {
+    const { socket, dispatch } = harness()
+    const provider = vi.fn(async (_type: string, _payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void, _asker: { ownerApp: boolean }) => reply({}))
+    socket.restartProvider = provider
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole')
+    role.mockReturnValue('web')
+    await dispatch(sealedDown(socket, 'web-1', type, { requestId: 'r', agentId: 'a1', launchArgs: '--chrome' }).frame, 'web-1')
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
+    expect(provider.mock.calls[0]![3]).toEqual({ ownerApp: true })
+    role.mockReturnValue('device')
+    await dispatch(sealedDown(socket, 'device-1', type, { requestId: 'r', agentId: 'a1', launchArgs: '--chrome' }).frame, 'device-1')
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(2))
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    expect(socket.registerLocalClient('local:app', sink)).toBe(true)
+    expect(socket.registerLocalClient('local:tool', sink, { tool: true })).toBe(true)
+    socket.handleLocalFrame('local:app', { type, payload: { requestId: 'r', agentId: 'a1' } })
+    socket.handleLocalFrame('local:tool', { type, payload: { requestId: 'r', agentId: 'a1' } })
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(4))
+    expect(provider.mock.calls.slice(1).map(call => call[3])).toEqual([{ ownerApp: false }, { ownerApp: true }, { ownerApp: false }])
+    await socket.unregisterLocalClient('local:app')
+    await socket.unregisterLocalClient('local:tool')
+  })
+
   it('hands a sealed dsh_install from a paired client to the service that answers it', async () => {
     const { socket, dispatch } = harness()
     const serviceRouter = vi.fn(() => true)
@@ -4480,9 +4583,9 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     socket.registerLocalClient('local:app', { sendFrame: () => true, sendBinary: () => true })
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'local:app', 'local')
     // With what became of it, for its measurement.
-    expect(onMessage).toHaveBeenCalledWith('a1', 'hi', undefined, expect.any(Function))
+    expect(onMessage).toHaveBeenCalledWith('a1', 'hi', expect.any(Function))
     await dispatch({ type: 'message', payload: { content: 'task in A', agentId: 'a1', tabId: 'swarm-a' } }, 'local:app', 'local')
-    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A', undefined, expect.any(Function))
+    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A', expect.any(Function))
   })
 })
 

@@ -54,7 +54,6 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
 | **Tab** | A group of harnesses in the window. | Frontend and Backend tabs. |
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
-| **Workspace** | The level above Swarms: several Swarms on one account and the people who may be in them, each with a role (owner, admin, member or guest). A person can belong to several Workspaces. Not the Harness **Team account**, a Mac's privacy-checked account for teammates' work. System name: workspace. | Create the Swarm in your company Workspace. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
 | **Instructions** | The visible name for a project's instruction document (on an older backend, its skill set). System name: instructions; the agent skills are `swarm-tools` and `swarm-instructions`. See [Instructions](swarms.md#instructions). | Open Instructions; edit the Reviewer section. |
 | **Product Manager** | The agent coordinating a Swarm project. A project may name it otherwise, and then that name replaces Product Manager wherever the screen names the coordinator; a badge shows the agent's own role name. Use **PM** in a compact role badge for the default name. System name: coordinator (the saved and wire value stays `lead`). | Message Product Manager. |
@@ -68,6 +67,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |
 | **Task** | The work requested. | Add a search field. |
 | **Browser** | The optional browser for web content and visual review. | Open the browser. |
+| **An agent's Browser** | That agent's own sandboxed Chrome, which it drives and its person can use too. A web pane shows one address. | Sign in to Gmail in Faye's Browser. |
 | **Connections** | Service accounts available to agents running as the same local user on a Harness computer. | Open Connections; connect GitHub. |
 | **Viewer** | A surface for inspecting or interacting with work. | The game viewer; the HTML preview. |
 | **This computer** | The local execution machine. | Run on This computer. |
@@ -113,7 +113,10 @@ after the label and an add action at the right. Project rows read as channels, f
 **# product-managers** row was removed on 2026-10-31: it was not a project.) A click on a project row
 opens its product manager chat and reveals its workgroups; a second click on the open project
 hides them. Workgroups are shown by their number in grey with no **#**
-and then their title (`12  Offline editing`), aligned with the project name. An expanded project
+and then their title (`12  Offline editing`), aligned with the project name, under four headings
+with their counts, in this order: **Needs you** (waiting on the person or tagging them),
+**Working**, **Waiting on others** and **The rest**, which starts folded (`▾ Needs you  1`); a
+click on a heading folds or unfolds it, each project keeping its own. An expanded project
 without workgroups says **No workgroups yet**. An open channel's heading reads as its row
 (`# openharness`). **Buddies** holds the person's **Buddy chat** for each project, from the
 start, listed by their Buddy's name and avatar, or while none runs by the name they chose for it,
@@ -128,29 +131,29 @@ There is no **Chat with PM** any more.
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
 their standalone Devices view. The navigation, conversation and people panes have
 draggable dividers; their default side widths are 300 and 280 pixels, respecting saved resizes.
-The right pane is a stable directory of all humans and agents in the current Swarm that the
-viewer can access. Selecting a project, workgroup or Devices does not filter that directory;
-local machine inventory does not add people or agents to it.
-The members pane has two sections, **Humans** and **Agents**: two roles in one team. **Humans**
-is the section heading and the label for the human role; ordinary prose still says *people*.
-Humans are listed by the selected week's points, highest first; equal points and no points
-by name. Agents are listed most urgent first, by the tabs' status marks.
-Agents have individual display names and the same avatar treatment as people. Their role badges
-are **PM**, **Dev** and **Rev**. The name, role badge and compact project tag share the first line;
-the existing status icon and activity or assigned task appear underneath. Shortened names and
-tags retain their full text on hover. Reuse observed status and assignment data; do not generate
+The right column, **Members**, opens only from the chat header's **Members** button and is closed
+at rest. It lists the people and agents in the current Swarm that the viewer can access; its
+heading is the choice of **This project** or **All projects**, beside its close. Local machine
+inventory does not add people or agents to it.
+It has two sections, **People** and **Agents**: two roles in one team. Every row is one line.
+People show their username, the crown for the week's top name, and their points (rolling 7 days,
+the period on hover), highest first; equal points and no points by name. Agents show their
+display name, one state word (**waiting**, **working**, **in review**, **idle**, …) and the tabs'
+status mark, most urgent first: waiting on a person, then working; agents holding no task that
+are idle, stopped or offline fold under **Idle (N)**. Agents have the same avatar treatment as
+people. Role, task, model, effort and machine are on the agent's card and its hover; a click
+opens the card (task, model · effort · machine, **Open terminal**, **Details…**), and a person's
+click opens theirs (points, shipped · unblocked · hours, **Manage people**). Role badges on the
+card are **PM**, **Dev** and **Rev**. Reuse observed status and assignment data; do not generate
 activity summaries or infer a work timer from the session's age. Engine names belong in details.
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
-Machine rows show **~** at the left, then the name the person gave the machine (else the
-Swarm's name for it), owner avatar and status, with no chevron.
-In the Swarm's views, a Mac and its Harness Team account are one row, and agents in that account
-read as on the Mac. App-wide machine lists still show the team account as its own machine.
-When teammates' agents cannot run on a machine, its row adds one line, such as
-**Teammates' agents paused: privacy check failed**. There is no badge.
+Machine rows in Manage show a status dot, the name the person gave the machine (else the
+Swarm's name for it), its owner (or **This machine**) and its free disk; one not online says
+when it was last seen, and one being removed says **Cleaning up**.
 A click on the row expands it, and its labeled details are in the right-click menu (a long press
 on a touch screen). Expanded, it shows agents with their names, role badges
-and status, followed by known resources and model allowances. Offline machines stay in the
+and status, followed by known resources and the models it serves. Offline machines stay in the
 same list and omit stale readings. Rows share the projects' alignment and full-width highlight.
 The wire role values `lead | dev | review | buddy` and native harness names remain compatible for older CLIs.
 People, agents and machines belong to the Swarm. A project's **Public** visibility means everyone
@@ -182,6 +185,12 @@ task form.
 | Author a reusable Store package | **Create Harness** |
 | Start the bundled agent from the installed OS home | **Start OpenCode** |
 | Set up wireless networking | **Connect to Wi-Fi** |
+| Answer a task that waits for you, as a meeting invite | **Accept**, **Decline**; a declined task reads **Declined**. Never Approve or Reject for a task. |
+| Choose whether the tasks you ask for wait for you | **Accept all**, **Ask me** |
+
+**Auto-approve** under the Cmd-N box keeps its name: it is what an agent may do
+on the computer, not an answer to a task. Command and field names in code
+(`task.approve`, `task.reject`, `autoApprove`, `review`) stay as they are.
 
 Use the object's own name where possible: **Blender**, **Web Viewer**, or the
 person's project name. Keep task instructions in the conversation and technical

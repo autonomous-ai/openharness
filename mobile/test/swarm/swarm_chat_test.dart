@@ -14,6 +14,7 @@ import 'package:harness_mobile/swarm/swarm_chat_cache.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
+import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
@@ -103,6 +104,7 @@ void main() {
     List<Map<String, dynamic>>? members,
     List<Map<String, dynamic>>? projects,
     List<Map<String, dynamic>>? agents,
+    List<Map<String, dynamic>> additionalGroups = const [],
     Map<String, dynamic> g1 = const {},
   }) {
     // The Swarm's counts say a decision waits: what has its list read.
@@ -119,6 +121,7 @@ void main() {
         head: projects == null ? null : headData(projects: projects),
         agents: agents,
         groups: [
+          ...additionalGroups,
           {
             ...groupData(
               'g1',
@@ -179,7 +182,6 @@ void main() {
     String conversation = 'g1',
     String? messageId,
     bool settle = true,
-    bool homeC = false,
     bool systemMenu = false,
   }) async {
     await tester.pumpWidget(
@@ -202,7 +204,6 @@ void main() {
           swarmId: swarmId,
           conversationId: conversation,
           messageId: messageId,
-          homeC: homeC,
         ),
       ),
     );
@@ -220,7 +221,6 @@ void main() {
     String conversation = 'g1',
     String? messageId,
     bool settle = true,
-    bool homeC = false,
     SwarmUpload upload = refuseSwarmUpload,
     bool systemMenu = false,
   }) async {
@@ -244,7 +244,6 @@ void main() {
       conversation: conversation,
       settle: settle,
       messageId: messageId,
-      homeC: homeC,
       systemMenu: systemMenu,
     );
     return host;
@@ -317,7 +316,7 @@ void main() {
     expect(find.text('PM'), findsOneWidget);
     expect(find.text('Nova'), findsOneWidget);
     expect(find.text('Dev'), findsOneWidget);
-    expect(find.text('tony'), findsOneWidget);
+    expect(find.text('person-me'), findsOneWidget);
     expect(find.text(time(0)), findsOneWidget);
     expect(find.text(time(1)), findsNothing, reason: 'a follow-up has none');
     expect(find.text(time(2)), findsOneWidget);
@@ -451,25 +450,158 @@ void main() {
           'm1',
           1,
           text: 'Here is the plan',
+          // A file the app does not read itself opens in the browser; a text
+          // file opens in the app (swarm_file_viewer_test.dart).
           attachments: [
             {
               'id': 'f1',
-              'name': 'plan.md',
-              'mime': 'text/markdown',
+              'name': 'plan.pdf',
+              'mime': 'application/pdf',
               'size': 2048,
-              'url': 'https://cdn.harness.autonomous.ai/f1/plan.md',
+              'url': 'https://cdn.harness.autonomous.ai/f1/plan.pdf',
             },
           ],
         ),
       ]),
     );
 
-    expect(find.textContaining('plan.md'), findsOneWidget);
+    expect(find.textContaining('plan.pdf'), findsOneWidget);
 
-    await tester.tap(find.textContaining('plan.md'));
+    await tester.tap(find.textContaining('plan.pdf'));
     await tester.pump();
 
-    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
+    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.pdf']);
+  });
+
+  testWidgets('a numbered task message opens that task conversation', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1, text: '#42')],
+        additionalGroups: [groupData('task-42', number: 42, title: 'Task 42')],
+      ),
+    );
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+
+    final pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'task-42');
+  });
+
+  testWidgets('a message links when its numbered conversation arrives', (
+    tester,
+  ) async {
+    final fake = backend([message('m1', 1, text: '#42')]);
+    final host = await pump(tester, fake);
+    expect(find.text('#42', findRichText: true), findsOneWidget);
+    final cachedRow = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(cachedRow.references, isEmpty);
+
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      lastChangedAt: 200,
+      groups: [
+        part('task-42', 2, groupData('task-42', number: 42, title: 'Task 42')),
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+
+    expect(
+      host.session!.inbox
+          .reader(tab)!
+          .snapshot!
+          .conversation('task-42')
+          ?.number,
+      42,
+    );
+    final row = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(row.references[42], 'task-42');
+    expect(row, isNot(same(cachedRow)));
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    var pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'task-42');
+    final openPages = pages.length;
+    Navigator.of(tester.element(find.byType(SwarmConversationPage).last)).pop();
+    await tester.pumpAndSettle();
+
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c4',
+      lastChangedAt: 300,
+      groups: [
+        {'key': 'task-42', 'version': 3, 'changedAt': 3, 'deleted': true},
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+
+    final revokedRow = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(revokedRow.references, isEmpty);
+    expect(revokedRow, isNot(same(row)));
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages, hasLength(openPages));
+  });
+
+  testWidgets('a numbered PR message opens that PR conversation', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1, text: '#43')],
+        additionalGroups: [groupData('pr-43', number: 43, title: 'PR 43')],
+      ),
+    );
+
+    await tester.tap(find.text('#43', findRichText: true));
+    await tester.pumpAndSettle();
+
+    final pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'pr-43');
+  });
+
+  testWidgets('an unknown conversation number does not open a chat', (
+    tester,
+  ) async {
+    await pump(tester, backend([message('m1', 1, text: '#999')]));
+
+    await tester.tap(find.text('#999', findRichText: true));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widgetList<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      ),
+      hasLength(1),
+    );
   });
 
   testWidgets('a notification opens an earlier message and highlights it', (
@@ -663,7 +795,7 @@ void main() {
     expect(fake.commands.single['replyTo'], isNull);
   });
 
-  testWidgets('the composer has an @ Tag chip (Tony, 11-01): it and an @ '
+  testWidgets('the composer has an @ button (Tony, 11-01): it and an @ '
       'typed in the field open the same picker', (tester) async {
     await pump(tester, backend([message('m1', 1)]));
 
@@ -1206,6 +1338,28 @@ void main() {
       find.text('Your message was not sent. Retry to check it.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Delete takes a Not sent post away, and sends nothing', (
+    tester,
+  ) async {
+    final fake = backend([message('m1', 1)]);
+    fake.routes[commands] = (_) =>
+        throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+    await pump(tester, fake);
+    await tester.enterText(find.byType(TextField), 'Never mind');
+    await tester.pump();
+    await tester.tap(key('swarm-send'));
+    await tester.pumpAndSettle();
+    expect(find.text('Not sent'), findsOneWidget);
+    final sends = fake.commands.length;
+
+    await tester.tap(key('swarm-delete-post'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Not sent'), findsNothing);
+    expect(find.text('Never mind'), findsNothing);
+    expect(fake.commands, hasLength(sends));
   });
 
   testWidgets('a post whose answer was lost reads Not sent under it, and '
@@ -1818,171 +1972,34 @@ void main() {
 
   // Tony's iPhone 14, Profile, 44d284f65: the whole chat was built again on
   // each keystroke, and in 25 ms mid-scroll when the 5 s read answered.
-  group('reactions', () {
-    late List<String> haptics;
-
-    setUp(() {
-      haptics = [];
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-            if (call.method == 'HapticFeedback.vibrate') {
-              haptics.add(call.arguments as String? ?? call.method);
-            }
-            return null;
-          });
-    });
-    tearDown(
-      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null),
-    );
-
-    testWidgets('a long-press on a message opens the six with a light tap; '
-        'the pick counts under it at once and goes to the backend', (
-      tester,
-    ) async {
-      final fake = backend([message('m1', 1, text: 'Plan')]);
-      final sent = Completer<Object?>();
-      fake.routes[commands] = (_) => sent.future;
-      fake.routes['$messages?before=2'] = (_) => {
-        'messages': [
-          message(
-            'm1',
-            1,
-            text: 'Plan',
-            reactions: {
-              'tada': [('person', me)],
-            },
-          ),
-        ],
-        'next': null,
-        'reactionSeq': 1,
-      };
-      await pump(tester, fake);
-
-      await tester.longPress(find.text('Plan'));
-      await tester.pumpAndSettle();
-      expect(haptics, ['HapticFeedbackType.lightImpact']);
-      await tester.tap(key('swarm-react-tada'));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.single, {
-        'type': 'message.react',
-        'conversationId': 'g1',
-        'messageId': 'm1',
-        'emoji': 'tada',
-        'on': true,
-      });
-      expect(
-        find.descendant(
-          of: key('swarm-reaction-m1-tada'),
-          matching: find.text('1'),
-        ),
-        findsOneWidget,
-        reason: 'counted before the backend answers',
-      );
-      sent.complete({'result': <String, dynamic>{}});
-      await tester.pumpAndSettle();
-      expect(key('swarm-reaction-m1-tada'), findsOneWidget);
-    });
-
-    testWidgets('a tap on your own count takes it back', (tester) async {
-      final fake = backend([
-        message(
-          'm1',
-          1,
-          reactions: {
-            'heart': [('person', me), ('agent', 'agent-lead')],
-          },
-        ),
-      ]);
-      fake.routes['$messages?before=2'] = (_) => {
-        'messages': [
-          message(
-            'm1',
-            1,
-            reactions: {
-              'heart': [('agent', 'agent-lead')],
-            },
-          ),
-        ],
-        'next': null,
-        'reactionSeq': 2,
-      };
-      await pump(tester, fake);
-
-      await tester.tap(key('swarm-reaction-m1-heart'));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.single['on'], isFalse);
-      expect(
-        find.descendant(
-          of: key('swarm-reaction-m1-heart'),
-          matching: find.text('1'),
-        ),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('holding a count names who gave it, never by email', (
-      tester,
-    ) async {
-      await pump(
-        tester,
-        backend(
-          [
-            message(
-              'm1',
-              1,
-              reactions: {
-                'eyes': [
-                  ('agent', 'agent-lead'),
-                  ('person', 'person-ann'),
-                  ('person', me),
-                ],
-              },
-            ),
-          ],
-          members: [
-            person(me),
-            person('person-ann', role: 'collaborator'),
-          ],
-        ),
-      );
-
-      await tester.longPress(key('swarm-reaction-m1-eyes'));
-      await tester.pump();
-
-      expect(find.text('River, person-ann and You'), findsOneWidget);
-      expect(find.textContaining('@example.com'), findsNothing);
-      expect(key('swarm-react-eyes'), findsNothing, reason: 'no picker');
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-    });
-
-    testWidgets('a person who cannot post sees the counts; neither a tap nor '
-        'a long-press reacts', (tester) async {
-      final fake = backend(
-        [
-          message(
-            'm1',
-            1,
-            text: 'Plan',
-            reactions: {
-              'rocket': [('agent', 'agent-lead')],
-            },
-          ),
-        ],
-        members: [person(me, role: 'viewer')],
-      );
-      await pump(tester, fake);
-
-      await tester.tap(key('swarm-reaction-m1-rocket'));
-      await tester.longPress(find.text('Plan'));
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-reaction-m1-rocket'), findsOneWidget);
-      expect(key('swarm-react-rocket'), findsNothing);
-      expect(fake.commands, isEmpty);
-    });
+  // Reactions are gone (anh Dee, 2026-11-09): a message shows none, whatever
+  // an older server sends, and nothing offers one.
+  testWidgets('a message shows no reactions, and the long press offers none', (
+    tester,
+  ) async {
+    final fake = backend([
+      message(
+        'm1',
+        1,
+        text: 'Plan',
+        reactions: {
+          'eyes': [('agent', 'agent-lead')],
+          'tada': [('person', me)],
+        },
+      ),
+    ]);
+    await pump(tester, fake);
+    expect(find.text('👀'), findsNothing);
+    expect(find.text('🎉'), findsNothing);
+    await tester.longPress(find.text('Plan'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-copy-link'), findsOneWidget);
+    for (final emoji in ['👍', '🎉', '❤️', '😄', '👀', '✅', '🚀']) {
+      expect(find.text(emoji), findsNothing, reason: emoji);
+    }
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    expect(fake.commands.where((c) => c['type'] == 'message.react'), isEmpty);
   });
 
   group('Copy link to message', () {
@@ -2010,7 +2027,6 @@ void main() {
 
       await tester.longPress(find.text('Plan'));
       await tester.pumpAndSettle();
-      expect(key('swarm-react-tada'), findsOneWidget);
       await tester.tap(key('swarm-copy-link'));
       await tester.pumpAndSettle();
 
@@ -2020,41 +2036,9 @@ void main() {
       expect(fake.commands, isEmpty);
     });
 
-    testWidgets('the Add reaction chip opens the reactions alone: Copy link '
-        'is the long-press sheet\'s', (tester) async {
-      final fake = backend([
-        message(
-          'm1',
-          1,
-          text: 'Plan',
-          reactions: {
-            'eyes': [('agent', 'agent-lead')],
-          },
-        ),
-      ]);
-      await pump(tester, fake, homeC: true);
-
-      await tester.tap(key('swarm-add-reaction-m1'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-react-tada'), findsOneWidget);
-      expect(key('swarm-copy-link'), findsNothing);
-      await tester.tap(key('swarm-react-tada'));
-      await tester.pumpAndSettle();
-
-      expect(copied, isEmpty);
-      expect(fake.commands.where((c) => c['type'] == 'message.react'), [
-        {
-          'type': 'message.react',
-          'conversationId': 'g1',
-          'messageId': 'm1',
-          'emoji': 'tada',
-          'on': true,
-        },
-      ]);
-    });
-
-    testWidgets('a person who cannot post still copies the link; the sheet '
-        'offers no reactions', (tester) async {
+    testWidgets('a person who cannot post still copies the link', (
+      tester,
+    ) async {
       final fake = backend(
         [message('m1', 1, text: 'Plan')],
         members: [person(me, role: 'viewer')],
@@ -2063,7 +2047,6 @@ void main() {
 
       await tester.longPress(find.text('Plan'));
       await tester.pumpAndSettle();
-      expect(key('swarm-react-tada'), findsNothing);
       await tester.tap(key('swarm-copy-link'));
       await tester.pumpAndSettle();
 
@@ -2208,6 +2191,114 @@ void main() {
       matching: find.text(text),
     );
 
+    testWidgets('an open thread refreshes numbered links when its target '
+        'arrives and is revoked', (tester) async {
+      final rootMessage = message('m1', 1, text: '#42', thread: 'm1');
+      final threadLine = line('m1', 1, 2);
+      final fake = backend([rootMessage], threads: [threadLine]);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      fake.routes['$messages?thread=m1'] = (_) => {
+        'messages': [rootMessage],
+        'next': null,
+        'threads': [threadLine],
+      };
+      final host = await pump(tester, fake);
+
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      expect(find.text('Thread'), findsOneWidget);
+      final before = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(before.references, isEmpty);
+
+      final currentReader = host.session!.inbox.reader(tab)!;
+      SuperTabSnapshot currentSnapshot({required bool includeTarget}) =>
+          SuperTabSnapshot.fromJson({
+            'version': 1,
+            'id': tab,
+            'name': 'Phone Swarm',
+            'ownerId': me,
+            'people': <Object>[],
+            'agents': <Object>[],
+            'machines': <Object>[],
+            'projects': <Object>[],
+            'invitations': <Object>[],
+            'conversations': [
+              groupData('g1', title: 'Fix login'),
+              if (includeTarget)
+                groupData('task-42', number: 42, title: 'Task 42'),
+            ],
+          });
+      // Update what the inbox currently exposes without notifying the older
+      // reader held by the open thread. The changed listing emits an inbox
+      // notification, as a reader replacement does.
+      currentReader.snapshot = currentSnapshot(includeTarget: true);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm updated',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      final arrived = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(arrived.references[42], 'task-42');
+      expect(arrived, isNot(same(before)));
+
+      final pagesBeforeRevocation = tester
+          .widgetList<SwarmConversationPage>(find.byType(SwarmConversationPage))
+          .length;
+      currentReader.snapshot = currentSnapshot(includeTarget: false);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm changed again',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      final revoked = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(revoked.references, isEmpty);
+      expect(revoked, isNot(same(arrived)));
+
+      await tester.tap(inThread('#42'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widgetList<SwarmConversationPage>(
+          find.byType(SwarmConversationPage),
+        ),
+        hasLength(pagesBeforeRevocation),
+      );
+      expect(find.text('Thread'), findsOneWidget);
+    });
+
     Future<void> back(WidgetTester tester) async {
       await tester.tap(find.bySemanticsLabel('Back'));
       await tester.pumpAndSettle();
@@ -2265,6 +2356,11 @@ void main() {
       expect(key('swarm-replied-in-thread-m3'), findsNothing);
       expect(key('swarm-thread-box'), findsOneWidget);
       expect(find.text('Reply'), findsOneWidget, reason: 'the field hint');
+      // Also send is in Reply options, folded until it is opened.
+      expect(find.text('Reply options'), findsOneWidget);
+      expect(find.text('Also send to the chat'), findsNothing);
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(find.text('Also send to the chat'), findsOneWidget);
     });
 
@@ -2291,6 +2387,41 @@ void main() {
 
       await back(tester);
       expect(key('swarm-reply-bar'), findsNothing);
+    });
+
+    testWidgets('in the main chat, Copy on a message says Copied, then Copy '
+        'again (Tony, 11-02)', (tester) async {
+      final copied = <String?>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add((call.arguments as Map)['text'] as String?);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      const words = 'The build is green';
+      await pump(tester, backend([message('m1', 1, text: words)]));
+      await tester.tap(find.text(words));
+      await tester.pumpAndSettle();
+
+      Finder inRow(String label) => find.descendant(
+        of: key('swarm-message-m1'),
+        matching: find.text(label),
+      );
+      await tester.tap(inRow('Copy'));
+      await tester.pumpAndSettle();
+      expect(copied, [words]);
+      expect(inRow('Copied'), findsOneWidget);
+
+      await tester.tap(inRow('Copied'));
+      await tester.pump(kSwarmCopiedFor);
+      await tester.pump();
+      expect(copied, [words], reason: 'one copy');
+      expect(inRow('Copy'), findsOneWidget);
     });
 
     testWidgets('in a thread, a tap on a message offers Copy, as in the chat, '
@@ -2322,6 +2453,14 @@ void main() {
         await tester.tap(copy);
         await tester.pumpAndSettle();
         expect(copied, text);
+        expect(
+          find.descendant(
+            of: key('swarm-thread-message-$id'),
+            matching: find.text('Copied'),
+          ),
+          findsOneWidget,
+          reason: '$id says it copied',
+        );
       }
     });
 
@@ -2461,8 +2600,19 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(key('swarm-thread-field'), 'Ship it as drawn.');
+      String said() =>
+          tester.widget<Text>(key('swarm-thread-options-label')).data!;
+      // Folded under Reply options until it is opened, nothing ticked.
+      expect(key('swarm-thread-also-send'), findsNothing);
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       await tester.tap(key('swarm-thread-also-send'));
       await tester.pump();
+      // Folded again, its line says the reply goes to the chat too.
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
+      expect(said(), 'Reply options · Also send to the chat');
       await tester.tap(key('swarm-thread-send'));
       await tester.pumpAndSettle();
 
@@ -2470,6 +2620,9 @@ void main() {
       expect(fake.commands.single['replyTo'], 'm1');
       expect(inThread('Ship it as drawn.'), findsOneWidget);
       // Ticked for this reply alone.
+      expect(said(), 'Reply options');
+      await tester.tap(key('swarm-thread-options'));
+      await tester.pump();
       expect(
         tester
             .widget<Semantics>(key('swarm-thread-also-send'))
@@ -2484,6 +2637,12 @@ void main() {
           .body!['operationId'];
       expect(find.text('Ship it as drawn.'), findsOneWidget);
       expect(key('swarm-replied-in-thread-${sentId(sent)}'), findsOneWidget);
+
+      // Opened again, the thread starts with Reply options folded.
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-thread-options'), findsOneWidget);
+      expect(key('swarm-thread-also-send'), findsNothing);
     });
 
     bool sendable(WidgetTester tester, String button) =>
@@ -3007,40 +3166,6 @@ void main() {
             ),
           ],
         );
-
-    testWidgets('a reaction: its own row alone', (tester) async {
-      final fake = backend(page());
-      fake.routes['$messages?before=4'] = (_) => {
-        'messages': [
-          for (final row in page().reversed)
-            if (row['id'] == 'm2')
-              message(
-                'm2',
-                2,
-                text: 'On it @River',
-                minute: 1,
-                reactions: {
-                  'thumbs_up': [('person', me)],
-                },
-              )
-            else
-              row,
-        ],
-        'next': null,
-        'reactionSeq': 1,
-      };
-      await pump(tester, fake);
-
-      final reacted = await rowsBuilt(() async {
-        await tester.longPress(find.text('On it @River'));
-        await tester.pumpAndSettle();
-        await tester.tap(key('swarm-react-thumbs_up'));
-        await tester.pumpAndSettle();
-      });
-
-      expect(reacted.toSet(), {'m2'});
-      expect(key('swarm-reaction-m2-thumbs_up'), findsOneWidget);
-    });
 
     testWidgets('a new message at the foot: its own row alone, at once', (
       tester,

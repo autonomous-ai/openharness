@@ -169,7 +169,7 @@ void main() {
   });
 
   test('a reply only in a thread leaves a read chat and its project as they '
-      'were; a message in the main stream still makes them bold', () async {
+      'were; a main-stream task message makes only its chat bold', () async {
     final r = await rig();
     await moveOn(r, {
       'g1': {
@@ -189,9 +189,7 @@ void main() {
     });
 
     expect(chat(r, 'g1'), (bold: true, tags: 0));
-    expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 0),
-    });
+    expect(swarmProjectNews(r.reader, r.asks), isEmpty);
   });
 
   test("a chat the Lead tagged the person in is bold with the count of the "
@@ -210,32 +208,59 @@ void main() {
     expect(chat(r, leadChat), (bold: false, tags: 0));
   });
 
-  test('a project is bold while its project chat or open work is unread, '
-      'and counts every tag waiting in it', () async {
+  test('a project counts only tags opening its chat clears, while task tags stay on their own row', () async {
+    final r = await rig(
+      tags: [
+        mentionRow('project-tag', conversationId: leadChat, messageSequence: 4),
+        mentionRow('task-tag', messageSequence: 4),
+      ],
+    );
+    await moveOn(r, {
+      leadChat: groupData(leadChat, title: 'Mobile', lastMessageSequence: 4),
+      'g1': groupData('g1', title: 'Fix login', lastMessageSequence: 4),
+    });
+    expect(swarmProjectNews(r.reader, r.asks)[project]?.tags, 1);
+    expect(chat(r, 'g1'), (bold: true, tags: 1));
+
+    r.reader.readMarks!.markRead(leadChat, 4);
+    await settle();
+    expect(swarmProjectNews(r.reader, r.asks)[project], (
+      bold: false,
+      tags: 0,
+      hasWaitingTag: true,
+    ));
+    expect(chat(r, 'g1'), (bold: true, tags: 1));
+    expect(
+      r.asks.mentions,
+      hasLength(2),
+      reason: 'Activity retains waiting tags',
+    );
+  });
+
+  test('a project is bold for people in its own chat, while task tags '
+      'only keep it under the filters', () async {
     final r = await rig(tags: [mentionRow('t1'), mentionRow('t2')]);
 
     expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 2),
+      project: (bold: false, tags: 0, hasWaitingTag: true),
     });
 
     final quiet = await rig();
     await moveOn(quiet, {
-      leadChat: groupData(
-        leadChat,
-        title: 'Mobile',
-        agentIds: ['agent-lead'],
-        leadId: 'agent-lead',
-        lastMessageSequence: 5,
-      ),
+      leadChat: {
+        ...groupData(leadChat, title: 'Mobile', lastMessageSequence: 5),
+        'lastPersonSequence': 5,
+      },
       'web-lead': {
         ...groupData('web-lead', title: 'Web', lastMessageSequence: 2),
+        'lastPersonSequence': 2,
         'projectId': other,
       },
     });
 
     expect(swarmProjectNews(quiet.reader, quiet.asks), {
-      project: (bold: true, tags: 0),
-      other: (bold: true, tags: 0),
+      project: (bold: true, tags: 0, hasWaitingTag: false),
+      other: (bold: true, tags: 0, hasWaitingTag: false),
     });
   });
 
@@ -291,7 +316,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
 
       r.reader.readMarks!.markRead('g1', 4);
@@ -307,7 +332,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
 
       // The person reads the chat as far as the first read had marked it.
@@ -393,7 +418,7 @@ void main() {
       expect(swarmProjectNews(r.reader, r.asks), isEmpty);
     });
 
-    test('a tag in a reply also sent to the chat counts in the chat and its '
+    test('a tag in a reply also sent to a task chat counts there, not on its '
         'project', () async {
       // The server names no thread for a reply also in the chat
       // (backend mentions.ts threadsOf).
@@ -404,7 +429,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
     });
 
@@ -424,7 +449,7 @@ void main() {
       expect(chat(r, 'g1'), (bold: false, tags: 0));
       expect(chat(r, 'g2'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: false, tags: 0, hasWaitingTag: true),
       });
       expect(r.asks.mentions, hasLength(2));
     });
@@ -443,7 +468,7 @@ void main() {
       );
 
       expect(swarmProjectNews(r.reader, r.asks), {
-        other: (bold: true, tags: 1),
+        other: (bold: true, tags: 1, hasWaitingTag: true),
       });
       // The private chat's own row still counts its tag, as the desktop's.
       expect(chat(r, 'private'), (bold: true, tags: 1));
@@ -498,10 +523,30 @@ void main() {
 
         expect(chat(r, 'g1'), (bold: true, tags: 1));
         expect(swarmProjectNews(r.reader, r.asks), {
-          project: (bold: true, tags: 1),
+          project: (bold: false, tags: 0, hasWaitingTag: true),
         });
       },
     );
+
+    // Task #2927: a project's number is its chat's tags alone; decisions are
+    // in Activity and on the chat's own row.
+    test('a decision asked in the project chat raises its chat row, not the '
+        "project's number, even while the chat is unread", () async {
+      final r = await rig(
+        decisions: [decisionRow('d1', conversationId: leadChat)],
+      );
+      await moveOn(r, {
+        leadChat: groupData(leadChat, title: 'Mobile', lastMessageSequence: 4),
+      });
+
+      expect(chat(r, leadChat), (bold: true, tags: 1));
+      expect(swarmProjectNews(r.reader, r.asks)[project], (
+        bold: false,
+        tags: 0,
+        hasWaitingTag: true,
+      ));
+      expect(r.asks.decisions, hasLength(1), reason: 'Activity keeps it');
+    });
 
     test('a decision answered on another device leaves the count without a '
         'reload', () async {
@@ -525,9 +570,7 @@ void main() {
       await settle();
 
       expect(chat(r, 'g1'), (bold: true, tags: 0));
-      expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0),
-      });
+      expect(swarmProjectNews(r.reader, r.asks), isEmpty);
       expect(
         r.swarm.paths.where((p) => p.endsWith('/parts')),
         hasLength(loads),

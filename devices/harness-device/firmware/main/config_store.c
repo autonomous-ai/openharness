@@ -110,25 +110,6 @@ bool config_save_habitat_options(uint8_t options)
     return ok;
 }
 
-uint8_t config_load_habitat_character(uint8_t fallback)
-{
-    nvs_handle_t h;
-    uint8_t value = fallback;
-    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u8(h, "habitat_char", &value);
-        nvs_close(h);
-    }
-    return value;
-}
-bool config_save_habitat_character(uint8_t character)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    bool ok = nvs_set_u8(h, "habitat_char", character) == ESP_OK && nvs_commit(h) == ESP_OK;
-    nvs_close(h);
-    return ok;
-}
-
 // --- scroll direction ---------------------------------------------------------------------------
 // Which way a drag moves the window's scrollback. A habit, not a fact about the hardware: some hands
 // expect the text to follow the finger, others expect the VIEW to follow it, and neither is wrong.
@@ -156,41 +137,6 @@ void config_save_scroll_reversed(bool reversed)
     nvs_close(h);
     ESP_LOGI(TAG, "save_scroll_reversed %d: %s", (int)reversed, ok ? "ok" : "FAILED");
 }
-
-// Which way a horizontal swipe walks the carousel. Same shape as the scroll habit above and stored
-// separately on purpose: someone can want the scrollback reversed and the carousel left alone, and one
-// switch for both would force a preference nobody asked for.
-bool config_load_swipe_reversed(void)
-{
-    nvs_handle_t h;
-    uint8_t v = 0;   // default: unchanged from every build before this one
-    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u8(h, "swiperev", &v);
-        nvs_close(h);
-    }
-    return v != 0;
-}
-
-void config_save_swipe_reversed(bool reversed)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    bool ok = nvs_set_u8(h, "swiperev", reversed ? 1 : 0) == ESP_OK && nvs_commit(h) == ESP_OK;
-    nvs_close(h);
-    ESP_LOGI(TAG, "save_swipe_reversed %d: %s", (int)reversed, ok ? "ok" : "FAILED");
-}
-
-// --- SDS provisioning ---------------------------------------------------------------------------
-// One NVS key per value. Do NOT be tempted to fold these into device_net_config_t: that struct is stored
-// as a fixed-size blob under "netv", so adding a field silently invalidates every saved network on an
-// upgraded unit.
-#define K_CID    "cid"
-#define K_MQHOST "mqhost"
-#define K_MQPORT "mqport"
-#define K_MQUSER "mquser"
-#define K_MQPASS "mqpass"
-#define K_FACH   "fach"
-#define K_FDCH   "fdch"
 
 bool config_clear_all(void)
 {

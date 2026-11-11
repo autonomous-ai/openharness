@@ -1,3 +1,4 @@
+import { daemonFetch } from '../localTransport.js'
 import { readHookCredential } from '../hookAuth.js'
 import { runAddonCommand } from './addonCommand.js'
 
@@ -36,7 +37,7 @@ export async function runAutonomousDeviceCommand(argv: string[], dataDir: string
   try {
     const body = verb === 'pair' ? { code: fromStdin ? await stdinCode() : args[1], ...(device ? { device } : {}) }
       : verb === 'revoke' ? { id: args[1] } : {}
-    const result = await fetch(`http://127.0.0.1:${port}/api/autonomous-device/${route}`, {
+    const result = await daemonFetch(dataDir, port)(`http://127.0.0.1:${port}/api/autonomous-device/${route}`, {
       method: mutation ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(45_000),
       headers: { Authorization: `Bearer ${credential}`, ...(mutation ? { 'Content-Type': 'application/json' } : {}) },
       ...(mutation ? { body: JSON.stringify(body) } : {}),

@@ -220,6 +220,9 @@ WidgetSpan ttyBranchMark(
 class TtyBackButton extends StatelessWidget {
   const TtyBackButton({super.key, required this.onPressed});
 
+  /// The target's width.
+  static const width = 52.0;
+
   final VoidCallback? onPressed;
 
   @override
@@ -239,7 +242,7 @@ class TtyBackButton extends StatelessWidget {
                 onPressed!();
               },
         child: SizedBox(
-          width: 52,
+          width: width,
           height: 44,
           child: Padding(
             padding: const EdgeInsets.only(left: Tty.origin - 5),

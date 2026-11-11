@@ -121,11 +121,11 @@ export function writePrivate(path: string, data: unknown): void {
   }
 }
 
-/** One writer at a time across agents, the bridge and the page: an exclusive lock file, waited for. */
-export function locked<T>(dir: string, work: () => T): T {
+/** One writer at a time across agents, the bridge and the page: an exclusive lock file, waited for (`waitMs`, then it throws). */
+export function locked<T>(dir: string, work: () => T, waitMs = 35_000): T {
   privateDirectory(dir)
   const lock = join(dir, '.lock')
-  const deadline = Date.now() + 35_000
+  const deadline = Date.now() + waitMs
   for (;;) {
     try { closeSync(openSync(lock, 'wx', 0o600)); break } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new ConnectorError('Invalid connection lock.')

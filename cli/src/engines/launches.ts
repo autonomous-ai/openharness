@@ -1,9 +1,12 @@
-import type { AttributionContract, EngineLaunch } from './facets/launch.js'
+import type { AttributionContract, EngineLaunch, StatusLineContract } from './facets/launch.js'
 import type { AgentEngine } from './types.js'
 import { launch as claude } from './claude/launch.js'
 import { launch as codex } from './codex/launch.js'
 import { attributionArgsIn, attributionInstruction, instructionsArgsIn, type Instruction } from './kit/attribution.js'
 import { contextArgsOf, envArgsOf, fill, ownProviderArgs, readConfig } from './kit/launchArgs.js'
+import { joinedSettings, statusLineSetting } from './kit/statusLine.js'
+import { claudeCodeGitBash } from '../lib/windows/claudeCodeGitBash.js'
+import { env } from '../config/env.js'
 import { launchHome, launchHomeOf, launchPersonalHome } from '../lib/engineHomes.js'
 
 /**
@@ -64,6 +67,8 @@ export interface AttributionPlace {
   environment?: NodeJS.ProcessEnv
   /** A seam, like `readCodexConfig`: a spec's launch reads no settings of the machine it runs on. The real file when absent. */
   read?: (path: string) => string | null
+  /** A Swarm session's instructions (lib/agentAttribution.ts): its folder is a branch, whose own settings are not run. */
+  swarmInstructions?: string
 }
 
 /**
@@ -91,18 +96,34 @@ export function agentInstructionArgs(engine: AgentEngine | string, said: { instr
   const launch = launchContract(engine)
   const attribution = launch?.attribution
   const told = launch?.harnessInstructions
-  if (!attribution && !told) return []
+  const status = statusLineArgs(launch?.statusLine, place)
+  if (!attribution && !told) return status
   said = { ...said, instructions: said.instructions && told?.also ? `${said.instructions} ${told.also}` : said.instructions }
   if (attribution?.kind === 'instruction') {
     const instructions: Instruction[] = [
       ...(said.instructions && told?.kind === 'attribution' ? [{ text: said.instructions, mark: said.instructions }] : []),
       ...(said.prLine ? [attributionInstruction(attribution, said.prLine)] : []),
     ]
-    return instructionsArgsIn(attribution, instructions, attributionFiles(attribution, place))
+    return [...instructionsArgsIn(attribution, instructions, attributionFiles(attribution, place)), ...status]
   }
   const setting = said.prLine && attribution ? attributionArgsIn(attribution, said.prLine, attributionFiles(attribution, place)) : []
   // Only beside the setting it backs: where the person's settings hide the engine's attribution, neither is given.
   const reminder = setting.length && attribution?.instruction ? attributionInstruction({ instruction: attribution.instruction }, said.prLine!).text : null
   const texts = told?.kind === 'append' ? [said.instructions, reminder].filter((text): text is string => !!text) : []
-  return [...setting, ...(texts.length && told?.kind === 'append' ? told.args.map((arg) => fill(arg, 'text', texts.join('\n\n'))) : [])]
+  const args = [...setting, ...status, ...(texts.length && told?.kind === 'append' ? told.args.map((arg) => fill(arg, 'text', texts.join('\n\n'))) : [])]
+  return launch?.statusLine ? joinedSettings(launch.statusLine.args[0]!, args) : args
+}
+
+/**
+ * The argv that gives a launch Harness's status line (kit/statusLine.ts): every session of an engine that declares one,
+ * the person's own or an agent's. A Swarm session's folder is a branch, which could commit a status line command that
+ * Harness would then run itself: only the person's own settings are read for the status line.
+ */
+function statusLineArgs(contract: StatusLineContract | undefined, place: AttributionPlace): string[] {
+  if (!contract) return []
+  const files = { home: launchHomeOf(contract.home, place.profile, place.environment), personal: launchPersonalHome(place.environment),
+    cwd: place.cwd, read: place.read ?? readConfig, folder: !place.swarmInstructions }
+  const setting = statusLineSetting(contract, files, env.ADAPTER_DATA_DIR, process.platform,
+    () => claudeCodeGitBash({ env: place.environment ?? process.env }))
+  return setting ? contract.args.map((arg) => fill(arg, 'settings', JSON.stringify(setting))) : []
 }

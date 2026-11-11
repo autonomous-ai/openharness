@@ -11,9 +11,9 @@ import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
-import { HERMES_HOMES, HERMES_SOURCE } from './engines/hermes/contract.js'
+import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
-import { isInteractiveSource } from './engines/kit/storeSource.js'
+import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
@@ -23,14 +23,15 @@ import { registry, type RegisterInput, type RegisteredSession } from './lib/regi
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
-import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAuth.js'
-import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches } from './lib/localCredential.js'
+import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
+import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
+import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches, PEER_LOOKUP_UNANSWERED, PEER_LOOKUP_UNANSWERED_MESSAGE } from './lib/localCredential.js'
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
-import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
+import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -45,13 +46,15 @@ import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
  * session; trusting that pane alone binds the old transcript to the replacement agent.
  * Two candidates is not a tie to break, so we answer nothing.
  */
-export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[], engine: AgentEngine): {
+export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[], engine: AgentEngine, bySessionPane = false): {
   agent: T | null
   reason: 'ancestry' | 'runtime' | 'ambiguous' | 'none'
 } {
   if (byAncestry.length === 1) return { agent: byAncestry[0], reason: 'ancestry' }
   if (byAncestry.length > 1) return { agent: null, reason: 'ambiguous' }
-  if (engine !== 'cursor') return { agent: null, reason: 'none' }
+  // A Hermes hook from its shared gateway names the pane its session was created from, read from Hermes' own store
+  // (`hermesSessionHint`), not from the caller: that pane is the evidence, as Cursor's hinted pane is.
+  if (engine !== 'cursor' && !bySessionPane) return { agent: null, reason: 'none' }
   if (byRuntimeOnly.length === 1) return { agent: byRuntimeOnly[0], reason: 'runtime' }
   return { agent: null, reason: byRuntimeOnly.length ? 'ambiguous' : 'none' }
 }
@@ -86,10 +89,16 @@ export interface HookServerHandlers {
     tmuxPane?: string
     runtimeHints: HookTerminalHint[]
     callerPid?: number
+    /** The hints are the pane the hook's session was opened from (`hermesSessionHint`), not the caller's: the agent on
+     *  that pane is the evidence, and the caller's process ancestry, which is a shared process's, is not. */
+    bySessionPane?: boolean
     /** Called once the resolution has to wait for the agent to record its process
      *  (core/engines/hooks.ts): the hook is answered then, before the wait. */
     onWait?: () => void
   }) => Promise<RegisteredSession | null>
+  /** Whether the hook's caller descends from a process that serves every pane (Hermes 0.22+'s gateway), whose
+   *  pane and ancestry say nothing about the session the hook is for (core/engines/hooks.ts). */
+  hookViaSharedProcess?: (query: { engine: RegisteredSession['engine']; callerPid: number }) => Promise<boolean>
   /** A turn is now running (Command Code's PreToolUse — its only live turn-open signal). Idempotent:
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
   onTurnStart?: (body: { sessionId: string }) => void
@@ -162,6 +171,9 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  /** PATCH /api/auth/me — the signed-in person's own account name (`{ name }`, task #2654), passed to the backend, which
+   *  validates it and answers the profile as GET does; a local write, so CSRF-guarded like the desk's ops. */
+  onAuthMeUpdate?: (body: unknown) => Promise<PairOutcome>
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
@@ -379,14 +391,16 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
   if (!HERMES_SOURCE.id.test(sessionId)) return { kind: 'accept', value: undefined }
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
-      sql: HERMES_SOURCE.query, params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
+      sql: columns => storeSourceQuery(HERMES_SOURCE, columns), params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
       columns: ['id', 'source'], pointKey: 'id', knownHome,
     })
     if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
     if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
     const { home, aliases, row } = found[0]
     if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
-    const source = row[HERMES_SOURCE.column]
+    // A unified-runtime row names its creator separately; an unstamped one waits like a row not written yet.
+    const source = rowSessionSource(HERMES_SOURCE, row)
+    if (source === null) return { kind: 'hold', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
     if (typeof source !== 'string' || source.length > 128) throw new IdentityReadUnavailable('the Hermes source record is invalid')
     if (!isInteractiveSource(HERMES_SOURCE, source)) return { kind: 'reject', reason: 'hermes_subagent' }
     return { kind: 'accept', value: knownHome ?? (home === env.HERMES_HOME ? undefined : home) }
@@ -396,7 +410,55 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
   }
 }
 
+/**
+ * The pane a client environment names, as the hook names its own (hook/notify.mjs `ptyHostPane`): a tmux pane's
+ * `TMUX_PANE` first, else a pty host pane's `HARNESS_PANE=<instance>:%N`.
+ */
+export function clientEnvPane(clientEnv: unknown): HookTerminalHint | null {
+  if (typeof clientEnv !== 'string' || clientEnv.length > HERMES_SESSION_PANE.maxBuffer) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(clientEnv) } catch { return null }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const { TMUX_PANE: tmuxPane, HARNESS_PANE: ptyPane } = parsed as Record<string, unknown>
+  if (typeof tmuxPane === 'string' && tmuxPane) return /^%\d+$/.test(tmuxPane) ? { backend: 'tmux', paneId: tmuxPane } : null
+  const pty = typeof ptyPane === 'string' ? PTY_HOST_PANE.exec(ptyPane) : null
+  return pty ? { backend: 'ptyhost', instance: pty[1]!, paneId: pty[2]! } : null
+}
+
+/** The pane Hermes froze with [sessionId] when it was created (`HERMES_SESSION_PANE`), or null: none, or unreadable. */
+async function hermesCreationPane(sessionId: string): Promise<HookTerminalHint | null> {
+  try {
+    const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
+      sql: HERMES_SESSION_PANE.query, params: [HERMES_SESSION_PANE.key(sessionId), sessionId], maxRows: 1,
+      maxBuffer: HERMES_SESSION_PANE.maxBuffer, columns: ['id'], pointKey: 'id',
+    })
+    return found.length === 1 ? clientEnvPane(found[0].row.client_env) : null
+  } catch (error) {
+    if (!(error instanceof IdentityReadUnavailable)) throw error
+    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${error.message}`)
+    return null
+  }
+}
+
+/**
+ * Where a hook that came through Hermes' shared gateway belongs. The pane its session was created from, while a Hermes
+ * agent is on it; else the pane of the agent the session is already bound to (a restore or resume opens the same
+ * conversation in a new pane, and Hermes keeps the creation policy); else the creation pane, for an agent that is still
+ * opening there. Null: neither is known, so nothing says which pane the session is.
+ */
+async function hermesSessionHint(sessionId: string): Promise<HookTerminalHint | null> {
+  const created = await hermesCreationPane(sessionId)
+  if (created && registry.byRuntimeEngine(created, 'hermes')) return created
+  const bound = registry.bySession(sessionId)
+  const runtime = bound?.engine === 'hermes' ? bound.runtimes[0] : undefined
+  if (runtime) return runtime.backend === 'tmux' ? { backend: 'tmux', paneId: runtime.paneId }
+    : { backend: 'ptyhost', instance: runtime.instance, paneId: runtime.paneId }
+  return created
+}
+
 export interface HookServerOptions {
+  /** Whether a TCP caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
   /** Also serve on this Unix socket, or with pipeToken the Windows pipe (see lib/localSocket.ts). Null or absent: TCP only. */
   socketPath?: string | null
   /** Windows: the daemon's token. When given, `socketPath` is a pipe whose every request proves it (lib/localSocket.ts). */
@@ -426,6 +488,8 @@ export function startHookServer(
   options: HookServerOptions = {},
 ): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
+  const hookToken = loadOrCreateHookToken(env.ADAPTER_DATA_DIR)
+  const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
   let admissionArrival = 0
   const admissionHolds = new Map<string, Map<string, string>>()
@@ -483,15 +547,28 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
-      // An engine hook's token. Today the daemon's own credential; a guest's harness will carry a token
-      // scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md), checked here.
-      const hookTokenMatches = (request: http.IncomingMessage): boolean =>
-        hookCredentialMatches(hookCredential, request.headers['x-harness-hook-token'])
-      const hookOk = hookTokenMatches(req)
+      // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
+      // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
+      // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+      // Over TCP either may have been heard by another account that held this port during a restart (audit H1), which
+      // could then forge session ends or turn stops here, so it counts only from this one. Asked only once it matched.
+      const suppliedHookToken = req.headers['x-harness-hook-token']
+      // One answer per request: a lookup that gave no answer is not kept on the socket (lib/peerAccount.ts), and the two
+      // checks below asking it twice waited out a slow lsof twice and could disagree.
+      let callerAnswer: Promise<boolean | 'unanswered'> | undefined
+      const callerIsThisAccount = async () => await (callerAnswer ??= peerAccount(req.socket)) === true
+      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await callerIsThisAccount())
       // The loopback port takes any local OS user's process, so over TCP every route but the few below
       // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
-      // read. Over the daemon's Unix socket the filesystem already said who this is.
-      const credentialOk = trustedLocal || localCredentialMatches(hookCredential, req)
+      // read. Over the daemon's Unix socket the filesystem already said who this is. Over TCP the credential may have
+      // been heard by another account that held this port during a restart (audit H1), so it counts only from this one.
+      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await callerIsThisAccount())
+      // A secret matched, but who is calling could not be looked up in time (a slow lsof, a busy Windows): not a refusal.
+      // The client asks again (lib/localTransport.ts). Liveness and the public status answer as ever.
+      if (callerAnswer && await callerAnswer === 'unanswered' && !(req.method === 'GET' && (url === '/api/health' || url === '/api/status'))) {
+        res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '1' })
+        res.end(JSON.stringify({ error: PEER_LOOKUP_UNANSWERED, message: PEER_LOOKUP_UNANSWERED_MESSAGE })); return
+      }
       // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
       // own token, above) and the native device routes (their own bearer, just below).
       const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))
@@ -502,7 +579,7 @@ export function startHookServer(
         const peer = req.socket.remoteAddress
         const loopback = trustedLocal || peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
         const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined
-        if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer)) {
+        if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer) || !credentialOk) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
         if (!handlers.onAutonomousDeviceRequest) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
@@ -552,8 +629,7 @@ export function startHookServer(
           console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
           answer(200, { ignored: true, reason })
         }
-        const runtimeHints = normalizedRuntimeHints(body)
-        if (!runtimeHints.length) { ignore('not_in_terminal'); return }
+        let runtimeHints = normalizedRuntimeHints(body)
         // A plugin/extension is loaded ONCE per engine process, so a pane opened before an update keeps
         // running the old copy — silently, and for hours. Measured on amp: a pane started at 11:49 was
         // still writing transcripts with no tool calls long after the fix reached disk. The engines that
@@ -569,6 +645,20 @@ export function startHookServer(
         // Capture before process resolution yields. Native time is unchanged across client retries.
         const admissionOrder = { firedAt: hookFiredAt(req), arrival: ++admissionArrival }
         const fingerprint = createHash('sha256').update(JSON.stringify([body, admissionOrder.firedAt])).digest('hex')
+        // A Hermes 0.22+ hook runs in the shared gateway, with the gateway's pane (or none) and ancestry. Those named
+        // the first Hermes pane for every session (DESKTOP-0TFH0OJ, 2026-11-09: `5afb24e8 rebound local-fc`, a
+        // conversation typed in another pane). Its session's own pane replaces them, and is the only evidence.
+        // After the order and fingerprint are taken: they are the delivery's as it was sent.
+        let bySessionPane = false
+        if (engine === 'hermes' && body.callerPid && handlers.hookViaSharedProcess
+          && await handlers.hookViaSharedProcess({ engine, callerPid: body.callerPid })) {
+          const hint = body.sessionId ? await hermesSessionHint(body.sessionId) : null
+          if (!hint) { ignore('hermes_gateway_session_has_no_pane'); return }
+          runtimeHints = [hint]
+          bySessionPane = true
+          body.tmuxPane = hint.backend === 'tmux' ? hint.paneId : undefined
+        }
+        if (!runtimeHints.length) { ignore('not_in_terminal'); return }
         const deliveryHeader = req.headers['x-harness-hook-delivery-id']
         const nativeDeliveryId = typeof deliveryHeader === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(deliveryHeader) ? deliveryHeader : undefined
         const deliveryId = nativeDeliveryId ?? randomUUID()
@@ -606,6 +696,7 @@ export function startHookServer(
             tmuxPane: body.tmuxPane,
             runtimeHints,
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
+            ...(bySessionPane ? { bySessionPane } : {}),
             // A relaunch records its engine's process a moment after the engine starts, and a hook in that
             // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
             // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down
@@ -1112,9 +1203,7 @@ export function startHookServer(
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
-      // A profile picture (`/avatars`) too: without it the daemon answered 404 and Desktop's Upload picture… failed
-      // with only "Could not upload the file".
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/(attachments|avatars)$/.exec(url) : null
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
       if (attachment) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1192,6 +1281,13 @@ export function startHookServer(
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(me); return
+      }
+      if (req.method === 'PATCH' && url === '/api/auth/me') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAuthMeUpdate) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onAuthMeUpdate!(body)); return
       }
       // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
       // a credential. So not the CSRF header, which any local process can send, but the daemon's

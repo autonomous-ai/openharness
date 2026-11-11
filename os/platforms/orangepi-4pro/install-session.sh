@@ -63,7 +63,6 @@ cat > "$T/etc/skel/.config/opencode/opencode.json" <<'EOF'
 {
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
-  "model": "opencode/muse-spark-1.3-contributor-free",
   "permission": {
     "external_directory": { "/usr/share/harness-os/*": "allow" },
     "read": { "/usr/share/harness-os/*": "allow" },

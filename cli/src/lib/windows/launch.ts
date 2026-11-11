@@ -16,6 +16,7 @@
 import { accessSync, closeSync, constants, openSync, readFileSync, readSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { windowsLaunchCommand } from '../binaryOnPath.js'
+import { hermesArgv } from './hermesLaunch.js'
 
 const BATCH = /\.(?:cmd|bat)$/i
 /** What cmd.exe reads in a command line: Rust's std refuses these in a batch file's arguments (BatBadBut). */
@@ -138,6 +139,12 @@ export function windowsEngineArgv(engine: string, argv: readonly string[], optio
     return resolved
   }
   const program = windowsLaunchCommand(command, environment, platform)
+  // Hermes' installer writes an unsigned uv launcher that Smart App Control refuses: run the Python it starts instead
+  // (lib/windows/hermesLaunch.ts), as gridCommand does for grid.exe.
+  if (engine === 'hermes') {
+    const viaPython = hermesArgv(program, args, { platform })
+    if (viaPython) return runs(viaPython)
+  }
   if (!BATCH.test(program)) return runs([program, ...args])
   let shim: NpmShimTarget | null = null
   try { shim = exists(program) ? parseNpmCmdShim(read(program), dirname(program)) : null } catch { shim = null }
@@ -149,6 +156,16 @@ export function windowsEngineArgv(engine: string, argv: readonly string[], optio
   }
   if (args.some((arg) => CMD_METACHARACTERS.test(arg))) throw new WindowsBatchLaunchRefused(engine, program)
   return runs([program, ...args])
+}
+
+/**
+ * [reason], a program's failure to start, in the person's words when Windows' Smart App Control or another application
+ * control policy blocked the program, which says only "os error 4551" or a raw status. Any other reason is left as it is.
+ */
+export function windowsBlockedReason(command: readonly string[], reason: string): string {
+  if (!/os error 4551|0xC0E90002|Application Control/i.test(reason)) return reason
+  const program = (command[0] ?? '').split(/[\\/]/).pop()!.replace(/\.(exe|cmd|bat|com)$/i, '') || 'this program'
+  return `Windows blocked ${program}: Smart App Control does not trust it. Choose another engine.`
 }
 
 /** A create's or fork's answer for [error] when it is a refused Windows launch, a batch file's or an unverified

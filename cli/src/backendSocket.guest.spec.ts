@@ -47,12 +47,35 @@ describe('a guest session', () => {
     ])
   })
 
+  it('is refused an agent\'s instructions file, even its own harness\'s, and the service never hears it', async () => {
+    const { socket, ask, answered } = session('kim@acme.io')
+    socket.agentGuest = (agentId) => (agentId === 'mine' ? 'kim@acme.io' : null)
+    const routed = vi.fn(() => true)
+    socket.serviceRouter = routed
+    await ask('agent_instructions_read', { agentId: 'mine', name: 'Faye' })
+    await ask('agent_instructions_write', { agentId: 'mine', name: 'Faye', text: 'planted', version: '' })
+    expect(routed).not.toHaveBeenCalled()
+    expect(answered()).toEqual([
+      { type: 'agent_instructions_read', payload: expect.objectContaining({ error: 'GUEST_NOT_ALLOWED' }) },
+      { type: 'agent_instructions_write', payload: expect.objectContaining({ error: 'GUEST_NOT_ALLOWED' }) },
+    ])
+  })
+
   it('may ask what is allowed, as no owner, saying whose guest it is', async () => {
     const { socket, ask } = session('kim@acme.io')
     const askers: unknown[] = []
     socket.serviceRouter = (_type, _payload, asker, reply) => { askers.push(asker); reply({ ok: true }); return true }
-    await ask('usage_read')
+    await ask('guest_folders')
     expect(askers).toEqual([expect.objectContaining({ owner: false, guest: 'kim@acme.io' })])
+  })
+
+  it('never hears the owner\'s plan allowances: the usage service is not asked', async () => {
+    const { socket, ask, answered } = session('kim@acme.io')
+    const routed = vi.fn(() => true)
+    socket.serviceRouter = routed
+    await ask('usage_read')
+    expect(routed).not.toHaveBeenCalled()
+    expect(answered()).toEqual([{ type: 'usage_read', payload: expect.objectContaining({ error: 'GUEST_NOT_ALLOWED' }) }])
   })
 
   it('lists only its own harnesses, and opens only their terminals', async () => {
@@ -81,6 +104,34 @@ describe('a guest session', () => {
     await ask('shell')
     expect(lists).toEqual([undefined])
     expect(askers).toEqual([expect.objectContaining({ owner: true })])
+  })
+
+  // A guest starts its own agents on its own sign-in: it needs which engines are installed, never whether the owner
+  // is signed in to each or when the owner last used it (#4259, from #4216's security review).
+  it('learns which engines are installed, and nothing of the owner\'s sign-in or last use', async () => {
+    const probe = async (guest?: string) => {
+      const { socket, ask, answered } = session(guest)
+      const reads: unknown[] = []
+      socket.engineProbeProvider = async (_engines, options) => {
+        reads.push(options?.accounts === true)
+        return options?.accounts
+          ? [{ engine: 'claude', installed: true, command: 'claude', installable: false, signedIn: true, lastUsedAt: 1_794_000_000_000 }]
+          : [{ engine: 'claude', installed: true, command: 'claude', installable: false }]
+      }
+      await ask('engines_probe', { engines: ['claude'] })
+      await vi.waitFor(() => expect(answered().some((a) => a.type === 'engines_probe')).toBe(true))
+      const reply = answered().find((a) => a.type === 'engines_probe')!.payload as { engines: Array<Record<string, unknown>> }
+      return { readAccounts: reads, entry: reply.engines[0] }
+    }
+    const guest = await probe('kim@acme.io')
+    expect(guest.readAccounts).toEqual([false])
+    expect(guest.entry).toMatchObject({ engine: 'claude', installed: true })
+    expect(guest.entry).not.toHaveProperty('signedIn')
+    expect(guest.entry).not.toHaveProperty('lastUsedAt')
+    // The owner's own app still opens its New Harness box on the agent the owner uses.
+    const owner = await probe()
+    expect(owner.readAccounts).toEqual([true])
+    expect(owner.entry).toMatchObject({ signedIn: true, lastUsedAt: 1_794_000_000_000 })
   })
 
   it('manages none of the machine\'s pairings, and joins no trust group: the gateway refuses it', async () => {

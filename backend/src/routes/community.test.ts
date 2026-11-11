@@ -18,7 +18,7 @@ const db = vi.hoisted(() => {
         if ('gt' in filter) return (row[key] as Date) > (filter.gt as Date)
         if ('lt' in filter) return (row[key] as number | Date) < (filter.lt as number | Date)
         if ('gte' in filter) return (row[key] as number | Date) >= (filter.gte as number | Date)
-        if ('isSet' in filter || 'not' in filter) return (!filter.isSet || row[key] !== undefined) && (!('not' in filter) || row[key] !== filter.not)
+        if ('isSet' in filter || 'not' in filter) return (!('isSet' in filter) || filter.isSet === (row[key] !== undefined)) && (!('not' in filter) || row[key] !== filter.not)
         return matches(row, filter)
       }
       return value instanceof Date ? (row[key] as Date)?.getTime() === value.getTime() : row[key] === value
@@ -82,9 +82,14 @@ const db = vi.hoisted(() => {
     }
   }
   return { communityHarness: table({ defaults: { likeCount: 0 } }), communityLike: table({ unique: ['autonomousEnv', 'harnessId', 'userId'] }), communityComment: table(), communityFollow: table(),
-    communityReport: table({ unique: ['autonomousEnv', 'targetType', 'targetId', 'userId'] }), communityHidden: table({ defaults: { restoredAt: null } }), communityNotification: table(), user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ name: where.id === 'alice' ? 'Alice' : 'Bob' })) } }
+    communityReport: table({ unique: ['autonomousEnv', 'targetType', 'targetId', 'userId'] }), communityHidden: table(), communityNotification: table(), user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ name: where.id === 'alice' ? 'Alice' : 'Bob' })) } }
 })
-vi.mock('../lib/prisma.js', () => ({ prisma: db }))
+/** The secondary client (lib/prisma.ts prismaSecondary): the same rows, with the models each read asked it for. */
+const secondary = vi.hoisted(() => ({ asked: [] as string[] }))
+vi.mock('../lib/prisma.js', () => ({ prisma: db, prismaSecondary: new Proxy(db, { get: (target, model: string) => {
+  secondary.asked.push(model)
+  return target[model as keyof typeof target]
+} }) }))
 import { communityRoutes, publicationSchema } from './community.js'
 import { communityCommentRoutes } from './communityComments.js'
 import { communityCreatorRoutes } from './communityCreators.js'
@@ -149,6 +154,9 @@ describe('publications and access', () => {
     expect(feed.stats[id]).toEqual({ likes: 1, comments: 2, forks: 0, liked: false })
     expect((await call('GET', 'harnesses?mine=true', 'bob')).json().data.harnesses).toEqual([])
     expect((await call('GET', 'harnesses?mine=true')).statusCode).toBe(401)
+    // An empty page reads no covers: Prisma sends an empty list as a scan of the whole collection.
+    const lists = db.communityHarness.findMany.mock.calls.flatMap(([query]) => { const list = (query?.where?.id as { in?: string[] } | undefined)?.in; return list ? [list] : [] })
+    expect(lists.filter(list => !list.length)).toEqual([])
   })
   it('keeps replies inside the same public harness and account environment', async () => {
     const id = await publish()
@@ -341,6 +349,17 @@ describe('persistent social actions', () => {
     expect(await search('q=lantern')).toHaveLength(2)
     expect(await search('q=lantern&mine=true', 'alice')).toEqual(['Lantern room'])
     expect(await search('q=nothing-like-this')).toEqual([])
+    // A search's unanchored match is read on the secondaries (task #2970); the plain feed stays on the primary.
+    expect(secondary.asked).toContain('communityHarness')
+    secondary.asked.length = 0
+    expect(await search('sort=newest')).toHaveLength(2)
+    expect(await search('sort=popular&q=lantern')).toHaveLength(2)
+    expect(await search('sort=trending&q=orbit')).toEqual(['Orbit study'])
+    expect(secondary.asked.length).toBeGreaterThan(0)
+    secondary.asked.length = 0
+    await search('sort=popular')
+    await search('sort=trending')
+    expect(secondary.asked).toEqual([])
     expect((await call('GET', 'harnesses?q=')).statusCode).toBe(400)
     expect((await call('GET', `harnesses?q=${'x'.repeat(81)}`)).statusCode).toBe(400)
   })

@@ -2,13 +2,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/super_tab_swarm.dart' show addAskingAgent;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_screen_test.dart' show mount;
 
 void main() {
   testWidgets(
-    'the Dock badge counts what needs the person in their Swarms and clears '
-    'when nothing does, or the workspace leaves',
+    'the Dock badge counts the agents that ask the person in their Swarms, and '
+    'clears when they are read, or the workspace leaves',
     (tester) async {
       const channel = MethodChannel('harness/swarm_tabs');
       final updates = <Map>[];
@@ -28,17 +29,20 @@ void main() {
       await tester.pump();
       expect(updates.last['dockBadge'], 0);
 
-      final server = f.connection.server
-        ..tag('message-1')
-        ..ask(['Ship it behind a flag?']);
+      final server = f.connection.server;
+      addAskingAgent(server, 'kai');
+      addAskingAgent(server, 'quinn');
       await tester.runAsync(c.refresh);
       await tester.pump();
       expect(updates.last['dockBadge'], 2);
 
-      server.state
-        ..['mentionsWaiting'] = 0
-        ..['decisionsWaiting'] = 0;
-      server.revision++;
+      // Both chats read on another device.
+      server.state['readMarks'] = {
+        'owner': {
+          'agent-chat-kai': server.revision,
+          'agent-chat-quinn': server.revision,
+        },
+      };
       await tester.runAsync(c.refresh);
       await tester.pump();
       expect(updates.last['dockBadge'], 0);

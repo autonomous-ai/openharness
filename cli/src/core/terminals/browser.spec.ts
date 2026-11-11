@@ -13,7 +13,7 @@ function setup(over: Partial<BrowserDeps> = {}) {
     isLocal: vi.fn((connId: string) => connId.startsWith('local:')),
     // A phone's key: `phone-1` reconnects as `phone-1b`.
     who: (connId: string) => connId.replace(/b$/, ''),
-    replay: vi.fn(async () => 200),
+    replay: vi.fn(async () => ({ status: 200, location: null })),
     now: () => now,
     log: vi.fn(),
     ...over,
@@ -66,8 +66,51 @@ describe('browser_callback', () => {
     expect(await browser.callback({ url: caught }, 'phone-1')).toEqual({ error: 'NOT_EXPECTED' })
   })
 
+  // Codex answers its callback with a 302 to its own `/success`, and its sign-in stayed open until a browser came (the MSI,
+  // 2026-11-06).
+  it('follows the program to its own next page on that port, as the phone\'s browser would, and nowhere else', async () => {
+    const CODEX = 'https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=s'
+    const pages: Record<string, { status: number; location: string | null }> = {
+      'http://127.0.0.1:1455/auth/callback?code=c': { status: 302, location: '/success?id=1' },
+      'http://127.0.0.1:1455/success?id=1': { status: 200, location: null },
+    }
+    const { deps, browser } = setup({ replay: vi.fn(async (url: string) => pages[url] ?? { status: 404, location: null }) })
+    browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
+    browser.open({ pane: '%7', url: CODEX })
+    expect(await browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
+    expect(vi.mocked(deps.replay).mock.calls.map(([url]) => url))
+      .toEqual(['http://127.0.0.1:1455/auth/callback?code=c', 'http://127.0.0.1:1455/success?id=1'])
+    expect(deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455: HTTP 200')
+    // Another port, another host, https, a page that fails: none opened, and the sign-in still said handed over.
+    for (const location of ['http://127.0.0.1:22/x', 'https://example.com/done', 'https://127.0.0.1:1455/success']) {
+      const replay = vi.fn(async () => ({ status: 302, location }))
+      const other = setup({ replay })
+      other.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
+      other.browser.open({ pane: '%7', url: CODEX })
+      expect(await other.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
+      expect(replay).toHaveBeenCalledOnce()
+    }
+    const failing = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce(new Error('ECONNRESET')) })
+    failing.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
+    failing.browser.open({ pane: '%7', url: CODEX })
+    expect(await failing.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
+    expect(failing.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: ECONNRESET')
+    // A rejection that is not an Error is said the same way.
+    const plain = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce('socket closed') })
+    plain.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
+    plain.browser.open({ pane: '%7', url: CODEX })
+    expect(await plain.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
+    expect(plain.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: socket closed')
+    // A program that keeps sending the browser on is followed a few pages, never for ever.
+    const loop = setup({ replay: vi.fn(async () => ({ status: 302, location: '/again' })) })
+    loop.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
+    loop.browser.open({ pane: '%7', url: CODEX })
+    await loop.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')
+    expect(loop.deps.replay).toHaveBeenCalledTimes(4)
+  })
+
   it('says when the program refused it or could not be reached', async () => {
-    const { browser, deps } = setup({ replay: vi.fn().mockResolvedValueOnce(400).mockRejectedValueOnce(new Error('ECONNREFUSED')).mockRejectedValueOnce('gone') })
+    const { browser, deps } = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 400, location: null }).mockRejectedValueOnce(new Error('ECONNREFUSED')).mockRejectedValueOnce('gone') })
     browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
     browser.open({ pane: '%7', url: CLAUDE })
     browser.open({ pane: '%7', url: CLAUDE })

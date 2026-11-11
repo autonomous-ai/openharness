@@ -2,132 +2,92 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
+import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
-import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
 import 'swarm_style.dart';
-import 'swarm_unread.dart';
-import 'team_glance.dart';
 
 /// The rows of Swarm Home: a project with how many people read it, how many
 /// agents are running and when it last moved, its tile a dot and its name a
 /// channel's, as C1 draws them (2026-10-30); the projects quiet for a day
 /// folded in one row.
 
-/// A team in a line of coloured dots, as B1 draws it: "● 4 working ● 1
-/// waiting", each dot in its state's colour ([swarmStateColor]), who is down
-/// in red words too, and heard as words alone. With nobody counted, the
-/// team's line in words ("No agents yet", "All idle").
-class SwarmTeamDots extends StatelessWidget {
-  const SwarmTeamDots(this.glance, {super.key, this.lead});
+/// An invitation to a Swarm on Home (Tony's mobile list, task 24), one line: the
+/// Swarm's name, Not now and Join. The account's, so it shows whichever Swarm
+/// or filter Home is on.
+class SwarmInvitationRow extends StatelessWidget {
+  const SwarmInvitationRow({
+    super.key,
+    required this.invitation,
+    required this.joining,
+    required this.onJoin,
+    required this.onLater,
+  });
 
-  final SwarmTeamGlance glance;
-
-  /// Words before the dots: the Swarm, where Home shows several.
-  final String? lead;
+  final SwarmInvitation invitation;
+  final bool joining;
+  final VoidCallback onJoin, onLater;
 
   @override
   Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final quiet = AppType.caption(
-      color: AppPalette.textSecondary,
-      height: 1.35,
-    );
-    final parts = glance.parts;
-    // Heard in words: "1 working · 1 waiting", never the dots.
-    final heard = [?lead, glance.line].join(' · ');
-    return Semantics(
-      label: heard,
-      excludeSemantics: true,
-      child: Text.rich(
-        TextSpan(
-          children: [
-            if (lead case final lead?) TextSpan(text: '$lead · '),
-            if (parts.isEmpty) TextSpan(text: glance.line),
-            for (final (i, part) in parts.indexed) ...[
-              if (i > 0) const TextSpan(text: '  '),
-              TextSpan(
-                text: '● ',
-                style: TextStyle(color: swarmStateColor(part.state)),
-              ),
-              TextSpan(
-                text: part.text,
-                style: part.state == SwarmAgentState.down
-                    ? TextStyle(color: AppColors.danger)
-                    : null,
-              ),
-            ],
-          ],
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: quiet,
+    final tty = Tty.of(context);
+    return SwarmRow(
+      title: invitation.name.trim(),
+      chevron: null,
+      onTap: null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TtyTextButton(
+            key: ValueKey('swarm-invitation-later-${invitation.inviteId}'),
+            label: 'Not now',
+            color: tty.dim,
+            onPressed: joining ? null : onLater,
+          ),
+          const SizedBox(width: AppSpace.s),
+          TtyTextButton(
+            key: ValueKey('swarm-invitation-join-${invitation.inviteId}'),
+            label: joining ? 'Joining…' : 'Join',
+            onPressed: joining ? null : onJoin,
+          ),
+        ],
       ),
     );
   }
 }
 
-/// A project's line on Home: "5 humans • 8 agents running", leaving out what
-/// is none, then its Swarm, the first to go when the row is short, where Home
-/// shows several. Empty with nothing to say.
-String swarmProjectLine({
-  required int humans,
-  required SwarmTeamGlance glance,
-  String? swarmName,
-}) => [
-  if (humans > 0) swarmHumans(humans),
-  ?glance.running,
-  ?swarmName,
-].join(_lineGap);
-
-const _lineGap = ' • ';
-
-/// What a need asks, as its Home row's title: a decision's question, a tag's
-/// words, the question work waits on (or the work itself).
-String swarmNeedAsk(SwarmNeed need) => switch (need) {
-  SwarmDecisionNeed(:final decision) => decision.question,
-  SwarmMentionNeed(:final mention) =>
-    mention.text.isNotEmpty ? mention.text : mention.conversationTitle,
-  SwarmWorkNeed(:final work) => work.question ?? work.conversation.label,
-};
-
-/// One project on Home, as C1 draws it: a dot in the colour of how its team
-/// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
-/// and bright with something new in it, quiet otherwise — how many people read
-/// it and how many agents are running ([swarmProjectLine]), and at its right
-/// how long ago it last moved, over the tags waiting in it ("@2", filled) or,
-/// unread, a dot; a skeleton in their place while what waits is on its way
-/// ([tagsLoading]). A tap opens it; a long press offers its pin ([onLongPress]).
+/// One project on Home, on one line as Slack's channels (Tony, 2026-11-03):
+/// its name as a channel's ("#openharness") — bold and bright with something
+/// new in it, quiet otherwise — and at its end the tags
+/// waiting in it ("@2", filled), else a dot while it is unread (anh Dee,
+/// 2026-11-04), or a skeleton in the tags' place while what
+/// waits is on its way ([tagsLoading]). No dot for how its team is: one on
+/// every row said little, and the name already says what waits on the person
+/// (Tony, 2026-11-03). No second line: who reads it and how long ago it moved
+/// were the same on every row. A private project has a lock at its end,
+/// after its tags, as the desktop's sidebar marks it. A tap opens it; a long
+/// press offers its pin ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
-    required this.glance,
-    required this.humans,
-    required this.now,
-    this.swarmName,
     this.tagsLoading = false,
     required this.onTap,
     this.onLongPress,
   });
 
+  /// One line, as tall as a thumb's touch.
+  static const double height = minTouchTarget;
+
   final SwarmHomeProject project;
-  final SwarmTeamGlance glance;
-
-  /// How many people read it ([swarmProjectPeople]).
-  final int humans;
-  final DateTime now;
-
-  /// Its Swarm, where Home shows several.
-  final String? swarmName;
 
   /// What waits in its Swarm is not read yet: its tags may still come.
   final bool tagsLoading;
@@ -139,112 +99,76 @@ class SwarmHomeProjectRow extends StatelessWidget {
     AppTheme.watch(context);
     final news = project.news;
     final bright = news.bold || news.tags > 0;
-    final age = switch (project.active) {
-      final at? => fzfAge(at.toLocal(), now.toLocal()),
-      null => '',
-    };
-    final line = swarmProjectLine(
-      humans: humans,
-      glance: glance,
-      swarmName: swarmName,
-    );
+    // A private project's lock takes the # mark's place, as the desktop's
+    // sidebar marks it (#2876): the row's right side is for its notifications.
+    final private = project.project.isPrivate;
+    final name = private ? project.project.name : '#${project.project.name}';
     return _Tap(
       onTap: onTap,
       onLongPress: onLongPress,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: SwarmRow.height),
+        constraints: const BoxConstraints(minHeight: height),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpace.l,
-            vertical: AppSpace.m,
+            vertical: AppSpace.xs,
           ),
           child: Row(
             children: [
-              ExcludeSemantics(
-                child: SizedBox(
-                  key: const ValueKey('swarm-project-dot'),
-                  width: 16,
-                  child: Center(
-                    child: _Dot(
-                      size: 8,
-                      color: swarmProjectColor(glance, news),
+              if (private) ...[
+                Icon(
+                  LucideIcons.lock300,
+                  key: const ValueKey('swarm-project-private'),
+                  size: 14,
+                  color: AppPalette.textSecondary,
+                  semanticLabel: 'Private project',
+                ),
+                const SizedBox(width: AppSpace.xs),
+              ],
+              Expanded(
+                child: Semantics(
+                  label: bright && news.tags == 0 ? 'Unread messages' : null,
+                  child: Text.rich(
+                    TextSpan(text: name),
+                    key: const ValueKey('swarm-project-name'),
+                    semanticsLabel: name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.label(
+                      color: bright
+                          ? AppPalette.textPrimary
+                          : AppPalette.textSecondary,
+                      height: 1.3,
+                      fontWeight: bright ? AppFont.semibold : null,
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: AppSpace.s),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Semantics(
-                      label: bright && news.tags == 0
-                          ? 'Unread messages'
-                          : null,
-                      child: Text(
-                        '#${project.project.name}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.label(
-                          color: bright
-                              ? AppPalette.textPrimary
-                              : AppPalette.textSecondary,
-                          height: 1.3,
-                          fontWeight: bright ? AppFont.semibold : null,
-                        ),
-                      ),
-                    ),
-                    if (line.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        line,
-                        key: const ValueKey('swarm-project-line'),
-                        semanticsLabel: line.replaceAll(_lineGap, ', '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.caption(
-                          color: AppPalette.textSecondary,
-                          height: 1.35,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              if (age.isNotEmpty || bright || tagsLoading) ...[
+              if (news.tags > 0) ...[
                 const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (age.isNotEmpty)
-                      Text(
-                        age,
-                        style: AppType.caption(
-                          color: AppPalette.textFaint,
-                          height: 1.3,
-                        ),
-                      ),
-                    if (news.tags > 0) ...[
-                      const SizedBox(height: 4),
-                      SwarmTags(news.tags, filled: true),
-                    ] else if (tagsLoading) ...[
-                      const SizedBox(height: 4),
-                      // As big as the filled tags it stands for.
-                      const Skeleton(
-                        key: ValueKey('swarm-project-tags-loading'),
-                        width: 36,
-                        height: 20,
-                        radius: 10,
-                      ),
-                    ] else if (news.bold) ...[
-                      const SizedBox(height: 8),
-                      ExcludeSemantics(
-                        child: _Dot(size: 7, color: AppPalette.textPrimary),
-                      ),
-                    ],
-                  ],
+                SwarmTags(news.tags, filled: true),
+              ] else if (tagsLoading) ...[
+                const SizedBox(width: 12),
+                // As big as the filled tags it stands for.
+                const Skeleton(
+                  key: ValueKey('swarm-project-tags-loading'),
+                  width: 36,
+                  height: 20,
+                  radius: 10,
+                ),
+              ] else if (news.bold) ...[
+                // Unread, as anh Dee's Home draws it (2026-11-04); heard in
+                // the name's words.
+                const SizedBox(width: 12),
+                SizedBox.square(
+                  key: const ValueKey('swarm-project-unread'),
+                  dimension: AppSpace.s,
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: AppPalette.textPrimary,
+                      shape: const CircleBorder(),
+                    ),
+                  ),
                 ),
               ],
             ],
@@ -314,18 +238,6 @@ class SwarmOtherProjectsRow extends StatelessWidget {
   }
 }
 
-/// How a project's team is, as its dot on Home: red with someone down,
-/// yellow with someone waiting or a tag waiting on the person, green with
-/// someone working, faint otherwise.
-Color swarmProjectColor(SwarmTeamGlance glance, SwarmRowNews news) =>
-    glance.down > 0
-    ? swarmStateColor(SwarmAgentState.down)
-    : glance.waiting > 0 || news.tags > 0
-    ? swarmStateColor(SwarmAgentState.waiting)
-    : glance.working > 0
-    ? swarmStateColor(SwarmAgentState.working)
-    : AppPalette.textFaint;
-
 /// A row's ink on a tap, with a click a thumb can feel.
 class _Tap extends StatelessWidget {
   const _Tap({required this.onTap, this.onLongPress, required this.child});
@@ -346,25 +258,6 @@ class _Tap extends StatelessWidget {
               onLongPress!();
             },
       child: child,
-    ),
-  );
-}
-
-/// A small round mark: what waits on the person in the warning colour, or
-/// [color].
-class _Dot extends StatelessWidget {
-  const _Dot({required this.size, this.color});
-
-  final double size;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      color: color ?? AppColors.warning,
-      shape: BoxShape.circle,
     ),
   );
 }

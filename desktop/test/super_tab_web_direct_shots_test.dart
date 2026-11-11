@@ -1,4 +1,4 @@
-// Phone-width web, no machine connected at all: #openharness and the Buddy
+// Phone-width web, no machine connected at all: #openharness and an agent's
 // chat drawn from what the browser read straight from the backend
 // (docs/specs/2026-10-30-web-swarm-direct.md), in light and dark.
 //
@@ -18,7 +18,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
 
-import 'support/buddy_fixture.dart';
+import 'support/own_agent_fixture.dart';
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'support/web_swarm_backend.dart';
@@ -26,13 +26,13 @@ import 'swarm_state_test.dart' show MemoryStore;
 
 final shots = Platform.environment['SUPER_TAB_WEB_SHOTS'];
 const _tab = '0123456789abcdef01234567';
-const _buddyChat = 'buddy-owner-lead';
+const _agentChat = 'agent-chat-sage';
 
 ConversationServer _swarm() {
-  final server = buddySwarm()
+  final server = ownAgentSwarm()
     ..state['id'] = _tab
     ..state['name'] = 'openharness';
-  giveBuddy(
+  giveOwnAgent(
     server,
     person: 'owner',
     id: 'sage',
@@ -48,16 +48,16 @@ ConversationServer _swarm() {
   };
   server.append(
     'Can my phone read the Swarm when my Mac is asleep?',
-    conversationId: _buddyChat,
+    conversationId: _agentChat,
   );
   server.messages.last['author'] = {
     'kind': 'person',
     'id': 'owner',
     'name': 'owner@example.com',
   };
-  buddyReply(
+  agentReply(
     server,
-    _buddyChat,
+    _agentChat,
     'Yes: the browser now reads it from Harness itself, signed in as you.',
     agentId: 'sage',
     name: 'Sage',
@@ -69,7 +69,7 @@ void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   for (final brightness in Brightness.values) {
-    testWidgets('phone web, no machine: #openharness and the Buddy chat in '
+    testWidgets('phone web, no machine: #openharness and an agent chat in '
         '${brightness.name}', (tester) async {
       final previous = grid.AppTheme.brightness.value;
       grid.AppTheme.brightness.value = brightness;
@@ -117,7 +117,6 @@ void main() {
             child: Scaffold(
               body: SuperTabView(
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 onNewProject: () {},
@@ -147,7 +146,7 @@ void main() {
       }
 
       await show('lead', 'openharness', 'Web chats now load');
-      await show(_buddyChat, 'buddy', 'reads it from Harness itself');
+      await show(_agentChat, 'agent', 'reads it from Harness itself');
       expect(backend.calls, isNotEmpty);
       // Closing the Swarm and the app stops their timers before the test ends.
       await tester.pumpWidget(const SizedBox());

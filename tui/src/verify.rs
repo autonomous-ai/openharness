@@ -34,10 +34,15 @@ pub struct Verifier {
 }
 
 static DUMP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(unix)]
 extern "C" fn on_usr2(_: libc::c_int) { DUMP.store(true, std::sync::atomic::Ordering::Relaxed) }
 
 /// `kill -USR2 <hn>` asks for a dump of the screen as it is (with verifying on).
+#[cfg(unix)]
 pub fn listen_for_dump() { unsafe { libc::signal(libc::SIGUSR2, on_usr2 as extern "C" fn(libc::c_int) as libc::sighandler_t); } }
+/// A developer's check: Windows has no such signal to ask with.
+#[cfg(windows)]
+pub fn listen_for_dump() {}
 pub fn dump_asked() -> bool { DUMP.swap(false, std::sync::atomic::Ordering::Relaxed) }
 
 /// One cell where the terminal and hn part: where, what hn drew, what the terminal shows.

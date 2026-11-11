@@ -12,7 +12,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -22,8 +21,8 @@ import 'swarm_fixture.dart';
 /// prototype draws it (2026-10-30): its chat with the New messages line,
 /// a task card and a PR card, a code block, reactions with the add-reaction
 /// chip and a replies row; ☰ open; its Leaderboard sheet; its Team sheet with
-/// open tasks on top, See all and the agents in their states; and Approve's
-/// question. On 390- and 320-point phones in both phone themes, from made-up
+/// open tasks on top, See all and the agents in their states; Work and Older;
+/// and Approve's question. On 390- and 320-point phones in both phone themes, from made-up
 /// data only, to the folder `SWARM_PROJECT_C_SHOTS` names.
 final shots = Platform.environment['SWARM_PROJECT_C_SHOTS'];
 void main() {
@@ -204,16 +203,27 @@ void main() {
         ...load,
         'members': [
           part(me, 1, person(me)),
-          part('diego', 1, {
-            ...person('diego', role: 'collaborator'),
-            // No emoji: the test engine draws none.
-            'status': {'text': 'Reviewing PRs'},
-          }),
+          part('diego', 1, person('diego', role: 'collaborator')),
           part('ken', 1, person('ken', role: 'collaborator')),
         ],
       };
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
           changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/$tab/groups?dormant=1&projectId=$project'] =
+          (_) => {
+            'groups': [
+              part('g-old', 50, {
+                ...groupData(
+                  'g-old',
+                  title: 'Old chat',
+                  number: 23,
+                  dormant: true,
+                ),
+                'archived': true,
+              }),
+            ],
+            'next': null,
+          };
       fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
         'decisions': [
           {
@@ -338,7 +348,6 @@ void main() {
             home: const SwarmProjectPage(
               swarmId: tab,
               projectId: project,
-              tabs: SwarmProjectTab.homeC,
             ),
           ),
         ),
@@ -368,26 +377,6 @@ void main() {
       await capture('leaderboard');
       await tester.tap(key('swarm-leaderboard-close'));
       await tester.pumpAndSettle();
-      await tester.tap(key('swarm-project-menu'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-project-menu-team'));
-      await tester.pumpAndSettle();
-      await capture('team');
-      await tester.dragUntilVisible(
-        key('swarm-team-see-all'),
-        key('swarm-project-team-list'),
-        const Offset(0, -200),
-      );
-      await tester.pumpAndSettle();
-      await capture('team-see-all');
-      await tester.drag(key('swarm-project-team-list'), const Offset(0, -1000));
-      await tester.pumpAndSettle();
-      await capture('team-agents');
-      await tester.drag(key('swarm-project-team-list'), const Offset(0, 2000));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-approve-d1'));
-      await tester.pumpAndSettle();
-      await capture('approve');
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));
       host.dispose();

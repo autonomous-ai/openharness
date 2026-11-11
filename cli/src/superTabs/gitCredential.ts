@@ -10,9 +10,13 @@
  *
  * The calling agent is found as `harness super-tab` finds it: its tmux pane, in the daemon's list of agents. The token is
  * written to git alone, on stdout, and never logged.
+ *
+ * Only sessions started with the App before its removal name it as their helper; delete on or after 2026-12-10, with
+ * superTabs/github.ts.
  */
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
+import { sendPane } from '../messages/command.js'
 import { identifier, object } from './wire.js'
 
 const USAGE = 'harness git-credential [--port N --machine ID] get|store|erase|trailers'
@@ -67,7 +71,7 @@ async function askToken(where: Where, deps: GitCredentialDeps): Promise<Record<s
   try {
     daemon = await (deps.open ?? openDaemon)(where)
     const listed = await daemon.request('agents_list', {}, TIMEOUT_MS)
-    const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? process.env.TMUX_PANE, where.machineId)
+    const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? sendPane(process.env), where.machineId)
     if (!caller) return { error: 'NOT_A_SWARM_AGENT', detail: 'git asked for a GitHub token outside a Swarm agent\'s harness.' }
     return await daemon.request('super_tabs', { action: 'githubToken', harnessId: caller.agentId }, TIMEOUT_MS)
   } catch (error) {
@@ -78,7 +82,7 @@ async function askToken(where: Where, deps: GitCredentialDeps): Promise<Record<s
 export async function gitCredentialCommand(argv: readonly string[], deps: GitCredentialDeps = {}): Promise<number> {
   const print = deps.print ?? (text => process.stdout.write(text))
   const warn = deps.warn ?? (text => process.stderr.write(`${text}\n`))
-  const where = { ...(deps.where ?? (() => whereFor(process.env.TMUX_PANE)))() }
+  const where = { ...(deps.where ?? (() => whereFor(sendPane(process.env))))() }
   const positional: string[] = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') where.port = Number(argv[++i])

@@ -9,6 +9,8 @@ import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/app_log.dart';
 import '../logging/http_log.dart';
+import '../notify/push_channel.dart' show PushAddress;
+import '../notify/push_tokens.dart' show PushTokenApi;
 import '../swarm/swarm_outgoing_files.dart';
 import '../swarm/swarm_request.dart' show SuperTabFailure;
 import '../viewer/device_ack.dart';
@@ -20,7 +22,7 @@ import 'bearer_auth_interceptor.dart';
 import 'multipart_body.dart';
 
 /// Authenticated control-plane REST client for the phone.
-class ApiClient {
+class ApiClient implements PushTokenApi {
   Future<Map<String, dynamic>> productUsageReport(
     Map<String, dynamic> report,
   ) async {
@@ -105,6 +107,14 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  /// Saves the signed-in person's own account name (`PATCH /api/auth/me`, task #2655, the route #2917 added) and
+  /// answers the profile as [me] does. The backend checks the name and says why it refused in words; one from before
+  /// the route answers 404.
+  Future<Map<String, dynamic>?> updateMe({required String name}) async {
+    final res = await _dio.patch('/api/auth/me', data: {'name': name});
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- machines --
   Future<List<Machine>> machines() async {
     final res = await _dio.get('/api/machines');
@@ -135,6 +145,30 @@ class ApiClient {
     );
     unwrapApiResponse(res);
   }
+
+  // -- where to push to this phone (notify/push_tokens.dart) --
+
+  @override
+  Future<void> registerPushToken(PushAddress address) async {
+    final res = await _dio.post('/api/push-devices', data: _pushBody(address));
+    unwrapApiResponse(res);
+  }
+
+  @override
+  Future<void> forgetPushToken(PushAddress address) async {
+    // In the body, not the path: a path lands in access logs.
+    final res = await _dio.post(
+      '/api/push-devices/drop',
+      data: _pushBody(address),
+    );
+    unwrapApiResponse(res);
+  }
+
+  /// The server's body is strict (`routes/pushDevices.ts`): these two keys, nothing else.
+  static Map<String, String> _pushBody(PushAddress address) => {
+    'platform': address.platform,
+    'token': address.token,
+  };
 
   // -- the account's device key log (viewer/device_log_sync.dart) --
 
@@ -343,7 +377,7 @@ class ApiClient {
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
     return (data['transcript'] as String? ?? '').trim();
   }
-  // -- Swarm reads (the viewer's own session signs them) --
+  // -- Swarm requests (the viewer's own session signs them) --
 
   /// One read of the Swarm ([path], `/api/super-tabs…`), straight from the
   /// backend with this viewer's own sign-in, as the web build reads it
@@ -354,6 +388,37 @@ class ApiClient {
   /// transport threw.
   Future<Object?> swarmRead(String path) async {
     final response = await _dio.get<dynamic>(path);
+    return _swarmValue(response);
+  }
+
+  /// A Swarm write signed by this phone. Keep [body], including its operation
+  /// ID, unchanged through bearer refresh and caller retries. The caller cancels
+  /// it on account change, preventing a refresh from replaying for a new account.
+  /// Never forward a command or its bearer to a redirect or another origin.
+  Future<Object?> swarmWrite(
+    String path, {
+    Map<String, dynamic>? body,
+    CancelToken? cancel,
+  }) async {
+    final uri = Uri.parse(path);
+    if (uri.hasScheme ||
+        uri.hasAuthority ||
+        !uri.path.startsWith('/api/super-tabs/') ||
+        uri.pathSegments.any((segment) => segment == '.' || segment == '..') ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      throw ArgumentError.value(path, 'path', 'Expected a Swarm backend path');
+    }
+    final response = await _dio.post<dynamic>(
+      path,
+      data: body,
+      cancelToken: cancel,
+      options: Options(followRedirects: false),
+    );
+    return _swarmValue(response);
+  }
+
+  static Object? _swarmValue(Response<dynamic> response) {
     final status = response.statusCode ?? 0;
     var body = response.data;
     if (body is String) {
@@ -560,29 +625,6 @@ class ApiClient {
       throw SuperTabFailure(failed.code, failed.message, statusCode: status);
     }
     appLog.debug('api', 'chat file to storage → $status');
-  }
-
-  // -- Swarm avatars (backend only: the computer a Swarm call goes through carries text) --
-
-  /// Uploads [png] as an avatar picture of the Swarm [tabId] and answers the
-  /// upload's id — `POST /api/super-tabs/:tabId/avatars` (backend
-  /// superTabs/profile.ts); a `member.avatar` command then makes it the
-  /// person's.
-  Future<String> uploadSwarmAvatar(String tabId, Uint8List png) async {
-    final body = multipartFileBody(
-      field: 'file',
-      filename: 'avatar.png',
-      fileContentType: 'image/png',
-      file: png,
-      boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
-    );
-    final res = await _dio.post(
-      '/api/super-tabs/${Uri.encodeComponent(tabId)}/avatars',
-      data: body.bytes,
-      options: Options(contentType: body.contentType),
-    );
-    final data = unwrapApiResponse(res) as Map<String, dynamic>;
-    return (data['avatar'] as Map<String, dynamic>)['id'] as String;
   }
 }
 

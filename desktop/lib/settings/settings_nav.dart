@@ -8,6 +8,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/section_scaffold.dart';
 import '../widgets/finger_target.dart';
 import 'settings_section.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The settings list: the way back, a field that narrows the list to what you
 /// type, then one row per screen with the open one highlighted.
@@ -36,9 +37,9 @@ class SettingsNav extends StatefulWidget {
   /// shortcuts is left out.
   final bool compact;
 
-  /// The machine rail's own default width, so Settings opens without the left
-  /// column jumping.
-  static const double width = 260;
+  /// The workspace sidebar's width with its rule, so Settings opens without the
+  /// left column jumping.
+  static const double width = 276;
 
   @override
   State<SettingsNav> createState() => _SettingsNavState();
@@ -139,7 +140,7 @@ class _SettingsNavState extends State<SettingsNav> {
     grid.AppTheme.watch(context);
     return Container(
       width: widget.railWidth,
-      color: grid.AppSurface.recess,
+      color: grid.AppPalette.swarmWelcome,
       child: Padding(
         // Rows add their own icon gutter: their glyphs and group captions sit
         // on the same 24px content inset as the section on the right.
@@ -193,7 +194,7 @@ class _SettingsNavState extends State<SettingsNav> {
   Widget _navList() {
     final visible = _visible;
     if (visible.isEmpty) return const _NoMatches();
-    return ListView(
+    return LaidOutListView(
       padding: const EdgeInsets.only(bottom: 10),
       children: [
         for (final group in visible) ...[

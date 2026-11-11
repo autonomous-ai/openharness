@@ -8,7 +8,7 @@ import type { MachineListCache } from '../device/machineList.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { routeVoiceTask, type RouteDecision, type RouterAgent } from '../lib/voiceRouter.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { FAIL, type CoreApi } from '../core/api.js'
+import { FAIL, type BackendNotice, type CoreApi } from '../core/api.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet, type FleetDeps } from './fleet.js'
 
 // The lane is a cloud socket and the pinned keys a file under the data folder: neither in a test.
@@ -105,16 +105,29 @@ afterEach(() => {
 })
 
 describe('the machine list', () => {
-  it('is read through the core at once, and again every minute until the fleet stops', () => {
+  // Spec 2026-11-02-poll-cost Part 4.4: read every 60 s by every daemon with a dial, almost always unchanged.
+  it('the fleet\'s machine list is served for 45 s and refreshed on machines_changed, every 5 minutes until the fleet stops', () => {
     vi.useFakeTimers()
-    const { fleet, machines } = setup()
+    const base = fakeCore()
+    let told: ((notice: BackendNotice) => void) | undefined
+    const unsubscribe = vi.fn()
+    vi.mocked(base.account.onNotice).mockImplementation((listener) => { told = listener; return unsubscribe })
+    const { fleet, machines } = setup({}, base)
+    expect(machines.refresh.mock.calls).toEqual([[{ maxAgeMs: 45_000 }]])
+    vi.advanceTimersByTime(299_999)
     expect(machines.refresh).toHaveBeenCalledTimes(1)
-    vi.advanceTimersByTime(60_000)
-    expect(machines.refresh).toHaveBeenCalledTimes(2)
+    vi.advanceTimersByTime(1)
+    expect(machines.refresh.mock.calls).toEqual([[{ maxAgeMs: 45_000 }], [{ maxAgeMs: 45_000 }]])
+    // A machine added, renamed or removed: read now, whatever the list's age. Who uses a harness here is not the list.
+    told!({ type: 'machines_changed', reason: 'renamed' })
+    told!({ type: 'machines_changed', reason: 'harness_shares' })
+    told!({ type: 'desk_changed', revision: 0 })
+    expect(machines.refresh.mock.calls.slice(2)).toEqual([[{ maxAgeMs: 0 }]])
     fleet.stop()
     expect(lane.stop).toHaveBeenCalled()
-    vi.advanceTimersByTime(120_000)
-    expect(machines.refresh).toHaveBeenCalledTimes(2)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(600_000)
+    expect(machines.refresh).toHaveBeenCalledTimes(3)
   })
 })
 

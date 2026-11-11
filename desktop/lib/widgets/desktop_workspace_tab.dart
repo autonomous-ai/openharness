@@ -43,6 +43,7 @@ class DesktopWorkspaceTab extends StatefulWidget {
     this.activity,
     this.activityLabel,
     this.highlighted = false,
+    this.attention = false,
     this.onRename,
     this.shortcutHint,
     this.sharedCount,
@@ -57,6 +58,10 @@ class DesktopWorkspaceTab extends StatefulWidget {
 
   final String id, label;
   final bool selected, highlighted;
+
+  /// Something there needs the person: the name is bold, and nothing counts
+  /// it (Quiet Swarm, screen 0).
+  final bool attention;
   final ValueListenable<bool> showShortcuts;
   final VoidCallback? onSelect, onClose;
   final VoidCallback? onRename;
@@ -469,9 +474,13 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                                         textAlign: TextAlign.center,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: DesktopChrome.control(
-                                          color: ink,
-                                        ),
+                                        strutStyle: grid.AppType.controlStrut(),
+                                        style: DesktopChrome.control(color: ink)
+                                            .copyWith(
+                                              fontWeight: widget.attention
+                                                  ? grid.AppFont.semibold
+                                                  : null,
+                                            ),
                                       ),
                                     ),
                                   ),
@@ -600,7 +609,13 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
     );
     // Always the anchor, menu or not: a tab whose share arrives keeps its
     // subtree (and keyboard focus); [_openMenu] opens nothing without rows.
-    return MenuAnchor(controller: _menu, menuChildren: _menuRows(), child: tab);
+    return AppDropdown(
+      controller: _menu,
+      consumeOutsideTap: false,
+      alignmentOffset: Offset.zero,
+      children: _menuRows(),
+      child: tab,
+    );
   }
 }
 

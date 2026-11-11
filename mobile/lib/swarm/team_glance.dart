@@ -64,9 +64,6 @@ class SwarmTeamGlance {
   };
 }
 
-/// "1 human", "3 humans".
-String swarmHumans(int count) => count == 1 ? '1 human' : '$count humans';
-
 const _finished = {'done', 'stopped', 'cancelled'};
 
 /// The team of [snapshot], or of its project [projectId]: an agent is in the
@@ -173,6 +170,11 @@ SwarmAgentGlance _glance(
   String two(int n) => n.toString().padLeft(2, '0');
   // The desktop's order, less what only the agent's computer can say.
   final (state, label) = switch (null) {
+    // A PM being moved to another engine or account (Switch PM).
+    _ when agent.switchRequest != null => (
+      SwarmAgentState.working,
+      'Switching…',
+    ),
     _ when work == 'lost' => (SwarmAgentState.down, 'Lost'),
     _ when agent.downSince != null => (SwarmAgentState.down, 'Down'),
     _ when until != null && until.isAfter(at) => (

@@ -87,6 +87,7 @@ function wire() {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
     device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
+    browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
   }
   const tokens = { accessToken: vi.fn(async () => 'token-a') }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { acct: 'a' } } }))
@@ -263,6 +264,9 @@ describe('the gateway\'s process, spoken to by the core', () => {
     events.deviceRevoked('P')
     events.toWindows({ type: 'device_keys_changed', payload: {} })
     events.tabFrame({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
+    events.browserRoute('s-1', 'turn')
+    events.browserRouteLost('s-2')
+    events.browserTransportError()
     const { heard } = w
     expect(heard.frame).toHaveBeenCalledWith('phone-1', { type: 'message' }, 'p2p', 'web')
     expect(heard.binary).toHaveBeenCalledWith('phone-1', clear)
@@ -282,6 +286,9 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.deviceRevoked).toHaveBeenCalledWith('P')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_keys_changed', payload: {} })
     expect(heard.tabFrame).toHaveBeenCalledWith({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
+    expect(heard.browserRoute).toHaveBeenCalledWith('s-1', 'turn')
+    expect(heard.browserRouteLost).toHaveBeenCalledWith('s-2')
+    expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
   })
 
   it('answers the core\'s commands about the keys from the gateway it runs, and 503 with none running', async () => {

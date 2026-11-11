@@ -338,7 +338,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
       await table.deleteMany({ where: { id: { in: ids } } })
       const either = cond ? db.superTabConfiguration : tx.superTabConfiguration
       await either.findMany({ where: { tabId: { in: tabIds } } })
-      async function read(roles: Prisma.SuperTabRoleTextDelegate, typed: typeof db.swarmAgent) {
+      async function read(roles: Prisma.SuperTabStopReceiptDelegate, typed: typeof db.swarmAgent) {
         await roles.findMany({ where: { tabId: { in: tabIds } } })
         await typed.findFirst({ where: { agentId: { in: ids } } })
       }
@@ -348,7 +348,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     `)
     expect(found.map(f => [f.call, f.operator])).toEqual([
       ['swarmGroup.findMany', 'in'], ['swarmGroup.count', 'has'], ['superTabDelivery.updateMany', 'in'], ['swarmMember.findMany', 'in'],
-      ['superTabRun.findMany', 'in'], ['part.deleteMany', 'in'], ['superTabConfiguration.findMany', 'in'], ['superTabRoleText.findMany', 'in'],
+      ['superTabRun.findMany', 'in'], ['part.deleteMany', 'in'], ['superTabConfiguration.findMany', 'in'], ['superTabStopReceipt.findMany', 'in'],
       ['swarmAgent.findFirst', 'in']])
   })
 
@@ -458,10 +458,10 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     const models = hotModels(schema)
     const all = [...schema.matchAll(/^model\s+(\w+)\s*\{/gm)].map(match => match[1]!)
     expect(models).toEqual(all.filter(model => /^(SuperTab|Swarm)/.test(model)))
-    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabRoleText', 'SuperTabDelivery', 'SwarmGroup', 'SwarmWorkspace']))
+    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabStopReceipt', 'SuperTabDelivery', 'SwarmGroup']))
     expect(hotModels('model SwarmNew {\n  id String @id\n}\nmodel Machine {\n}\nmodel SuperTabLater {\n}\n')).toEqual(['SwarmNew', 'SuperTabLater'])
-    const found = lint('await db.superTabRoleText.findMany({ where: { tabId: { in: ids } } })')
-    expect(found.map(f => f.call)).toEqual(['superTabRoleText.findMany'])
+    const found = lint('await db.superTabStopReceipt.findMany({ where: { tabId: { in: ids } } })')
+    expect(found.map(f => f.call)).toEqual(['superTabStopReceipt.findMany'])
   })
 
   it('allows only the uses already listed, and the list only shrinks', () => {
@@ -473,5 +473,6 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     expect(added, 'A Prisma in/has filter on a hot Swarm collection is sent as $expr, which no index bounds. Read through a named index (parts/indexed.ts readBy) with a plan test instead. An `unresolved` call is one whose collection this test cannot tell: name the delegate (db.swarmGroup, or a parameter typed Prisma.XDelegate), or list it after checking it is not a hot collection.').toEqual([])
     const fewer = Object.entries(allowed).filter(([key, count]) => count > (current[key] ?? 0)).map(([key, count]) => `${key}: ${current[key] ?? 0} (listed ${count})`)
     expect(fewer, 'Fewer uses than listed: lower them in hotFilters.allowed.json (UPDATE_HOT_FILTERS=1 rewrites it).').toEqual([])
-  })
+    // It parses every file under src/ (about 1.5 s alone), and a CI runner running the whole suite took over the default 5 s.
+  }, 60_000)
 })

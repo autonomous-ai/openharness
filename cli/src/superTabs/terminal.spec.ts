@@ -1,31 +1,42 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
+import { createSuperTabTerminal } from './inCore/terminal.js'
+import { screen as codexScreen } from '../engines/codex/screen.js'
+import type { RegisteredSession } from '../lib/registry.js'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
-import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
+import { capScreen, limitOf, modelFailing, signedOut, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
 
-function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[] } = {}) {
+function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[];
+  refuse?: (command: Record<string, any>) => { status: number; code: string } | null; engine?: string } = {}) {
   let clock = 1_000_000
   const sent: Sent[] = []
   let pending = options.requests ?? []
   const backend: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     if (path === '/api/super-tabs/hosts/m1/terminal') { const rows = pending; pending = []; return { status: 200, body: { success: true, data: rows } } }
     sent.push({ path, body: body as Record<string, any> })
+    const refused = options.refuse?.((body as Record<string, any>).command)
+    if (refused) return { status: refused.status, body: { success: false, error: { code: refused.code, message: 'Refused.' } } }
     return { status: 200, body: { success: true, data: { result: {} } } }
   })
   let screen = options.screen ?? (() => ({ ok: true as const, text: '> ', hold: null }))
   const core = fakeCore({
     account: { backend },
-    agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
+    agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id, engine: options.engine ?? 'claude' } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
       screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
   return { core, backend, sent, host,
+    now: () => clock,
     wait: (ms: number) => { clock += ms },
     request: (...rows: unknown[]) => { pending = rows },
     showing: (next: (harnessId: string) => SuperTabScreen) => { screen = next },
@@ -134,9 +145,78 @@ describe('a host serving its Lead\'s terminal requests', () => {
   })
 })
 
+// Spec 2026-11-02-poll-cost Part 4.2: every host of a Swarm agent asked every 3 s, almost always for nothing (prod 2026-11-02:
+// 305 a minute, each a transaction). A server that pushes deliveries also says when a terminal request waits for this
+// machine (`__terminal_waiting`). Task #2800: the 8 s fallback that followed was still almost all empty; the sender's wait now
+// tells the machine again at each re-check while the request waits (backend store.ts terminalResult), inside the 10 s pickup,
+// so with the push lease the host asks only when told.
+describe('terminal requests the server pushes', () => {
+  it('with the push lease, asks only when told, and at once on __terminal_waiting', async () => {
+    let pushing = true
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => pushing })
+    for (let second = 0; second < 60; second++) { await host.tick([row()]); t.wait(1_000) }
+    expect(t.polls()).toBe(0)
+    // Told a request waits: answered now, before the backend's 10 s are out.
+    t.request(screenRequest())
+    await host.waiting()
+    expect(t.polls()).toBe(1)
+    expect(t.sent.map(s => s.body.command.type)).toEqual(['agent.screenResult'])
+    for (let second = 0; second < 60; second++) { t.wait(1_000); await host.tick([row()]) }
+    expect(t.polls()).toBe(1)
+    // The lease lapses: every 3 s again.
+    pushing = false
+    t.wait(3_000); await host.tick([row()])
+    expect(t.polls()).toBe(2)
+  })
+
+  it('without it, polls every 3 s', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => false })
+    for (let second = 0; second < 9; second++) { await host.tick([row()]); t.wait(1_000) }
+    expect(t.polls()).toBe(3)
+  })
+
+  it('picks up nothing on a push before the host has read its roster, or with no Swarm agent here', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
+    await host.waiting()
+    await host.tick([])
+    await host.waiting()
+    expect(t.polls()).toBe(0)
+  })
+
+  it('picks up once more after a push that came during a pickup', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
+    await host.tick([row()])
+    const first = host.waiting()
+    const pushed = host.waiting()
+    await first; await pushed
+    await vi.waitFor(() => expect(t.polls()).toBe(2))
+  })
+})
+
 describe('the stuck and usage-limit alerts', () => {
   const prompt = (): SuperTabScreen => ({ ok: true, text: 'Do you want to proceed?\n❯ 1. Yes\n  2. No', hold: 'permission_open' })
   const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+
+  // Ken's prod scan (11-04): 116 agent.alert refusals in 32 minutes, AGENT_UNAVAILABLE: an alert the Swarm will never take
+  // (its agent gone or to be shared again) was tried again on every 15-second read.
+  it('does not send again an alert the Swarm refused for good (#2675)', async () => {
+    const t = setup({ screen: prompt, refuse: command => command.type === 'agent.alert' ? { status: 400, code: 'AGENT_UNAVAILABLE' } : null })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toHaveLength(1)
+    for (let i = 0; i < 20; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(t.alerts()).toHaveLength(1)
+  })
+
+  it('backs off an alert the backend could not take for now (#2675)', async () => {
+    const t = setup({ screen: prompt, refuse: command => command.type === 'agent.alert' ? { status: 503, code: 'BACKEND_UNAVAILABLE' } : null })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    // Ten minutes of reads: 40 tries at the old pace.
+    for (let i = 0; i < 40; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(t.alerts().length).toBeGreaterThanOrEqual(2)
+    expect(t.alerts().length).toBeLessThanOrEqual(8)
+  })
 
   it('alerts once when a prompt has waited 3 minutes, and ends the episode when it is answered', async () => {
     const t = setup({ screen: prompt })
@@ -244,6 +324,45 @@ describe('the stuck and usage-limit alerts', () => {
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     expect(t.alerts()).toHaveLength(1)
+  })
+})
+
+// Task #3301: an agent signed out of its model showed Claude Code's signed-out notice and sat there until a person came
+// (Quince, 2026-11-05: "Not logged in · Please run /login"). The watch reads it as a model the agent gets no answer from.
+describe('an agent signed out of its model (task #3301)', () => {
+  const NOT_LOGGED_IN = '⏺ I will run the tests.\n\n  ⎿  Not logged in · Please run /login\n\n❯ \n  ? for shortcuts'
+
+  it('knows Claude Code\'s and Codex\'s own signed-out notices near the prompt', () => {
+    for (const line of ['  ⎿  Not logged in · Please run /login', '⎿  API Error: 401 {"type":"error","error":{"type":"authentication_error"}} · Please run /login',
+      '  ⎿  Invalid API key · Please run /login', '  ⎿  OAuth token has expired · Please run /login', '■ unexpected status 401 Unauthorized: Missing bearer authentication']) {
+      expect(signedOut(`⏺ work\n\n${line}\n❯ `), line).toBe(true)
+    }
+    expect(modelFailing(NOT_LOGGED_IN)).toBe(false)
+  })
+
+  it('never reads the agent\'s own words, a tool\'s output or an old notice far up the screen as signed out', () => {
+    // An agent working on this very bug writes and prints these lines: restarting it would cost its turn.
+    expect(signedOut('⏺ Quince showed "Not logged in · Please run /login" after the update.\n❯ ')).toBe(false)
+    expect(signedOut('  The brief says API Error: 401 is not recovered.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ Bash(echo "Not logged in · Please run /login")\n  ⎿  Not logged in · Please run /login\n❯ ')).toBe(false)
+    expect(signedOut(`  ⎿  Not logged in · Please run /login\n${'line\n'.repeat(30)}❯ `)).toBe(false)
+    // A reply that starts with the phrase is still the agent's own words, Claude Code's "⏺" or Codex's "•" (security review 2).
+    expect(signedOut('⏺ Not logged in users are sent to /login, so the server never sees them.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ API Error: 401 comes from the server when its token is stale.\n❯ ')).toBe(false)
+    expect(signedOut('• Invalid API key is what Codex prints for a stale token.\n› ')).toBe(false)
+  })
+})
+
+// Alba on Mac 2, 2026-11-11: Claude Code asked whether to make auto mode the default, and the agent sat on the question.
+describe('answering Claude Code\'s question to make auto mode the default, for a Swarm agent', () => {
+  const ASKED = [' Make auto mode your default permission mode?', '', '   ❯ Yes, set auto mode as my default permission mode',
+    '     No, keep bypass permissions'].join('\n')
+  it('picks No, keeping its person\'s own default, through the core\'s if-screen door, and raises no alert', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: ASKED, hold: 'prompt_hidden' }) })
+    await t.host.tick([row()])
+    expect(vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls).toEqual([['h1', ['Down', 'Enter'], ASKED]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.alerts()).toEqual([])
   })
 })
 
@@ -393,10 +512,52 @@ describe('reading a usage limit off a screen', () => {
     ['claude-weekly-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-opus-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-fable-limit', {}],
+    // Mid-turn, its notice is a row of its own after a tool's output (review of #2712, Important 1).
+    ['claude-limit-after-tool', { resetAt: new Date(2026, 9, 23, 15, 0).toISOString() }],
     ['codex-usage-limit', { resetAt: new Date(2026, 9, 27, 15, 5).toISOString() }],
     ['codex-model-limit', { resetAt: new Date(2026, 9, 23, 16, 5).toISOString() }],
   ])('reads the %s screen', (name, limit) => {
     expect(limitOf(fixture(name), now)).toEqual(limit)
+  })
+  // Task #2321 (Ken, 11-03): River was listed limited while it worked, as it had just printed another agent's screen,
+  // which showed Codex's limit line. Only the engine's own notice marks an agent limited, never text it prints.
+  it.each([
+    ['claude-printed-codex-limit', 'a screen Claude Code printed, the limit line further down its tool output'],
+    ['claude-printed-limit-first-line', 'the limit line first in its tool output, right above the prompt'],
+  ])('reads no limit off %s: %s', name => {
+    expect(limitOf(fixture(name), now)).toBeNull()
+  })
+  it.each([
+    '⏺ harness - read_screen (MCP)(harnessId: "h1")',
+    '⏺ my.server-1 - read_screen.v2 (MCP)(harnessId: "h1")',
+  ])('reads no limit off an MCP reply: %s', header => {
+    expect(limitOf(`${header}\n  ⎿  ■ You've hit your usage limit. Try again at 4:08 PM.\n\n❯ `, now)).toBeNull()
+  })
+  it('still reads its own notice after MCP output or a reply with parentheses', () => {
+    for (const before of [
+      '⏺ harness - read_screen (MCP)(harnessId: "h1")\n  ⎿  Screen read.\n',
+      '⏺ Checked the agent (it is working).',
+    ]) {
+      expect(limitOf(`${before}\n  ⎿  You've hit your session limit · resets 3pm\n\n❯ `, now))
+        .toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
+    }
+  })
+  it('reads no limit off a log a tool printed, quoted or indented, near the prompt', () => {
+    expect(limitOf('⏺ Read(logs/codex.log)\n  ⎿  Read 3 lines\n     5-hour limit reached ∙ resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('• Ran cat codex.log\n  └ ■ You\'ve hit your usage limit. Try again at 4:05 PM.\n\n› ', now)).toBeNull()
+    // A Claude Code screen printed in a tool's output, its header scrolled off: its "⎿" rows sit deeper than the engine's own.
+    expect(limitOf('       └  Test Files  1 passed (1)\n     ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('⏺ Update(notes.md)\n  ⎿  Added 1 line\n       1 + You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+  })
+  it('still reads Claude Code\'s limit dialog', () => {
+    expect(limitOf([
+      '╭──────────────────────────────────────────────────────────╮',
+      '│ You\'ve hit your limit · resets 3pm (Asia/Saigon)         │',
+      '│                                                          │',
+      '│ ❯ 1. Stop and wait for limit to reset                    │',
+      '│   2. Upgrade your plan                                   │',
+      '╰──────────────────────────────────────────────────────────╯',
+    ].join('\n'), now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
   })
   it('knows a limit without a reset time, and ignores the words in an agent\'s own prose or far above the prompt', () => {
     expect(limitOf('⎿  API Error: Usage limit reached\n> ', now)).toEqual({})
@@ -405,6 +566,8 @@ describe('reading a usage limit off a screen', () => {
     expect(limitOf('> ', now)).toBeNull()
     // A full context is not a usage limit; a workspace out of credits is one.
     expect(limitOf('  ⎿  Context limit reached · /compact or /clear to continue\n> ', now)).toBeNull()
+    // A notice under Claude Code's reply whose start has scrolled off the screen is still its own.
+    expect(limitOf('  ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
     expect(limitOf('■ You\'ve reached your workspace credit limit\n› ', now)).toEqual({})
   })
 })
@@ -417,5 +580,95 @@ describe('reading a model that keeps failing off a screen', () => {
     }
     expect(modelFailing('I will handle the case where the API response is slow.\n> ')).toBe(false)
     expect(modelFailing(`Waiting for API response\n${'line\n'.repeat(30)}> `)).toBe(false)
+  })
+
+  it('knows a connection that is gone: Claude Code\'s connection lines and Codex\'s reconnect', () => {
+    // Claude Code 2.1 names the connection's failure in place of "Connection error." (Pro-10's Team agent, 2026-11-03).
+    for (const line of ['⎿  API Error: Unable to connect to API (ECONNREFUSED)', '  ⎿  Unable to connect to API (ECONNREFUSED) · Retrying in 4s · attempt 3/10',
+      '⎿  API Error: No internet route — check your connection or VPN (ENETUNREACH)']) {
+      expect(modelFailing(`work\n${line}\n> `)).toBe(true)
+    }
+    // Pro-9's Team Codex agents, four hours after the update.
+    expect(modelFailing('• Reconnecting... waiting for network (4h 21m 27s • esc to interrupt)\n  └ Connection failed: error sending request\n› Ask Codex to do anything')).toBe(true)
+    expect(modelFailing('work\n  └ Connection failed: error sending request\n› ')).toBe(true)
+    expect(modelFailing(`I will make the client say "Unable to connect to API" when the relay is down.\n${'line\n'.repeat(30)}> `)).toBe(false)
+  })
+})
+
+// #3904: a resumed Swarm Codex already has an identity, so startup settlement never sees its folder prompt.
+describe.each([
+  { version: '0165', secondRow: 'Quit' },
+  { version: '0166', secondRow: 'Back to Agent Command Center' },
+])('opening a Swarm Codex folder restricted after start or resume ($version)', ({ version, secondRow }) => {
+  const restricted = fixture(`codex-${version}-open-restricted`)
+  it.each(['start', 'resume'])('continues a fake Codex %s without granting trust', async (mode) => {
+    const home = mkdtempSync(join(tmpdir(), 'codex-restricted-'))
+    const config = join(home, 'config.toml')
+    const savedConfig = '[projects."/worktree"]\ntrust_level = "untrusted"\n'
+    writeFileSync(config, savedConfig)
+    // A separate fake engine waits on input on both startup paths, reading only its disposable home.
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      import { createInterface } from 'node:readline';
+      const [mode, config, prompt] = process.argv.slice(1);
+      if (!['start', 'resume'].includes(mode) || !readFileSync(config, 'utf8').includes('"untrusted"')) process.exit(1);
+      console.log(JSON.stringify(prompt));
+      createInterface({ input: process.stdin }).on('line', key => {
+        if (key === 'Enter') console.log(JSON.stringify('› Ask Codex to do anything'));
+      });
+    `, mode, config, restricted], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
+    const nextScreen = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const line = await Promise.race([lines.next(), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Fake Codex did not draw its next screen')), 2_000)
+        })])
+        if (line.done) throw new Error('Fake Codex exited before drawing its screen')
+        return JSON.parse(line.value) as string
+      } finally { clearTimeout(timer) }
+    }
+    try {
+      let capture = await nextScreen()
+      const t = setup({ engine: 'codex' })
+      const terminal = createSuperTabTerminal({
+        resolve: id => id === 'h1' ? { agentId: id, engine: 'codex' } as RegisteredSession : undefined,
+        capture: async () => ({ state: 'succeeded', value: capture }),
+        read: async (_session, text) => codexScreen.inspect(text ?? ''),
+        type: async () => false,
+        key: async (_id, key) => { child.stdin.write(`${key}\n`); capture = await nextScreen(); return true },
+        locked: async (_id, write) => write(),
+      })
+      Object.assign(t.core.superTabs!, terminal)
+      await t.host.tick([row()])
+      expect(capture).toBe('› Ask Codex to do anything')
+      expect(readFileSync(config, 'utf8')).toBe(savedConfig)
+      t.wait(180_000); await t.host.tick([row()])
+      expect(t.alerts()).toEqual([])
+    } finally {
+      child.kill()
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['trust grant', CODEX_TRUST_PROMPT, 'codex', [row()]],
+    ['another engine', restricted, 'claude', [row()]],
+    ['personal session outside the roster', restricted, 'codex', []],
+    ['the second row highlighted', restricted.replace('› 1. Open restricted', '  1. Open restricted').replace(`  2. ${secondRow}`, `› 2. ${secondRow}`), 'codex', [row()]],
+  ])('never types on %s', async (_name, text, engine, rows) => {
+    const t = setup({ engine, screen: () => ({ ok: true, text, hold: 'trust_open' }) })
+    await t.host.tick(rows)
+    expect(t.core.superTabs!.inputIfScreen).not.toHaveBeenCalled()
+  })
+
+  it('bounds failed conditional inputs and alerts when the prompt persists', async () => {
+    const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: restricted, hold: 'trust_open' }) })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValue({ ok: false, error: 'Screen changed.' })
+    for (let i = 0; i < 5; i++) { await t.host.tick([row()]); t.wait(15_000) }
+    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledTimes(3)
+    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledWith('h1', ['Enter'], restricted)
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toContainEqual(expect.objectContaining({ alert: 'prompt', active: true }))
   })
 })

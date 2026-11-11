@@ -16,16 +16,19 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     SuperTabReading reading = const SuperTabReading(),
+    double height = 720,
   }) async {
     final c = server.controller(reading: reading);
     await c.refresh();
+    // A window as tall as a laptop's, unless a test asks for a shorter one.
+    await tester.binding.setSurfaceSize(Size(800, height));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -58,6 +61,15 @@ void main() {
   void fromAgent(ConversationServer server) => server.messages.last['author'] =
       {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'};
 
+  /// A row changes somewhere in the conversation (an edit or a delete moves
+  /// the counter): the next read takes the page shown again, with every
+  /// receipt in it as it is now. A receipt alone is no reason to (spec
+  /// 2026-11-02-poll-cost, Part 2).
+  void rowChanged(ConversationServer server) {
+    final group = (server.state['conversations'] as List).first as Map;
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+  }
+
   void agentUpdates(ConversationServer server, int count) {
     for (var i = 0; i < count; i++) {
       server.append(
@@ -82,7 +94,7 @@ void main() {
   testWidgets(
     'the receipt moving off a row above the view leaves the view in place',
     (tester) async {
-      final server = ConversationServer()..append('My first question');
+      final server = ConversationServer.chat()..append('My first question');
       agentUpdates(server, 30);
       final c = await show(tester, server);
       await justAbove(tester, 'message-1');
@@ -118,7 +130,7 @@ void main() {
   testWidgets(
     'a receipt growing in a row above the view leaves the view in place',
     (tester) async {
-      final server = ConversationServer()..append('My first question');
+      final server = ConversationServer.chat()..append('My first question');
       server.messages.last['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'delivered'},
       ];
@@ -131,6 +143,7 @@ void main() {
       server.messages.first['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
+      rowChanged(server);
       await c.refresh();
       await tester.pumpAndSettle();
 
@@ -149,7 +162,7 @@ void main() {
     'at the end, the newest row growing keeps the end in view and the next '
     'reply follows',
     (tester) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       agentUpdates(server, 30);
       server.append('Is the reconnect fixed?');
       server.messages.last['deliveries'] = [
@@ -161,6 +174,7 @@ void main() {
       server.messages.last['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
+      rowChanged(server);
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text("Couldn't confirm delivery"), findsOneWidget);
@@ -181,7 +195,7 @@ void main() {
   testWidgets('reading older messages, the end growing does not scroll', (
     tester,
   ) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     server.append('Is the reconnect fixed?');
     final c = await show(tester, server);
@@ -204,7 +218,7 @@ void main() {
   testWidgets('a page read in above keeps the rows on screen, state and all', (
     tester,
   ) async {
-    final server = ConversationServer()..messagePage = 20;
+    final server = ConversationServer.chat()..messagePage = 20;
     agentUpdates(server, 40);
     final c = await show(tester, server);
     expect(c.messages('lead').length, 20);
@@ -227,7 +241,7 @@ void main() {
     tester,
   ) async {
     // One agent's run of short updates: every third shows its name.
-    final server = ConversationServer()..messagePage = 20;
+    final server = ConversationServer.chat()..messagePage = 20;
     agentUpdates(server, 41);
     final c = await show(tester, server);
     position(tester).jumpTo(0);
@@ -241,7 +255,8 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(c.messages('lead').length, 40);
+    // The page above, and the rest read ahead of the reader.
+    expect(c.messages('lead').length, greaterThanOrEqualTo(40));
     for (final id in shown) {
       expect(top(tester, id), moreOrLessEquals(tops[id]!, epsilon: .5));
     }
@@ -252,7 +267,7 @@ void main() {
   testWidgets('paging with the keyboard across the dividing row moves rows '
       'only by the page', (tester) async {
     // Two pages: the one read first, and one read in above it.
-    final server = ConversationServer()..messagePage = 20;
+    final server = ConversationServer.chat()..messagePage = 20;
     agentUpdates(server, 60);
     final c = await show(tester, server);
     position(tester).jumpTo(position(tester).minScrollExtent);
@@ -315,7 +330,7 @@ void main() {
 
   testWidgets('sending while reading older messages shows the message at the '
       'end', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     final c = await show(tester, server);
     position(tester).jumpTo(200);
@@ -383,30 +398,34 @@ void main() {
     }
   }
 
-  testWidgets('a reader at the end stays at the end as polls cut the oldest '
-      'rows', (tester) async {
-    final server = ConversationServer();
-    agentUpdates(server, 30);
-    final c = await show(tester, server);
-    final end = bottomOf(tester, 'message-30');
+  // At 480 the first row of the group at the top of the view is above the rows laid out, so the list divides at the row at
+  // the top instead (_moveSplitToView): before, it never moved, and nothing was ever cut.
+  for (final height in [720.0, 480.0]) {
+    testWidgets('a reader at the end stays at the end as polls cut the oldest '
+        'rows, at $height tall', (tester) async {
+      final server = ConversationServer.chat();
+      agentUpdates(server, 30);
+      final c = await show(tester, server, height: height);
+      final end = bottomOf(tester, 'message-30');
 
-    // 1,000 updates, 50 a poll: past 500 each poll cuts the oldest. New rows
-    // reach the end a frame after they arrive, cut or not.
-    await poll(tester, server, c, 1000, everyFrame: false, () {
-      final newest = c.messages('lead').last.id;
-      expect(bottomOf(tester, newest), moreOrLessEquals(end, epsilon: .5));
+      // 1,000 updates, 50 a poll: past 500 each poll cuts the oldest. New rows
+      // reach the end a frame after they arrive, cut or not.
+      await poll(tester, server, c, 1000, everyFrame: false, () {
+        final newest = c.messages('lead').last.id;
+        expect(bottomOf(tester, newest), moreOrLessEquals(end, epsilon: .5));
+      });
+
+      expect(position(tester).extentAfter, lessThan(1));
+      expect(c.messages('lead'), hasLength(500));
+      expect(c.hasOlder('lead'), isTrue);
+      expect(tester.takeException(), isNull);
+      await close(tester, c);
     });
-
-    expect(position(tester).extentAfter, lessThan(1));
-    expect(c.messages('lead'), hasLength(500));
-    expect(c.hasOlder('lead'), isTrue);
-    expect(tester.takeException(), isNull);
-    await close(tester, c);
-  });
+  }
 
   testWidgets('a reader scrolled up keeps every row, in place, as polls pass '
       'the cap', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     final c = await show(tester, server);
     position(tester).jumpTo(position(tester).maxScrollExtent / 2);
@@ -423,36 +442,39 @@ void main() {
     await close(tester, c);
   });
 
-  testWidgets('back at the end after reading up, the cut with nothing new '
-      'moves and regroups no row', (tester) async {
-    final server = ConversationServer();
-    agentUpdates(server, 30);
-    // Desktop's: the messages read lands beside the state read, before the
-    // view hears of either.
-    final c = await show(tester, server, reading: SuperTabReading.desktop);
-    position(tester).jumpTo(position(tester).maxScrollExtent / 2);
-    await tester.pumpAndSettle();
-    await poll(tester, server, c, 600, () {});
-    expect(c.messages('lead'), hasLength(630));
-    // Back to the end: a lazy list learns its full extent as it goes.
-    for (var i = 0; i < 12 && position(tester).extentAfter > 0; i++) {
-      position(tester).jumpTo(position(tester).maxScrollExtent);
+  for (final height in [720.0, 480.0]) {
+    testWidgets('back at the end after reading up, the cut with nothing new '
+        'moves and regroups no row, at $height tall', (tester) async {
+      final server = ConversationServer.chat();
+      agentUpdates(server, 30);
+      // A reading that asks for the messages after every state read: one with
+      // nothing new still cuts. Desktop's asks only when the conversation's
+      // counters move (spec 2026-11-02-poll-cost, Part 2).
+      final c = await show(tester, server, height: height);
+      position(tester).jumpTo(position(tester).maxScrollExtent / 2);
       await tester.pumpAndSettle();
-    }
-    final shown = onScreen(tester);
-    expect(shown.keys, contains('super-message-message-630'));
+      await poll(tester, server, c, 600, () {});
+      expect(c.messages('lead'), hasLength(630));
+      // Back to the end: a lazy list learns its full extent as it goes.
+      for (var i = 0; i < 12 && position(tester).extentAfter > 0; i++) {
+        position(tester).jumpTo(position(tester).maxScrollExtent);
+        await tester.pumpAndSettle();
+      }
+      final shown = onScreen(tester);
+      expect(shown.keys, contains('super-message-message-630'));
 
-    // The first poll moves the list's dividing row to the rows on screen;
-    // the cut above it waits for the next.
-    for (var i = 0; i < 2; i++) {
-      await poll(tester, server, c, 0, () {
-        expect(onScreen(tester), shown);
-      });
-    }
+      // The first poll moves the list's dividing row to the rows on screen;
+      // the cut above it waits for the next.
+      for (var i = 0; i < 2; i++) {
+        await poll(tester, server, c, 0, () {
+          expect(onScreen(tester), shown);
+        });
+      }
 
-    expect(c.messages('lead'), hasLength(500));
-    expect(position(tester).extentAfter, lessThan(1));
-    expect(tester.takeException(), isNull);
-    await close(tester, c);
-  });
+      expect(c.messages('lead'), hasLength(500));
+      expect(position(tester).extentAfter, lessThan(1));
+      expect(tester.takeException(), isNull);
+      await close(tester, c);
+    });
+  }
 }

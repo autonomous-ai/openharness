@@ -63,3 +63,34 @@ it('never rewrites a day whose marks may be expiring, so its totals cannot shrin
   expect(Object.keys(c).filter(k => k.startsWith('2026-10-01:'))).toEqual([])
   expect(c['2026-10-02:people_active']).toBe(1) // C+9 is the last day C=10-02 is rewritten
 })
+
+// A Swarm agent's turn on someone's Mac is hosting, never that person working (Dee, 2026-11-04).
+it('counts hosting apart from working, with no returns of its own, and staff apart', () => {
+  const c = asMap(peopleCounters([
+    m('host', '2026-10-10', { hosting: true }),
+    m('both', '2026-10-10', { hosting: true, worked: true }),
+    m('own', '2026-10-10', { worked: true }),
+    m('old', '2026-10-10', { hosting: null }),
+    m('staff', '2026-10-10', { hosting: true, staff: true }),
+  ], new Date('2026-10-12T10:00:00Z')))
+  expect(c['2026-10-10:people_hosting']).toBe(2)
+  expect(c['2026-10-10:people_working']).toBe(2)
+  expect(c['2026-10-10:people_active']).toBe(4)
+  expect(c['2026-10-10:people_hosting_d1_returned']).toBeUndefined()
+  expect(PEOPLE_METRICS).toContain('people_hosting')
+})
+
+it('takes a day of hosting alone as no working return, in D1 or D7, and still an active one', () => {
+  const marks = [
+    m('a', '2026-10-01', { worked: true }), m('b', '2026-10-01', { worked: true }),
+    m('a', '2026-10-02', { worked: true }), m('b', '2026-10-02', { hosting: true }),
+    m('a', '2026-10-08', { hosting: true }), m('b', '2026-10-08', { worked: true }),
+    m('h', '2026-10-01', { hosting: true }), m('h', '2026-10-02', { worked: true }), m('h', '2026-10-08', { worked: true }),
+  ]
+  const c = asMap(peopleCounters(marks, new Date('2026-10-09T00:30:00Z')))
+  expect(c['2026-10-01:people_working']).toBe(2)
+  expect(c['2026-10-01:people_working_d1_returned']).toBe(1)
+  expect(c['2026-10-01:people_working_d7_returned']).toBe(1)
+  expect(c['2026-10-01:people_active_d1_returned']).toBe(3)
+  expect(c['2026-10-01:people_active_d7_returned']).toBe(3)
+})

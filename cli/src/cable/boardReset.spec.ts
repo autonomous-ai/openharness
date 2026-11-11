@@ -14,9 +14,21 @@ describe('resetting a board over its cable', () => {
     expect(run).toHaveBeenCalledWith('perl', ['-e', expect.any(String), '/dev/ttyACM0', '0x5418', '4:200', '0:200'], { timeout: 5000 })
   })
 
+  it('on Windows asks harness-serial, hidden, and says it could not when that fails or is not there', async () => {
+    const run = vi.fn(async () => ({ stdout: '', stderr: '' }))
+    const serial = (args: string[]) => ({ file: 'C:\\pty\\harness-serial.exe', args })
+    expect(await resetBoard('COM3', { platform: 'win32', run, serial })).toBe(true)
+    expect(run).toHaveBeenCalledWith('C:\\pty\\harness-serial.exe', ['reset', 'COM3'], { timeout: 5000, windowsHide: true })
+    run.mockRejectedValueOnce(new Error('busy'))
+    expect(await resetBoard('COM3', { platform: 'win32', run, serial })).toBe(false)
+    run.mockClear()
+    expect(await resetBoard('COM3', { platform: 'win32', run, serial: () => null })).toBe(false)
+    expect(run).not.toHaveBeenCalled()
+  })
+
   it('says it could not, and runs nothing, where there is no way to set the lines', async () => {
     const run = vi.fn(async () => ({ stdout: '', stderr: '' }))
-    expect(await resetBoard('COM3', { platform: 'win32', run })).toBe(false)
+    expect(await resetBoard('X', { platform: 'freebsd', run })).toBe(false)
     expect(run).not.toHaveBeenCalled()
     // No perl on the PATH: the failed spawn is a "no", never a throw.
     const missing = vi.fn(async () => { throw Object.assign(new Error('spawn perl ENOENT'), { code: 'ENOENT' }) })

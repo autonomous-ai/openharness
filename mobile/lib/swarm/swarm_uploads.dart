@@ -73,8 +73,12 @@ class SwarmUploads {
   double? progress(SwarmOutgoingFile file) => _progress[file];
 
   /// Uploads each of [outgoing] that has not gone up yet and returns their
-  /// ids, what stopped it, or neither when it was given up meanwhile.
-  Future<SwarmUploaded> upload(List<SwarmOutgoingFile> outgoing) async {
+  /// ids, what stopped it, or neither when it was given up meanwhile, or when
+  /// [live] says no before a file starts.
+  Future<SwarmUploaded> upload(
+    List<SwarmOutgoingFile> outgoing, {
+    bool Function()? live,
+  }) async {
     if (outgoing.isEmpty) return (ids: const <String>[], failure: null);
     final run = ++_run;
     _uploading = true;
@@ -86,6 +90,7 @@ class SwarmUploads {
       for (final file in outgoing) {
         var id = _uploaded[file];
         if (id == null) {
+          if (live?.call() == false) return (ids: null, failure: null);
           final answer = await _uploadFile(file);
           if (run != _run) return (ids: null, failure: null);
           id = superTabMap(answer['attachment'])['id'] as String;

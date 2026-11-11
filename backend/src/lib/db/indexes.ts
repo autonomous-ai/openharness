@@ -17,6 +17,9 @@ async function listIndexes(db: Pick<PrismaClient, '$runCommandRaw'>, collection:
   }
 }
 
+/** What [ensureIndex] left: the index as asked, or the index without the expiry the database user may not set. */
+export type IndexOutcome = 'ready' | 'expiry-refused'
+
 const sameKey = (a: Record<string, number>, b: Record<string, number>) => JSON.stringify(Object.entries(a)) === JSON.stringify(Object.entries(b))
 
 /**
@@ -24,11 +27,12 @@ const sameKey = (a: Record<string, number>, b: Record<string, number>) => JSON.s
  * the collection exclusively for a moment, and a Swarm read's transaction waits at most 5 ms for its lock (the 10-28 release);
  * listing the indexes takes no lock that reads or writes wait for. An index Prisma declares without expiry (db push builds it
  * so on a new database) gets its expiry with collMod, without a rebuild. Any other difference fails in createIndexes, as before.
+ * It answers 'expiry-refused' when the database user may not run that collMod, so the caller can remove what the expiry would.
  */
-export async function ensureIndex(db: Pick<PrismaClient, '$runCommandRaw'>, collection: string, index: IndexSpec): Promise<void> {
+export async function ensureIndex(db: Pick<PrismaClient, '$runCommandRaw'>, collection: string, index: IndexSpec): Promise<IndexOutcome> {
   const found = (await listIndexes(db, collection)).find(existing => existing.name === index.name)
   if (found && sameKey(found.key, index.key) && !!found.unique === !!index.unique) {
-    if (found.expireAfterSeconds === index.expireAfterSeconds) return
+    if (found.expireAfterSeconds === index.expireAfterSeconds) return 'ready'
     if (index.expireAfterSeconds !== undefined) {
       try {
         await db.$runCommandRaw({ collMod: collection, index: { name: index.name, expireAfterSeconds: index.expireAfterSeconds } })
@@ -37,9 +41,11 @@ export async function ensureIndex(db: Pick<PrismaClient, '$runCommandRaw'>, coll
         // exists and serves reads; only its expiry waits for someone with the right to set it, so warn and carry on.
         if (!notAuthorized(error)) throw error
         logger.warn('index expiry not set: the database user may not run collMod', { collection, index: index.name, expireAfterSeconds: index.expireAfterSeconds })
+        return 'expiry-refused'
       }
-      return
+      return 'ready'
     }
   }
   await db.$runCommandRaw({ createIndexes: collection, indexes: [index] })
+  return 'ready'
 }

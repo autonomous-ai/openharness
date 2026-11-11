@@ -26,6 +26,11 @@ import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
  * they are tested with their own modules, and a test must never write the person's own engine config.
  */
 const root = vi.hoisted(() => ({ projects: '' }))
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../../engines/kit/windowsFiles.js', async (real) => {
+  const actual = await real<typeof import('../../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
 // The engines' folder trust (engines/launchPrep.ts), one spy per engine.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
@@ -93,6 +98,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
     swarmLaunch: SWARM_LAUNCH,
+    stoppedAgent: () => undefined,
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -103,7 +109,8 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     deps, create, fork, resume, restart, replies, requests,
     ask: async (payload: Record<string, unknown>, local = true) => { await requests.create(payload, { local }, reply); return replies.at(-1) },
     status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, { local: true }, reply); return replies.at(-1) },
-    relaunch: async (type: string, payload: Record<string, unknown>) => { await requests.relaunch(type, payload, reply); return replies.at(-1) },
+    // An app of the owner's own unless a test says otherwise: only that asker may change an agent's launch flags.
+    relaunch: async (type: string, payload: Record<string, unknown>, asker: { ownerApp: boolean } = { ownerApp: true }) => { await requests.relaunch(type, payload, reply, asker); return replies.at(-1) },
     forkAsk: async (payload: Record<string, unknown>) => { await requests.fork(payload, reply); return replies.at(-1) },
   }
 }
@@ -252,6 +259,49 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls.map(([input]) => input.codexHome)).toEqual([null, null, null, null])
   })
 
+  it('claudeHome is refused for codex and with a grid (INVALID_CLAUDE_HOME), and dropped when it is not a plain absolute path', async () => {
+    const { ask, create } = setup()
+    const refused = { error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is only valid for claude, without a grid' }
+    expect(await ask({ engine: 'codex', cwd: '/w', claudeHome: '/homes/claude' })).toStrictEqual(refused)
+    vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'ok', override: { networkId: 'g' } } as never)
+    expect(await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/claude' })).toStrictEqual(refused)
+    expect(create).not.toHaveBeenCalled()
+    for (const claudeHome of ['relative', '/with\nnewline', `/${'x'.repeat(4096)}`, 7]) await ask({ engine: 'claude', cwd: '/w', claudeHome })
+    expect(vi.mocked(create!).mock.calls.map(([input]) => 'claudeHome' in input)).toEqual([false, false, false, false])
+  })
+
+  it('claudeHome is accepted only when it is a profile this machine lists', async () => {
+    const { ask, create } = setup({ claudeHomeListed: (home) => home === '/homes/listed' })
+    expect(await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/other' })).toStrictEqual({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
+    expect(create).not.toHaveBeenCalled()
+    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/listed' })
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ claudeHome: '/homes/listed' })
+  })
+
+  // #4183: on Windows a profile folder is `C:\\…`; the check that wanted a leading '/' dropped every one, so the agent ran on
+  // the default account and reported its quota.
+  it('on Windows a drive-letter codexHome or claudeHome reaches the create input, and a POSIX one is dropped', async () => {
+    host.win32 = true
+    try {
+      const { ask, create } = setup()
+      await ask({ engine: 'codex', cwd: '/w', codexHome: 'C:\\Users\\u\\.codex-work' })
+      await ask({ engine: 'claude', cwd: '/w', claudeHome: 'C:\\Users\\u\\.claude-work' })
+      await ask({ engine: 'claude', cwd: '/w', claudeHome: '/Users/u/.claude-work' })
+      const inputs = vi.mocked(create!).mock.calls.map(([input]) => input)
+      expect(inputs[0]).toMatchObject({ codexHome: 'C:\\Users\\u\\.codex-work' })
+      expect(inputs[1]).toMatchObject({ claudeHome: 'C:\\Users\\u\\.claude-work' })
+      expect('claudeHome' in inputs[2]).toBe(false)
+    } finally {
+      host.win32 = false
+    }
+  })
+
+  it('claudeHome reaches the create input', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/claude' })
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ engine: 'claude', claudeHome: '/homes/claude' })
+  })
+
   it('a harness that is not an id, not installed here, a viewer, or not for this engine', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', dsh: 'not an id' })).toStrictEqual({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' })
@@ -266,7 +316,7 @@ describe('agent_create, refused before any pane exists', () => {
 
   it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
     const { ask, create } = setup()
-    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its swarm-review file.
+    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its Reviewer kind.
     const kinds = { lead: { swarmRole: 'coordinator' }, dev: { swarmRole: 'agent' }, review: { swarmRole: 'agent', swarmFallback: 'review' } }
     for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review'] as const) {
       await ask({ engine, cwd: '/w', swarmRole })
@@ -285,7 +335,7 @@ describe('agent_create, refused before any pane exists', () => {
     const launched = () => vi.mocked(create!).mock.calls.at(-1)![0]
     await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review' })
     expect(launched()).toMatchObject({ swarmRole: 'agent', swarmFallback: 'review' })
-    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['buddy', 'buddy'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
+    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
       await ask({ engine: 'codex', cwd: '/w', swarmRole })
       expect(launched()).toMatchObject({ swarmRole: role })
       expect(launched()).not.toHaveProperty('swarmFallback')
@@ -293,7 +343,7 @@ describe('agent_create, refused before any pane exists', () => {
     const calls = vi.mocked(create!).mock.calls.length
     for (const swarmRole of ['pm', 'Coordinator', 'reviewer']) {
       expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toStrictEqual({ error: 'INVALID_SWARM_ROLE',
-        detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
+        detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
     }
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
@@ -312,39 +362,45 @@ describe('agent_create, refused before any pane exists', () => {
     expect(deps.receipts.has(`${CREATION}-new`, creationFingerprint({ ...before, swarmRole: 'dev' }))).toBe(true)
   })
 
-  it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
-    const { ask, create } = setup()
-    for (const swarmSkillMode of ['default', 'orchestration']) {
-      await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmSkillMode })
-    }
-    // From a start before modes: the session launches as it did then.
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev' })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
-    const calls = vi.mocked(create!).mock.calls.length
-    for (const swarmSkillMode of ['light', 7, null]) {
-      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
-    }
-    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  // A start asked with the Harness GitHub App before this machine's update still finds the receipt its first ask got.
+  it('finds the receipt a start got with the GitHub App before the update when it is asked again', async () => {
+    const { ask, create, deps, replies } = setup()
+    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
+      swarmRole: 'dev', swarmGitHub: true, name: null, agent: null, resumeSessionId: null, takeOver: null }
+    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+    expect(create).not.toHaveBeenCalled()
   })
 
-  it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
+  // The Swarm's skill modes are gone (PM, 2026-11-11: agents start as plain Claude Code or Codex): a start that still sends one
+  // (Desktop's Personal Swarm, until its own removal) is not refused, and the mode goes no further.
+  it('takes a start that still sends a skill mode as any other, and passes the mode on to nothing', async () => {
     const { ask, create } = setup()
-    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmGitHub: true })
-    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
-    const calls = vi.mocked(create!).mock.calls.length
-    for (const payload of [{ swarmRole: 'dev', swarmGitHub: false }, { swarmRole: 'dev', swarmGitHub: 'yes' }, { swarmGitHub: true }]) {
-      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    for (const swarmSkillMode of ['default', 'orchestration', 'light', 7, null]) {
+      await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent' })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
     }
-    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
+  // The Harness GitHub App is gone: a start that still sends its flag is not refused, and the flag goes no further.
+  it('takes a start that still sends the GitHub App flag as any other, and passes the flag on to nothing', async () => {
+    const { ask, create } = setup()
+    for (const swarmGitHub of [true, false, 'yes']) {
+      await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent' })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
+    }
+    const calls = vi.mocked(create!).mock.calls.length
+    expect(await ask({ engine: 'claude', cwd: '/w', swarmGitHub: true })).not.toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls + 1)
   })
 
   // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
   it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
     const { ask, create } = setup({ swarmLaunch: undefined })
-    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmGitHub: true }, { swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true }]) {
+    for (const payload of [{ swarmRole: 'dev' }, { swarmRole: 'lead', swarmSkillMode: 'orchestration' }]) {
       expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     }
     expect(create).not.toHaveBeenCalled()
@@ -405,6 +461,21 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'claude', cwd: '/w', takeOver: 'now' })).toStrictEqual(takeOver)
     expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'ses_abc', takeOver: 'later' })).toStrictEqual(takeOver)
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('a new OpenClaw agent takes a first task and a folder, and an OpenClaw conversation is resumed by its full key', async () => {
+    const { ask, create } = setup()
+    // The key a new agent opens (`harness-<agentId>`) is the launch's own choice, not a resume: the task and folder go with it.
+    await ask({ engine: 'openclaw', cwd: '/w', prompt: 'Fix the parser' })
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ engine: 'openclaw', cwd: '/w', prompt: 'Fix the parser', resumeSessionId: null }))
+    for (const key of ['agent:main:main', 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20']) {
+      await ask({ engine: 'openclaw', cwd: '/w', resumeSessionId: key })
+      expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ engine: 'openclaw', resumeSessionId: key }))
+    }
+    // Only OpenClaw's ids have colons, and only in its key's shape.
+    const notASession = { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }
+    expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'agent:main:main' })).toStrictEqual(notASession)
+    expect(await ask({ engine: 'openclaw', cwd: '/w', resumeSessionId: 'agent:main:../x' })).toStrictEqual(notASession)
   })
 
   it('a starter that is not another agent: absent is the person, anything else is refused', async () => {
@@ -493,6 +564,18 @@ describe('agent_create, launched', () => {
     expect(known).toMatchObject({ startedBy: 'agent', parentAgentId: 'a1' })
     expect(Object.keys(unknown!)).not.toContain('parentAgentId')
     expect(Object.keys(none!)).not.toContain('parentAgentId')
+  })
+
+  // Browser ticked in New agent: a sandboxed Chrome starts beside it (services/agentBrowser.ts). Only true asks for one.
+  it('hands on Browser ticked, and nothing for any other value', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', browser: true })
+    await ask({ engine: 'claude', cwd: '/w', browser: 'yes' })
+    await ask({ engine: 'claude', cwd: '/w' })
+    const [ticked, odd, none] = vi.mocked(create!).mock.calls.map(([input]) => input)
+    expect(ticked).toMatchObject({ browser: true })
+    expect(Object.keys(odd!)).not.toContain('browser')
+    expect(Object.keys(none!)).not.toContain('browser')
   })
 
   it('opens a terminal in the home folder, bypasses permission unless told not to, and takes blank choices as none', async () => {
@@ -653,18 +736,13 @@ describe('agent_create with a receipt', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
-  it('fetches nothing with this machine\'s login for another person\'s Swarm worktree: its host already fetched with the app\'s token', async () => {
+  it('fetches a Swarm worktree as any other, whatever its start says of the GitHub App', async () => {
     const { ask, replies } = setup()
     await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
       swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
-      fromDefaultBranch: true, offline: true }, expect.anything())
-    // A Swarm start that is the machine owner's own fetches as before.
-    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-2', branchBase: 'default',
-      swarmRole: 'dev', creationId: `${CREATION}-own` })
-    await vi.waitFor(() => expect(replies).toHaveLength(2))
-    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![0]).not.toHaveProperty('offline')
+      fromDefaultBranch: true }, expect.anything())
   })
 
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {
@@ -871,42 +949,43 @@ describe('agent_create with a receipt', () => {
 
   // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
   // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
-  it('trusts a Swarm agent\'s checkout of its remote project in the Swarm\'s full mode, and no other existing folder', async () => {
+  it('trusts a Swarm agent\'s checkout of its remote project in its owner\'s own mode, and no other existing folder', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }
-    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 1)
+    await launch({ engine: 'claude', ...remote, swarmRole: 'lead' }, 1)
     expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
-    // The guard: the same checkout outside a Swarm or outside full mode, and a Swarm agent in a folder it was handed.
+    // The guard: the same checkout outside a Swarm, and a Swarm agent in a folder it was handed.
     await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
-    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'auto' }, 3)
+    await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead' }, 3)
     await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
-    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, false)
+    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead' }, false)
     await vi.waitFor(() => expect(replies).toHaveLength(5))
     expect(preTrustClaudeProject).toHaveBeenCalledOnce()
     // Claude Code only: a Codex Lead's checkout is not trusted for it.
-    await launch({ engine: 'codex', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 6)
+    await launch({ engine: 'codex', ...remote, swarmRole: 'lead' }, 6)
     expect(preTrustCodexProject).not.toHaveBeenCalled()
     // A worktree made from that checkout then inherits its answer.
     vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
-    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 7)
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead' }, 7)
     expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
   })
 
   // 2026-10-30: a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of that
   // checkout, which Claude Code had never been told to trust; the PM sat at the question, shown as Idle in the Swarm.
-  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in full mode', async () => {
+  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in any mode', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, local: boolean, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }, local); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const worktree = { projectSource: 'worktree', gitSource: '/Users/me/openharness', branchName: 'lively-meteor' }
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 1)
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead' }, true, 1)
     expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
-    // Not relayed, not outside a Swarm or full mode, not for Codex: those stay the person's question.
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, false, 2)
-    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 3)
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'auto' }, true, 4)
-    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 5)
-    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 2)
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+    // Not relayed, not outside a Swarm, not for Codex: those stay the person's question.
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead' }, false, 3)
+    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 4)
+    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead' }, true, 5)
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
     expect(preTrustCodexProject).not.toHaveBeenCalled()
   })
 
@@ -1090,6 +1169,12 @@ describe('agent_create_status', () => {
     const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.status({ creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
   })
+
+  it('tells the host why when the status read fails on a permissions problem (task #3861)', async () => {
+    const detail = 'The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions).'
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), createdLaunchModel: vi.fn(() => null), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED', detail) }) } })
+    expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED', detail })
+  })
 })
 
 describe('agent_resume and agent_restart', () => {
@@ -1100,6 +1185,12 @@ describe('agent_resume and agent_restart', () => {
     expect(await relaunch('agent_resume', { agentId: 'a1', permissionMode: 'plan' })).toMatchObject({ resumed: true })
     expect(restart).toHaveBeenCalledWith('a1')
     expect(vi.mocked(resume!).mock.calls).toEqual([['a1'], ['a1', 'plan']])
+  })
+
+  // Backend #3872: no agent is Team-written now; a saved mode never holds a resume to it.
+  it('resume an agent in the mode asked for, whatever mode it saved', async () => {
+    const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : undefined })
+    expect(await run.relaunch('agent_resume', { agentId: 'written', permissionMode: 'full' })).toMatchObject({ resumed: true })
   })
 
   it('refuse a request with no agent, on a machine that cannot relaunch, and a permission mode a restart has no use for', async () => {
@@ -1160,6 +1251,114 @@ describe('agent_resume and agent_restart', () => {
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
     await vi.waitFor(() => expect(frameless.replies).toStrictEqual([{ error: 'INTERNAL' }]))
+  })
+})
+
+describe('agent_restart with launchArgs', () => {
+  /** A record the launch itself writes, as a real restart does once the engine is back: the daemon saves on success. */
+  const records = (flags?: string[]) => {
+    const row = { ...session('a1'), ...(flags ? { launchArgs: flags } : {}) }
+    return { row, byAgent: (id: string) => id === 'a1' ? row : undefined }
+  }
+
+  it('hands the parsed words to the restart, saving nothing itself, and echoes what the record then holds, directly and through a receipt', async () => {
+    const store = records()
+    const restart = vi.fn(async (_id: string, words?: string[]) => { store.row.launchArgs = words; return { ok: true as const, session: store.row, resumed: false } })
+    const run = setup({ byAgent: store.byAgent }, { restart })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })).toStrictEqual({ agent: { id: 'a1' }, resumed: false, launchArgs: ['--chrome'] })
+    expect(restart).toHaveBeenCalledWith('a1', ['--chrome'])
+    run.replies.length = 0
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+    expect(run.replies[0]).toMatchObject({ creationId: CREATION, state: 'created', launchArgs: ['--chrome'] })
+    // The same receipt asked again does not restart a second time.
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    expect(run.replies.at(-1)).toMatchObject({ launchArgs: ['--chrome'] })
+    expect(restart).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears with an empty string and echoes an empty list', async () => {
+    const store = records(['--old'])
+    const restart = vi.fn(async (_id: string, words?: string[]) => { store.row.launchArgs = words?.length ? words : undefined; return { ok: true as const, session: store.row, resumed: false } })
+    const run = setup({ byAgent: store.byAgent }, { restart })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '' })).toMatchObject({ launchArgs: [] })
+    expect(restart).toHaveBeenCalledWith('a1', [])
+  })
+
+  it('refuses a flag Harness sets, a non-string, an unknown agent and a non-owner, restarting nothing', async () => {
+    const run = setup({ byAgent: (id: string) => id === 'a1' ? session('a1') : undefined })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--model x' }))
+      .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: '--model is set by Harness and can\'t be added here.' })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: 5 })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_restart', { agentId: 'gone', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
+    expect(run.restart).not.toHaveBeenCalled()
+  })
+
+  // The words are run by the engine as the owner: a device (dial, Pro), an agent's own CLI and a guest may not set them.
+  it('takes them only from the owner\'s own app, whichever way the others ask', async () => {
+    const run = setup()
+    for (const type of ['agent_restart', 'agent_resume']) {
+      expect(await run.relaunch(type, { agentId: 'a1', launchArgs: '--chrome' }, { ownerApp: false }))
+        .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' })
+      expect(await run.relaunch(type, { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION }, { ownerApp: false })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    }
+    expect(run.restart).not.toHaveBeenCalled()
+    expect(run.resume).not.toHaveBeenCalled()
+    // The same asker still restarts and resumes without them.
+    expect(await run.relaunch('agent_restart', { agentId: 'a1' }, { ownerApp: false })).toMatchObject({ resumed: false })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })).toMatchObject({ resumed: false })
+    expect(run.restart).toHaveBeenCalledTimes(2)
+  })
+
+  it('takes them on a resume too, validated, handed over and fingerprinted, with a permission mode beside them', async () => {
+    const store = records()
+    const resume = vi.fn(async (_id: string, _mode?: string, words?: string[]) => { store.row.launchArgs = words; return { ok: true as const, session: store.row, resumed: true } })
+    const run = setup({ byAgent: store.byAgent }, { resume })
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toStrictEqual({ agent: { id: 'a1' }, resumed: true, launchArgs: ['--chrome'] })
+    expect(resume).toHaveBeenLastCalledWith('a1', undefined, ['--chrome'])
+    await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome', permissionMode: 'plan' })
+    expect(resume).toHaveBeenLastCalledWith('a1', 'plan', ['--chrome'])
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--model x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    run.replies.length = 0
+    await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+    await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--other', creationId: CREATION })
+    expect(run.replies.at(-1)).toStrictEqual({ error: 'CREATION_CONFLICT' })
+  })
+
+  // A harness a bad flag left stopped lives in the stopped-agents store, not the registry (resumeAgentService.ts).
+  it('resumes a stopped agent with them: its engine is read from the stopped store', async () => {
+    const stopped = { ...session('a1'), engine: 'codex' as const }
+    const resume = vi.fn(async () => ({ ok: true as const, session: stopped, resumed: true }))
+    const run = setup({ byAgent: () => undefined, stoppedAgent: (id) => id === 'a1' ? stopped : undefined }, { resume })
+    // Codex's own -c is the owner's to use; a key Harness sets is not, and the engine is the stopped row's.
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model=x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model_reasoning_effort=high' })).toMatchObject({ resumed: true })
+    expect(resume).toHaveBeenCalledExactlyOnceWith('a1', undefined, ['-c', 'model_reasoning_effort=high'])
+    expect(await run.relaunch('agent_resume', { agentId: 'nowhere', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
+  })
+
+  // Nothing is saved here: the launch saves on success. A refusal, a missing process or an engine that does not start
+  // carries no echo, because there is nothing new on the record to report.
+  it('echoes nothing on a failed reply, directly or through a receipt, whatever the failure', async () => {
+    for (const error of ['AGENT_BUSY', 'NO_ACTIVE_PROCESS', 'RESTART_FAILED', 'RESUME_UNCONFIRMED']) {
+      for (const creationId of [undefined, CREATION]) {
+        const run = setup({}, { restart: vi.fn(async () => ({ ok: false as const, error })) })
+        await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', ...(creationId ? { creationId } : {}) })
+        await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+        expect(run.replies[0], `${error} ${creationId}`).not.toHaveProperty('launchArgs')
+        expect(run.replies[0]).not.toHaveProperty('agent')
+      }
+    }
+  })
+
+  it('treats the same receipt with different flags as a different request', async () => {
+    const run = setup()
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--other', creationId: CREATION })
+    expect(run.replies.at(-1)).toStrictEqual({ error: 'CREATION_CONFLICT' })
+    expect(run.restart).toHaveBeenCalledOnce()
   })
 })
 

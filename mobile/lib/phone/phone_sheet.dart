@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart'
     show
         appDialogButtonStyle,
@@ -160,9 +161,12 @@ Future<void> showPhoneSheet(
 /// a menu of actions. Push it on the root navigator; held, it can be taken away again
 /// ([NavigatorState.removeRoute]) when the page that opened it goes.
 ModalBottomSheetRoute<T> phoneSheetRoute<T>(
-  BuildContext context, {
+  BuildContext opener, {
   required WidgetBuilder builder,
 }) {
+  // The app's sheet even over a terminal's page, which keeps a look of its own — see
+  // [TerminalLook.outside].
+  final context = TerminalLook.outside(opener);
   assert(debugCheckHasMediaQuery(context));
   assert(debugCheckHasMaterialLocalizations(context));
   // What `showModalBottomSheet` does, with [_PhoneSheetRoute] pushed in place of its route —

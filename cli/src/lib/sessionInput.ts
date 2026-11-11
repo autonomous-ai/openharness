@@ -11,6 +11,8 @@ import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult 
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
+/** The longest a cancel holds the messages sent while its Ctrl-C is on its way (`interrupting`). */
+const CANCEL_HOLD_MS = 5_000
 const ITEM_TTL_MS = 5 * 60_000
 // The window for an engine that declares none of its own (engines/submissionPolicies.ts declares Claude
 // Code's and Codex's, with the reasons).
@@ -55,6 +57,9 @@ const AGY_SUBMIT_VERIFY_MS = 8_000
 // Copilot's first hook of a turn is `userPromptSubmitted`, which fires as soon as Enter is accepted —
 // faster than agy's, which waits for the model call. 6s is the same headroom grok gets.
 const COPILOT_SUBMIT_VERIFY_MS = 6_000
+// OpenClaw's TUI draws no composer glyph Harness reads, and the Gateway writes the run's user row as the run starts:
+// its reader's 1s poll surfaces it as turn_started, so it gets OpenCode's poll-sized window.
+const OPENCLAW_SUBMIT_VERIFY_MS = 2_500
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
@@ -98,7 +103,6 @@ function sayOnce(receipt?: MessageReceipt): MessageReceipt | undefined {
 
 interface QueuedInput {
   deliveryId?: string
-  inputContext?: string
   receipt?: MessageReceipt
   content: string
   bytes: number
@@ -129,6 +133,11 @@ interface InputState {
   /** Identical follow-ups still own different asynchronous composer observations. */
   personWriteVersion?: number
   controlLocked: boolean
+  /** Cancels still pressing their Ctrl-C: a message sent meanwhile waits for it, in `held` (`interrupting`). */
+  cancelling: number
+  /** What those cancels hold, to go on once they are done: writes that were already on their way first, then
+   *  messages sent since, each in the order it came. */
+  afterCancel: { writes: Array<() => void>; sent: Array<() => void> }
   settling: boolean
   queue: QueuedInput[]
   /** The messages the move gate holds for this agent, in arrival order. Counted against the queue's limits,
@@ -152,7 +161,7 @@ export interface SessionInputDeps {
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
   /** Boolean is retained for direct controller tests and legacy embedders. Production returns dispatch evidence. */
-  inject: (terminalTarget: string, content: string, inputContext?: string) => Promise<boolean | TerminalActionResult>
+  inject: (terminalTarget: string, content: string) => Promise<boolean | TerminalActionResult>
   /** Host serializes the preflight and paste with other terminal writers. */
   injectTeam?: (terminalTarget: string, content: string, deliveryId: string) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean | TerminalActionResult>
@@ -164,6 +173,13 @@ export interface SessionInputDeps {
    * moment at which a turn is known to have started, and this one is exact: we sent it.
    */
   onSubmitted?: (sessionId: string, content: string) => void
+  /** Whether the engine's reader of [session] is starting: null when it is up (or the engine needs none), else whether it came up
+   *  within its bounded wait (core/serviceLinks.ts `whenUp`). A message waits for it before the lease's wait begins. */
+  engineStarting?: (session: RegisteredSession) => Promise<boolean> | null
+  /** A message waits for something before it is typed: said once, as it starts to wait. */
+  onWaiting?: (sessionId: string, reason: 'engine_starting') => void
+  /** An agent's `waitingFor` changed (its first message began to wait, or its last stopped): its frame is pushed again. */
+  onWaitChanged?: (id: string) => void
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -194,6 +210,8 @@ function fingerprint(content: string): string {
 /** Engine-aware prompt injection. Terminal TUIs get a bounded per-session FIFO while a turn is busy. */
 export class SessionInputController {
   private states = new Map<string, InputState>()
+  /** The messages waiting for each agent's engine's reader to start (`engineReady`), by session. */
+  private readonly waitingEngine = new Map<string, number>()
 
   constructor(private readonly deps: SessionInputDeps) {}
 
@@ -232,6 +250,37 @@ export class SessionInputController {
     return launchBound(session, this.controlSession(session.agentId))
   }
 
+  /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once to the person (a team delivery is
+   *  automatic: its mailbox hears how it ends); one that does not come in time is logged by name. Whether it waited: the agent may
+   *  have gone meanwhile, which its caller checks again. */
+  private async engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<boolean> {
+    const starting = this.deps.engineStarting?.(session)
+    if (!starting) return false
+    console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
+    if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
+    const since = (this.deps.now ?? Date.now)()
+    // A person's wait is on the agent's frame too, as message_waiting said it (a team delivery's is not), and every window hears
+    // when it starts and ends (`onWaitChanged`).
+    if (!team) this.countWait(sessionId, 1)
+    let up = false
+    try { up = await starting } finally { if (!team) this.countWait(sessionId, -1) }
+    console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
+    return true
+  }
+
+  /** What a message to [id] (an agent's id or its session's, as it was sent) waits for now: `engine` while one waits for its
+   *  engine's reader (the agent's frame says so). */
+  waitingFor(id: string): 'engine' | null {
+    return this.waitingEngine.has(id) ? 'engine' : null
+  }
+
+  private countWait(id: string, by: 1 | -1): void {
+    const count = (this.waitingEngine.get(id) ?? 0) + by
+    if (count > 0) this.waitingEngine.set(id, count)
+    else this.waitingEngine.delete(id)
+    if (count === (by > 0 ? 1 : 0)) this.deps.onWaitChanged?.(id)
+  }
+
   /**
    * A paste the pane's control lease refused before a byte was written: the agent is there, but its
    * process is not yet the one the registry holds — a resume or restart moments ago, before the new
@@ -240,6 +289,7 @@ export class SessionInputController {
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
    */
+
   private async injectWhenLeased(
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
@@ -264,6 +314,8 @@ export class SessionInputController {
         awaitingFingerprint: null,
         awaitingContent: null,
         controlLocked: false,
+        cancelling: 0,
+        afterCancel: { writes: [], sent: [] },
         settling: false,
         queue: [],
         held: [],
@@ -326,7 +378,7 @@ export class SessionInputController {
   }
 
   /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
-  submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
+  submit(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
     const said = sayOnce(receipt)
     // An agent changing host has no pane to type into until the move ends: the message waits, as itself, and
     // is submitted then, through every check `submitNow` makes, into the pane the row then names.
@@ -342,11 +394,11 @@ export class SessionInputController {
       gate.enqueue(agentId, async () => {
         const at = state.held.indexOf(item)
         if (at >= 0) state.held.splice(at, 1)
-        if (!item.cancelled) await this.submitNow(sessionId, content, deliveryId, inputContext, said)
+        if (!item.cancelled) await this.submitNow(sessionId, content, deliveryId, said)
       })
       return
     }
-    void this.submitNow(sessionId, content, deliveryId, inputContext, said)
+    void this.submitNow(sessionId, content, deliveryId, said)
   }
 
   /**
@@ -354,7 +406,7 @@ export class SessionInputController {
    * here or refused: the gate delivers what it held one at a time, and a keystroke held behind this message
    * must not land between its paste and its Enter.
    */
-  private submitNow(sessionId: string, content: string, deliveryId?: string, inputContext?: string, said?: MessageReceipt): Promise<void> {
+  private submitNow(sessionId: string, content: string, deliveryId?: string, said?: MessageReceipt): Promise<void> {
     const session = this.controlSession(sessionId)
     if (!session) {
       said?.('agent_gone')
@@ -363,6 +415,11 @@ export class SessionInputController {
       return Promise.resolve()
     }
     const state = this.state(sessionId)
+    if (state.cancelling) {
+      this.holdForCancel(sessionId, state, Buffer.byteLength(content, 'utf8'), deliveryId, said, 'sent',
+        () => void this.submitNow(sessionId, content, deliveryId, said))
+      return Promise.resolve()
+    }
     this.dropExpired(sessionId, state)
     if (state.controlLocked
       || (this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.writes || state.queue.length > 0))
@@ -370,7 +427,7 @@ export class SessionInputController {
         || (!this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.turnOpen || state.settling))))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
-      this.enqueue(sessionId, state, content, deliveryId, inputContext, said)
+      this.enqueue(sessionId, state, content, deliveryId, said)
       if (this.swarmTypesWhileBusy(session.engine, deliveryId) && state.turnOpen
         && !state.deliveryId && state.awaitingFingerprint && !state.timer) this.armSubmitCheck(sessionId, session, state)
       return Promise.resolve()
@@ -384,12 +441,20 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    return this.scheduleWrite(sessionId, session, content, deliveryId, inputContext, said)
+    return this.scheduleWrite(sessionId, session, content, deliveryId, said)
   }
 
-  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
+  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
-    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext, receipt)
+    const write = (): Promise<void> => {
+      // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
+      if (state.cancelling) {
+        this.holdForCancel(sessionId, state, 0, deliveryId, receipt, 'writes',
+          () => void this.scheduleWrite(sessionId, session, content, deliveryId, receipt))
+        return Promise.resolve()
+      }
+      return this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, receipt)
+    }
     const running = state.writes ? state.writes.then(write, write) : write()
     const settled: Promise<void> = running.catch(() => {}).then(() => {
       if (state.writes !== settled) return
@@ -426,7 +491,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    if (state.controlLocked || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
+    if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
     state.controlLocked = true
     let released = false
     return () => {
@@ -437,6 +502,11 @@ export class SessionInputController {
       current.controlLocked = false
       this.drainOne(sessionId, current)
     }
+  }
+
+  /** Whether a caller holds this pane (`acquireControl`): a question being answered, a sequence of keys. */
+  controlHeld(sessionId: string): boolean {
+    return this.states.get(sessionId)?.controlLocked === true
   }
 
   onTurnStarted(sessionId: string, userMessage: string): void {
@@ -573,29 +643,75 @@ export class SessionInputController {
   }
 
   cancel(sessionId: string): void {
-    const session = this.controlSession(sessionId)
-    if (!session) return
-    void this.deps.validateRuntime(session).then(async (valid) => {
-      if (!valid) { this.deps.onError(sessionId, 'This agent process is no longer running.'); return }
-      await this.deps.sendKey(session.agentId, 'C-c')
-      const state = this.state(sessionId)
-      this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
-      this.settle(state, 'cancelled')
-      state.turnOpen = false
-      state.awaitingFingerprint = null
-      state.awaitingContent = null
-      state.ambiguousDispatch = false
-      if (state.timer) clearTimeout(state.timer)
-      state.timer = null
-      setTimeout(() => this.drainOne(sessionId, state), 250)
+    void this.interrupt(sessionId, true).catch((error) => {
+      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
+      this.deps.onError(sessionId, 'Stop did not reach this agent.')
     })
   }
 
-  async cancelConfirmed(sessionId: string): Promise<boolean> {
+  cancelConfirmed(sessionId: string): Promise<boolean> {
+    return this.interrupt(sessionId, false)
+  }
+
+  /**
+   * A cancel's Ctrl-C and what it settles. A message sent while the key is on its way (or a write whose turn
+   * to be typed comes then, or a device's control) waits, and goes on after it, once the cancel has settled
+   * what it interrupted: typed before, the cancel took it for its own and settled it as cancelled, with its
+   * submit check dropped, and the Ctrl-C could clear it from the composer (seen once in seven Codex Stop runs,
+   * 2026-11-10: received, never typed). Held at most CANCEL_HOLD_MS: a key stuck behind another writer does not
+   * hold them for good.
+   */
+  private async interrupt(sessionId: string, reportGone: boolean): Promise<boolean> {
     const session = this.controlSession(sessionId)
-    if (!session || !await this.deps.validateRuntime(session)) return false
-    const result = await this.deps.sendKey(session.agentId, 'C-c')
+    if (!session) return false
     const state = this.state(sessionId)
+    state.cancelling++
+    let held = true
+    const release = (): void => {
+      if (!held) return
+      held = false
+      clearTimeout(timer)
+      state.cancelling--
+      if (state.cancelling) return
+      const { writes, sent } = state.afterCancel
+      state.afterCancel = { writes: [], sent: [] }
+      // A moment for the engine to take the key, as before; a forgotten agent's held messages are told so there.
+      setTimeout(() => {
+        for (const next of [...writes, ...sent]) next()
+        if (this.states.get(sessionId) === state) this.drainOne(sessionId, state)
+      }, 250)
+    }
+    const timer = setTimeout(() => {
+      console.warn(`[inject] ${sid(sessionId)} cancel still pressing after ${CANCEL_HOLD_MS} ms · held messages go on`)
+      release()
+    }, CANCEL_HOLD_MS)
+    try {
+      if (!await this.deps.validateRuntime(session)) {
+        if (reportGone) this.deps.onError(sessionId, 'This agent process is no longer running.')
+        return false
+      }
+      const result = await this.deps.sendKey(session.agentId, 'C-c')
+      this.interrupted(sessionId, state)
+      return typeof result === 'boolean' ? result : result.dispatch === 'executed'
+    } finally { release() }
+  }
+
+  /** Hold one message for the cancel pressing now, counted against the queue's limits and cancellable as queued ones are. */
+  private holdForCancel(sessionId: string, state: InputState, bytes: number, deliveryId: string | undefined,
+    receipt: MessageReceipt | undefined, kind: 'writes' | 'sent', go: () => void): void {
+    if (bytes && this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
+    const item: HeldInput = { deliveryId, bytes, cancelled: false }
+    state.held.push(item)
+    console.log(`[inject] ${sid(sessionId)} held · a cancel is pressing Ctrl-C · depth=${state.held.length}`)
+    state.afterCancel[kind].push(() => {
+      const at = state.held.indexOf(item)
+      if (at >= 0) state.held.splice(at, 1)
+      if (!item.cancelled) go()
+    })
+  }
+
+  /** What a Ctrl-C the person asked for ends: the message typed last, and the turn. */
+  private interrupted(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
     this.settle(state, 'cancelled')
     state.turnOpen = false
@@ -604,8 +720,6 @@ export class SessionInputController {
     state.ambiguousDispatch = false
     if (state.timer) clearTimeout(state.timer)
     state.timer = null
-    setTimeout(() => this.drainOne(sessionId, state), 250)
-    return typeof result === 'boolean' ? result : result.dispatch === 'executed'
   }
 
   forget(sessionId: string): void {
@@ -625,7 +739,7 @@ export class SessionInputController {
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
-  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
+  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     state.personWriteVersion = (state.personWriteVersion ?? 0) + 1
     if (!(await this.deps.validateRuntime(session))) {
@@ -651,7 +765,17 @@ export class SessionInputController {
       // would corrupt it into a run-on prompt anyway, which is worse and harder to notice.
       await this.deps.sendKey(session.agentId, 'C-u')
     }
-    const delivery = await this.injectWhenLeased(() => this.write(session.agentId, content, inputContext),
+    if (await this.engineReady(sessionId, session, false)) {
+      // Seconds may have passed: the agent may have been closed, or its process ended.
+      if (this.states.get(sessionId) !== state || this.deps.getSession(sessionId) === undefined) return
+      if (!(await this.deps.validateRuntime(session))) {
+        console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+        receipt?.('runtime_gone')
+        this.deps.onError(sessionId, 'This agent process is no longer running.')
+        return
+      }
+    }
+    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
       () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
       ? delivery
@@ -690,11 +814,7 @@ export class SessionInputController {
     this.armSubmitCheck(sessionId, session, state)
   }
 
-  private write(id: string, content: string, inputContext?: string) {
-    return inputContext ? this.deps.inject(id, content, inputContext) : this.deps.inject(id, content)
-  }
-
-  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
+  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A later person write replaces the shared composer-check fields. Read the Swarm
@@ -703,9 +823,9 @@ export class SessionInputController {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      if (!receipt) return this.injectLegacy(sessionId, session, content, inputContext)
+      if (!receipt) return this.injectLegacy(sessionId, session, content)
       // A write that threw may have typed something: unknown, and thrown on as before.
-      return this.injectLegacy(sessionId, session, content, inputContext, receipt).catch((error: unknown) => {
+      return this.injectLegacy(sessionId, session, content, receipt).catch((error: unknown) => {
         receipt('ambiguous')
         throw error
       })
@@ -720,6 +840,17 @@ export class SessionInputController {
         this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
         if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
         return
+      }
+      if (state.cancelled || this.states.get(sessionId) !== state) return
+      // Before the team's own check of the pane, which a reader not yet up cannot read either.
+      if (await this.engineReady(sessionId, session, deliveryId.startsWith('team:'))) {
+        if (state.cancelled || this.states.get(sessionId) !== state) return
+        if (!(await this.deps.validateRuntime(session))) {
+          console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+          this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
+          if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
+          return
+        }
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (deliveryId.startsWith('team:')) {
@@ -747,7 +878,7 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
       const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
-        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.write(session.agentId, content, inputContext)),
+        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
       () => !state.cancelled && this.states.get(sessionId) === state)
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
@@ -836,6 +967,8 @@ export class SessionInputController {
                           ? AGY_SUBMIT_VERIFY_MS
                           : session.engine === 'copilot'
                             ? COPILOT_SUBMIT_VERIFY_MS
+                            : session.engine === 'openclaw'
+                              ? OPENCLAW_SUBMIT_VERIFY_MS
                       : SUBMIT_VERIFY_MS))
   }
 
@@ -889,7 +1022,8 @@ export class SessionInputController {
         return
       }
     } else if (session.engine === 'opencode' || session.engine === 'kilo' || session.engine === 'pi' || session.engine === 'hermes' || session.engine === 'muse'
-      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot') {
+      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot'
+      || session.engine === 'openclaw') {
       // OpenCode has no composer glyph, and the submitted text stays visible in the message area, so a
       // pane scrape can't tell "still in the composer" from "already sent". Rely purely on the reader-
       // derived turn_started (a new user row in opencode.db) to clear awaitingFingerprint; if it hasn't
@@ -1119,7 +1253,7 @@ export class SessionInputController {
     // A person write may still be awaiting its terminal result when several chat
     // deliveries arrive. Reserve one Swarm receipt only after that writer finishes.
     if (busySwarm && state.writes) return
-    if (state.controlLocked || (!busySwarm && (state.turnOpen || state.settling)) || state.awaitingFingerprint) return
+    if (state.controlLocked || state.cancelling || (!busySwarm && (state.turnOpen || state.settling)) || state.awaitingFingerprint) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
     const next = state.queue.shift()
     if (!next) return
@@ -1130,14 +1264,14 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    if (busySwarm) await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
-    else await this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
+    if (busySwarm) await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.receipt)
+    else await this.inject(sessionId, session, next.content, next.deliveryId, next.receipt)
   }
 
-  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
+  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
     const bytes = Buffer.byteLength(content, 'utf8')
     if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
-    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, inputContext, ...(receipt ? { receipt } : {}) })
+    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, ...(receipt ? { receipt } : {}) })
     this.delivery(sessionId, deliveryId, 'queued')
   }
 

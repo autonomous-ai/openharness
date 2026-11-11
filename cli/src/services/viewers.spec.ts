@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
 import { emptyPorts, type ViewersPort } from '../core/api.js'
 import { catalogEntry } from '../dsh/catalog.js'
 import { installedDsh } from '../dsh/installed.js'
@@ -45,6 +46,7 @@ vi.mock('../dsh/viewer.js', () => ({
     stopAll = vi.fn(async () => { built.order.push('viewers stopped') })
     forwardingUrl = vi.fn((agentId: string) => `http://127.0.0.1:9/${agentId}`)
     setVerdictArtifact = vi.fn()
+    setVerdictPreview = vi.fn()
     constructor(readonly deps: any) { built.order.push('viewers'); built.viewers.push(this) }
   },
 }))
@@ -124,13 +126,20 @@ describe('the DSH viewers service', () => {
 
     it('a verdict points the viewer at its artifact, or at none', () => {
       const { core, port, viewers, verdicts } = setup()
-      const verdict = { status: 'pass', artifact: 'render.png' }
+      const verdict = { status: 'pass', artifact: 'render.png', preview: 'http://127.0.0.1:5173/' }
       verdicts.deps.onChange('a1', verdict)
       expect(viewers.setVerdictArtifact).toHaveBeenCalledWith('a1', 'render.png')
+      expect(viewers.setVerdictPreview).toHaveBeenCalledWith('a1', 'http://127.0.0.1:5173/')
       expect(port.frameContext(agent())).toMatchObject({ verdict })
       verdicts.deps.onChange('a1', null)
       expect(viewers.setVerdictArtifact).toHaveBeenLastCalledWith('a1', null)
+      expect(viewers.setVerdictPreview).toHaveBeenLastCalledWith('a1', null)
       expect(core.agents.sync).toHaveBeenCalledTimes(2)
+    })
+
+    it('never takes this daemon\'s own API port for an agent\'s preview', () => {
+      const { viewers } = setup()
+      expect(viewers.deps.reservedPorts()).toEqual([env.PORT])
     })
 
     it('waits for the terminal before pushing a frame, which would otherwise read as "agent gone"', () => {

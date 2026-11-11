@@ -10,7 +10,7 @@ import type { Agent, AgentStart, Conversation, Person, SuperTabState, WorkStatus
 import type { ContributedMachine } from '../machines.js'
 
 export const READ_FORMAT = 2
-export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
+export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start'
 
 /** A live part: the reader's view of one stored record. */
 export interface LivePart<T> { key: string; version: number; changedAt: number; data: T }
@@ -21,71 +21,70 @@ export interface DormantStub { key: string; version: number; changedAt: number; 
 export type PartChange<T> = LivePart<T> | Tombstone
 export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 
-/** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
- *  invitations filtered (invitations only for the Swarm owner). */
-export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies'>
-/** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
-export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
-/** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
- *  role) come only in `derived.agents`, so an agent never changes without a new version. */
-export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'roleId' | 'avatar'> & { avatar?: import('../profile.js').AvatarView }
+/** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects and
+ *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
+ *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
+export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
+  | 'environment' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
+  | 'autoJoin'> & {
+  /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
+  projects?: Array<import('../projects.js').SwarmProject & {
+    process: import('../process.js').ProjectProcess; columns: readonly import('../process.js').BoardColumn[]
+  }>
+}
+export type MemberView = Person
+/** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision) come only in
+ *  `derived.agents`, so an agent never changes without a new version. */
+export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'mainProjectId' | 'member'>
 /** A private conversation's audience: the people it is shared with. The project's Lead always reads it too. */
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'>
-  & { messageSeq: number; dormant?: true; audience?: Audience
-    /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
-    buddyOwnerId?: string }
+export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'> & {
+  /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
+  shippedAt?: number
+  /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
+  held?: import('../heldReason.js').HeldView
+}
+  & { messageSeq: number; dormant?: true; audience?: Audience }
 /** A contribution as `state.machines[]` has it, privacy detail only for its contributor, harness ids cut to what the
  *  reader can see. Machines without a contribution are never sent. */
 export type MachineView = ContributedMachine
 export type StartView = AgentStart
-export interface ProgressView {
-  since: number
-  summarizedFloor: number
-  summarized: Record<string, number>
-  requestedFloor: number
-  requested: Record<string, number>
-  requestedAt: number | null
-  requestMessageId?: string
-}
 
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
-  /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
-  /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>
+  /** Every agent the reader can see. `workDecision` is null when the stored value stands. */
+  /** `kind`: a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
+   *  (agentKind.ts, task #4116). Absent from an older backend. */
+  /** `myAgent`: whether it is in the reader's My agents (agentKind.ts inMyAgents, task #4192). Absent from an older backend. */
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null;
+    kind: import('../agentKind.js').AgentKind; chatId: string | null; myAgent: boolean
+    /** Lead or Member, and its main project when the reader reads that project (agentKind.ts, task #4540). Absent from an older backend. */
+    role: import('../agentKind.js').AgentRole; mainProjectId: string | null }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
-  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
+  machines: Record<string, { availableSlots: number; clientVersion?: string
     /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
     suspendedEngines?: Record<string, string>
-    /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
-     *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
-    lead?: Record<string, { machineId: string } | { refused: string }> }>
+    /** Pickup timeout cooldown: applies to every new start, including grid models. */
+    machineSuspended?: string }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
-  /** A person only. */
-  mentionsWaiting?: number
-  /** A person only: a digest of which tags wait, moving when they change though the count may not. */
-  mentionsDigest?: string
-  /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
-   *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
-  avatars?: Record<string, string>
-  /** A person only: decisions asked of them, still open. */
-  decisionsWaiting?: number
-  /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
-  decisionsDigest?: string
-  /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
-   *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
-  activityDigest?: string
+  /** A project agent only: the account each project's PM runs on, a project it may not read named "another project". */
+  pmAccounts?: Array<{ machineId: string; engine: string; project: string; pm: string }>
+  /** The Swarm's owner only: projects nobody owns, which they may delete but never read (projects.ts ownerlessProjects). */
+  ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
   readMarks?: Record<string, number>
+  /** A person only: those of their `readMarks` whose last move was their own Mark unread (readMarks.ts lowerReadMark), which
+   *  a client takes in place of a higher mark it holds, where it keeps the higher of the two for every other mark. Like
+   *  `readMarks`: a first load has every one of the conversations it holds, a changes read those moved since its cursor; a read
+   *  that raises the mark again ends it. Absent when there are none, and from an older backend. Never another person's. */
+  unreadMarks?: Record<string, number>
   /** A person only: their own thread marks (readMarks.ts), the newest message sequence read by thread root, by conversation.
    *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
    *  Absent when there are none, and from an older backend. Never another person's. */
@@ -97,17 +96,6 @@ export interface Derived {
   /** Present, and false, only from a backend that held Harness Team accounts to listed owners' Swarms (2026-10-27 to 11-02):
    *  this Mac's daemon and Desktop then offered no team account for it. No longer sent: every Swarm takes part. */
   teamAccounts?: false
-  /** This server takes a thread reply's `newSession` (buddySessions.ts): Desktop offers New session only where it is
-   *  true and the Buddy's machine reports it can run sessions. Absent from an older backend, whose strict schema refuses
-   *  the field. */
-  threadSessions?: true
-  /** This server also takes `newSession` on a person's top-level message in their own Buddy chat: the message roots its
-   *  own thread, which gets the session (commands.ts routeBuddySession). Desktop offers New session in that chat's main
-   *  composer only where it is true. Absent from an older backend, which refuses it. */
-  sessionsFromChat?: true
-  /** One Buddy per person per Swarm (Dee, 10-31): a person's one Buddy chat, its Buddy reading every project they read, and New
-   *  session in one project. An older server says nothing, and its app keeps a Buddy per project. */
-  swarmBuddy?: true
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null
@@ -127,9 +115,6 @@ interface ReadMeta {
 /** GET /api/super-tabs/:tabId/parts[?asAgentId=] */
 export interface FirstLoad extends ReadMeta {
   tabId: string
-  githubApp?: true
-  /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
-  steps?: true
   head: LivePart<HeadView>
   members: LivePart<MemberView>[]
   agents: LivePart<AgentView>[]
@@ -137,14 +122,28 @@ export interface FirstLoad extends ReadMeta {
   groups: LivePart<GroupView>[]
   machines: LivePart<MachineView>[]
   starts: LivePart<StartView>[]
-  progress: LivePart<ProgressView>[]
+  /** Always empty: the report progress part went with Swarm v4 (S19). Released CLIs still require the list (cli
+   *  superTabs/partsStore.ts maps every list, readContract.ts marks it required). It goes not before 2026-12-12, and only once
+   *  a CLI release reads `progress` as optional and is 30 days old. */
+  progress: []
   derived: Derived
+  /** Opaque: the reader's summary (`derived` without its marks) as a hash (derivedEtag.ts). Send it back as `derivedEtag` on
+   *  the next change read. Absent from an older backend. */
+  derivedEtag: string
 }
 
-/** GET /api/super-tabs/:tabId/changes?cursor=[&asAgentId=] */
+/** The reader's own marks of `derived`, which a change read sends only as they move. */
+export type ReaderMarks = Pick<Derived, 'readMarks' | 'unreadMarks' | 'threadMarks' | 'chatSettings'>
+
+/** GET /api/super-tabs/:tabId/changes?cursor=[&asAgentId=][&machines=light][&derivedEtag=] */
 export type Changes = ChangesReload | ChangesDelta
 /** Drop the store and do a first load: bad or old cursor, another epoch, or older than tombstones are kept. */
 export interface ChangesReload { reload: true }
+/** A machine's own reading, as one line, for a client that asked (`machines=light`): when it last reported, from which it works out
+ *  online or offline as it does from a part. The rest of the reading is read on demand (MachineReadings). */
+export interface MachineReading { key: string; version: number; receivedAt: number }
+/** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
+export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
   reload: false
   head: LivePart<HeadView> | null
@@ -152,9 +151,18 @@ export interface ChangesDelta extends ReadMeta {
   agents: PartChange<AgentView>[]
   groups: GroupChange[]
   machines: PartChange<MachineView>[]
+  /** Only for a client that asked: machines whose reading alone moved, which `machines` then leaves out. */
+  machineReadings?: MachineReading[]
   starts: PartChange<StartView>[]
-  progress: PartChange<ProgressView>[]
-  derived: Derived
+  /** Always empty, as in a first load. */
+  progress: []
+  /** The whole summary, or with `derivedUnchanged` only the reader's moved marks: the client keeps the summary it holds. */
+  derived: Derived | ReaderMarks
+  /** As a first load's: the summary this reply's reader has now, sent whether or not `derived` carries it. */
+  derivedEtag: string
+  /** Only when the client sent the `derivedEtag` its summary still hashes to (task #2906): `derived` then holds only the
+   *  reader's moved marks. A client that sends no etag, as every released one, always gets the whole summary. */
+  derivedUnchanged?: true
 }
 
 /** GET /api/super-tabs/:tabId/groups?dormant=1[&projectId=][&before=][&asAgentId=]: newest activity first, 50 a page. */
@@ -167,17 +175,15 @@ export interface CommandReply {
   result: Record<string, unknown>
   parts: Array<{ kind: PartKind; key: string; version: number }>
   lastChangedAt: number | null
-  /** Only on a replayed receipt from before the migration. */
+  /** Only on a replayed receipt from before the parts (2026-10-26). */
   legacyRevision?: number
 }
 
 /** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
-  /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
-    /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
-     *  Swarm whose count cannot be told here has neither). */
-    mentionsWaiting?: number; mentionsDigest?: string }>
+  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null
+    /** Only on the reader's own Personal Swarm. */
+    personal?: true }>
   next: string | null
 }
 
@@ -190,8 +196,8 @@ export interface MessagePageCursor { sequence: number; id: string }
 export interface MessagePage<M = Record<string, unknown>> {
   messages: M[]
   next: MessagePageCursor | null
-  /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
-   *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
+  /** Moves when a message here is edited or deleted (messageEdits.ts): read the page shown again. Named for the reactions it
+   *  first counted, which are gone. */
   reactionSeq: number
 }
 
@@ -234,7 +240,6 @@ export type HostRosterRow =
   | HostAgentRow
   | { tabId: string; agent: { id: string; harnessId: string; machineId: string }; closeSession: true; active: false }
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
-  | { tabId: string; joinTeam: { machineId: string; name: string; maxAgents: number } }
 export interface HostAgentRow {
   tabId: string
   tabName: string
@@ -242,21 +247,19 @@ export interface HostAgentRow {
   paused: boolean
   active: boolean
   attention: { assignmentId: string; status: WorkStatus; result: string | null } | null
-  /** Its task lost to a usage limit, still waiting for it: when its host types it back into the same session. `lostAt`
-   *  names that loss, since one task can be lost, resumed and lost again. */
-  resume: { conversationId: string; assignmentId: string; lostAt: number; at: string } | null
+  /** Always null since Swarm v4 (no task resumes after a usage limit); an older host still reads it. Goes after 2026-12-09. */
+  resume: null
   agent: Agent
   joinSwarm: boolean
-  skillMode: 'default' | 'orchestration'
-  role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
-  /** The role it goes by (instructions.ts roleNameOf). */
-  roleName: string
-  /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
-   *  `hash`): no document yet, so the built-in template. */
-  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
+  /** A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11. */
+  skillMode: 'default'
   lead: boolean
+  /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
+  owed: { messageId: string; since: number; restartAfterMs: number } | null
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null
+  /** The conversation this agent leads, when it is a project's Product Manager. */
+  ledConversationId: string | null
   stopRequested: boolean
   observers: Array<{ email: string; userId: string }>
   /** Its session is confidential in some Swarm: the host refuses every share of it, ordinary ones too (Critical 1). */
@@ -270,21 +273,16 @@ export interface HostPool {
   paused: boolean
   machine: ContributedMachine
   starts: AgentStart[]
-  /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
-  buddyStarts?: AgentStart[]
   /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
   leadStarts?: AgentStart[]
+  /** Regular agents' starts (commands.ts agent.new, task #4116), apart for the same reason. */
+  regularStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
-  githubApp?: true
+  removedHarnessIds?: string[]
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
 }
-
-/** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */
-export const UPDATE_REQUIRED = { code: 'UPDATE_REQUIRED', status: 426, message: 'Update Harness to keep using this Swarm.' } as const
-/** HTTP 503 on the new routes while a Swarm is still on the old format; clients retry. */
-export const SWARM_MIGRATING = { code: 'SWARM_MIGRATING', status: 503, message: 'This Swarm is being upgraded. Try again in a moment.' } as const
 

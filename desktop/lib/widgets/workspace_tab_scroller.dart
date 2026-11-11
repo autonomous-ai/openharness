@@ -1,12 +1,20 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../state/workspace_chrome.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/workspace_bar_style.dart';
 import 'workspace_bar_control.dart';
 
 /// Cells each arrow takes beside an overflowing tab list.
 const int kWorkspaceTabArrowCells = 3;
+
+/// Whether tabs that do not fit get arrows and the mouse wheel: the web's chrome
+/// asks for them, and Windows always has them. Without them, a Windows person
+/// with a ninth tab had no way to reach the first, nor any sign it was there
+/// (DESKTOP-0TFH0OJ, 2026-11-05: their Personal Swarm looked gone).
+bool scrollsTabsByMouse(WorkspaceChrome? chrome, {required bool windows}) =>
+    windows || chrome?.scrollsTabsByArrows == true;
 
 /// Arrows either side of a tab list that no longer fits, for hosts with no
 /// trackpad-sideways habit to lean on ([WorkspaceChrome.scrollsTabsByArrows]).

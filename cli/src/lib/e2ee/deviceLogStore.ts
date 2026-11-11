@@ -202,7 +202,7 @@ export class DeviceLogStore {
     return next
   }
 
-  /** Keep `file` — the log of an account this machine is leaving — to restore if it comes back. */
+  /** Keep the departing log, in place of an older archived copy. */
   archive(file: DevLogFile): void {
     if (!file.state) return
     const all = this.archived()

@@ -46,18 +46,16 @@ void main() {
         await mouse.addPointer(location: Offset.zero);
         var firstHover = true;
 
-        Future<void> checkHints(String search, String store) async {
+        Future<void> checkHints(String search) async {
           if (native) {
             final payload =
                 calls.lastWhere((call) => call.method == 'update').arguments
                     as Map;
             expect(payload['searchTooltip'], search);
-            expect(payload['storeTooltip'], store);
+            // Store is in the avatar's menu; the native bar draws none.
+            expect(payload['storeVisible'], isFalse);
           } else {
-            for (final (key, text) in [
-              ('swarm-search-button', search),
-              ('swarm-store-button', store),
-            ]) {
+            for (final (key, text) in [('swarm-search-button', search)]) {
               await mouse.moveTo(Offset.zero);
               await tester.pump(const Duration(milliseconds: 300));
               await mouse.moveTo(tester.getCenter(find.byKey(ValueKey(key))));
@@ -76,21 +74,18 @@ void main() {
           expect(input, isEmpty);
         }
 
-        await checkHints('Open Harness · ⌘P', 'Explore Harness Store · ⌃⌘S');
+        await checkHints('Open Harness · ⌘P');
         map.apply('''{"bindings":[
           {"keys":"cmd+p","command":null},
-          {"keys":"cmd+ctrl+s","command":null},
-          {"keys":"cmd+k","command":"harnesses.list"},
-          {"keys":"cmd+shift+s","command":"app.store"}
+          {"keys":"cmd+k","command":"harnesses.list"}
         ]}''');
         await tester.pump();
-        await checkHints('Open Harness · ⌘K', 'Explore Harness Store · ⇧⌘S');
+        await checkHints('Open Harness · ⌘K');
         map.apply('''{"bindings":[
-          {"keys":"cmd+p","command":null},
-          {"keys":"cmd+ctrl+s","command":null}
+          {"keys":"cmd+p","command":null}
         ]}''');
         await tester.pump();
-        await checkHints('Open Harness', 'Explore Harness Store');
+        await checkHints('Open Harness');
         await mouse.removePointer();
         await tester.pumpWidget(const SizedBox());
         app.dispose();

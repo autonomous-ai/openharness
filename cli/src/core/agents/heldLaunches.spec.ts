@@ -28,6 +28,20 @@ function setup(rows: RegisteredSession[], answer: (only: ReadonlySet<string>) =>
 }
 
 describe('agents held until a service is ready', () => {
+  it('says once why an agent stays held, and does not repeat a pass that changed nothing', async () => {
+    let reason = 'the pty host has gone'
+    const { held, log } = setup([row('a', HELD)], (only) => summary({ held: [...only], failed: [...only].map(agentId => ({ agentId, reason })) }))
+    await held.boot(async () => {})
+    await held.restoreHeld(); await held.restoreHeld(); await held.restoreHeld()
+    reason = 'no such folder'
+    await held.restoreHeld()
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      '[restore] a · could not launch from held · the pty host has gone',
+      '[restore] held · every service · launched 0 of 1 · 1 still waiting',
+      '[restore] a · could not launch from held · no such folder',
+    ])
+  })
+
   it.each(['removed', 'closed'] as const)('does not restore a queued row that was %s before its preparation', async state => {
     const h = setup([row('a', HELD)])
     await h.held.boot(async () => {})

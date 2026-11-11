@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -21,6 +23,7 @@ class _Connection extends WsConn {
 
   bool catalogUnavailable = false, installed = false;
   bool held = false, cancelLost = false;
+  String? refusal;
   final cancels = <String>[];
   final install = Completer<Map<String, dynamic>>();
   int installs = 0;
@@ -63,6 +66,13 @@ class _Connection extends WsConn {
         return reply;
       case 'agent_create':
         starts.add(Map.of(payload));
+        if (refusal case final detail?) {
+          return {
+            'creationId': payload['creationId'],
+            'state': 'failed',
+            'failure': {'code': 'BUSY', 'detail': detail},
+          };
+        }
         if (held) {
           return {
             'creationId': payload['creationId'],
@@ -93,6 +103,57 @@ class _Connection extends WsConn {
 }
 
 void main() {
+  // "Installing Hermes. The harness starts once it is installed." was red, as
+  // if the start had failed (DESKTOP-0TFH0OJ, 2026-11-04).
+  testWidgets('a request the machine is holding does not read as a failure', (
+    tester,
+  ) async {
+    Future<Color?> colorOf(_Connection connection, String words) async {
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'claude',
+        folder: '/work',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NewHarnessForm(
+              key: UniqueKey(),
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(box.create);
+      await tester.pump();
+      final status = find.byKey(const ValueKey('new-harness-status'));
+      expect(tester.widget<Text>(status).data, contains(words));
+      return tester.widget<Text>(status).style?.color;
+    }
+
+    final error = ThemeData().colorScheme.error;
+    expect(
+      await colorOf(_Connection()..held = true, 'Waiting for the selected'),
+      isNot(error),
+    );
+    expect(
+      await colorOf(_Connection()..refusal = 'Try later', 'Try later'),
+      error,
+    );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
   test(
     'held creation retains its choices until cancellation is confirmed',
     () async {

@@ -10,20 +10,19 @@ import 'swarm_chat_peeks.dart';
 import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
+import 'swarm_thread.dart' show SwarmThreadFocus;
 
 /// Activity's filters, as Tony's prototype C3 names them.
 enum SwarmActivityFilter {
   /// Decisions asked of the person and work waiting on them.
   needsYou('Needs you'),
 
-  /// The Product Manager's tags of the person.
-  mentions('@'),
+  /// The Product Manager's tags of the person: "Mentions" on the phone, a
+  /// word a screen reader says, where the desktop has "@" (Tony, 2026-11-03).
+  mentions('Mentions'),
 
   /// Threads the person wrote in or was tagged in.
-  threads('Threads'),
-
-  /// Others' reactions to what the person wrote.
-  reactions('Reactions');
+  threads('Threads');
 
   /// What [threads] is called once the server lists replies to the person
   /// ([SwarmActivityFeed]), as Desktop calls it.
@@ -50,6 +49,14 @@ sealed class SwarmActivityItem {
 
   /// When it happened, where that is known.
   DateTime? get at;
+
+  /// The root of the thread the row's message lives only in; null for a
+  /// message in the chat's main stream, which Reply lands on in the chat.
+  String? get threadId => null;
+
+  /// Where that thread lands: on the row's message, or at its first unread
+  /// reply for a row that stands for the whole thread.
+  SwarmThreadFocus? get threadFocus => null;
 }
 
 /// Something a Swarm asks of the person ([SwarmNeed]): Needs you, or @ for a
@@ -76,11 +83,60 @@ class SwarmActivityNeed extends SwarmActivityItem {
   };
 
   @override
+  String? get threadId => switch (need) {
+    SwarmMentionNeed(:final mention) => mention.threadId,
+    _ => null,
+  };
+
+  @override
+  SwarmThreadFocus? get threadFocus => switch (need) {
+    SwarmMentionNeed(:final mention) when mention.threadId != null =>
+      SwarmThreadFocus.message(mention.messageId),
+    _ => null,
+  };
+
+  @override
   DateTime? get at => switch (need) {
     SwarmDecisionNeed(:final decision) => decision.createdAt,
     SwarmMentionNeed(:final mention) => mention.createdAt,
     SwarmWorkNeed(:final work) => work.conversation.changedAt,
   };
+}
+
+/// Activity's All (Slack's one feed, Tony, 2026-11-03): what needs the
+/// person and is still to handle first, as Needs you lists it; then every
+/// other row — tags and replies — newest first, those with no time
+/// last; then the needs handled. Each row once.
+List<SwarmActivityItem> swarmActivityAll(SwarmActivity activity) {
+  final needs = activity.items(SwarmActivityFilter.needsYou);
+  final seen = <String>{};
+  final waiting = [
+    for (final item in needs)
+      if (activity.handled(item) == null && seen.add(item.key)) item,
+  ];
+  final rest = [
+    for (final filter in SwarmActivityFilter.values)
+      if (filter != SwarmActivityFilter.needsYou)
+        for (final item in activity.items(filter))
+          if (seen.add(item.key)) item,
+  ];
+  // Stable: rows at the same time keep their filter's order.
+  final order = {for (final (i, item) in rest.indexed) item.key: i};
+  rest.sort((a, b) {
+    final (atA, atB) = (a.at, b.at);
+    if (atA == null || atB == null) {
+      if (atA != atB) return atA == null ? 1 : -1;
+    } else if (atA != atB) {
+      return atB.compareTo(atA);
+    }
+    return order[a.key]!.compareTo(order[b.key]!);
+  });
+  return [
+    ...waiting,
+    ...rest,
+    for (final item in needs)
+      if (seen.add(item.key)) item,
+  ];
 }
 
 /// Whether [item] is of project [projectId], as [snapshot] — its Swarm's read
@@ -99,7 +155,6 @@ bool swarmActivityItemIn(
       mention.projectId,
     SwarmActivityNeed(need: SwarmWorkNeed(:final work)) => work.project.id,
     SwarmActivityThread(:final project) => project.id,
-    SwarmActivityReaction(:final project) => project.id,
     // A server row names no project of its own: its chat's, as read here.
     SwarmActivityServerItem(:final conversationId) =>
       snapshot.conversation(conversationId)?.projectId,
@@ -137,11 +192,17 @@ class SwarmActivityThread extends SwarmActivityItem {
   String? get messageId => thread.id;
 
   @override
+  String? get threadId => thread.id;
+
+  @override
+  SwarmThreadFocus? get threadFocus => const SwarmThreadFocus.firstUnread();
+
+  @override
   DateTime? get at => thread.lastAt;
 }
 
-/// A reply to the person's message or a reaction to it, as the server lists
-/// it ([SwarmActivityFeed]): under Threads (called Replies) or Reactions.
+/// A reply to the person's message, as the server lists it
+/// ([SwarmActivityFeed]): under Threads (called Replies).
 class SwarmActivityServerItem extends SwarmActivityItem {
   const SwarmActivityServerItem(super.swarmId, this.entry);
   final SwarmActivityEntry entry;
@@ -150,9 +211,7 @@ class SwarmActivityServerItem extends SwarmActivityItem {
   String get key => 'activity:$swarmId:${entry.id}';
 
   @override
-  SwarmActivityFilter get filter => entry.kind == SwarmActivityKind.reply
-      ? SwarmActivityFilter.threads
-      : SwarmActivityFilter.reactions;
+  SwarmActivityFilter get filter => SwarmActivityFilter.threads;
 
   @override
   String get conversationId => entry.conversationId;
@@ -162,65 +221,33 @@ class SwarmActivityServerItem extends SwarmActivityItem {
   String? get messageId => entry.threadId ?? entry.messageId;
 
   @override
+  String? get threadId => entry.threadId;
+
+  @override
+  SwarmThreadFocus? get threadFocus =>
+      entry.threadId == null ? null : SwarmThreadFocus.message(entry.messageId);
+
+  @override
   DateTime? get at => entry.createdAt;
-}
-
-/// Others' reactions to one of the person's messages in a project chat.
-class SwarmActivityReaction extends SwarmActivityItem {
-  const SwarmActivityReaction(
-    super.swarmId, {
-    required this.project,
-    required this.chatId,
-    required this.message,
-    required this.reactions,
-  });
-  final SuperTabProject project;
-  final String chatId;
-  final SuperTabMessage message;
-
-  /// Each emoji with who gave it, the person themself left out.
-  final List<SuperTabReactionCount> reactions;
-
-  @override
-  String get key => 'reaction:$swarmId:${message.id}';
-
-  @override
-  SwarmActivityFilter get filter => SwarmActivityFilter.reactions;
-
-  @override
-  String get conversationId => chatId;
-
-  @override
-  String? get messageId => message.id;
-
-  @override
-  DateTime? get at => message.createdAt;
-
-  /// Who gave which emoji, in one value: a reaction seen is handled until
-  /// this moves.
-  String get signature => ([
-    for (final r in reactions)
-      for (final who in r.by) '${r.emoji.key}:${who.kind}:${who.id}',
-  ]..sort()).join(',');
 }
 
 /// Activity, in place of Needs you (Tony's prototype C3; Product Manager's
 /// brief 10-30): what the Swarms ask of the person (Needs you, @), the replies
-/// and reactions to what they wrote, each filter counted, and the needs they
+/// to what they wrote, each filter counted, and the needs they
 /// acted on kept as handled.
 ///
-/// Needs you and @ are the inbox's, read already. Replies and Reactions are
+/// Needs you and @ are the inbox's, read already. Replies are
 /// the server's, as Desktop reads them ([SwarmActivityFeed], #2453): unread
 /// in bold, and read on every device once Activity is left — only those
 /// Activity had open. The badge counts what Desktop's does: decisions and
 /// tags waiting, and replies unread.
 ///
 /// From a server before Activity (no digest, or 404), that Swarm's rows are
-/// built on the phone as before: Threads and Reactions come
+/// built on the phone as before: Threads come
 /// from each project chat's newest page ([SwarmChatPeeks]), read only while
 /// Activity is [shown] and only when the chat's counters moved; Buddy chats
 /// and task chats are not read. A thread is handled once the person read the
-/// chat past its last reply, or opened it here; a reaction once opened here.
+/// chat past its last reply, or opened it here.
 /// Those marks are kept on the phone under the account and the Swarm (thread
 /// and message ids, and numbers; no words), and leave it with the Swarm. A
 /// need the person answered, marked done or opened here stays as a handled
@@ -236,7 +263,7 @@ class SwarmActivity extends ChangeNotifier {
 
   final SwarmSession session;
 
-  /// Where the handled marks of threads and reactions are kept; null keeps
+  /// Where the handled marks of threads are kept; null keeps
   /// them in memory.
   final LocalKeyValueStore? store;
 
@@ -264,7 +291,7 @@ class SwarmActivity extends ChangeNotifier {
   /// Each listed Swarm's handled marks, while its server has no Activity.
   final _marks = <String, _SwarmMarks>{};
 
-  /// Each listed Swarm's replies and reactions from the server.
+  /// Each listed Swarm's replies from the server.
   final _feeds = <String, SwarmActivityFeed>{};
 
   /// The server rows each Swarm's Activity had open in this visit, by id:
@@ -342,7 +369,7 @@ class SwarmActivity extends ChangeNotifier {
       ? SwarmActivityFilter.repliesLabel
       : filter.label;
 
-  /// Some listed Swarm's replies and reactions come from its server.
+  /// Some listed Swarm's replies come from its server.
   bool get repliesFromServer => _feeds.values.any((feed) => feed.fromServer);
 
   /// The tab's badge, as Desktop counts its Activity: each Swarm's decisions
@@ -381,7 +408,7 @@ class SwarmActivity extends ChangeNotifier {
 
   /// A project chat is being read for the first time since it moved, with
   /// nothing of it read yet, or a Swarm's Activity is read from its server
-  /// for the first time: Replies and Reactions may still fill.
+  /// for the first time: Replies may still fill.
   bool get reading =>
       _feeds.values.any(
         (feed) => feed.fromServer && !feed.loaded && feed.error == null,
@@ -446,9 +473,6 @@ class SwarmActivity extends ChangeNotifier {
                 opened is int && thread.lastSequence <= opened
             ? 'Read'
             : null;
-      case SwarmActivityReaction():
-        final seen = _marks[item.swarmId]?.values['r:${item.message.id}'];
-        return seen == item.signature ? 'Seen' : null;
       // Read or not, a server row is never handled here: its server says
       // whether it is read ([unread]).
       case SwarmActivityServerItem():
@@ -464,9 +488,10 @@ class SwarmActivity extends ChangeNotifier {
       final decision = need.decision;
       final asks = inbox.asks(need.swarmId);
       final busy =
-          session.held(need) != null ||
+          session.holding(need) ||
           (asks?.answering.contains(decision.id) ?? false) ||
-          asks?.unconfirmed(decision) != null;
+          asks?.unconfirmed(decision) != null ||
+          (asks?.unconfirmedDelegate(decision) ?? false);
       final choice = decision.recommended;
       if (!busy && choice >= 0 && choice < decision.options.length) {
         return decision.options[choice];
@@ -488,8 +513,7 @@ class SwarmActivity extends ChangeNotifier {
   }
 
   /// The person opened [item] with Reply: handled at once. A need stays
-  /// handled until it changes (its key moves); a thread until a newer reply,
-  /// a reaction until someone else reacts.
+  /// handled until it changes (its key moves); a thread until a newer reply.
   void replied(SwarmActivityItem item) {
     if (_disposed) return;
     switch (item) {
@@ -503,14 +527,24 @@ class SwarmActivity extends ChangeNotifier {
             .reader(item.swarmId)
             ?.readMarks
             ?.markThreadRead(item.chatId, thread.id, thread.lastSequence);
-      case SwarmActivityReaction():
-        _marks[item.swarmId]?.put('r:${item.message.id}', item.signature);
       // Read on every device once Activity is left, as on Desktop.
       case SwarmActivityServerItem():
         return;
     }
     _built = null;
     notifyListeners();
+  }
+
+  /// Where [item]'s thread lands when it is opened: ask before [replied],
+  /// which reads a whole thread, so its first unread reply is still known.
+  SwarmThreadFocus? landingOf(SwarmActivityItem item) {
+    if (item is! SwarmActivityThread) return item.threadFocus;
+    final reader = inbox.reader(item.swarmId);
+    final through =
+        reader?.readMarks?.threadThrough(item.chatId, item.thread.id) ??
+        reader?.snapshot?.threadMarks[item.chatId]?[item.thread.id] ??
+        0;
+    return SwarmThreadFocus.firstUnread(after: through);
   }
 
   bool _open(SwarmActivityNeed item) =>
@@ -533,7 +567,6 @@ class SwarmActivity extends ChangeNotifier {
   void _changed() {
     if (_disposed) return;
     _sweep();
-    _seed();
     _built = null;
     if (shown) _want();
     // What a send does is told before the send starts (SwarmSession._send):
@@ -579,9 +612,13 @@ class SwarmActivity extends ChangeNotifier {
       final reader = inbox.reader(id);
       if (reader == null || reader.accessRevoked) continue;
       if (!_feeds.containsKey(id)) {
-        final feed = _feeds[id] = SwarmActivityFeed(reader);
+        final feed = _feeds[id] = SwarmActivityFeed(reader)
+          ..onReply = (entry) => session.announceReply(id, entry);
         if (shown) feed.opened();
-        feed.addListener(_changed);
+        feed
+          ..addListener(_changed)
+          // Gone with the feed: disposing it drops what listens.
+          ..addListener(() => session.repliesListed(id, feed));
       }
       if (_marks.containsKey(id) || _answered(id)) continue;
       _marks[id] = _SwarmMarks(reader, store, accountId, onLoaded: _changed);
@@ -597,27 +634,8 @@ class SwarmActivity extends ChangeNotifier {
 
   bool _held(String key) => inbox.needs.any(
     (need) =>
-        need.key == key &&
-        need is SwarmDecisionNeed &&
-        session.held(need) != null,
+        need.key == key && need is SwarmDecisionNeed && session.holding(need),
   );
-
-  /// On this phone's first Activity of a Swarm, the reactions already there
-  /// count as seen: a new phone does not start with all of them new.
-  void _seed() {
-    for (final MapEntry(key: id, value: marks) in _marks.entries) {
-      if (!marks.loaded || marks.found) continue;
-      for (final (:project, :chat) in _projectChats(marks.reader)) {
-        if (marks.seeded.contains(chat.id)) continue;
-        final peek = session.peeks.of(marks.reader, chat.id);
-        if (peek == null) continue;
-        marks.seeded.add(chat.id);
-        for (final item in _reactions(id, project, chat.id, peek)) {
-          marks.put('r:${item.message.id}', item.signature);
-        }
-      }
-    }
-  }
 
   /// Asks for each project chat as its counters stand: read only if they
   /// moved since it was last read.
@@ -719,19 +737,11 @@ class SwarmActivity extends ChangeNotifier {
         rows[SwarmActivityFilter.threads]!.addAll(
           _threads(swarm.id, project, chat.id, peek),
         );
-        rows[SwarmActivityFilter.reactions]!.addAll(
-          _reactions(swarm.id, project, chat.id, peek),
-        );
       }
     }
     int newest(SwarmActivityItem a, SwarmActivityItem b) =>
         (b.at ?? DateTime(0)).compareTo(a.at ?? DateTime(0));
-    for (final filter in [
-      SwarmActivityFilter.threads,
-      SwarmActivityFilter.reactions,
-    ]) {
-      rows[filter]!.sort(newest);
-    }
+    rows[SwarmActivityFilter.threads]!.sort(newest);
     final built = <SwarmActivityFilter, List<SwarmActivityItem>>{};
     for (final MapEntry(key: filter, value: list) in rows.entries) {
       final handledNeeds = [
@@ -765,34 +775,6 @@ class SwarmActivity extends ChangeNotifier {
     }
   }
 
-  Iterable<SwarmActivityReaction> _reactions(
-    String swarmId,
-    SuperTabProject project,
-    String chatId,
-    SwarmPeek peek,
-  ) sync* {
-    for (final message in peek.messages) {
-      if (message.fromAgent || message.authorId != accountId) continue;
-      final others = [
-        for (final r in message.reactions)
-          if ([
-                for (final who in r.by)
-                  if (!(who.kind == 'person' && who.id == accountId)) who,
-              ]
-              case final by when by.isNotEmpty)
-            SuperTabReactionCount(r.emoji, by),
-      ];
-      if (others.isEmpty) continue;
-      yield SwarmActivityReaction(
-        swarmId,
-        project: project,
-        chatId: chatId,
-        message: message,
-        reactions: List.unmodifiable(others),
-      );
-    }
-  }
-
   @override
   void dispose() {
     _disposed = true;
@@ -813,8 +795,7 @@ class SwarmActivity extends ChangeNotifier {
   }
 }
 
-/// One Swarm's handled marks on the phone: a thread's last reply opened, a
-/// message's reactions seen.
+/// One Swarm's handled marks on the phone: a thread's last reply opened.
 class _SwarmMarks {
   _SwarmMarks(
     this.reader,
@@ -829,24 +810,25 @@ class _SwarmMarks {
   final LocalKeyValueStore? store;
   final VoidCallback onLoaded;
   final String _key;
-  final values = <String, Object>{};
-
-  /// The project chats seeded on this phone's first Activity.
-  final seeded = <String>{};
-  bool loaded = false, found = false, _forgotten = false;
+  final values = <String, int>{};
+  bool loaded = false, _forgotten = false;
 
   Future<void> _load() async {
-    final held = <String, Object>{};
-    var found = false;
+    final held = <String, int>{};
+    var dropped = false;
     try {
       if (await store?.read(_key) case final raw?) {
         if (jsonDecode(raw) case {'marks': final Map marks}) {
           for (final MapEntry(:key, :value) in marks.entries) {
-            if (key is String && (value is int || value is String)) {
-              held[key] = value as Object;
+            // A reaction's mark (a String) from before reactions went
+            // (2026-11-09) is dropped, and the marks written again without
+            // it. Goes from 2026-12-09, as the backend's retired commands.
+            if (key is String && value is int) {
+              held[key] = value;
+            } else {
+              dropped = true;
             }
           }
-          found = true;
         }
       }
     } catch (_) {
@@ -855,26 +837,22 @@ class _SwarmMarks {
     if (_forgotten) return;
     for (final MapEntry(:key, :value) in held.entries) {
       // A thread opened before the marks were back keeps the higher of the
-      // two: a mark read back late never lowers it. A reaction's signature
-      // set since is the newer.
+      // two: a mark read back late never lowers it.
       final now = values[key];
-      if (now == null || (now is int && value is int && value > now)) {
+      if (now == null || value > now) {
         values[key] = value;
       }
     }
-    this.found = found;
     loaded = true;
-    if (values.isNotEmpty) _write();
+    if (values.isNotEmpty || dropped) _write();
     onLoaded();
   }
 
   /// Keeps [value] under [key]: a thread's reply opened ([int]) only moves
   /// on, so an older one put later never lowers it.
-  void put(String key, Object value) {
+  void put(String key, int value) {
     if (_forgotten || values[key] == value) return;
-    if (values[key] case final int had when value is int && value < had) {
-      return;
-    }
+    if (values[key] case final had? when value < had) return;
     values.remove(key);
     values[key] = value;
     while (values.length > SwarmActivity.keptMarks) {

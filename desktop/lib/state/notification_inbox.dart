@@ -2,6 +2,7 @@ import '../notify/alert_sounds.dart';
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';
+import 'swarm_navigation.dart';
 
 /// A current question or an unread result, using the existing alert ledger.
 class InboxNotification {
@@ -75,4 +76,39 @@ InboxNotification? _notification(
     kind: current,
     unavailable: harnessSessionUnavailable(machine, agent),
   );
+}
+
+/// Opens [row]'s harness where it is, a Swarm agent's terminal beside the chat
+/// it waits in (#2792), and acknowledges the notification it opened. True when
+/// something opened.
+Future<bool> openInboxNotification(
+  AppNotifier app,
+  InboxNotification row,
+) async {
+  final readToken = app.agentUnread.readTokenFor(row.machineId, row.agentId);
+  final questionId = app.questionFor(row.machineId, row.agentId)?.requestId;
+  // A Swarm agent is also one of this machine's harnesses, but opened as one
+  // it lands in a tab whose Swarm view closes it: it opens in its Swarm.
+  final destination = swarmDestinations(app)
+      .where(
+        (item) =>
+            item.machineId == row.machineId && item.agentId == row.agentId,
+      )
+      .firstOrNull;
+  final opened =
+      app.openSwarmAgentTerminal(row.machineId, row.agentId) ||
+      (destination != null &&
+          await activateSwarmDestination(
+            app,
+            destination,
+            destinationSwarmId: app.activeSwarmId,
+          ));
+  // Opening acknowledges this notification. Its question stays pending
+  // until the daemon confirms an answer, independently of unread state.
+  if (opened &&
+      app.agentUnread.readTokenFor(row.machineId, row.agentId) == readToken &&
+      app.questionFor(row.machineId, row.agentId)?.requestId == questionId) {
+    app.readAgentNotification(row.machineId, row.agentId, readToken: readToken);
+  }
+  return opened;
 }

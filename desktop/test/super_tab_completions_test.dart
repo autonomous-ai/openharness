@@ -16,7 +16,7 @@ void main() {
     Brightness brightness = Brightness.dark,
     double scale = 1,
   }) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     (server.state['conversations'] as List)[1]['number'] = 12;
     (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
       {...conversationFixture('sync', 'Sync reliability'), 'number': 13},
@@ -39,7 +39,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',

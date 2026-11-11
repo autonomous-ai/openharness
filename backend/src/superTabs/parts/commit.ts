@@ -1,7 +1,8 @@
 import type { Prisma } from '@prisma/client'
-import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
+import { agentOnly, conversation, fail, isLeads, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
+import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
-import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
+import { guardedWrite, PartConflict, plainHost, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { RELEASED_CAP } from './types.js'
 
@@ -15,7 +16,7 @@ export interface Written { kind: PartKind; key: string; version: number }
 /** MongoDB limits a document to 16 MiB. A part leaves room for its columns and indexes (design section 1.4). */
 export const PART_LIMIT_BYTES = 4 * 1024 * 1024
 
-const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts', progress: 'progress' } as const
+const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts' } as const
 type ListKind = keyof typeof LISTS
 
 /** JSON with sorted keys, so two equal records compare equal whatever order a command built them in. */
@@ -58,11 +59,11 @@ export function sameData(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Who sees what changed (design section 4.2): a project's visibility or members, a person removed or rejoined, the set of
+ * Who sees what changed (design section 4.2): a project's visibility, owner or members, a person removed or rejoined, the set of
  * Leads (the Leads conversation's members), a conversation's audience, or a project removed. Readers reload in full.
  */
 export function visibilityChanged(before: SuperTabState, after: SuperTabState): boolean {
-  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.members]))
+  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.ownerId, p.members]))
   const people = (state: SuperTabState) => canonical(state.people.map(p => [p.id, p.generation, p.role]))
   const leads = (state: SuperTabState) => canonical(state.conversations.filter(isLeads).map(c => c.agentIds))
   const audiences = (state: SuperTabState) => new Map(state.conversations.map(c => [c.id, canonical(c.audience ?? null)]))
@@ -83,7 +84,28 @@ export function indexesOf(state: SuperTabState) {
       ...(state.closingSessions ?? []).map(c => c.machineId), ...(state.machineCleanups ?? []).map(c => c.machineId)])],
     cleanupMachineIds: [...new Set([...(state.machines ?? []).flatMap(m => m.removal ? [m.machineId] : []),
       ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+    // Who joins by domain (autoJoin.ts): a deleted Swarm, or one whose owner turned it off, is found by nobody.
+    autoJoinDomain: autoJoinOn(state), autoJoinDeclined: state.autoJoinDeclined ?? [],
   }
+}
+
+/** How long a chat remembers that a person talked with an agent there: well past the 15 minutes an idle agent waits. */
+export const TALKED_KEEP_MS = 60 * 60_000
+
+/** Who a person talked with in [group] (task #3816): each agent a person's message reaches (`person`), and that agent's first
+ *  post to people after it (`answer`): a post to no agent, once per person's message, so an agent never keeps itself or another
+ *  agent from idling (review of #3389). Who wrote and whom it reached, never the words; a system row or notice marks nobody.
+ *  Entries older than TALKED_KEEP_MS go first, before this message is read, so an old one never comes back. */
+function markTalked(group: Conversation, message: MessageDraft, now: number): void {
+  if (message.source || !group.talkedAt && message.author.kind !== 'person') return
+  const talked = Object.fromEntries(Object.entries(group.talkedAt ?? {})
+    .filter(([, at]) => now - Math.max(at.person, at.answer ?? 0) <= TALKED_KEEP_MS))
+  if (message.author.kind === 'person') for (const id of message.recipients) talked[id] = { person: now }
+  else if (message.author.kind === 'agent' && !message.recipients.length) {
+    const entry = talked[message.author.id]
+    if (entry && (entry.answer === undefined || entry.answer < entry.person)) talked[message.author.id] = { ...entry, answer: now }
+  }
+  if (group.talkedAt || Object.keys(talked).length) group.talkedAt = talked
 }
 
 /**
@@ -100,7 +122,11 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     sequences.set(message.id, sequence)
     if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
-    if (!message.thread || message.alsoInChat) group.lastMainSequence = sequence
+    if (!message.thread || message.alsoInChat) {
+      group.lastMainSequence = sequence
+      if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
+    }
+    markTalked(group, message, now)
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }
@@ -132,8 +158,22 @@ export function capReleased(state: SuperTabState): void {
  *  that machine's host needs to hear about. */
 const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
-  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined } }
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined } }
 }
+
+/** What a reading moves all the time, measured on production (2026-11-04: of 128 parts moved in 40 s, `resources` in all of them): a
+ *  client that asks gets a line for these, and reads them on demand (read/changes.ts, read/service.ts machineReadings). */
+const VOLATILE_READING = ['receivedAt', 'resources', 'quotas', 'quotaReasons', 'profiles', 'harnessProgress', 'harnessTokens', 'harnessUncommitted'] as const
+const steadyPart = (data: unknown) => {
+  const machine = data as MachineData | undefined
+  const observation = machine?.contribution?.observation
+  if (!machine?.contribution) return machine
+  const steady: Record<string, unknown> | undefined = observation && { ...observation }
+  for (const field of VOLATILE_READING) if (steady) delete steady[field]
+  return { ...machine, contribution: { ...machine.contribution, observation: steady, lent: undefined, lentDays: undefined } }
+}
+/** Whether a machine's write changes anything beyond those fields: running sessions, tools, readiness and all the rest. */
+export const machineContentChanged = (before: unknown, after: unknown): boolean => !sameData(steadyPart(before), steadyPart(after))
 
 /**
  * What a part write tells host reads (read/host.ts, review round 1), from the part's data before and after (undefined for
@@ -149,34 +189,12 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
 }
 
 /**
- * Which host a part concerns from its data alone: every host of the Swarm for the head and its people (names, pause,
- * observers), the machine of an agent or a start, none for the other kinds, whose writes leave markers instead (hostMarker).
- * The one rule the host read wakes by (read/host.ts) and the push names hosts by (hostsToTell).
- */
-export function plainHost(kind: PartKind, data: unknown): 'all' | string | null {
-  switch (kind) {
-    case 'head': case 'member': return 'all'
-    case 'agent': {
-      const machineId = (data as { machineId?: unknown } | null)?.machineId
-      return typeof machineId === 'string' ? machineId : null
-    }
-    case 'start': {
-      const machineId = (data as AgentStart | null)?.request?.machineId
-      return typeof machineId === 'string' ? machineId : null
-    }
-    default: return null
-  }
-}
-
-/**
  * The machines whose hosts a commit's writes concern, by the same rules the host read wakes a Swarm for a machine
  * (read/host.ts woken): the head and members for every host of the Swarm before or after; an agent or a start for its
- * machine; a group for the machines its marker names; a machine's settings for that machine, the Mac it follows and the
- * team accounts that follow it. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
+ * machine; a group for the machines its marker names; a machine's settings for that machine. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
  */
 export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState, after: SuperTabState): string[] {
   const hosts = new Set<string>()
-  const pools = [...before.machines ?? [], ...after.machines ?? []]
   for (const write of writes) {
     if (write.op === 'touch') continue
     switch (write.kind) {
@@ -192,9 +210,6 @@ export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState,
       case 'machine': {
         if (!write.host?.hostChangedAt) break
         hosts.add(write.key)
-        const follows = (write.data as MachineData | null)?.contribution?.hostMachineId
-        if (follows) hosts.add(follows)
-        for (const pool of pools) if (pool.hostMachineId === write.key) hosts.add(pool.machineId)
         break
       }
     }
@@ -243,15 +258,16 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       const prior = before.get(key)
       if (!prior) {
         writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first, ...host(kind, undefined, part.data) })
-        if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+        if (kind !== 'group' && kind !== 'start') referencesChanged = true
       } else if (!sameData(prior.data, part.data)) {
-        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data) })
+        writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data),
+          ...kind === 'machine' && machineContentChanged(prior.data, part.data) ? { content: true as const } : {} })
       }
     }
     for (const [key, prior] of before) {
       if (now.has(key)) continue
       writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data, ...host(kind, prior.data, undefined) })
-      if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+      if (kind !== 'group' && kind !== 'start') referencesChanged = true
     }
   }
   const agentsWritten = new Set(writes.filter(w => w.kind === 'agent').map(w => w.key))
@@ -281,7 +297,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     versions.set(`${write.kind}:${write.key}`, version)
     written.push({ kind: write.kind, key: write.key, version })
   }
-  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts, ...parts.progress]
+  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts]
   for (const touch of opts.touches ?? []) {
     const key = `${touch.kind}:${touch.key}`
     if (versions.has(key)) continue

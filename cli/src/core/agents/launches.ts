@@ -15,10 +15,13 @@ import type { BackendSocket } from '../../backendSocket.js'
 import type { Asker, SwarmLaunch } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
+import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
+import { OPENCLAW_KEY } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
@@ -45,14 +48,16 @@ export type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 export type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 /** Stops an agent's live engine process and relaunches it in the SAME tmux pane, keeping the SAME
  *  agentId and (best-effort) resuming the same engine session. `resumed` says whether the relaunch
- *  actually resumed the prior conversation or had to fall back to a fresh one (core/agents/restart.ts). */
-export type RestartAgent = (agentId: string) => Promise<
+ *  actually resumed the prior conversation or had to fall back to a fresh one (core/agents/restart.ts). `launchArgs` are
+ *  the owner's new launch words (an empty list clears them): the relaunch is built with them and saves them on the record
+ *  only once the engine is back, so a refused or failed restart saves nothing. */
+export type RestartAgent = (agentId: string, launchArgs?: string[]) => Promise<
   { ok: true; session: RegisteredSession; resumed: boolean }
   | { ok: false; error: string; detail?: string; reason?: string }
 >
 /** Resumes stopped work directly, or attaches if it is already running. Never replaces a live process
  *  and never falls back to a fresh conversation (core/agents/lifecycle.ts). */
-export type ResumeAgent = (agentId: string, permissionMode?: string) => ReturnType<RestartAgent>
+export type ResumeAgent = (agentId: string, permissionMode?: string, launchArgs?: string[]) => ReturnType<RestartAgent>
 
 export interface LaunchRequestDeps {
   /** The receipts of launches asked for with a `creationId`. */
@@ -67,6 +72,8 @@ export interface LaunchRequestDeps {
   resumeAgent: () => ResumeAgent | null
   restartAgent: () => RestartAgent | null
   byAgent: (agentId: string) => RegisteredSession | undefined
+  /** A stopped agent's saved row (the stopped-agents store): a resume may bring it back with new launch words. */
+  stoppedAgent: (agentId: string) => RegisteredSession | undefined
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
   /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
@@ -75,14 +82,16 @@ export interface LaunchRequestDeps {
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
   guestCreate?: () => GuestCreate | null
-  /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
-  swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
+  /** Which Swarm roles a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: Pick<SwarmLaunch, 'role'>
+  /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeListed); absent, any is. */
+  claudeHomeListed?: (claudeHome: string) => boolean
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate, swarmLaunch }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeListed }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -131,24 +140,24 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
       // the answer its source repo already has. `branch` IS the source folder: nothing to record.
       //
-      // One consented exception: a Swarm agent in the Swarm's full mode, in the checkout a remote project resolved
+      // One consented exception: a Swarm agent, in any mode (task #4215), in the checkout a remote project resolved
       // to (cloned now, or one already there that holds that very repository). The person chose this repository
-      // and full mode for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
+      // for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
       // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
       // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
       // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
       // main repository), which made the source look trusted before the worktree started.
       // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
       //
-      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent in full mode:
+      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent, in any mode (#4215):
       // 2026-10-30, a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of it, and
       // the PM sat at Claude Code's trust question, which no Swarm view shows; it read Idle and every message to it was
       // withheld. Only from a local frame: a relayed request could name any repository on this machine.
-      const swarmAgent = input.engine === 'claude' && !!input.swarmRole && input.permissionMode === 'full'
+      const swarmAgent = input.engine === 'claude' && !!input.swarmRole
       const swarmCheckout = swarmAgent && (projectFolder.source === 'remote' || (projectFolder.source === 'worktree' && local))
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
-        const engineTrust = folderTrust(input.engine, input.codexHome)
+        const engineTrust = folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)
         if (engineTrust && (projectFolder.source === 'new' || swarmCheckout
           || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
@@ -171,7 +180,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
       try {
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
-        if (empty) folderTrust(input.engine, input.codexHome)?.record(input.cwd)
+        if (empty) folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)?.record(input.cwd)
       } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
     }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
@@ -300,7 +309,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const launchModel = status.state === 'created' ? receipts.createdLaunchModel(creationId) : null
       reply({ creationId, ...await creationStatusPayload(status), ...(launchModel ? { launchModel } : {}) })
     } catch (error) {
-      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+      // The reason travels with the code, so the host can tell the Swarm why the start waits (task #3861).
+      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL', ...error instanceof AgentCreationReceiptError && error.detail ? { detail: error.detail } : {} })
     }
   }
 
@@ -381,16 +391,30 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
       if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
     }
-    // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
-    // repeated here because a client's own check is not a guarantee about what actually
-    // arrives on the wire.
+    // Checked here whatever the client checked (`Agent._safeCodexHome` in the desktop app), because a client's own check is
+    // not a guarantee about what arrives on the wire. Absolute as this platform spells it: on Windows a drive-letter path,
+    // which a leading-'/' check refused, so a linked profile's agent ran on the default account (#4183).
     const rawCodexHome = typeof payload.codexHome === 'string' ? payload.codexHome : null
-    const codexHome = rawCodexHome && rawCodexHome.startsWith('/') && rawCodexHome.length <= 4096
+    const codexHome = rawCodexHome && homeIsAbsolute(rawCodexHome) && rawCodexHome.length <= 4096
       && !/[\x00-\x1f\x7f]/.test(rawCodexHome)
       ? rawCodexHome
       : null
     if (codexHome && (engine !== 'codex' || grid.state === 'ok')) {
       reply({ error: 'INVALID_CODEX_HOME', detail: 'codexHome is only valid for codex, without a grid' })
+      return
+    }
+    // Claude profiles (CLAUDE_CONFIG_DIR) follow the same rule: Claude only, without a grid.
+    const rawClaudeHome = typeof payload.claudeHome === 'string' ? payload.claudeHome : null
+    const claudeHome = rawClaudeHome && homeIsAbsolute(rawClaudeHome) && rawClaudeHome.length <= 4096
+      && !/[\x00-\x1f\x7f]/.test(rawClaudeHome)
+      ? rawClaudeHome
+      : null
+    if (claudeHome && (engine !== 'claude' || grid.state === 'ok')) {
+      reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is only valid for claude, without a grid' })
+      return
+    }
+    if (claudeHome && claudeHomeListed && !claudeHomeListed(claudeHome)) {
+      reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
       return
     }
     // A DSH is refused, never approximated: an agent created as its plain base engine would look
@@ -423,30 +447,18 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       prompt = trimmed || null
     }
     const swarmRole = payload.swarmRole
-    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
+    if (!swarmLaunch && swarmRole !== undefined && swarmRole !== null) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
-    // Project instructions, phase 4 (decision 1): a coordinator, an agent or a Buddy. An older Harness sends lead, dev or review
-    // (a Reviewer, which keeps its swarm-review file); the next release may send the kinds, so this one takes both.
+    // Project instructions, phase 4 (decision 1): a coordinator or an agent. An older Harness sends lead, dev or review
+    // (a Reviewer, which keeps its Reviewer kind); the next release may send the kinds, so this one takes both.
     const swarm = swarmRole === undefined || swarmRole === null ? null : roleFromWire(swarmRole)
     if (swarmRole !== undefined && swarmRole !== null &&
       (!swarm || !swarmLaunch?.role(swarm.role) || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
     }
-    // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
-    const swarmSkillMode = payload.swarmSkillMode
-    if (swarmSkillMode !== undefined && !swarmLaunch?.mode(swarmSkillMode)) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
-    }
-    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
-    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
-    const swarmGitHub = payload.swarmGitHub
-    if (swarmGitHub !== undefined && (swarmGitHub !== true || !swarm)) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
-    }
-    // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
-    // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
-    if (swarmGitHub === true && projectFolder?.source === 'worktree') projectFolder = { ...projectFolder, offline: true }
+    // `swarmSkillMode` is read as nothing: the skill modes are gone (PM, 2026-11-11), and Desktop's Personal Swarm still
+    // sends one. Delete this note on or after 2026-12-11, once no Desktop of the last 30 days sends it.
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -475,14 +487,15 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     let resumeSessionId: string | null = null
     if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
       // Engines' ids: uuids, `ses_…` (OpenCode, Kilo), `20260927_101500_ab12cd` (Hermes), slugs
-      // (Devin), Pi's custom ids with dots. One word, never a path.
-      if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
+      // (Devin), Pi's custom ids with dots, OpenClaw's `agent:<id>:<key>`. One word, never a path.
+      const sessionId = payload.resumeSessionId
+      if (typeof sessionId !== 'string' || !(/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(sessionId) || engine === 'openclaw' && OPENCLAW_KEY.test(sessionId))) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
       if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
-      resumeSessionId = payload.resumeSessionId
+      resumeSessionId = sessionId
     }
     let takeOver: 'idle' | 'now' | 'wait' | null = null
     if (payload.takeOver !== undefined && payload.takeOver !== null) {
@@ -515,21 +528,25 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}),
-        ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
+      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
       takeOver,
       // Only when set: a person's create keeps the fingerprint its receipt was recorded with before the field.
+      ...(claudeHome ? { claudeHome } : {}),
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
+      ...(payload.browser === true ? { browser: true } : {}),
     }
     // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
     // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
     const { swarmFallback: _fallback, ...stable } = input
-    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm) } : input
+    // A start asked with the Harness GitHub App before this machine's update named it, and its worktree offline, in its receipt:
+    // asked again, it finds that receipt (and launches on this machine's own login). Delete on or after 2026-12-10.
+    const app = swarm && payload.swarmGitHub === true
+    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm), ...(app ? { swarmGitHub: true } : {}) } : input
     const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
@@ -537,7 +554,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // on this connection, just as engines_probe is detached above.
       const create = onCreateAgent
       try {
-        const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        const fingerprint = creationFingerprint(projectFolder
+          ? { ...fingerprintInput, projectFolder: app && projectFolder.source === 'worktree' ? { ...projectFolder, offline: true } : projectFolder } : fingerprintInput)
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than
@@ -580,7 +598,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
 
   // Resume attaches or restores a saved conversation; restart replaces a live process in its
   // existing pane. Both keep the agentId and use the same durable operation receipt protocol.
-  const relaunch = async (type: string, payload: Record<string, unknown>, reply: Reply): Promise<void> => {
+  const relaunch = async (type: string, payload: Record<string, unknown>, reply: Reply, asker: { ownerApp: boolean }): Promise<void> => {
     const target = payload.agentId as string | undefined
     if (!target) { reply({ error: 'MISSING_AGENT_ID' }); return }
     const operation = type === 'agent_resume' ? 'resume' : 'restart'
@@ -591,13 +609,37 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
       reply({ error: 'INVALID_PERMISSION_MODE' }); return
     }
-    const invoke = () => permissionMode === undefined ? restart(target) : resumeAgent()!(target, permissionMode)
+    // Extra launch flags ride a restart or a resume of an agent the owner may change, and are checked with the engine's
+    // own refused list before anything is relaunched. The engine runs them as the owner, so only the owner's own app
+    // may send them (a device, an agent's own CLI and a guest may not), as only it may change a permission.
+    let launchArgs: string[] | undefined
+    if (payload.launchArgs !== undefined) {
+      if (!asker.ownerApp) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' }); return }
+      // A harness a bad flag left stopped is in the stopped store, not the registry: the way back is to resume it.
+      const known = byAgent(target) ?? stoppedAgent(target)
+      if (typeof payload.launchArgs !== 'string') {
+        reply({ error: 'INVALID_LAUNCH_ARGS' }); return
+      }
+      if (!known) { reply({ error: 'AGENT_NOT_FOUND' }); return }
+      const parsed = parseLaunchArgs(known.engine, payload.launchArgs)
+      if (!parsed.ok) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: parsed.detail }); return }
+      launchArgs = parsed.args
+    }
+    // The words travel with the relaunch and the launch saves them once the engine is back (core/agents/restart.ts,
+    // lib/resumeAgentService.ts): a restart refused, a process gone or an engine that did not start leaves the record as
+    // it was, and nothing here has to be undone.
+    const invoke = () => operation === 'resume'
+      ? (launchArgs ? resumeAgent()!(target, permissionMode as string | undefined, launchArgs)
+        : permissionMode === undefined ? restart(target) : resumeAgent()!(target, permissionMode as string))
+      : (launchArgs ? restartAgent()!(target, launchArgs) : restart(target))
+    // What the record holds now: the words a successful launch saved, `[]` once cleared. Never on a failure.
+    const echo = () => launchArgs ? { launchArgs: byAgent(target)?.launchArgs ?? [] } : {}
     const creationId = payload.creationId
     if (creationId !== undefined) {
       if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
       try {
         void receipts.run(creationId, creationFingerprint({ operation, agentId: target,
-          ...(permissionMode === undefined ? {} : { permissionMode }) }), async () => {
+          ...(permissionMode === undefined ? {} : { permissionMode }), ...(launchArgs ? { launchArgs } : {}) }), async () => {
           const result = await invoke()
           if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
           // RESTART_FAILED can follow an unobserved relaunch. Never silently
@@ -606,7 +648,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           return { state: 'failed', error: result.error, ...(result.reason ? { reason: result.reason } : {}),
             ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
         }).then(async (status) => {
-          reply({ creationId, ...await creationStatusPayload(status) })
+          reply({ creationId, ...await creationStatusPayload(status), ...(status.state === 'created' ? echo() : {}) })
         }).catch(() => reply({ error: 'INTERNAL' }))
       } catch (error) {
         reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
@@ -618,7 +660,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       reply({ error: result.error, ...(result.reason ? { reason: result.reason } : {}), ...(result.detail ? { detail: result.detail } : {}) })
       return
     }
-    reply({ agent: await toProject(result.session), resumed: result.resumed })
+    reply({ agent: await toProject(result.session), resumed: result.resumed, ...echo() })
   }
 
   // Fork an agent: a second one with the first one's history — see lib/forkAgent.ts. The reply

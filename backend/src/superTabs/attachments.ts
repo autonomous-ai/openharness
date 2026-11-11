@@ -1,14 +1,23 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { createGunzip } from 'node:zlib'
 import { z } from 'zod'
+import type { VoiceFacts } from './voiceMessages.js'
 
 /** Metadata as a message stores it. The bytes stay in the bucket. `url` is the file's public address on the CDN: it names the
  *  object, and apps from before signed links open it, until the bucket is no longer public (docs/swarms.md, "Chat file
  *  links"). Each read adds `link`, a short-lived signed link of that read, and `expiresAt` (epoch ms), when it stops opening
  *  (fileLinks.ts). A read that could not sign one says so with `unlinked: true` instead, so an app asks again rather than
  *  open the public address; only a file with neither comes from a server from before links. None of the three is stored. */
-export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true }
+export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true
+  /** A voice message's length, waveform and whether it has words (voiceMessages.ts); its words are the message's text. */
+  voice?: VoiceFacts
+  /** A picture's size as it is shown, and the small WebP the server made of it at upload (thumbnails.ts): a chat draws that and
+   *  the viewer opens the original. `thumb.url` is its public address beside the original's; a read adds `link` and
+   *  `expiresAt` (or `unlinked`) exactly as for the file, from the same read (fileLinks.ts). Absent on a file without them. */
+  width?: number; height?: number
+  thumb?: { url: string; width: number; height: number; size: number; link?: string; expiresAt?: number; unlinked?: true } }
 
 /** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
 export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024
@@ -19,6 +28,8 @@ export const MAX_FORM_ATTACHMENT_BYTES = 10 * 1024 * 1024
 export const MAX_ATTACHMENTS = 10
 /** How long an upload link may be started: storage checks it when a request begins, so a long transfer that started in time finishes. */
 export const UPLOAD_LINK_MS = 10 * 60_000
+/** The longest a finished upload's check and its picture's read-back may wait on the bucket, whose client retries for minutes. */
+export const UPLOAD_CHECK_MS = 20_000
 /** The `purpose` of an upload whose link was handed out and whose bytes the server has not yet checked. Servers before this
  *  one refuse a row with any purpose as a message's file, so a rollout never sends a file that has not arrived. */
 export const PENDING_UPLOAD_PURPOSE = 'pending-upload'
@@ -33,11 +44,13 @@ export const HOURLY_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 export const PENDING_UPLOAD_LIFE_MS = UPLOAD_LINK_MS + 3_600_000
 /** The form route's own refusal, seen only by a client from before upload links. */
 export const FORM_TOO_LARGE_MESSAGE = 'Update Harness to send files over 10 MB. Files can be up to 256 MB.'
-/** An avatar is a small picture: Desktop resizes it before upload, and the backend still holds it to this. */
-export const MAX_AVATAR_BYTES = 1024 * 1024
-export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
 /** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
 export const AVATAR_PURPOSE = 'avatar'
+/** How long an upload may wait to be sent. */
+export const UNSENT_LIFE_MS = 24 * 3_600_000
+/** `usedBy` of an upload the expiry sweep took (lib/attachmentSweep.ts): its file is being removed and nothing may use it.
+ *  Message and receipt ids are 24 hex characters (model.ts stableId), so the colon keeps it from ever matching one. */
+export const EXPIRED_UPLOAD = 'expired:unsent'
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: a name that hides its real shape.
 export const attachmentName = z.string().trim().min(1).max(255).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value), 'Use a printable file name.')
@@ -58,8 +71,10 @@ export interface DirectUploads {
   uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink>
   /** The stored object's size, or null while nothing is there. */
   stored(objectKey: string): Promise<{ size: number } | null>
-  /** Its first `bytes` bytes. */
-  head(objectKey: string, bytes: number): Promise<Buffer>
+  /** Its first `bytes` bytes; `signal` stops the download. */
+  head(objectKey: string, bytes: number, signal?: AbortSignal): Promise<Buffer>
+  /** The whole object, for a picture to be thumbnailed once its upload is complete; `signal` stops the download. */
+  read(objectKey: string, signal?: AbortSignal): Promise<Buffer>
   /** Removes it; an object already gone counts as removed. */
   delete(objectKey: string): Promise<void>
 }
@@ -87,9 +102,15 @@ export interface AttachmentStore {
   /** A link that opens [objectKey] until [expiresAt] (epoch ms) and never after, whether or not the bucket is public. Storage
    *  checks it when a request starts, so a long download that started in time finishes. */
   signedUrl(objectKey: string, expiresAt: number): Promise<string>
+  /** Removes the object. One that is already gone counts as removed. */
+  delete(objectKey: string): Promise<void>
 }
-/** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
-export interface AvatarStore extends AttachmentStore {}
+/** Where avatars are kept. Avatars went in Swarm v4 (S18): `list` serves only the job that removes those still stored
+ *  (migration/avatarRemoval.ts), and goes with it. */
+export interface AvatarStore extends AttachmentStore {
+  /** Up to [max] object keys under [prefix], in the bucket's order: the first that are left. */
+  list(prefix: string, max: number): Promise<string[]>
+}
 /** `avatars`: where avatars are kept and how they are linked (AvatarStore); without it, avatar uploads are refused and presets
  *  still work. `avatarPrefix`: the folder avatar keys start with, and the only one a link is signed for (avatarLinks.ts);
  *  `prefix` when unset. */
@@ -115,6 +136,34 @@ export function served(name: string, mime: string): { contentType: string; conte
     contentDisposition: `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}` }
 }
 
+/** A form file's bytes as they were before the client packed them. A client may gzip a form file and say so with
+ * `contentEncoding: gzip` before it (task #2737): a gateway's content filter in front of the backend refused a handoff full
+ * of shell lines as text, and cannot read packed bytes. The store then sees, sizes and caps the original bytes, so a small
+ * packed file that unpacks past the cap is refused like any other. The request stream's own failure reaches the result. */
+export function formFileBody(file: Readable, encoding: 'gzip' | null): Readable {
+  if (encoding === null) return file
+  const unpacked = createGunzip()
+  // Not stream.pipeline: stopping the unpacking must not destroy the request's file stream, which the route drains.
+  file.once('error', error => unpacked.destroy(error))
+  // Bad gzip can fail before the store starts reading (it checks access first): kept on `errored` for the reader, never
+  // thrown as an unheard 'error' event that would end the process.
+  unpacked.on('error', () => {})
+  return file.pipe(unpacked)
+}
+
+/** Stops unpacking `body` once the store is done with it, so a packed file past the cap is never inflated to its end. */
+export function stopUnpacking(file: Readable, body: Readable): void {
+  if (body === file) return
+  file.unpipe(body as unknown as NodeJS.WritableStream)
+  body.destroy()
+}
+
+/** Whether `body` failed because its packed bytes were not gzip: the client's fault, never the bucket's. */
+export const unpackFailed = (body: Readable): boolean => {
+  const code = body.errored && typeof body.errored === 'object' && 'code' in body.errored ? body.errored.code : null
+  return typeof code === 'string' && code.startsWith('Z_')
+}
+
 /** The raster type the first bytes really are, or null. */
 export function imageTypeOf(head: Buffer): string | null {
   const ascii = (at: number, text: string) => head.subarray(at, at + text.length).toString('latin1') === text
@@ -127,7 +176,7 @@ export function imageTypeOf(head: Buffer): string | null {
 
 /** The raster type `body`'s first bytes are, or null, and `body` handed back with those bytes in front, so the store
  * still reads the whole file as a stream. */
-export async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
+async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
   // One iterator for the whole read: leaving a `for await` early would destroy the request stream.
   const source = body[Symbol.asyncIterator]()
   const parts: Buffer[] = []
@@ -189,6 +238,12 @@ export function serviceAccountFrom(raw: string): ServiceAccount | null {
     credentials: { client_email: key.client_email as string, private_key: key.private_key as string } }
 }
 
+/** All of [stream], or its error. Aborting [signal] destroys the stream, which ends its request, so a download its caller gave up on
+ *  holds no memory and no connection. */
+async function downloaded(stream: Readable, signal?: AbortSignal): Promise<Buffer> {
+  return Buffer.concat(await stream.toArray({ signal }) as Buffer[])
+}
+
 export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   private bucket: Promise<import('@google-cloud/storage').Bucket> | null = null
   constructor(private readonly name: string, private readonly account: ServiceAccount | null = null,
@@ -220,12 +275,18 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
       throw error
     }
   }
-  async head(objectKey: string, bytes: number) {
-    const [content] = await (await this.files()).file(objectKey).download({ start: 0, end: bytes - 1 })
-    return content
+  async head(objectKey: string, bytes: number, signal?: AbortSignal) {
+    return downloaded((await this.files()).file(objectKey).createReadStream({ start: 0, end: bytes - 1 }), signal)
+  }
+  async read(objectKey: string, signal?: AbortSignal) {
+    return downloaded((await this.files()).file(objectKey).createReadStream(), signal)
   }
   async delete(objectKey: string) {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
+  }
+  async list(prefix: string, max: number) {
+    const [files] = await (await this.files()).getFiles({ prefix, maxResults: max, autoPaginate: false })
+    return files.map(file => file.name)
   }
   /** A V4 signed GET, on Cloud Storage's own host. Signed with the service account key when one is set, else through the
    *  cloud's signing API, a network call: fileLinks.ts and avatarLinks.ts reuse each link through its window. */
@@ -243,9 +304,11 @@ export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
 /** Avatars in the attachments bucket's avatar folder (prod, Ken 2026-10-28 option B1), linked as chat files are: by signed
  *  links, so a removed member's copied link stops opening and nothing breaks once the bucket is no longer public. */
 export class SharedAvatarStore implements AvatarStore {
-  constructor(readonly store: AttachmentStore) {}
+  constructor(readonly store: AttachmentStore & Pick<AvatarStore, 'list'>) {}
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
   signedUrl(objectKey: string, expiresAt: number) { return this.store.signedUrl(objectKey, expiresAt) }
+  delete(objectKey: string) { return this.store.delete(objectKey) }
+  list(prefix: string, max: number) { return this.store.list(prefix, max) }
 }
 
 export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
@@ -302,8 +365,10 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
     return 200
   }
   async stored(objectKey: string) { const object = this.objects.get(objectKey); return object ? { size: object.bytes.byteLength } : null }
-  async head(objectKey: string, bytes: number) { return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
+  async head(objectKey: string, bytes: number, signal?: AbortSignal) { signal?.throwIfAborted(); return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
+  async read(objectKey: string, signal?: AbortSignal) { signal?.throwIfAborted(); return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
   async delete(objectKey: string) { this.objects.delete(objectKey) }
+  async list(prefix: string, max: number) { return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort().slice(0, max) }
 }
 
 /** Avatars for tests and the local rig: links carry their expiry and an HMAC of it, and `open` honours both as the bucket would. */

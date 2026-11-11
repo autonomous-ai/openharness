@@ -131,12 +131,21 @@ class SuperTabSavedViews {
         // Only for the account using this device: after a sign-out in
         // another tab, or another account's claim, a late write keeps nothing.
         if (await storage.read(_owner) != account) return false;
-        final text = jsonEncode({
-          ...view,
+        // Over the limit the oldest chats go first, so the open chat's view is still kept.
+        final chats = [...view['chats'] as List? ?? const []];
+        String encoded() => jsonEncode({
+          for (final field in view.entries)
+            if (field.key != 'chats') field.key: field.value,
           'parts': SuperTabParts.drawnOnly(
             view['parts'] as Map<String, dynamic>,
           ),
+          if (chats.isNotEmpty) 'chats': chats,
         });
+        var text = encoded();
+        while (_utf8Length(text) > maxBytes && chats.isNotEmpty) {
+          chats.removeLast();
+          text = encoded();
+        }
         if (_utf8Length(text) > maxBytes) {
           await _forget(account, tabId);
           return false;

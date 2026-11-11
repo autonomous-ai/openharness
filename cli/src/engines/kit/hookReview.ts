@@ -35,14 +35,15 @@ function sortedKeys(value: unknown): unknown {
   return value
 }
 
+const identityHash = (identity: unknown): string => `sha256:${createHash('sha256').update(JSON.stringify(sortedKeys(identity))).digest('hex')}`
+
 /** The engine's hash of one command hook, as `hooks/list` reports it in `currentHash`. */
 export function reviewHash(record: HookReviewRecord, event: string, matcher: string | undefined, hook: { command: string; timeout?: number; async?: boolean }): string {
-  const identity = {
+  return identityHash({
     event_name: record.events[event],
     ...(record.matcherEvents.includes(event) && matcher !== undefined ? { matcher } : {}),
     hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout ?? record.defaultTimeout), async: hook.async === true }],
-  }
-  return `sha256:${createHash('sha256').update(JSON.stringify(sortedKeys(identity))).digest('hex')}`
+  })
 }
 
 /** The records Harness's own blocks in `settings` need: key → hash. */

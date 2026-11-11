@@ -3,6 +3,7 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
@@ -14,7 +15,8 @@ import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 /// agent's terminal is the product; around it, the phone draws what tmux and fzf would.
 ///
 /// Colours come from the terminal's resolved theme ([terminalThemeFor]), so the chrome changes with
-/// the terminal when its colours do.
+/// the terminal when its colours do. On a terminal's page ([TerminalLook]) that theme is resolved on
+/// the terminal's palette, which stays dark in a light app; everywhere else on the app's.
 class Tty {
   Tty._(this.theme, this.fontFamily, this.fontFallback, this.fontSize);
 
@@ -23,7 +25,10 @@ class Tty {
     AppTheme.watch(context);
     final font = terminalFontStore.value;
     return Tty._(
-      terminalThemeFor(AppTheme.palette.value, terminalThemeStore.value),
+      terminalThemeFor(
+        TerminalLook.paletteOf(context),
+        terminalThemeStore.value,
+      ),
       font.fontFamily,
       font.fontFamilyFallback,
       // The terminal's own size, exactly: chrome and output share one cell, so a status line or an

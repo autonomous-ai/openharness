@@ -48,6 +48,18 @@ abstract final class AppType {
       ? const ['SF Pro Text', 'Helvetica Neue', 'Arial']
       : const ['Ubuntu', 'Noto Sans', 'DejaVu Sans', 'sans-serif'];
 
+  /// Pins a control's line, so its text keeps one baseline whatever font falls
+  /// out of the fallback chain: without it, labels side by side sat a pixel or
+  /// two apart.
+  static StrutStyle controlStrut({double? size, double height = 1.25}) =>
+      StrutStyle(
+        fontSize: size ?? bodySize,
+        fontFamily: sansFamily,
+        fontFamilyFallback: sansFallback,
+        height: height,
+        forceStrutHeight: true,
+      );
+
   /// The terminal's face, so mono chrome changes with the terminal font.
   static String get monoFamily => terminalFontStore.value.fontFamily;
   static List<String> get monoFallback =>

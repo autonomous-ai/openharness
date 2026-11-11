@@ -55,6 +55,9 @@ EOF
 # Use the same source-versioned identity as its update-channel package. An ISO
 # installation should not immediately be offered this identical build again.
 python3 tools/build-package.py --runtime "$RUNTIME_DIR" --compositor "$COMPOSITOR_DIR" --output "$BUILD_DIR/repo" --development
+# The newest OpenCode Arch has now, not the snapshot's: pacman reads this build's repository first.
+# Only the image takes it; an OS update never changes OpenCode (installer.py IgnorePkg).
+OPENCODE_PACKAGE=$(python3 tools/opencode_package.py --output "$BUILD_DIR/repo" ${HARNESS_OS_OPENCODE_VERSION:+--version "$HARNESS_OS_OPENCODE_VERSION"})
 PROFILE_ARGS=(--profile "$PROFILE" --platform "$PLATFORM")
 if [[ $PLATFORM == apple-t2 ]]; then
     [[ -n ${HARNESS_OS_T2_BUNDLE:-} ]] || { echo 'Prepare the pinned T2 kernel bundle first.' >&2; exit 1; }
@@ -63,7 +66,10 @@ fi
 python3 tools/configure-boot-profile.py "${PROFILE_ARGS[@]}"
 REPO_PACKAGES=("$BUILD_DIR/repo/"*.pkg.tar.gz)
 if [[ $PLATFORM == apple-t2 ]]; then
+    # OpenCode's among them.
     REPO_PACKAGES+=("$BUILD_DIR/repo/"*.pkg.tar.zst)
+else
+    REPO_PACKAGES+=("$OPENCODE_PACKAGE")
 fi
 repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "${REPO_PACKAGES[@]}"
 if [[ $PLATFORM == pc ]]; then

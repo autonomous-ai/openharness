@@ -111,8 +111,6 @@ export interface CableHostWiring {
   swarmCardRecap?: (tabId: string, leadId: string, chat?: CardChat) => Promise<LeadRecap | null>
   /** The recap a device (one cable `session`) has open, or null once closed. */
   swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
-  /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
-  swarmCardSide?: (tabId: string, side: CardSide) => void
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
    *  `refused` with the backend's reason when it refused the post. */
   swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
@@ -557,10 +555,6 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
   }
 
-  swarmCardSide(tabId: string, side: CardSide): void {
-    this.wiring.swarmCardSide?.(tabId, side)
-  }
-
   swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
     const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
     return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
@@ -575,13 +569,15 @@ export class DaemonCableHost implements CableHost {
    * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
    * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
    * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
-   * conversation it has open there, when the window names one, which the round dial's face follows.
+   * conversation it has open there, when the window names one, which the round dial's face follows, and `threadRoot` the
+   * thread whose pane is on screen beside it.
    */
-  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null {
+  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null {
     const app = this.swarms
     const tab = app?.swarms.find((s) => s.id === app.active)
     return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
-      ...(tab.conversationId ? { conversationId: tab.conversationId } : {}), fromDevice: app.fromDevice === true } : null
+      ...(tab.conversationId ? { conversationId: tab.conversationId, ...(tab.threadRoot ? { threadRoot: tab.threadRoot } : {}) } : {}),
+      fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {

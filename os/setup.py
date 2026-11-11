@@ -54,6 +54,9 @@ NOW = Path('/run/harness-os/setup-now')
 SCREEN = Path('/run/harness-os/setup-screen')
 # Signed in from a phone: its first workspace is OpenCode alone, not with two terminals (onboarding.py).
 FROM_PHONE = STATE / 'set-up-from-phone'
+# A phone with Swarm on set it up for the person's Swarm: its screen opens no OpenCode, and no workspace, of its own
+# (hn app.rs); the Swarm's Buddy is its first work. A phone without it, or an older one, sends none: as before.
+FOR_SWARM = STATE / 'set-up-for-swarm'
 # A phone's Wi-Fi and sign-in, sent with the computer's password as it started (unlock/http): /run
 # outlives the switch from its startup to the system, and nothing of it reaches the disk.
 PHONE_SETUP = Path('/run/harness-os/phone-setup.json')
@@ -65,6 +68,11 @@ USER = 'me'
 HOME = Path('/home') / USER
 SESSION = HOME / '.harness/auth/session.json'
 COMPUTER_ID = HOME / '.harness/computer-id'
+# A sign-in the backend did not answer is tried this many times in all, this many seconds apart.
+SIGN_IN_ATTEMPTS = 4
+SIGN_IN_PAUSE = 5
+# `harness login --ticket` answers that trying again cannot change (cli.ts ticketSignIn).
+FINAL_SIGN_IN = ('TICKET_INVALID', 'ALREADY_SIGNED_IN')
 HOTSPOT = 'harness-setup'
 ADDRESS = '10.42.0.1'
 PORT = 80
@@ -160,7 +168,13 @@ def hotspot_name(device=None):
 
 
 def signed_in():
-    return SESSION.is_file()
+    """A session the CLI has not marked signed out (cli authSession.ts readAuthSession). A sign-in the
+    backend refused stays on disk with its mark, and a computer signed in by that alone took no
+    ticket: the Dell, 2026-11-03, said signed in to the phone with an account it could not use."""
+    try:
+        return not json.loads(SESSION.read_text()).get('signedOut')
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def rows(*args, wait=3):
@@ -360,18 +374,34 @@ def forget(ssid):
         nmcli('connection', 'delete', 'uuid', saved)
 
 
-def sign_in(ticket):
+def sign_in(ticket, swarm=False):
     if signed_in():
         return True, ''
     # Before the sign-in, not after: the screen's hn opens its first workspace the moment the
-    # account is there, and reads this to open OpenCode alone (onboarding.py).
+    # account is there, and reads this to open OpenCode alone (onboarding.py), or none for a Swarm.
     try:
         FROM_PHONE.touch()
+        if swarm:
+            FOR_SWARM.touch()
+        else:
+            FOR_SWARM.unlink(missing_ok=True)
     except OSError:
         pass
-    ok, message = run_sign_in(ticket)
+    # A computer that joined the Wi-Fi a moment ago may not reach the backend on its first try: the MSI's
+    # sign-in failed with "fetch failed" two seconds after it joined (2026-11-03), and the phone was left
+    # with a computer on the Wi-Fi and signed out. A refused ticket is final, and so is a computer signed in.
+    for attempt in range(SIGN_IN_ATTEMPTS):
+        if attempt:
+            log(f'sign-in failed ({message}); trying again')
+            time.sleep(SIGN_IN_PAUSE)
+        ok, message, again = run_sign_in(ticket)
+        if ok or not again:
+            break
+    # A try whose answer was lost may have signed in all the same: the next then hears ALREADY_SIGNED_IN.
+    ok = ok or signed_in()
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
+        FOR_SWARM.unlink(missing_ok=True)
         return ok, message
     # Online in the account only with its daemon running, and nobody may ever sign in at a screen
     # to start a session (one with no encryption asks for its password there first): started here.
@@ -380,6 +410,8 @@ def sign_in(ticket):
 
 
 def run_sign_in(ticket):
+    """(signed in, why not, whether trying again may help): only the backend's answer about the ticket
+    or this computer is final; one that never arrived is not."""
     try:
         result = subprocess.run(['/usr/bin/runuser', '-u', USER, '--', '/usr/bin/harness', 'login', '--json',
                                  '--ticket=' + ticket],
@@ -388,16 +420,17 @@ def run_sign_in(ticket):
                                          PATH='/usr/local/bin:/usr/bin:/bin',
                                          XDG_RUNTIME_DIR=f'/run/user/{pwd.getpwnam(USER).pw_uid}'))
     except (OSError, KeyError, subprocess.TimeoutExpired) as error:
-        return False, str(error)
+        return False, str(error), True
     if result.returncode == 0:
-        return True, ''
-    message = ''
+        return True, '', False
+    message, code = '', ''
     for line in result.stdout.splitlines():
         try:
-            message = json.loads(line).get('message') or message
+            answer = json.loads(line)
+            message, code = answer.get('message') or message, answer.get('code') or code
         except (ValueError, AttributeError):
             pass
-    return False, message or result.stderr.strip()[-200:] or 'The sign-in failed.'
+    return False, message or result.stderr.strip()[-200:] or 'The sign-in failed.', code not in FINAL_SIGN_IN
 
 
 def join(request, networks, device):
@@ -420,7 +453,7 @@ def join(request, networks, device):
         log(f'"{ssid}" failed after {int(time.monotonic() - started)}s: {failed}')
         return dict(state='failed', error=failed, ssid=ssid, message=MESSAGES[failed].format(ssid=ssid))
     if ticket:
-        ok, message = sign_in(ticket)
+        ok, message = sign_in(ticket, swarm=request.get('swarm') is True)
         if not ok:
             log('sign-in failed: ' + message)
             return dict(state='done', ssid=ssid, signedIn=False, error='SIGN_IN', message=message)
@@ -713,7 +746,10 @@ def set_up_as_unlocked():
     if signed_in() and isinstance(account, str) and account and account != signed_in_account():
         # The phone's account, in place of the one it was signed in to: a sign-out, then its sign-in.
         log('signed in to another account than the phone\'s: signing out')
-        as_user('/usr/bin/harness', 'logout', timeout=60)
+        if not log_out():
+            write_result(run=run, state='failed', error='SIGN_IN', ssid=ssid,
+                         message='This computer could not sign out of its other account. Restart it and try again.')
+            return
     security = request.get('security')
     networks = [dict(ssid=ssid, security=security)] if ssid and isinstance(security, str) else []
     log('setting up as the phone asked at the unlock')
@@ -799,6 +835,18 @@ GH_INSTALL_TIMEOUT = 120
 # A phone sets this computer up next (network.py UNLOCKED_BY_PHONE): the screen's Wi-Fi page keeps
 # off the radio the hotspot needs, until a key there.
 PHONE_SETS_UP = Path('/run/harness-os/unlocked-by-phone')
+
+
+def log_out():
+    """The person's sign-out, as the desktop's Sign out asks for it (desktop cli_login.dart): `harness logout` with no
+    terminal and no word of a person refuses (cli lib/signOut.ts, #1866), and a phone's Sign out or a setup for
+    another account is a person's. Without it the session stayed, and the next phone's ticket was never used: the
+    Dell, 2026-11-06, stayed in the first account while a phone on the second waited for it. True once signed out."""
+    result = as_user('/usr/bin/harness', 'logout', '--from-sign-out-button', timeout=60)
+    if signed_in():
+        log('the sign-out was refused: ' + ((result.stderr or result.stdout).strip()[-300:] if result else 'no answer'))
+        return False
+    return True
 
 
 def as_user(*command, timeout=30):
@@ -905,8 +953,12 @@ def sign_out(keep_wifi=False):
     its hotspot to be set up again — a phone on the other account sets it up as before. Its harnesses,
     projects and everything else of the person stay, as a sign-out and a sign-in at the screen keep them."""
     log('signing out; the harnesses and projects stay')
-    as_user('/usr/bin/harness', 'logout', timeout=60)
+    # Still signed in: it stays online in that account, where the phone still sees it, rather than opening a hotspot
+    # for a setup that would keep the old sign-in.
+    if not log_out():
+        raise SystemExit('Could not sign out.')
     FROM_PHONE.unlink(missing_ok=True)
+    FOR_SWARM.unlink(missing_ok=True)
     if not keep_wifi:
         forget_wifi()
     open_hotspot()
@@ -1065,7 +1117,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False, reboot=False):
     # While signed in and its daemon up: off the account, then signed out.
     forget_desk()
     remove_from_account()
-    as_user('/usr/bin/harness', 'logout', timeout=60)
+    log_out()
     account = pwd.getpwnam(USER)
     # Every process of the person: the screen's session, the daemon, hn, tmux and its harnesses.
     subprocess.run(['loginctl', 'terminate-user', USER], capture_output=True, timeout=60)
@@ -1079,7 +1131,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False, reboot=False):
     (HOME / 'projects').mkdir(exist_ok=True)
     subprocess.run(['chown', '-R', f'{account.pw_uid}:{account.pw_gid}', str(HOME)], check=True, timeout=120)
     HOME.chmod(0o700)
-    for path in (RESULT, FROM_PHONE, SCREEN):
+    for path in (RESULT, FROM_PHONE, FOR_SWARM, SCREEN):
         path.unlink(missing_ok=True)
     restore_initial_password()
     if not keep_ssh:
@@ -1110,7 +1162,7 @@ def recover():
     log('factory reset: starting again in the recovery')
     forget_desk()
     remove_from_account()
-    as_user('/usr/bin/harness', 'logout', timeout=60)
+    log_out()
     subprocess.run(['grub-editenv', str(GRUBENV), 'set', f'next_entry={RECOVERY_ENTRY}'], check=True, timeout=30)
     subprocess.run(['systemctl', 'reboot'], capture_output=True, timeout=60)
 

@@ -40,6 +40,7 @@ import { submitContent, submitSettleMs } from './submitTiming.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
 import { TMUX_KEYS } from './terminalKeys.js'
 import { processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { windowsBlockedReason } from './windows/launch.js'
 import { windowsProcessRows } from './windows/processTable.js'
 import { defaultWindowsShell } from './windows/shell.js'
 import { endProcessTree, processTreeKillDeps, type TreeKillOutcome } from './windows/treeKill.js'
@@ -106,6 +107,9 @@ export interface PtyHostBackendOptions {
   platform?: NodeJS.Platform
   /** End a process and its descendants (windows/treeKill.ts `endProcessTree`); a seam for tests. */
   endTree?: (pid: number) => Promise<TreeKillOutcome>
+  /** A host running in another account (a guest's): its panes are validated against that host's process table, and it
+   *  never installs this daemon's machine-wide process table and signaller (the owner's own host keeps those). */
+  guestHost?: boolean
 }
 
 /**
@@ -170,6 +174,8 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   private readonly owner: () => string
   private readonly platform: NodeJS.Platform
   private readonly endTree: (pid: number) => Promise<TreeKillOutcome>
+  /** A guest's host: its own process table, never the machine-wide one (`installWindowsSeams`). */
+  private readonly guestHost: boolean
   /** Whether this backend set the process table source and the agent signaller (Windows), for `dispose`. */
   private windowsSeams = false
   private client: PtyHostClient | null = null
@@ -208,6 +214,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       ? ((home) => reachPtyHost(home, drainInstance, liveness))
       : (async (home) => ensurePtyHost(home, { target: await this.pinnedTarget(liveness), liveness })))
     this.endTree = options.endTree ?? ((pid) => this.endTreeOf(pid))
+    this.guestHost = options.guestHost === true
   }
 
   /**
@@ -260,7 +267,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     this.disposed = false
     this.cancelReconnect()
     // The process table and the signaller are the machine's, not a host's: the create backend's alone.
-    if (this.platform === 'win32' && !this.draining) this.installWindowsSeams()
+    if (this.platform === 'win32' && !this.draining && !this.guestHost) this.installWindowsSeams()
     if (this.gone) return { state: 'ready' }
     const reached = await this.launch(this.home)
     if (this.draining && 'unavailable' in reached) {
@@ -608,7 +615,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       // Windows: what the pane must not inherit from the host's environment (a grid launch's provider keys).
       ...(request.clearInherited?.length ? { clearInherited: [...request.clearInherited] } : {}),
     })
-    if (result.state !== 'ok') return actionOf(result) as TerminalCreateResult<PtyRuntimeRef>
+    if (result.state !== 'ok') {
+      const action = actionOf(result) as TerminalCreateResult<PtyRuntimeRef>
+      return action.state === 'failed' ? { ...action, reason: windowsBlockedReason(request.command ?? [], action.reason) } : action
+    }
     // Recorded here, before any other await: an exit that overtook this reply is released by the client
     // on the next turn (client.ts), and must find the pane known.
     this.panes.set(result.value.pane, { hold: true })

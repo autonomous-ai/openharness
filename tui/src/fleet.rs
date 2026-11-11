@@ -394,7 +394,7 @@ pub fn todos_of(input: &Value) -> Vec<(String, String)> {
 /// it gives them: a Bash call's description).
 pub fn describe_tool(tool: &str, input: &Value) -> String {
     let text = |k: &str| input.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
-    let file = |k: &str| text(k).map(|p| p.rsplit('/').next().unwrap_or(&p).to_string());
+    let file = |k: &str| text(k).map(|p| crate::sys::path_name(&p).to_string());
     let first = |v: String| v.lines().next().unwrap_or("").trim().to_string();
     let command = || match input.get("command") {
         Some(Value::Array(parts)) => parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "),

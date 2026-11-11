@@ -716,15 +716,25 @@ void main() {
       reply.complete(null);
       await tester.pump();
       app.resourceReply = null;
-      app.foreground.value = false;
+      // A hidden window asks no machine; shown again, it reads once at once (#2953).
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      addTearDown(
+        () => tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        ),
+      );
       await tester.pump(const Duration(seconds: 2));
       expect(app.resourceReads, before + 2);
-      app.foreground.value = true;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(app.resourceReads, before + 4);
       fixture.search.setQuery(':');
       await tester.pump(const Duration(seconds: 2));
       expect(
         app.resourceReads,
-        before + 2,
+        before + 4,
         reason: 'Model browsing should not poll machine telemetry',
       );
       fixture.search.setQuery('@');

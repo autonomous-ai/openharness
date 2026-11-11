@@ -27,13 +27,6 @@ meaning: a warning triangle remains a triangle, a chevron remains a chevron.
 - AppKit controls use `HarnessControlSymbols`: regular monochrome SF Symbols
   at the shared 16-point size. Native menu items and the title bar share this
   factory. Native tab close is the optically matched 8-point regular `xmark`.
-- One exception draws SF Symbols inside Flutter: a Swarm's machine rows lead
-  with each Mac's own shape (`laptopcomputer`, `macstudio`, `macmini`,
-  `desktopcomputer`, else `display`; `super_tabs/machine_icon.dart`). AppKit
-  draws the symbol as a one-ink PNG over `harness/system_symbols`, and Flutter
-  tints it with the row's ink. Off a Mac, for a symbol this macOS lacks, and
-  when the call fails, the row draws `AppIcons.laptop` or `AppIcons.monitor`,
-  never nothing. No Apple artwork ships with the app.
 
 Add a missing semantic symbol to the catalogue, then reuse it. Do not create
 a local font alias or duplicate a drawing. A new optical variant belongs in
@@ -99,12 +92,16 @@ These are content or identities, not a second action-icon library:
 - Harness activity has one vocabulary in `harness_activity.dart`: `?`, `✗`,
   `✓`, the ten-frame Braille spinner, `◌`, `■`, `⊘`, and unmarked idle. Native
   tabs and menu notifications share `HarnessNativeActivity`; Dart pane headers
-  share `ActivityMark`. Bridge payloads use `nativeActivityPayload` and the
-  same `activityColor`, including the monochrome preference. Do not substitute
-  SF Symbols or add status pills to a different Harness surface. A notification
-  mark describes its unread receipt; a tab/pane mark describes current activity.
+  share `ActivityMark`. In Flutter, `ActivityMark` draws Failed as
+  `AppIcons.triangleAlert` in its cell rather than `✗`: an X means close
+  (task #4461). Native tabs and terminal text keep `✗`.
+- Bridge payloads use `nativeActivityPayload` and the same `activityColor`,
+  including the monochrome preference. Do not substitute SF Symbols or add
+  status pills to a different Harness surface. A notification mark describes its
+  unread receipt; a tab/pane mark describes current activity.
 - A rank is its numeral. The #1 crown and badges are content artwork beside
-  it, never a replacement for it; see
+  it, never a replacement for it, and the crown means only that: a Lead wears
+  the gold Lead ring instead; see
   [Team and celebration](desktop-design-system.md#team-and-celebration). A
   trend is `AppIcons.arrowUp` or `arrowDown` with its number; see
   [Numbers and rankings](desktop-design-system.md#numbers-and-rankings).
@@ -146,6 +143,14 @@ appearances, at 14/16/20/24 points. Inspect every page at actual size. Review
 changed symbols in their real screens too: dense grids, menus, long labels,
 hover/focus/disabled states, Increase Contrast and text scaling. A contact
 sheet does not replace interaction checks.
+
+Swarm elements (agent faces, the Lead ring, person avatars, the task card and
+the row) have their own gallery against checked-in images;
+it runs in every suite, and an intended change regenerates its images:
+
+```sh
+flutter test --no-pub --update-goldens test/swarm_elements_gallery_test.dart
+```
 
 ## Audit record — 2026-09-30
 

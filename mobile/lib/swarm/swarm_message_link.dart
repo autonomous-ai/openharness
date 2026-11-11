@@ -19,6 +19,24 @@ class SwarmMessageLink {
   String get url => 'harness://swarm/$tabId/$conversationId/$messageId';
 
   static final _id = RegExp(r'^[A-Za-z0-9_-]{1,160}$');
+  static final _candidate = RegExp(
+    r'harness://swarm/[A-Za-z0-9_/-]+(?![A-Za-z0-9_/?#%.-])',
+  );
+  static final _code = RegExp(r'```[\s\S]*?(?:```|$)|`[^`\n]*`');
+
+  /// Links a message previews; the rest stay text.
+  static const previewLimit = 4;
+
+  /// The message links [text] says outside code, each once, in order, as
+  /// Desktop finds them.
+  static List<SwarmMessageLink> allIn(String text) {
+    if (!text.contains('harness://swarm/')) return const [];
+    final seen = <String>{};
+    return [
+      for (final match in _candidate.allMatches(text.replaceAll(_code, ' ')))
+        if (parse(match[0]!) case final link? when seen.add(link.url)) link,
+    ].take(previewLimit).toList();
+  }
 
   /// The link [value] is, read as Desktop reads it; null for anything else.
   static SwarmMessageLink? parse(String value) {

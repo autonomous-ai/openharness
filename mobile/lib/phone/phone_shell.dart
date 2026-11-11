@@ -1,24 +1,22 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../demo/sample_mode.dart' show SampleMode;
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
-import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
-import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
-import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
-import '../swarm/swarm_profile.dart';
+import '../swarm/swarm_page.dart';
 import '../swarm/swarm_project_page.dart' show swarmChatRoute;
+import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
+import '../swarm/swarm_you_page.dart';
 import '../swarm/swarm_session.dart';
-import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
@@ -28,8 +26,9 @@ import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
 import 'phone_status.dart';
+import 'resume_agent.dart';
 import 'settings_page.dart' show openPhoneSettings;
-import 'voice_input_controller.dart';
+import 'voice_recorder.dart';
 import 'voice_input_scope.dart';
 import 'welcome/connect_code.dart';
 
@@ -116,25 +115,12 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       // Swarm Home's start screens: which computers the account has, and
       // whether any is online.
       computers: _swarmComputers,
-      // A photo goes straight to the backend with this app's own sign-in;
-      // the computer a Swarm call goes through carries text only.
-      uploadAvatar: swarmAvatarUploadVia(
-        (tabId, png) => widget.notifier.api.uploadSwarmAvatar(tabId, png),
-      ),
-      // A chat's mic hears as a terminal's does: through the backend's
-      // speech-to-text, or sample mode's, which records nothing.
-      voice: () =>
-          VoiceInputScope.maybeOf(context)?.create() ??
-          VoiceInputController(
-            transcriber: (wav, lang) =>
-                widget.notifier.api.transcribeVoice(wav, lang: lang),
-          ),
-      // And first through the iPhone's own recognizer, the words in the box
-      // as they are said. Not in sample mode, which opens no microphone.
-      dictation: Platform.isIOS && VoiceInputScope.maybeOf(context) == null
-          ? SwarmChannelDictation()
+      // A chat's mic records voice messages with the terminal's recorder. Not
+      // in sample mode, which has no account to send them with.
+      voice: VoiceInputScope.maybeOf(context) == null
+          ? MicVoiceRecorder.new
           : null,
-    )..foreground = state == null || _inFront(state);
+    )..foreground = _swarmFront = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
     // A message link (Desktop's Copy link to message): one that launched the
@@ -334,6 +320,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             conversationId: conversationId,
             messageId: null,
             decisionId: null,
+            threadId: null,
           ));
           return;
         }
@@ -392,6 +379,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       conversationId: link.conversationId,
       messageId: link.messageId,
       decisionId: null,
+      threadId: null,
     ));
   }
 
@@ -401,33 +389,37 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
-    // A decision opens in Activity, where it is answered, as Desktop opens
-    // it in Notifications: no chat shows decisions. Activity says so when it
-    // is no longer open, whoever's it was.
-    if (target.decisionId case final decisionId?) {
-      unawaited(
-        navigator.push(
-          swarmActivityRoute(
-            focus: SwarmDecisionNeed.keyOf(decisionId),
-            swarmId: target.swarmId,
-          ),
-        ),
-      );
-      return;
-    }
     // A project's own chat opens as its project, on Swarm Home C's tabs.
     unawaited(
       navigator.push(
         swarmChatRoute(
           swarmId: target.swarmId,
           conversationId: target.conversationId,
-          messageId: target.messageId,
+          // A message only in its thread: the chat at the thread's root, the
+          // thread open over it at that message, as Activity opens a reply.
+          messageId: target.threadId ?? target.messageId,
+          threadId: target.threadId,
+          threadFocus: target.threadId != null && target.messageId != null
+              ? SwarmThreadFocus.message(target.messageId!)
+              : null,
         ),
       ),
     );
   }
 
   /// In front of the person: resumed, or only covered for a moment (the app switcher, a call).
+  /// Whether Swarm was last told the app is in front ([didChangeAppLifecycleState]).
+  bool _swarmFront = true;
+
+  /// Back in front: what pushes showed while the app was away is told already
+  /// (task #2905), so the reads that start now post none of it again.
+  Future<void> _swarmToFront() async {
+    final shown = await widget.notifier.pushesShown();
+    if (!mounted || !_swarmFront) return;
+    _swarm.toldElsewhere(shown);
+    _swarm.foreground = true;
+  }
+
   static bool _inFront(AppLifecycleState state) =>
       state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
 
@@ -458,7 +450,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Swarm is read only in front of the person.
-    _swarm.foreground = _inFront(state);
+    if (!_inFront(state)) {
+      _swarmFront = false;
+      _swarm.foreground = false;
+    } else if (!_swarmFront) {
+      _swarmFront = true;
+      unawaited(_swarmToFront());
+    }
     if (state == AppLifecycleState.inactive) {
       // The app switcher coming up is `inactive`, and a swipe there can end the app without it
       // ever reaching `paused` — so the machine cache is written here as well. See
@@ -585,9 +583,15 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               openMachineId: _linkedMachineId,
               openAgent: _openAgentRequest,
             ),
-            swarm: (_) => SwarmTabsPage(
+            swarm: (_) => SwarmYouScope(
               onSettings: (context) =>
-                  openPhoneSettings(context, widget.notifier),
+                  openPhoneSettings(context, widget.notifier, swarm: true),
+              // You's Notifications, not in the sample, as Settings leaves
+              // it out there: its notices go nowhere.
+              notices: SampleMode.ofNotifier(widget.notifier) == null
+                  ? widget.notifier.agentNotices.system
+                  : null,
+              child: const SwarmPage(),
             ),
           ),
         ),
@@ -601,8 +605,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
       onShowSwarm: _showSwarm,
+      home: _home,
       canOpenMachine: (machineId) =>
           phoneMachineOpensTerminals(widget.notifier.machineStates[machineId]),
+      agentStopped: (machineId, agentId) =>
+          phoneAgentStopped(widget.notifier, machineId, agentId),
+      onResumeAgent: (machineId, agentId) =>
+          phoneResumeAgent(widget.notifier, machineId, agentId),
       // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
       child: ListenableBuilder(
         listenable: _home,

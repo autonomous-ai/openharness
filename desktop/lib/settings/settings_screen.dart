@@ -9,6 +9,7 @@ import '../shortcuts/keymap_commands.dart';
 import '../shortcuts/keymap_keyboard.dart';
 import '../state/app_state.dart';
 import '../widgets/harness_customize_pane.dart';
+import '../widgets/window_chrome.dart';
 import 'experimental_features.dart';
 import 'settings_body.dart';
 import 'settings_compact.dart';
@@ -242,13 +243,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return FocusScope(
       onKeyEvent: _key,
       child: Scaffold(
-        backgroundColor: grid.AppPalette.windowBg,
-        body: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        backgroundColor: grid.AppPalette.swarmWelcome,
+        body: Stack(
           children: [
-            SettingsNav(section: _section, onSelect: _show),
-            VerticalDivider(width: 1, color: grid.AppPalette.divider),
-            Expanded(child: body),
+            Positioned.fill(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SettingsNav(
+                    section: _section,
+                    onSelect: _show,
+                    // A ring around an untouched field on a page opened to read.
+                    autofocusSearch: !drawsWindowCaption,
+                  ),
+                  VerticalDivider(width: 1, color: grid.AppPalette.divider),
+                  Expanded(child: body),
+                ],
+              ),
+            ),
+            if (drawsWindowCaption) ...[
+              Positioned(
+                top: 0,
+                left: SettingsNav.width + 1,
+                right: 3 * WindowCaptionButtons.buttonWidth,
+                height: 24,
+                child: const WindowCaptionDragArea(),
+              ),
+              const Positioned(
+                top: 0,
+                right: 0,
+                child: WindowCaptionButtons(height: kWindowCaptionHeight),
+              ),
+            ],
           ],
         ),
       ),

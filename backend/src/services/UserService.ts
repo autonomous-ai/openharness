@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto'
 import { prisma } from '../lib/prisma.js'
 import { ADMIN_EMAILS } from '../config/env.js'
 import { hashPassword } from '../lib/password.js'
+import { signInsChanged } from '../lib/harnessAuthCache.js'
+import { accountRenamed } from '../superTabs/accountRenames.js'
 import { ConflictError, NotFoundError } from '../errors/index.js'
 import type { AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import type { SignInAttribution } from '../lib/signInAttribution.js'
@@ -56,6 +58,7 @@ async function mergeProdProvisionalUser(provisional: User, user: User): Promise<
     }),
     prisma.user.delete({ where: { id: provisional.id } }),
   ])
+  await signInsChanged(provisional.id)
 }
 
 export const userService = {
@@ -108,7 +111,9 @@ export const userService = {
       const data = {
         ...(claimsProvisional ? signUpAttribution : {}),
         ...(existing.email !== em ? { email: em } : {}),
-        ...(input.name && existing.name !== input.name ? { name: input.name } : {}),
+        // The name is taken from SSO once, while the account has none: later sign-ins never change it, so a name set
+        // in Harness (or by an admin) stays (Ken, 2026-11-04).
+        ...(input.name && !existing.name ? { name: input.name } : {}),
         ...(existing.role !== role ? { role } : {}),
         // A new production subject on this row makes its stored Google subject (lib/googleSubject.ts)
         // somebody else's answer: forget it, so the account is unchecked until a live read of THIS
@@ -123,10 +128,15 @@ export const userService = {
       // SSO profile auth runs on every control-plane request. Avoid turning that validation into a
       // write-per-request DB hot path when the mirrored user record is already current.
       if (Object.keys(data).length === 0) return existing
-      return prisma.user.update({
+      const updated = await prisma.user.update({
         where: { id: existing.id },
         data,
       })
+      // Its email or role may have changed: a Harness sign-in each pod remembers answers them (lib/harnessAuthCache.ts).
+      await signInsChanged(existing.id)
+      // A name filled from SSO: the person's Swarms show it (superTabs/accountRenames.ts).
+      if ('name' in data) await accountRenamed({ userId: existing.id, autonomousEnv: updated.autonomousEnv })
+      return updated
     }
 
     const data = {
@@ -256,8 +266,9 @@ export const userService = {
   },
 
   async update(id: string, input: { name?: string; password?: string; role?: string; autonomousEnv?: AutonomousEnvironment }): Promise<User> {
-    if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
-    return prisma.user.update({
+    const before = await prisma.user.findUnique({ where: { id } })
+    if (!before) throw new NotFoundError('User')
+    const updated = await prisma.user.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
@@ -266,10 +277,15 @@ export const userService = {
         ...(input.password ? { passwordHash: hashPassword(input.password) } : {}),
       },
     })
+    await signInsChanged(id)
+    // By the person or an admin: the person's name in each of their Swarms follows it (superTabs/accountRenames.ts).
+    if (input.name !== undefined && input.name !== before.name) await accountRenamed({ userId: id, autonomousEnv: updated.autonomousEnv })
+    return updated
   },
 
   async remove(id: string): Promise<void> {
     if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
     await prisma.user.delete({ where: { id } })
+    await signInsChanged(id)
   },
 }

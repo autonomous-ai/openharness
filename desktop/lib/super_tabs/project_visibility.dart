@@ -38,35 +38,25 @@ class _ProjectVisibilityState extends State<ProjectVisibility> {
   @override
   Widget build(BuildContext context) {
     final width = (MediaQuery.sizeOf(context).width - 32).clamp(0.0, 360.0);
-    return MenuAnchor(
+    return AppDropdown(
       controller: _menu,
       childFocusNode: _focus,
-      consumeOutsideTap: true,
+      width: width,
       alignmentOffset: Offset(-width, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(
-        minWidth: width,
-        maxWidth: width,
-      ).copyWith(alignment: AlignmentDirectional.bottomEnd),
-      menuChildren: [
+      alignment: AlignmentDirectional.bottomEnd,
+      children: [
         for (final (id, title, detail) in const [
           ('public', 'Public', 'Everyone in this swarm'),
           ('private', 'Private', 'Only people you invite to this project'),
         ])
-          SizedBox(
-            width: width,
-            child: Tooltip(
-              message: detail,
-              child: AppMenuItem(
-                label: title,
-                detail: detail,
-                icon: id == 'private' ? AppIcons.lock : AppIcons.users,
-                selected: id == widget.value,
-                expandLabel: true,
-                onPressed: () {
-                  _menu.close();
-                  widget.onChanged?.call(id);
-                },
-              ),
+          Tooltip(
+            message: detail,
+            child: AppMenuItem(
+              label: title,
+              detail: detail,
+              icon: id == 'private' ? AppIcons.lock : AppIcons.users,
+              selected: id == widget.value,
+              onPressed: () => widget.onChanged?.call(id),
             ),
           ),
       ],

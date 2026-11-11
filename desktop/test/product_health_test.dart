@@ -143,6 +143,25 @@ void main() {
     expect(totals()['health_desktop_first_run_response'], 1);
   });
 
+  test('Import agent outcomes wait for vocabulary 7 (task #2379)', () async {
+    expect(ProductFlow.agentImport.wire, 'agent_import');
+    expect(ProductFlow.agentImport.vocabulary, 7);
+    await usage.flush();
+    usage.proxyVocabulary = 6;
+    usage.begin(ProductFlow.agentImport)(ProductOutcome.ok);
+    usage.begin(ProductFlow.agentImport)(ProductOutcome.cancelled);
+    await usage.flush();
+    expect(
+      totals().keys.where((name) => name.contains('agent_import')),
+      isEmpty,
+    );
+    usage.proxyVocabulary = 7;
+    await usage.flush();
+    expect(totals()['ui_desktop_agent_import_started'], 2);
+    expect(totals()['ui_desktop_agent_import_ok'], 1);
+    expect(totals()['ui_desktop_agent_import_cancelled'], 1);
+  });
+
   test('invite counters wait for vocabulary 5', () async {
     await usage.flush();
     usage.proxyVocabulary = 4;
@@ -396,6 +415,39 @@ void main() {
     },
   );
 
+  // Task #2953: the minute's memory sample is what made a hidden window send a report every
+  // minute. Out of sight it samples nothing, so nothing is sent; in sight it samples as before.
+  testWidgets('memory is sampled only while the window is in sight', (
+    tester,
+  ) async {
+    var lifecycle = AppLifecycleState.hidden;
+    final runtime = ProductRuntimeHealth(
+      usage,
+      readState: () async => {},
+      writeState: (_) async {},
+      readVersion: () async => '1.2.73',
+      lifecycle: () => lifecycle,
+    );
+    runtime.account('PRIVATE_ACCOUNT');
+    await usage.flush();
+    await tester.pump();
+    int rss() => totals().entries
+        .where((e) => e.key.contains('_rss_'))
+        .fold(0, (sum, e) => sum + e.value);
+    final before = rss();
+    for (var i = 0; i < 5; i++) {
+      runtime.sampleResources();
+    }
+    await usage.flush();
+    expect(rss(), before, reason: 'hidden: no sample');
+    lifecycle = AppLifecycleState.inactive;
+    runtime.sampleResources();
+    await usage.flush();
+    expect(rss(), before + 1, reason: 'in sight, unfocused: sampled');
+    runtime.dispose();
+    await tester.pump();
+  });
+
   testWidgets(
     'frames sample every 60th visible frame, never the first or a hidden one',
     (tester) async {
@@ -566,6 +618,23 @@ void main() {
       await tester.pump();
     },
   );
+
+  test('an opened agent Browser counts its name alone, once a CLI forwards '
+      'it, at 9', () async {
+    await usage.flush();
+    usage.agentBrowserOpened();
+    usage.proxyVocabulary = 8;
+    await usage.flush();
+    expect(totals()['agent_browser_opened'], isNull);
+    usage.proxyVocabulary = 9;
+    usage.agentBrowserOpened();
+    await usage.flush();
+    expect(totals()['agent_browser_opened'], 2);
+    expect(
+      totals().keys.where((k) => k.contains('browser')),
+      ['agent_browser_opened'],
+    );
+  });
 
   group('Add Phone', () {
     test(

@@ -43,6 +43,7 @@ class Swarm {
   bool get isCompanions => kind == 'companions';
   bool get isDevices => kind == 'devices';
   bool get isUtility => isStore || isCompanions || isDevices;
+
   bool get isOrchestrator =>
       kind == 'orchestrator' &&
       orchestratorId != null &&

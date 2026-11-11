@@ -3,8 +3,8 @@ import 'package:flutter/rendering.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shortcuts/key_cap.dart';
 import '../widgets/desktop_chrome.dart';
-import 'catch_up.dart';
 import 'model.dart';
 
 /// The first message of [shown] the reader has not read, for the New messages line: in the main stream (a reply
@@ -46,9 +46,6 @@ class SuperTabUnreadLines {
   final _failed = <String, int>{};
   static const _tries = 3;
 
-  /// The catch-up card under each line, kept and forgotten with it.
-  final catchUps = SuperTabCatchUps();
-
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
 
@@ -59,15 +56,28 @@ class SuperTabUnreadLines {
   /// Conversations whose line has been in view this visit.
   final _seen = <String>{};
 
+  /// Conversations read through this visit: their line seen, then the end
+  /// reached with nothing newer to load.
+  final _readThrough = <String>{};
+
   /// [id]'s line came into view: reading on needs no way back to it.
   void saw(String id) => _seen.add(id);
 
-  /// Whether [id]'s line has been in view this visit.
-  bool seen(String id) => _seen.contains(id);
+  /// [id] reached its end: once its line was seen, everything from it was
+  /// read, and the bar goes for the visit. A link landing at the end skipped
+  /// the line, so the bar stays to lead back to it. True when this call read
+  /// it through.
+  bool readThrough(String id) => _seen.contains(id) && _readThrough.add(id);
 
-  /// Whether [id] offers the jump back to its line: placed, out of view, and
-  /// not yet seen this visit (a link opened the chat elsewhere).
-  bool offersJump(String id) => away && _at[id] != null && !_seen.contains(id);
+  /// Whether [id] shows the bar back to its line: placed and above the
+  /// reader, seen or not (Slack's "N new messages"), until read through.
+  bool offersBar(String id) =>
+      away && !below && _at[id] != null && !_readThrough.contains(id);
+
+  /// Whether [id] offers the pill down to its line: placed, below the reader
+  /// (a link opened the chat above it), and not yet seen this visit.
+  bool offersDown(String id) =>
+      away && below && _at[id] != null && !_seen.contains(id);
 
   /// The message [id]'s line sits above, or null.
   String? lineAt(String id) => _at[id];
@@ -81,6 +91,13 @@ class SuperTabUnreadLines {
   }) {
     if (_at.containsKey(id) || shown.isEmpty) return false;
     return (_at[id] = superTabFirstUnread(shown, mark, own: own)) != null;
+  }
+
+  /// Mark unread from [messageId]: [id]'s line goes above it, whatever came after it.
+  void placeAt(String id, String messageId) {
+    _at[id] = messageId;
+    _seen.remove(id);
+    _readThrough.remove(id);
   }
 
   /// Whether [id]'s line waits for older messages: loading, or a read back that failed and is not yet done. Nothing is
@@ -134,14 +151,13 @@ class SuperTabUnreadLines {
     _loaded.remove(id);
     _failed.remove(id);
     _seen.remove(id);
-    catchUps.forget(id);
+    _readThrough.remove(id);
     away = below = false;
   }
 
-  /// Read with Esc: no line or card until the next visit.
+  /// Read with Esc: no line until the next visit.
   void clear(String id) {
     _at[id] = null;
-    catchUps.dismiss(id);
     away = below = false;
   }
 
@@ -151,7 +167,7 @@ class SuperTabUnreadLines {
     _loaded.clear();
     _failed.clear();
     _seen.clear();
-    catchUps.reset();
+    _readThrough.clear();
     away = below = false;
   }
 }
@@ -192,32 +208,133 @@ class SuperTabNewMessagesLine extends StatelessWidget {
   }
 }
 
-/// Shown while the New messages line, not yet seen this visit, is out of view: takes the reader back to it.
-class SuperTabJumpToUnread extends StatelessWidget {
-  const SuperTabJumpToUnread({
+/// Shown while the New messages line is above the screen: a flat row across the top of the chat, Slack's
+/// "N new messages", that takes the reader back to it, with Mark as read and its key (Esc) at its end. The words
+/// carry it, not the colour.
+class SuperTabUnreadBar extends StatelessWidget {
+  const SuperTabUnreadBar({
     super.key,
+    required this.count,
     required this.onPressed,
-    this.down = false,
+    required this.onMarkRead,
+    this.more = false,
   });
 
+  /// The messages from others from the line on.
+  final int count;
+
+  /// Newer pages are not read yet, so [count] is a floor.
+  final bool more;
   final VoidCallback onPressed;
 
-  /// The line is below the reader (a link opened the chat above it).
-  final bool down;
+  /// Reads the chat where the reader is, as Esc does.
+  final VoidCallback onMarkRead;
+
+  static String label(int count, bool more) =>
+      '${more ? '$count+' : '$count'} new ${count == 1 && !more ? 'message' : 'messages'} · Jump';
+
+  static const _padding = EdgeInsets.symmetric(
+    horizontal: grid.AppDesktop.panelPadding,
+    vertical: grid.AppDesktop.controlGap,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final accent = DesktopChrome.accent;
+    final words = label(count, more);
+    return Material(
+      key: const ValueKey('super-jump-unread'),
+      color: DesktopChrome.selection,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Semantics(
+                button: true,
+                label: '$words to the first unread',
+                excludeSemantics: true,
+                child: InkWell(
+                  onTap: onPressed,
+                  child: Padding(
+                    padding: _padding,
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            words,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.control(
+                              color: accent,
+                              medium: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: grid.AppDesktop.controlGap),
+                        Icon(
+                          AppIcons.arrowUp,
+                          size: grid.AppDesktop.iconSize,
+                          color: accent,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Semantics(
+              key: const ValueKey('super-unread-mark-read'),
+              button: true,
+              label: 'Mark as read',
+              hint: 'Esc',
+              excludeSemantics: true,
+              child: InkWell(
+                onTap: onMarkRead,
+                child: Padding(
+                  padding: _padding,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Mark as read',
+                        maxLines: 1,
+                        style: DesktopChrome.control(medium: true),
+                      ),
+                      const SizedBox(width: grid.AppDesktop.controlGap),
+                      const KeyCap('esc'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown while the New messages line, not yet seen this visit, is below the reader (a link opened the chat above
+/// it): takes the reader down to it.
+class SuperTabJumpToUnread extends StatelessWidget {
+  const SuperTabJumpToUnread({super.key, required this.onPressed});
+
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) => FilledButton.icon(
     key: const ValueKey('super-jump-unread'),
     onPressed: onPressed,
-    icon: Icon(
-      down ? AppIcons.chevronDown : AppIcons.chevronUp,
-      size: grid.AppDesktop.iconSize,
-    ),
+    icon: const Icon(AppIcons.chevronDown, size: grid.AppDesktop.iconSize),
     label: const Text('Jump to first unread'),
   );
 }
 
-/// The jump pill's place above the list ([child], or nothing). When it opens
+/// The bar's or the jump pill's place above the list ([child], or nothing). When it opens
 /// or closes, [scroll] moves by the same height in that frame, so the messages
 /// under the reader's eye stay where they were.
 class SuperTabUnreadBand extends SingleChildRenderObjectWidget {

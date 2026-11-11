@@ -15,6 +15,7 @@ import { communityNotificationRoutes } from './communityNotifications.js'
 import { communityReportRoutes } from './communityReports.js'
 import { communityEditRoutes } from './communityEdit.js'
 import { deviceKeyRoutes } from './deviceKeys.js'
+import { pushDeviceRoutes } from './pushDevices.js'
 import { qrSignInRoutes } from './qrSignIn.js'
 import { deskRoutes } from './desk.js'
 import { connectorRoutes } from './connectors.js'
@@ -67,6 +68,7 @@ export async function registerControlRoutes(app: FastifyInstance, opts: {
   await app.register(communityTranslateRoutes) // a Hub draft's words in English, for its author to review
   await app.register(qrSignInRoutes)       // sign a computer in by scanning its QR with a signed-in phone
   await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device
+  await app.register(pushDeviceRoutes)    // a signed-in phone's push token: replies and tags reach it while the app is closed
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
   await app.register(connectorRoutes)     // sign-in to GitHub, Slack, Google… for local agents (lib/connectorGateway.ts)
   await app.register(connectorVaultRoutes) // those connections sealed for the account's computers, which keep them in step

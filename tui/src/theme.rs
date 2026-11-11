@@ -1255,19 +1255,25 @@ pub fn engine_mark(engine: &str) -> (&'static str, Color) {
     (mark, paint(color))
 }
 
+/// An engine's mark as drawn: its colour.
+pub fn engine_style(engine: &str) -> Style { fg(engine_mark(engine).1) }
+
 /// A colour as this terminal can show it: none under NO_COLOR, the nearest it has otherwise.
 pub fn paint(c: Color) -> Color { if no_color() { Color::Reset } else { depth_fit(c) } }
 
 fn engine_mark_raw(engine: &str) -> (&'static str, Color) {
     match engine {
         "claude" => ("✳", Color::Rgb(0xD9, 0x77, 0x57)),
-        "codex" => ("◎", Color::Rgb(0x10, 0xA3, 0x7F)),
+        // (As their icons in assets/engine-icons: Codex's rounded cloud, in its purple; OpenCode's
+        // hollow frame, a line in the text's colour.)
+        "codex" => ("☁", Color::Rgb(0x8F, 0x83, 0xF8)),
         "cursor" => ("▲", TEXT),
-        "opencode" => ("▣", Color::Rgb(0xF5, 0xA7, 0x42)),
+        "opencode" => ("□", TEXT),
         "pi" => ("π", ACCENT_SOFT),
         "hermes" => ("☿", Color::Rgb(0xC7, 0x92, 0xEA)),
         "amp" => ("ϟ", DANGER),
         "kilo" => ("K", Color::Rgb(0xF7, 0xDF, 0x1E)),
+        "openclaw" => ("Ж", Color::Rgb(0xFF, 0x4D, 0x4D)),
         "grok" => ("X", TEXT),
         "devin" => ("◆", TEAL),
         "copilot" => ("◉", Color::Rgb(0x8B, 0x94, 0x9E)),
@@ -1297,7 +1303,7 @@ pub fn machine_mark(reach: &crate::fleet::Reach, online: bool, tick: u64) -> (&'
 pub fn engine_label(engine: &str) -> &str {
     match engine {
         "claude" => "Claude Code", "codex" => "Codex", "cursor" => "Cursor", "opencode" => "OpenCode", "pi" => "Pi",
-        "hermes" => "Hermes", "amp" => "Amp", "kilo" => "Kilo", "grok" => "Grok", "devin" => "Devin", "copilot" => "Copilot",
+        "hermes" => "Hermes", "amp" => "Amp", "kilo" => "Kilo", "openclaw" => "OpenClaw", "grok" => "Grok", "devin" => "Devin", "copilot" => "Copilot",
         "commandcode" => "Command Code", "muse" => "Muse", "agy" => "Antigravity", "terminal" => "Terminal",
         other => other,
     }
@@ -1517,5 +1523,17 @@ mod accent_theme_tests {
             let (mx, mn) = (c.iter().max().copied().unwrap_or(0) as f64, c.iter().min().copied().unwrap_or(0) as f64);
             assert!(mx > 0.0 && (mx - mn) / mx > 0.25, "{name}: {c:?} is a colour");
         }
+    }
+}
+
+#[cfg(test)]
+mod engine_tests {
+    use super::*;
+
+    #[test]
+    fn openclaw_is_named_marked_and_offered() {
+        assert_eq!(engine_label("openclaw"), "OpenClaw");
+        assert_eq!(engine_mark_raw("openclaw").0, "Ж");
+        assert!(crate::modal::ENGINES.contains(&"openclaw"));
     }
 }

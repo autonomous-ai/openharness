@@ -11,14 +11,18 @@ describe('the model catalog', () => {
     expect(MODEL_CATALOG.models).toEqual([
       { engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
       { engine: 'claude', model: 'opus', effort: 'xhigh', strength: 3, cost: 4, offered: true },
-      { engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
-      { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true },
+      { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true, engineDefault: true },
       { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', strength: 3, cost: 5, offered: true },
       { engine: 'claude', model: 'sonnet', effort: 'high', strength: 2, cost: 2, offered: true },
       { engine: 'claude', model: 'haiku', effort: 'auto', strength: 1, cost: 1, offered: false, note: NOT_OFFERED },
     ])
     // Ken, 2026-11-02: small work runs on Sonnet or Sol, nothing below high effort; Haiku stays off.
-    expect(MODEL_CATALOG.models.filter(m => m.offered).every(m => m.strength >= 2 && ['high', 'xhigh', 'default'].includes(m.effort))).toBe(true)
+    expect(MODEL_CATALOG.models.filter(m => m.offered).every(m => m.strength >= 2 && ['high', 'xhigh'].includes(m.effort))).toBe(true)
+    // Task #2972: the route offers the models the catalog rates, never an engine's own `default`, which ran whatever the account's CLI chose.
+    expect(MODEL_CATALOG.models.filter(m => m.model === 'default' || m.effort === 'default')).toEqual([])
+    expect(MODEL_CATALOG.models.filter(m => m.engineDefault).map(m => `${m.engine} ${m.model} ${m.effort}`)).toEqual(['codex gpt-6.1-sol high'])
+    // gpt-6-luna has no rating or benchmark, so it is not a row: the route offers it only when a person names it, unrated.
+    expect(MODEL_CATALOG.models.some(m => m.model.includes('luna'))).toBe(false)
     expect(MODEL_CATALOG.grid).toEqual({ strength: 1, models: [{ model: 'kimi k3', strength: 2 }, { model: 'deepseek v4.1', strength: 2 }] })
   })
 

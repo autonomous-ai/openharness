@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/phone_sheet.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
@@ -17,6 +19,7 @@ import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_chat_menu.dart' show swarmNotifySection;
 import 'swarm_conversation_page.dart';
+import 'swarm_message_receipt.dart' show swarmMachineOffline;
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
@@ -58,7 +61,10 @@ Future<String?> openSwarmBuddy(
 /// may write: the chat is there before any Buddy. Under all of it, what went
 /// wrong with the last start or removal. Nothing for a viewer with no Buddy,
 /// nor while a Buddy runs on the person's own machine: the chat is the
-/// screen, and its messages start under the header (Tony, 10-29).
+/// screen, and its messages start under the header (Tony, 10-29). Nor that
+/// a Buddy is down while its computer is offline: the line under the message
+/// sent to it says that computer is offline, and nothing starts there until
+/// it is back (Tony, 11-04).
 class SwarmBuddyBar extends StatelessWidget {
   const SwarmBuddyBar({super.key, required this.actions});
 
@@ -68,7 +74,13 @@ class SwarmBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([actions.reader, actions]),
+      // Every read, changed or not: a computer goes offline by its reading
+      // growing old, which no change to the Swarm announces.
+      listenable: Listenable.merge([
+        actions.reader,
+        actions.reader.reads,
+        actions,
+      ]),
       builder: (context, _) {
         final reader = actions.reader;
         final canWrite = swarmCanWrite(reader);
@@ -119,11 +131,18 @@ class SwarmBuddyBar extends StatelessWidget {
 
   /// On someone else's machine, "Claude on Dee Studio · dee can see its
   /// terminal" (a Buddy from before the server kept Buddies to their owner's
-  /// machines, 10-28); and, while it is down, that it is offline with Start
-  /// again. Null on the person's own machine while it runs.
+  /// machines, 10-28); and, while it is down on a computer that is online,
+  /// that it is offline with Start again. Null on the person's own machine
+  /// while it runs, or while it is down there and that computer is offline.
   Widget? _running(SwarmReader reader, SuperTabAgent agent, bool canWrite) {
     final shared = agent.machineOwnerId != reader.accountId;
-    if (!shared && agent.downSince == null) return null;
+    final down =
+        agent.downSince != null &&
+        !swarmMachineOffline(
+          reader.snapshot?.pool(agent.machineId),
+          clock.now(),
+        );
+    if (!shared && !down) return null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -137,18 +156,17 @@ class SwarmBuddyBar extends StatelessWidget {
             key: const ValueKey('swarm-buddy-where'),
             lines: 2,
           ),
-        if (agent.downSince != null)
+        if (down)
           _Line(
             key: const ValueKey('swarm-buddy-offline'),
             text:
                 '${swarmBuddyName(reader, actions.projectId)} is offline. '
                 'Your chat stays.',
-            engine: agent.engine,
             again: canWrite
                 ? () => unawaited(
                     actions.start(
                       machineId: agent.machineId,
-                      engine: swarmBuddyRestartEngine(agent.engine),
+                      engine: agent.engine,
                     ),
                   )
                 : null,
@@ -177,12 +195,11 @@ class SwarmBuddyBar extends StatelessWidget {
       return _Line(
         key: const ValueKey('swarm-buddy-failed'),
         text: "Couldn't start: $error",
-        engine: engine,
         again: canWrite && machineId.isNotEmpty
             ? () => unawaited(
                 actions.start(
                   machineId: machineId,
-                  engine: swarmBuddyRestartEngine(engine),
+                  engine: engine,
                 ),
               )
             : null,
@@ -199,19 +216,16 @@ class SwarmBuddyBar extends StatelessWidget {
 }
 
 /// What happened to the Buddy, in a line, and Start again at its end for a
-/// person who may write: "Start with Claude Code" for an [engine] the server
-/// refuses.
+/// person who may write.
 class _Line extends StatelessWidget {
   const _Line({
     super.key,
     required this.text,
-    required this.engine,
     required this.again,
     required this.busy,
   });
 
   final String text;
-  final String engine;
   final VoidCallback? again;
   final bool busy;
 
@@ -224,7 +238,7 @@ class _Line extends StatelessWidget {
       if (again != null)
         SwarmButton(
           key: const ValueKey('swarm-buddy-start-again'),
-          label: swarmBuddyRestartLabel(engine),
+          label: 'Start again',
           style: SwarmButtonStyle.link,
           busy: busy,
           busyLabel: 'Starting…',
@@ -250,8 +264,8 @@ class _BuddyStartState extends State<_BuddyStart> {
   String? _machine;
   String _engine = 'claude';
 
-  /// The machines under their one heading, each by its name; an offline one
-  /// says so and cannot be picked (Dee, 10-29: no notes).
+  /// The machines under their one heading, each by its name; an offline or
+  /// paused one says so and cannot be picked (Dee, 10-29: no notes).
   Future<void> _pickMachine(List<SwarmBuddyMachine> machines, String? chosen) =>
       showPhoneSheet(
         context,
@@ -264,8 +278,8 @@ class _BuddyStartState extends State<_BuddyStart> {
                 PhoneSheetAction(
                   icon: m.id == chosen ? LucideIcons.check : LucideIcons.laptop,
                   label: m.name,
-                  value: m.away ? swarmBuddyMachineOffline : null,
-                  enabled: !m.away,
+                  value: swarmBuddyMachineBlock(m),
+                  enabled: swarmBuddyMachineBlock(m) == null,
                   onTap: () {
                     if (mounted) setState(() => _machine = m.id);
                   },
@@ -283,9 +297,9 @@ class _BuddyStartState extends State<_BuddyStart> {
       actions.reader,
       computers: computers?.own ?? const [],
     );
+    final open = machines.where((m) => swarmBuddyMachineBlock(m) == null);
     final machine =
-        machines.where((m) => m.id == _machine && !m.away).firstOrNull ??
-        machines.where((m) => !m.away).firstOrNull;
+        open.where((m) => m.id == _machine).firstOrNull ?? open.firstOrNull;
     final busy = actions.busy;
     return Column(
       key: const ValueKey('swarm-buddy-start'),
@@ -303,7 +317,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           Padding(
             padding: const EdgeInsets.only(top: AppSpace.xs),
             child: SwarmRow.line(
-              machines.isEmpty ? swarmBuddyNoMachine : swarmBuddyAllOffline,
+              machines.isEmpty
+                  ? swarmBuddyNoMachine
+                  : machines.any((m) => m.paused && !m.away)
+                  ? swarmBuddyAllPaused
+                  : swarmBuddyAllOffline,
               key: const ValueKey('swarm-buddy-no-machine'),
               lines: 3,
             ),
@@ -369,9 +387,7 @@ class _BuddyStartState extends State<_BuddyStart> {
                       key: ValueKey('swarm-buddy-engine-$key'),
                       label: value,
                       icon: key == _engine ? LucideIcons.check : null,
-                      // One the server refuses is offered turned off.
-                      onPressed:
-                          busy || swarmBuddyEngineRefusals.containsKey(key)
+                      onPressed: busy
                           ? null
                           : () => setState(() => _engine = key),
                     ),
@@ -379,14 +395,6 @@ class _BuddyStartState extends State<_BuddyStart> {
               ],
             ),
           ),
-          for (final refusal in swarmBuddyEngineRefusals.values)
-            Padding(
-              padding: const EdgeInsets.only(
-                left: _Field._labelWidth,
-                top: AppSpace.xs,
-              ),
-              child: SwarmRow.line(refusal, lines: 3),
-            ),
           const SizedBox(height: AppSpace.s),
           SwarmButton(
             key: const ValueKey('swarm-buddy-start-button'),
@@ -438,25 +446,95 @@ class _Field extends StatelessWidget {
   static const _labelWidth = AppSpace.xl * 3;
 }
 
-/// At the end of the person's own Buddy chat's header, while they may
-/// write: ⋮, with Open terminal first (Tony, 11-01: the Buddy's terminal on
-/// this phone, as Team's agent rows open theirs; dimmed with why while it
-/// cannot be, [swarmTerminalAction]), Rename Buddy, and Remove Buddy
-/// while one runs, which asks first, then stops it; the chat stays (the
-/// desktop's Buddy options); and the chat's Notifications, as its menu on
-/// the desktop has. Nothing in anyone else's Buddy chat.
+/// At the end of the person's own Buddy chat's header: ⋮. While they may
+/// write, with Open terminal first (Tony, 11-01: the Buddy's terminal on this
+/// phone, as Team's agent rows open theirs; dimmed with why while it cannot
+/// be, [swarmTerminalAction]), Rename Buddy, and Remove Buddy while one runs,
+/// which asks first, then stops it; the chat stays (the desktop's Buddy
+/// options); and the chat's Notifications, as its menu on the desktop has.
+/// In their one chat for the Swarm, for a viewer too, Old chats with their
+/// older Buddy chats. Nothing
+/// in anyone else's Buddy chat, or for a viewer with nothing to offer.
 class SwarmBuddyMenuButton extends StatelessWidget {
   const SwarmBuddyMenuButton({
     super.key,
     required this.actions,
     required this.chatId,
+    this.swarmId,
+    this.onFind,
   });
 
   final SwarmBuddyActions actions;
 
+  /// Find in chat, where the page holding the chat offers it (task #2826).
+  final VoidCallback? onFind;
+
   /// The Buddy chat it is on: what Rename names the Buddy of, by its id
   /// rather than its project. Null while that chat is not known yet.
   final String? chatId;
+
+  /// The Swarm the chat is in, for what Old chats opens; none offers no Old
+  /// chats.
+  final String? swarmId;
+
+  /// Old chats: rows a viewer has too.
+  bool _hasOthers(SwarmReader reader) => _oldChats(reader).isNotEmpty;
+
+  /// The older Buddy chats to offer, from the person's one chat alone.
+  List<({SuperTabProject project, SuperTabConversation chat})> _oldChats(
+    SwarmReader reader,
+  ) => swarmId != null && actions.projectId == swarmBuddyKey
+      ? swarmOldBuddyChats(reader)
+      : const [];
+
+  /// Old chats, by project, newest first: each opens read only. The sheet goes
+  /// with access to the Swarm, and a project lost meanwhile leaves its rows.
+  Future<void> _openOldChats(BuildContext context) async {
+    final reader = actions.reader;
+    Route<void>? sheet;
+    void moved() {
+      final route = sheet;
+      if (route == null || !reader.accessRevoked) return;
+      sheet = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (route.isActive) route.navigator?.removeRoute(route);
+      });
+    }
+
+    reader.addListener(moved);
+    try {
+      await showPhoneSheet(
+        context,
+        title: 'Old chats',
+        onShown: (route) => sheet = route,
+        rebuildOn: reader,
+        rows: () => (
+          actions: [
+            for (final (:project, :chat) in _oldChats(reader))
+              PhoneSheetAction(
+                icon: LucideIcons.messageCircle,
+                label: project.name,
+                value: switch (chat.changedAt) {
+                  final at? => fzfAge(at.toLocal(), DateTime.now()),
+                  null => null,
+                },
+                chevron: true,
+                onTap: () {
+                  if (context.mounted &&
+                      !reader.accessRevoked &&
+                      swarmIsOldBuddyChat(reader, chat.id)) {
+                    openSwarmConversation(context, swarmId!, chat.id);
+                  }
+                },
+              ),
+          ],
+          sections: const <PhoneSheetSection>[],
+        ),
+      );
+    } finally {
+      reader.removeListener(moved);
+    }
+  }
 
   /// The sheet, with the chat's Notifications under the Buddy's own rows
   /// ([swarmNotifySection]). It goes once the chat is no longer the
@@ -475,6 +553,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
       _ => null,
     };
     var buddyId = running();
+    final wrote = swarmCanWrite(reader);
     Route<void>? sheet;
     void moved() {
       final route = sheet;
@@ -483,7 +562,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
       if (route == null ||
           (!reader.accessRevoked &&
               swarmIsOwnBuddyChat(reader, chatId) &&
-              swarmCanWrite(reader) &&
+              swarmCanWrite(reader) == wrote &&
               now == buddyId)) {
         return;
       }
@@ -504,21 +583,42 @@ class SwarmBuddyMenuButton extends StatelessWidget {
           final buddy = swarmBuddy(reader, actions.projectId);
           return (
             actions: [
-              swarmTerminalAction(
-                agent: () => swarmBuddy(reader, actions.projectId),
-                allowed: () =>
-                    !reader.accessRevoked &&
-                    swarmIsOwnBuddyChat(reader, chatId) &&
-                    swarmCanWrite(reader),
-                shell: shell,
-                computers: computers,
-              ),
-              PhoneSheetAction(
-                icon: LucideIcons.pencil,
-                label: 'Rename Buddy',
-                onTap: () => unawaited(_rename(context, chatId)),
-              ),
-              if (buddy != null)
+              if (wrote) ...[
+                swarmTerminalAction(
+                  context: context,
+                  agent: () => swarmBuddy(reader, actions.projectId),
+                  allowed: () =>
+                      !reader.accessRevoked &&
+                      swarmIsOwnBuddyChat(reader, chatId) &&
+                      swarmCanWrite(reader),
+                  shell: shell,
+                  computers: computers,
+                  until: reader,
+                ),
+                PhoneSheetAction(
+                  icon: LucideIcons.pencil,
+                  label: 'Rename Buddy',
+                  onTap: () => unawaited(_rename(context, chatId)),
+                ),
+              ],
+              if (onFind case final find?)
+                PhoneSheetAction(
+                  icon: LucideIcons.search300,
+                  label: 'Find in chat',
+                  onTap: find,
+                ),
+              if (_oldChats(reader).isNotEmpty)
+                PhoneSheetAction(
+                  icon: LucideIcons.history,
+                  label: 'Old chats',
+                  chevron: true,
+                  onTap: () {
+                    if (context.mounted && !reader.accessRevoked) {
+                      unawaited(_openOldChats(context));
+                    }
+                  },
+                ),
+              if (wrote && buddy != null)
                 PhoneSheetAction(
                   icon: LucideIcons.userMinus,
                   label: 'Remove Buddy',
@@ -586,7 +686,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
         final chat = chatId;
         if (chat == null ||
             !swarmIsOwnBuddyChat(reader, chat) ||
-            !swarmCanWrite(reader)) {
+            (!swarmCanWrite(reader) && !_hasOthers(reader))) {
           return const SizedBox.shrink();
         }
         final busy = actions.busy;

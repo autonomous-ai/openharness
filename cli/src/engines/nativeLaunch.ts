@@ -18,6 +18,7 @@ import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
 import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
+import { OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
 import { type AgentEngine, isTerminalEngine } from './types.js'
 
@@ -108,6 +109,33 @@ async function read(executable: string, args: readonly string[], environment: Re
   })
 }
 
+/** Each engine executable's help, by the file's identity (its path, inode, size and times: kit/nativeVersion.ts) and the
+ *  PATH it runs under. Its help, and that it runs at all, are facts about the installed file, not one launch: launches that
+ *  ask together share one probe, and a held pass of many agents (a restore, a Swarm's agents) never meets the probes' cap,
+ *  nor does a relaunch or fork ask twice. Not keyed on the homes: help does not read them, and a Swarm agent's own home
+ *  would bring the cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
+ *  file (its Node uninstalled), and a launch after that is refused with its reason again. No answer or a failure is asked
+ *  again. A new install, an upgrade or a finished download is a new identity, asked afresh. */
+const helps = new Map<string, { help: Promise<ProbeOutput | null>; at: number }>()
+const HELP_LIFE_MS = 60_000
+/** At most this many installs, each under the PATH it runs with; beyond it the oldest goes. */
+const HELP_LIMIT = 32
+function helpOf(executable: NativeExecutableSnapshot, environment: Readonly<Record<string, string>>,
+  args: readonly string[] = ['--help']): Promise<ProbeOutput | null> {
+  const key = `${executable.identity}\0${environment.PATH ?? ''}\0${args.join(' ')}`, at = performance.now()
+  const known = helps.get(key)
+  if (known && at - known.at < HELP_LIFE_MS) return known.help
+  helps.delete(key)
+  const help = read(executable.command, args, environment)
+  if (helps.size >= HELP_LIMIT) helps.delete(helps.keys().next().value!)
+  helps.set(key, { help, at })
+  void help.then(output => {
+    const printed = output?.code === 0 && `${output.stdout}${output.stderr}`.trim() && executable.current()
+    if (!printed && helps.get(key)?.help === help) helps.delete(key)
+  })
+  return help
+}
+
 /** The location variables every engine's homes derive from. */
 const SHARED_LOCATIONS: ReadonlySet<string> = new Set(['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'])
 /** The variables `nativeHookLocations` derives each engine's own homes from (kit/nativeLocations.ts). */
@@ -125,6 +153,7 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
   agy: ['AGY_HOME', 'AGY_CONFIG_DIR'],
   devin: ['DEVIN_HOME', 'DEVIN_CONFIG_PATH'],
   amp: ['AMP_PLUGIN_DIR'],
+  openclaw: ['OPENCLAW_STATE_DIR'],
 }
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
@@ -165,13 +194,34 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (output && output.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${output.stderr}\n${output.stdout}`, `it exited with status ${output.code}`))
   // Unknown is an observation of this attempt, never a permanent installed-file answer.
   if (engine === 'opencode' && opencodeMajor === null) return waiting('Waiting to confirm the selected OpenCode executable’s version.')
+  // OpenClaw moves itself onto another Node it can find; on none, its TUI refuses to start. A creation is refused with
+  // the named state rather than opening a pane that says so and exits. No answer is no evidence: the launch goes on.
+  const runtime = engine === 'openclaw' ? await read(executable.command, OPENCLAW_RUNTIME_PROBE, environment) : null
+  const runtimeState = runtime ? openclawRuntimeState(`${runtime.stderr}\n${runtime.stdout}`) : null
+  if (runtime && executable.current() && (runtimeState || runtime.code !== 0)) {
+    if (!runtimeState) return cannotRun(engine, failureReason(`${runtime.stderr}\n${runtime.stdout}`, `it exited with status ${runtime.code}`))
+    console.warn(`[launch] openclaw refused · ${runtimeState}`)
+    return { ...waiting(runtimeState), refusal: 'ENGINE_CANNOT_RUN' }
+  }
   if (!executable.current()) return waiting('Waiting for the selected engine executable to stop changing.')
+  // Windows: a program named claude that is not Claude Code, asked its version before anything else. The Claude
+  // desktop app's own Claude.exe (reached through CLAUDE_PATH, or an older app's `claude` alias on PATH) answers
+  // `--version` with its bare version (5.1231.2) at once, and `--help` by opening its window on the person's screen and
+  // never exiting: every launch then held at "permission flags" for good (a customer, 2026-11-10; reproduced on
+  // Windows 11, 2026-11-11). Claude Code says `2.1.322 (Claude Code)`. No answer is no evidence: the launch goes on.
+  if (engine === 'claude' && process.platform === 'win32') {
+    const version = await helpOf(executable, environment, ['--version'])
+    const said = `${version?.stdout ?? ''}\n${version?.stderr ?? ''}`
+    if (version?.code === 0 && said.trim() && !said.includes('Claude Code') && executable.current()) {
+      return { ...waiting(notClaudeCode(executable.command, said)), refusal: 'ENGINE_CANNOT_RUN' }
+    }
+  }
   // Windows: the startup probe a launch script makes before every run elsewhere (engines/kit/launchStartup.ts), made
   // once here, of the executable this launch holds. No answer holds the launch, as the script ends one.
   const owned = process.platform === 'win32' ? startupOwnedFlag(launchContract(engine)) : null
   let startupArgs: readonly string[] | undefined
   if (owned) {
-    const help = await read(executable.command, ['--help'], environment)
+    const help = await helpOf(executable, environment)
     if (help && help.code !== 0 && executable.current()) return cannotRun(engine, failureReason(`${help.stderr}\n${help.stdout}`, `it exited with status ${help.code}`))
     if (!help || help.code !== 0 || !`${help.stdout}${help.stderr}`.trim()) return waiting('Waiting to confirm the selected executable’s startup options.')
     startupArgs = Object.freeze(helpLists(`${help.stdout}\n${help.stderr}`, owned.flag) ? [owned.flag] : [])
@@ -181,7 +231,6 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const dependenciesCurrent = () => dependencies.every(proof => proof.current())
   let preparing = false, valid = true, prepared = false, revision = 0
   const current = () => valid && !preparing && executable.current() && [...dependencies, ...proofs].every(proof => proof.current())
-  const permissions = new Map<string, 'supported' | 'unsupported'>()
   /** Why the latest help probe's executable failed, when it ran and exited non-zero. */
   let failed: string | null = null
   const launch: NativeLaunch = {
@@ -196,7 +245,6 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     async prepareHooks(port, owner, overrides = {}, clear = []) {
       if (preparing || !executable.current() || !owner() || !dependenciesCurrent()) return false
       preparing = true; valid = false; const attemptRevision = ++revision
-      permissions.clear()
       try {
         const chosen = { ...selectedEnvironment }
         for (const key of clear) if (LAUNCH_LOCATION_VARIABLES.includes(key as typeof LAUNCH_LOCATION_VARIABLES[number])) delete chosen[key]
@@ -218,6 +266,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         // adopting them globally would refresh a held package's hooks at boot
         // before its Store dependencies are ready.
         if ((engine === 'claude' || engine === 'codex') && home === implicitHome) deps.confirmHome?.(engine, home)
+        // A Claude profile is adopted too, or its transcripts fall outside every root and the agent never binds.
+        else if (engine === 'claude' && source.claudeHome === home) deps.confirmHome?.(engine, home)
         if (!executable.current() || !owner() || [...dependencies, ...confirmed].some(proof => !proof.current())) return false
         // The command locations and the proofs become dispatch authority together.
         // A failed or pending replacement can never expose B with A's proof set.
@@ -230,14 +280,15 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       } finally { preparing = false }
     },
     async permission(choice) {
+      // A launch that names no mode (#3466: the owner's own) has no flag to confirm, and is still probed as auto mode's flag
+      // would be: the engine's help is what tells one that cannot run, or that the Desktop is still downloading, from one
+      // that can. Any help it prints will do. Asked once per install (helpOf), as auto mode's own flag is.
       const flag = permissionFlagToVerify(engine, choice)
-      if (!flag) return 'supported'
+      if (!flag && !permissionFlagToVerify(engine, { permissionMode: 'auto' })) return 'supported'
       if (!current()) return 'unknown'
-      const known = permissions.get(flag)
-      if (known) return known
       const observedRevision = revision
       failed = null
-      const probe = await read(executable.command, ['--help'], selectedEnvironment)
+      const probe = await helpOf(executable, selectedEnvironment)
       if (!probe || !current() || observedRevision !== revision) return 'unknown'
       if (probe.code !== 0) { failed = failureReason(`${probe.stderr}\n${probe.stdout}`, `it exited with status ${probe.code}`); return 'unknown' }
       // Help on either stream, as the shell probe reads it (`2>&1`, lib/engineLaunch.ts). OpenCode
@@ -246,15 +297,22 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       // for good, waiting to confirm its permission flags.
       const help = `${probe.stdout}\n${probe.stderr}`
       if (!help.trim()) return 'unknown'
-      const answer = helpLists(help, flag) ? 'supported' : 'unsupported'
-      permissions.set(flag, answer)
-      return answer
+      return !flag || helpLists(help, flag) ? 'supported' : 'unsupported'
     },
   }
   if (await launch.permission(source) === 'unknown') {
-    return failed ? cannotRun(engine, failed) : waiting('Waiting to confirm the selected executable’s permission flags.')
+    // Which file, so a launch held this way says what it waits for (a customer saw this sentence alone for minutes).
+    return failed ? cannotRun(engine, failed) : waiting(`Waiting to confirm the selected executable’s permission flags (${executable.command}).`)
   }
   return { ok: true, launch }
+}
+
+/** The sentence a creation is refused with when the selected `claude` is another program: which one, what it said, and
+ *  the two ways out. */
+export function notClaudeCode(path: string, said: string): string {
+  const answer = said.split(/\r?\n/).map(line => line.trim()).find(Boolean)?.slice(0, 80) ?? ''
+  return `${path} is not Claude Code: asked its version, it answered "${answer}" (the Claude desktop app's own program answers this way). `
+    + 'Install Claude Code (irm https://claude.ai/install.ps1 | iex), or set CLAUDE_PATH to its claude.exe, then start the harness again.'
 }
 
 /** Whether [help] lists [flag] as a whole option, not the start of a longer one (`--auto` is not `--auto-update`). */

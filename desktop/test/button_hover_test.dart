@@ -276,7 +276,7 @@ void main() {
     expect(ink(), restingInk);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pumpAndSettle();
-    expect(rim().color.a, greaterThan(0));
+    expect(rim().color.a, 0, reason: 'focus never draws a colored line');
     expect(
       tester.getRect(button),
       bounds,

@@ -64,31 +64,6 @@ void main() {
       expect(reader.snapshot!.conversation(leadChat)!.changedAt, at(ago(90)));
     });
 
-    test('a closed chat read later carries its own', () async {
-      final swarm = FakeSwarm();
-      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
-      swarm.routes['/api/super-tabs/$tab/groups?dormant=1'] = (_) => {
-        'groups': [
-          changed(
-            part('old', 3, groupData('old', title: 'Old', dormant: true)),
-            ago(3000),
-          ),
-        ],
-        'next': null,
-      };
-      final reader = SwarmReader(
-        tabId: tab,
-        accountId: me,
-        request: swarm.request,
-      );
-      addTearDown(reader.dispose);
-      await reader.refresh();
-
-      await reader.loadDormant(project);
-
-      expect(reader.snapshot!.conversation('old')!.changedAt, at(ago(3000)));
-    });
-
     test('the Home kept keeps it, and a chat without one has none', () {
       final read = SuperTabSnapshot.fromJson({
         ...headData(),
@@ -193,7 +168,7 @@ void main() {
       String id, {
       int? minutes,
       String swarmId = tab,
-      SwarmRowNews news = swarmNoNews,
+      SwarmProjectNews news = swarmNoProjectNews,
     }) => SwarmHomeProject(
       swarmId: swarmId,
       project: SuperTabProject.fromJson({
@@ -209,8 +184,47 @@ void main() {
       for (final p in projects) p.project.id,
     ];
 
-    test('newest first; one with no time known after them, in the order '
-        'read, and never folded', () {
+    test('default A to Z ignores # and case, not activity or unread', () {
+      SwarmHomeProject named(
+        String id,
+        String name,
+        int minutes, {
+        SwarmProjectNews news = swarmNoProjectNews,
+      }) => SwarmHomeProject(
+        swarmId: tab,
+        project: SuperTabProject.fromJson({
+          'id': id,
+          'name': name,
+          'ownerId': me,
+          'leadConversationId': 'lead-$id',
+        }),
+        active: at(ago(minutes)),
+        news: news,
+      );
+      for (final updated in [false, true]) {
+        final lists = swarmHomeLists(
+          [
+            named(
+              'z',
+              '# Zebra',
+              updated ? 0 : 10,
+              news: updated
+                  ? (bold: true, tags: 1, hasWaitingTag: true)
+                  : swarmNoProjectNews,
+            ),
+            named('b', 'beta', 1),
+            named('a2', '# ALPHA', 3),
+            named('a1', 'alpha', 5),
+          ],
+          pins: const {},
+          now: now,
+        );
+        expect(ids(lists.recent), ['a1', 'a2', 'b', 'z']);
+        expect(lists.recent.last.news.bold, updated);
+      }
+    });
+
+    test('default alphabetical order includes projects with no activity', () {
       final lists = swarmHomeLists(
         [
           project('a', minutes: 40),
@@ -224,11 +238,11 @@ void main() {
       );
 
       expect(ids(lists.pinned), isEmpty);
-      expect(ids(lists.recent), ['c', 'e', 'a', 'b', 'd']);
+      expect(ids(lists.recent), ['a', 'b', 'c', 'd', 'e']);
       expect(lists.quiet, isEmpty);
     });
 
-    test('quiet for more than a day: folded under Other projects, newest '
+    test('quiet for more than a day: folded under Other projects, alphabetical '
         'first', () {
       final lists = swarmHomeLists(
         [
@@ -242,10 +256,10 @@ void main() {
       );
 
       expect(ids(lists.recent), ['b']);
-      expect(ids(lists.quiet), ['a', 'd', 'c']);
+      expect(ids(lists.quiet), ['a', 'c', 'd']);
     });
 
-    test('pinned: at the top in a group of their own, newest first, quiet '
+    test('pinned: at the top in a group of their own, alphabetical, quiet '
         'or not, and out of Projects', () {
       final lists = swarmHomeLists(
         [
@@ -259,8 +273,8 @@ void main() {
         now: now,
       );
 
-      expect(ids(lists.pinned), ['d', 'b']);
-      expect(ids(lists.recent), ['c', 'a']);
+      expect(ids(lists.pinned), ['b', 'd']);
+      expect(ids(lists.recent), ['a', 'c']);
       expect(ids(lists.quiet), ['e']);
     });
 
@@ -280,15 +294,28 @@ void main() {
       final lists = swarmHomeLists(
         [
           project('a', minutes: 5),
-          project('b', minutes: 60 * 30, news: (bold: false, tags: 1)),
-          project('c', minutes: 60 * 31, news: (bold: true, tags: 0)),
+          project(
+            'b',
+            minutes: 60 * 30,
+            news: (bold: false, tags: 1, hasWaitingTag: true),
+          ),
+          project(
+            'c',
+            minutes: 60 * 31,
+            news: (bold: true, tags: 0, hasWaitingTag: false),
+          ),
           project('d', minutes: 60 * 32),
+          project(
+            'task-tag',
+            minutes: 60 * 33,
+            news: (bold: false, tags: 0, hasWaitingTag: true),
+          ),
         ],
         pins: const {},
         now: now,
       );
 
-      expect(ids(lists.recent), ['a', 'b', 'c']);
+      expect(ids(lists.recent), ['a', 'b', 'c', 'task-tag']);
       expect(ids(lists.quiet), ['d']);
     });
 
@@ -512,52 +539,6 @@ void main() {
       expect(jsonDecode(store.values[key]!), {
         'pins': [swarmHomeProjectKey(tab, 'old')],
       });
-    });
-
-    test('when the person left the app is kept, a time only, the later '
-        'standing, and read back by the next start; telling no one', () async {
-      final store = MemoryKeyValueStore();
-      final first = await prefs(store);
-      var told = 0;
-      first.addListener(() => told++);
-      final left = DateTime(2026, 10, 30, 1, 30);
-
-      first.seen(left);
-      first.seen(left.subtract(const Duration(hours: 1)));
-      await settle();
-
-      expect(told, 0);
-      expect(first.seenAt, left);
-      expect(jsonDecode(store.values[key]!), {
-        'pins': <Object>[],
-        'seen': left.millisecondsSinceEpoch,
-      });
-      expect((await prefs(store)).seenAt, left);
-    });
-
-    test('a time left before the choices are read back: the later of it and '
-        'the one read stands', () async {
-      final store = _SlowStore();
-      final earlier = DateTime(2026, 10, 29, 20);
-      final later = DateTime(2026, 10, 30, 1);
-      store.values[key] = jsonEncode({
-        'pins': <Object>[],
-        'seen': earlier.millisecondsSinceEpoch,
-      });
-      final prefs0 = SwarmHomePrefs(accountId: me, store: store);
-      addTearDown(prefs0.dispose);
-
-      prefs0.seen(later);
-      expect(prefs0.loaded, isFalse);
-      store.answer();
-      await settle();
-
-      expect(prefs0.loaded, isTrue);
-      expect(prefs0.seenAt, later);
-      expect(
-        (jsonDecode(store.values[key]!) as Map)['seen'],
-        later.millisecondsSinceEpoch,
-      );
     });
 
     test('another account reads none of them', () async {

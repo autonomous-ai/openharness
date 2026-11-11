@@ -2,21 +2,25 @@
 //! PTYs, independently of attached clients and their headless handoffs. Its private Unix
 //! socket speaks the same terminal protocol as the daemon; it never listens on TCP.
 
-use std::collections::{HashMap, VecDeque};
-use std::io::{self, Read, Write};
+use std::collections::HashMap;
+#[cfg(unix)]
+use std::collections::VecDeque;
+use std::io;
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{OnResize, WindowSize};
+#[cfg(unix)]
 use alacritty_terminal::tty;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+#[cfg(unix)]
 use tokio::io::unix::AsyncFd;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
@@ -27,6 +31,13 @@ use crate::proto::{self, Kind};
 #[path = "local_screen.rs"]
 mod screen;
 pub use screen::{ScreenState, colour};
+#[cfg(windows)]
+#[path = "local_windows.rs"]
+mod console;
+#[cfg(windows)]
+use console::Pty;
+#[cfg(unix)]
+use tty::Pty;
 
 pub const MACHINE: &str = "hn-local-shells";
 pub fn is_local(id: &str) -> bool { id == MACHINE }
@@ -39,26 +50,26 @@ pub fn socket_path() -> PathBuf {
 }
 
 /// Reuse the supervisor or start one once, under the same private socket namespace.
-pub async fn connect(port: u16) -> io::Result<UnixStream> {
+pub async fn connect(port: u16) -> io::Result<crate::sock::Stream> {
     let path = socket_path();
-    if let Ok(stream) = UnixStream::connect(&path).await { return Ok(stream) }
+    if let Ok(stream) = crate::sock::connect(&path).await { return Ok(stream) }
     let dir = crate::ipc::dir();
     std::fs::create_dir_all(&dir)?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    crate::sock::secure_dir(&dir)?;
     let lock_path = path.with_file_name(format!("{}.start", path.file_name().unwrap().to_string_lossy()));
     let lock = crate::ipc::lock(&lock_path).ok_or_else(|| io::Error::other("could not lock local shell startup"))?;
-    if let Ok(stream) = UnixStream::connect(&path).await { drop(lock); return Ok(stream) }
+    if let Ok(stream) = crate::sock::connect(&path).await { drop(lock); return Ok(stream) }
     let name = std::env::var("HN_SOCKET_NAME").unwrap_or_else(|_| "default".into());
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command.args(["-L", &name, "--port", &port.to_string(), "--local-server"])
         .env("HN_SOCKET_NAME", &name).env("PORT", port.to_string())
         .env_remove("TMUX").env_remove("TMUX_PANE").env_remove("HN_SOCKET")
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    unsafe { command.pre_exec(|| { if libc::setsid() < 0 { Err(io::Error::last_os_error()) } else { Ok(()) } }); }
+    crate::sys::detach(&mut command);
     let mut child = command.spawn()?;
     std::thread::spawn(move || { let _ = child.wait(); });
     for _ in 0..100 {
-        if let Ok(stream) = UnixStream::connect(&path).await { drop(lock); return Ok(stream) }
+        if let Ok(stream) = crate::sock::connect(&path).await { drop(lock); return Ok(stream) }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     Err(io::Error::new(io::ErrorKind::TimedOut, "the local shell supervisor did not start"))
@@ -67,7 +78,7 @@ pub async fn connect(port: u16) -> io::Result<UnixStream> {
 /// kill-server ends this namespace's local shells as well. It never starts a supervisor.
 pub async fn stop() {
     let work = async {
-        let stream = UnixStream::connect(socket_path()).await?;
+        let stream = crate::sock::connect(&socket_path()).await?;
         let (mut ws, _) = tokio_tungstenite::client_async("ws://localhost/local-shells", stream).await.map_err(io::Error::other)?;
         ws.send(Message::text(json!({"type":"local_shutdown"}).to_string())).await.map_err(io::Error::other)?;
         while ws.next().await.is_some() {}
@@ -88,7 +99,7 @@ struct Client { tx: mpsc::Sender<Message>, selected: bool }
 struct Stream { client: Uuid, seq: u64, input: u64, readonly: bool }
 struct Shell {
     agent: Value,
-    pty: Option<tty::Pty>,
+    pty: Option<Pty>,
     pid: u32,
     payload: Value,
     generation: Uuid,
@@ -125,6 +136,7 @@ fn winsize(cols: u16, rows: u16) -> WindowSize { WindowSize { num_cols: cols, nu
 
 /// Reading and writing use the same nonblocking PTY, with backpressure on output and
 /// complete writes for input. In particular, a large paste is never truncated at EAGAIN.
+#[cfg(unix)]
 async fn drive(file: std::fs::File, id: String, generation: Uuid, mut input: mpsc::UnboundedReceiver<Vec<u8>>, events: mpsc::Sender<Event>) {
     let Ok(fd) = AsyncFd::new(file) else { let _ = events.send(Event::Eof(id, generation)).await; return };
     let mut queue: VecDeque<Vec<u8>> = VecDeque::new();
@@ -172,6 +184,25 @@ impl Shell {
         env.insert("TMUX".into(), format!("{},{},0", socket.display(), std::process::id()));
         if let Some(pane) = pane_id(&id) { env.insert("TMUX_PANE".into(), crate::pane::tag(pane)); }
         env.remove("HN_AS_TMUX");
+        let (input, rx) = mpsc::unbounded_channel();
+        let generation = Uuid::new_v4();
+        #[cfg(windows)]
+        let (pty, reader, pid, tty) = {
+            // A pseudoconsole cannot start stopped: the shell starts at the usual size and hears its pane's at terminal_open.
+            let command = payload["command"].as_str();
+            let (program, args) = if let Some(argv) = payload["argv"].as_array().filter(|_| command.is_none()) {
+                let argv = argv.iter().map(|arg| arg.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()
+                    .filter(|argv| !argv.is_empty() && !argv[0].is_empty() && argv.iter().all(|arg| !arg.contains('\0')))
+                    .ok_or_else(|| io::Error::other("Invalid shell arguments."))?;
+                (argv[0].clone(), argv[1..].to_vec())
+            } else { (shell.clone(), crate::sys::shell_args(&shell, command)) };
+            let spawn = console::Spawn { program, args, cwd: cwd.clone(), env, size: winsize(80, 24) };
+            let (pty, reader) = console::start(spawn, id.clone(), generation, rx, events)?;
+            let pid = pty.pid();
+            (pty, reader, pid, String::new())
+        };
+        #[cfg(unix)]
+        let (pty, reader, pid, tty) = {
         // tty::Options overlays inherited variables. Remove only absent names with env -u;
         // values stay in the child's environment, never in argv, and no process-wide
         // environment is mutated. Also remove the PTY library's graphical-window variables.
@@ -207,19 +238,38 @@ impl Shell {
         }
         let file = pty.file().try_clone()?;
         let tty = unsafe { let p = libc::ptsname(pty.file().as_raw_fd()); if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() } };
-        let (input, rx) = mpsc::unbounded_channel();
-        let generation = Uuid::new_v4();
         let reader = tokio::spawn(drive(file, id.clone(), generation, rx, events));
-        let label = shell.rsplit('/').next().unwrap_or("sh");
+        let pid = pty.child().id();
+        (pty, reader, pid, tty)
+        };
+        let label = crate::sys::shell_label(&shell);
         let agent = json!({"id":id,"sessionId":id,"name":label,"engine":"terminal","status":"active","launch":{"state":"ready"},"terminal":{"available":true},"project":{"cwd":cwd,"root":cwd,"name":""}});
         let mut pane = Pane::new(0, MACHINE, &id, 80, 24);
         pane.enable_local();
-        let pid = pty.child().id();
         Ok(Self { agent, pty: Some(pty), pid, payload: payload.clone(), generation, death: None, death_drawn: false, eof: false, waiting: true, input, reader, pane, tail: Tail::default(), streams: HashMap::new(), controller: None, ended: false, exited: None, tty })
     }
 
     fn start(&mut self) {
-        if self.waiting { self.waiting = false; unsafe { libc::kill(self.pid as i32, libc::SIGCONT); } }
+        if self.waiting {
+            self.waiting = false;
+            #[cfg(unix)]
+            unsafe { libc::kill(self.pid as i32, libc::SIGCONT); }
+        }
+    }
+
+    /// How the shell ended, once it has; `None` until then.
+    fn exit(&self) -> Option<crate::pane::Exit> {
+        #[cfg(unix)] { child_exited(self.pid) }
+        #[cfg(windows)] { self.pty.as_ref().and_then(Pty::exited) }
+    }
+
+    /// What is in the foreground of its terminal: only a Unix terminal can say.
+    fn foreground(&self) -> u32 {
+        #[cfg(unix)] {
+            let group = self.pty.as_ref().map(|pty| unsafe { libc::tcgetpgrp(pty.file().as_raw_fd()) }).unwrap_or(0);
+            if group > 0 { group as u32 } else { self.pid }
+        }
+        #[cfg(windows)] { self.pid }
     }
 
     fn keyframe(&mut self, stream: Uuid, clients: &mut HashMap<Uuid, Client>) {
@@ -251,7 +301,7 @@ impl Shell {
     }
 }
 
-async fn connection(stream: UnixStream, id: Uuid, events: mpsc::Sender<Event>) {
+async fn connection(stream: crate::sock::Stream, id: Uuid, events: mpsc::Sender<Event>) {
     let Ok(ws) = tokio_tungstenite::accept_async(stream).await else { return };
     let (mut write, mut read) = ws.split();
     let (tx, mut rx) = mpsc::channel(128);
@@ -273,6 +323,7 @@ async fn connection(stream: UnixStream, id: Uuid, events: mpsc::Sender<Event>) {
     let _ = events.send(Event::Gone(id)).await;
 }
 
+#[cfg(unix)]
 fn child_exited(pid: u32) -> Option<crate::pane::Exit> {
     // SAFETY: a zeroed output record, a child we own, and WNOWAIT leave wait/reaping to Pty.
     unsafe {
@@ -286,7 +337,13 @@ fn child_exited(pid: u32) -> Option<crate::pane::Exit> {
 
 fn reap(mut shell: Shell) -> tokio::task::JoinHandle<()> { shell.reader.abort(); reap_pty(shell.pty.take()) }
 
-fn reap_pty(pty: Option<tty::Pty>) -> tokio::task::JoinHandle<()> {
+#[cfg(windows)]
+fn reap_pty(pty: Option<Pty>) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || { if let Some(pty) = pty { pty.end() } })
+}
+
+#[cfg(unix)]
+fn reap_pty(pty: Option<Pty>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
         let Some(pty) = pty else { return };
         let pid = pty.child().id() as i32;
@@ -306,27 +363,30 @@ fn reap_pty(pty: Option<tty::Pty>) -> tokio::task::JoinHandle<()> {
 pub async fn run(_port: u16) -> io::Result<()> {
     let path = socket_path();
     std::fs::create_dir_all(crate::ipc::dir())?;
-    std::fs::set_permissions(crate::ipc::dir(), std::fs::Permissions::from_mode(0o700))?;
-    if UnixStream::connect(&path).await.is_ok() { return Ok(()) }
+    crate::sock::secure_dir(&crate::ipc::dir())?;
+    if crate::sock::connect(&path).await.is_ok() { return Ok(()) }
     let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let mut listener = crate::sock::Listener::bind(&path)?;
     let (tx, mut rx) = mpsc::channel(128);
     let mut clients: HashMap<Uuid, Client> = HashMap::new();
     let mut shells: HashMap<String, Shell> = HashMap::new();
     let mut reaping = Vec::new();
     let mut empty = Instant::now();
     let mut pulse = tokio::time::interval(Duration::from_millis(100));
+    #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // A detached process has no console to hear it from: kill-server asks with `local_shutdown`.
+    #[cfg(windows)]
+    let mut terminate = mpsc::channel::<()>(1).1;
     loop {
         tokio::select! {
             _ = terminate.recv() => break,
-            accepted = listener.accept() => if let Ok((stream, _)) = accepted { tokio::spawn(connection(stream, Uuid::new_v4(), tx.clone())); },
+            accepted = listener.accept() => if let Ok(stream) = accepted { tokio::spawn(connection(stream, Uuid::new_v4(), tx.clone())); },
             _ = pulse.tick() => {
                 for shell in shells.values_mut().filter(|s| !s.ended) {
                     // Leave the child unreaped until Pty::drop. Its PID cannot be reused while
                     // cleanup signals its process group, and final output can still drain.
-                    if shell.exited.is_none() { if let Some(death) = child_exited(shell.pid) { shell.exited = Some(Instant::now()); shell.death = Some(death); } }
+                    if shell.exited.is_none() { if let Some(death) = shell.exit() { shell.exited = Some(Instant::now()); shell.death = Some(death); } }
                 }
                 // Let the PTY reader drain final output before announcing exit. A background
                 // job retaining the slave must not keep its exited shell alive forever.
@@ -460,8 +520,7 @@ pub async fn run(_port: u16) -> io::Result<()> {
                         "terminal_info" => {
                             let Some(shell) = p["agentId"].as_str().and_then(|id| shells.get(id)) else { error(&mut clients, client, ty, &p, "NOT_FOUND", "no such local shell"); continue };
                             let pid = shell.pid;
-                            let group = shell.pty.as_ref().map(|pty| unsafe { libc::tcgetpgrp(pty.file().as_raw_fd()) }).unwrap_or(0);
-                            let foreground = if group > 0 { group as u32 } else { pid };
+                            let foreground = shell.foreground();
                             let cwd = (!shell.ended).then(|| process_cwd(foreground).or_else(|| process_cwd(pid))).flatten().or_else(|| shell.pane.cwd.clone()).unwrap_or_else(|| shell.agent["project"]["cwd"].as_str().unwrap_or("").to_string());
                             let command = if shell.ended { String::new() } else { process_name(foreground).unwrap_or_default() };
                             reply(&mut clients, client, "terminal_info_result", &p, json!({"pid":pid,"tty":shell.tty,"path":cwd,"command":command,"startCommand":shell.payload["command"]}));
@@ -548,10 +607,15 @@ fn process_name(pid: u32) -> Option<String> {
 }
 #[cfg(target_os = "linux")]
 fn process_name(pid: u32) -> Option<String> { std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim_end().to_string()) }
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+fn process_name(pid: u32) -> Option<String> { console::process_name(pid) }
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn process_name(_: u32) -> Option<String> { None }
 
-/// tmux uses sys_signame on macOS/BSD and a numeric fallback on Linux.
+/// tmux uses sys_signame on macOS/BSD and a numeric fallback on Linux. Windows has no signals to name.
+#[cfg(windows)]
+pub fn signal_name(signal: i32) -> String { signal.to_string() }
+#[cfg(unix)]
 pub fn signal_name(signal: i32) -> String {
     if cfg!(target_os = "linux") { return signal.to_string() }
     #[cfg(target_os = "macos")]

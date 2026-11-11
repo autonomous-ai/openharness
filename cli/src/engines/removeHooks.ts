@@ -129,6 +129,7 @@ function codexHooksNow(home: string): Settings {
 export const PLUGIN_CHANGED = "Harness's plugin, changed since Harness wrote it; delete it yourself if you no longer need it."
 /** What a value of a plugin's template can be: a port, or one JSON string (nativePlugin.ts `NativePluginValues`). */
 const SLOTS = {
+  socket: '"(?:[^"\\\\]|\\\\.)*"|null',
   port: String.raw`\d{1,5}`,
   credential: String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"`,
   version: String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"`,

@@ -87,3 +87,54 @@ bool _resumedTerminal(AppNotifier notifier, AgentEntry entry, Agent stopped) {
       current.launchState != 'failed' &&
       stopped.resumedAsPromised(current);
 }
+
+/// Whether [agentId]'s session on [machineId] is stopped there, as this phone's
+/// list of that machine's agents says — what the Swarm's Open terminal reads
+/// (`PhoneShellScope.agentStopped`). Null while it runs, or when the phone does
+/// not list it, or lists it on a machine another account shares (the
+/// desktop's Resume is for the person's own machines alone,
+/// `belongsToOtherAccount`); true for stopped work [resumeAgentForOpen] can
+/// bring back ([Agent.canPauseAndResume]), false for stopped work it cannot.
+bool? phoneAgentStopped(
+  AppNotifier notifier,
+  String machineId,
+  String agentId,
+) {
+  final machine = notifier.stateOf(machineId);
+  final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+  if (machine == null ||
+      machine.machine.shared ||
+      agent == null ||
+      !agent.isStopped) {
+    return null;
+  }
+  return agent.canPauseAndResume;
+}
+
+/// Brings [agentId]'s stopped work on [machineId] back for the Swarm's Open
+/// terminal (`PhoneShellScope.onResumeAgent`), the desktop's
+/// `resumeStoppedSession`: [resumeAgentForOpen], read afresh at the press.
+/// Null once there is a terminal to open — at once for work that is no longer
+/// stopped — or what to say.
+Future<String?> phoneResumeAgent(
+  AppNotifier notifier,
+  String machineId,
+  String agentId,
+) async {
+  final machine = notifier.stateOf(machineId);
+  // Never offered there ([phoneAgentStopped]): refused should it be asked.
+  if (machine != null && machine.machine.shared) {
+    return 'Only the person whose machine runs this agent can resume it.';
+  }
+  final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+  if (machine == null || agent == null) {
+    // The desktop pane's words for a harness its machine no longer lists.
+    return 'This harness is no longer on '
+        '${machine?.machine.displayName ?? 'this machine'}.';
+  }
+  if (!agent.isStopped) return null;
+  return resumeAgentForOpen(
+    notifier,
+    AgentEntry(machine: machine, agent: agent),
+  );
+}

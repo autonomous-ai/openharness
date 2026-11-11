@@ -349,6 +349,7 @@ void main() {
             'requestId': asked['requestId'],
             'error': 'SPAWN_FAILED',
             'detail': 'tmux: no server',
+            'message': 'The terminal could not start.',
           }),
         );
         await expectLater(
@@ -357,6 +358,11 @@ void main() {
             isA<WsRequestFailure>()
                 .having((e) => e.code, 'code', 'SPAWN_FAILED')
                 .having((e) => e.detail, 'detail', 'tmux: no server')
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'The terminal could not start.',
+                )
                 .having(
                   (e) => '$e',
                   'text',

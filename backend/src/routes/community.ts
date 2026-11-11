@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
-import { prisma } from '../lib/prisma.js'
+import { prisma, prismaSecondary } from '../lib/prisma.js'
 import { parseAutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { communityStarterAuthor, communityStarters } from '../lib/communityAccess.js'
 import { feedPage, feedSorts, feedStats } from '../lib/communityFeed.js'
@@ -196,12 +196,13 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     // the reader follows Harness, and on a creator's page only on Harness's.
     const followed = new Set(follows.map(row => row.authorId))
     const starters = mine === 'true' || forkedFrom || (following === 'true' && !followed.has(communityStarterAuthor)) || (author && author !== communityStarterAuthor) ? [] : [...communityStarters]
-    const { page, order, nextCursor } = await feedPage(where, autonomousEnv, sort, starters, cursor)
+    // A search matches text anywhere in the publications, which no index bounds: read on the secondaries (task #2970).
+    const { page, order, nextCursor } = await feedPage(where, autonomousEnv, sort, starters, cursor, q ? prismaSecondary : prisma)
     const ids = [...page.map(row => row.id), ...communityStarters]
     const [stats, covered] = await Promise.all([
       feedStats(ids, autonomousEnv, req.user?.sub),
       // Which have a cover, without reading one: a page of them is megabytes of base64.
-      prisma.communityHarness.findMany({ where: { id: { in: page.map(row => row.id) }, cover: { isSet: true, not: null } }, select: { id: true } }),
+      page.length ? prisma.communityHarness.findMany({ where: { id: { in: page.map(row => row.id) }, cover: { isSet: true, not: null } }, select: { id: true } }) : [],
     ])
     const withCover = new Set(covered.map(row => row.id))
     sendSuccess(reply, { harnesses: page.map(row => withCoverPath({ ...row, cover: withCover.has(row.id) ? 'set' : null })), ...(order ? { order } : {}), stats, signedIn: !!req.user, nextCursor, following: [...followed] })

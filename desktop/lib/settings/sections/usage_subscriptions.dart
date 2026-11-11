@@ -8,6 +8,7 @@ import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../usage/models_menu_controller.dart';
 import '../../widgets/workspace_subscription_usage.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// Settings ▸ Usage in a browser: the account's Claude Code and Codex
 /// subscriptions, read from its computers as the footer reads them. A browser
@@ -45,7 +46,7 @@ class _UsageSubscriptionsState extends State<UsageSubscriptions> {
               'computers is online and signed in to them.',
         );
       }
-      return ListView(
+      return LaidOutListView(
         padding: EdgeInsets.zero,
         children: [
           for (final account in accounts)

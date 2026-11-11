@@ -310,4 +310,61 @@ void main() {
       expect(tester.getSize(left).width, 400, reason: saved);
     }
   });
+
+  // Huy, 11-03: an open thread (or task, or Members) is set apart from the
+  // chat by a soft shadow on its left edge, as in Slack, in both themes.
+  for (final brightness in Brightness.values) {
+    testWidgets('the right pane lays the shared shade over the chat along its '
+        'left edge; the chat casts none (${brightness.name})', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+      final page = grid.AppDesktop.surface;
+      var chatTaps = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: SuperTabPaneLayout(
+              storage: MemoryStore(),
+              onLeave: () {},
+              left: SizedBox.expand(child: ColoredBox(color: page)),
+              right: SizedBox.expand(child: ColoredBox(color: page)),
+              center: GestureDetector(
+                onTap: () => chatTaps++,
+                child: SizedBox.expand(child: ColoredBox(color: page)),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // No pane casts a shade: the 1-point rule between them separates them.
+      Finder shadesIn(Finder pane) => find.descendant(
+        of: pane,
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is DecoratedBox &&
+              w.decoration is BoxDecoration &&
+              ((w.decoration as BoxDecoration).gradient != null ||
+                  (w.decoration as BoxDecoration).boxShadow != null),
+        ),
+      );
+      expect(shadesIn(center), findsNothing);
+      expect(shadesIn(left), findsNothing);
+      expect(shadesIn(right), findsNothing);
+
+      // A click beside the pane is the chat's.
+      await tester.tapAt(tester.getRect(right).centerLeft - const Offset(6, 0));
+      expect(chatTaps, 1);
+
+      final row = tester.widget<Row>(
+        find.ancestor(of: right, matching: find.byType(Row)).first,
+      );
+      expect(row.children.last.key, const ValueKey('super-right-pane'));
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

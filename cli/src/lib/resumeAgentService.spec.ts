@@ -141,6 +141,79 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
 
+describe('resuming a stopped harness with new launch words', () => {
+  const WORDS = ['--chrome']
+  const resumeWith = (launchArgs?: string[], mode?: string) => createResumeAgentService(deps)(saved.agentId, mode, launchArgs)
+
+  it('builds the launch with them, applies them to the argv, and the resumed row keeps them', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    vi.mocked(deps.relaunchOverrides).mockImplementation(async (_row, source) => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], ownerArgs: source.launchArgs } }))
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: true, session: { launchArgs: WORDS } })
+    expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: saved.agentId, launchArgs: WORDS }), expect.any(Function))
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ ownerArgs: WORDS }))
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+  })
+
+  it('clears them with an empty list', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    expect(await resumeWith([])).toMatchObject({ ok: true })
+    expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function))
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toBeUndefined()
+  })
+
+  it('without them, relaunches from the saved row and leaves its words as they were', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    expect(await resumeWith()).toMatchObject({ ok: true })
+    expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: ['--old'] }), expect.any(Function))
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(['--old'])
+  })
+
+  // The new row exists as soon as the pane does, but the words are only the record's once the engine is confirmed.
+  it('saves nothing when the engine does not come back, and the retained row keeps the words that last worked', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    live()
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
+    paneState.mockResolvedValueOnce({ dead: false, engineExit: 1 } as any).mockResolvedValueOnce('gone')
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+    expect(deps.stoppedAgents.get(saved.agentId)?.launchArgs).toEqual(['--old'])
+  })
+
+  it('saves nothing when the launch is refused before a pane exists', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'x' })
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.get(saved.agentId)?.launchArgs).toEqual(['--old'])
+    expect(registry.byAgent(saved.agentId)).toBeUndefined()
+  })
+
+  it('keeps the terminal engine\'s resume, which has no launch to confirm, saving them as well', async () => {
+    rewrite({ engine: 'terminal' })
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+  })
+
+  it('asked with other words, an overlapping resume is refused rather than answered by the first launch', async () => {
+    const stop = deferred<void>(); (deps.stopJobs as Map<string, Promise<void>>).set(saved.agentId, stop.promise)
+    const resume = createResumeAgentService(deps)
+    const first = resume(saved.agentId, undefined, WORDS)
+    expect(await resume(saved.agentId, undefined, ['--other'])).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    stop.resolve()
+    expect(await first).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+  })
+
+  it('does not claim to have applied them to a harness that was already running', async () => {
+    live({ processIdentity: identity, lastHookAt: Date.now(), launch: { state: 'ready' } })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: true })
+    expect(create).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toBeUndefined()
+  })
+})
+
 describe('production resume handler', () => {
   it('holds the reservation and restores cold history before checking its control identity', async () => {
     const restored = join(dir, 'restored.jsonl')
@@ -200,15 +273,15 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.swarmSkill).toEqual(swarmSkill)
   })
 
-  // Security review 2 of #2255: opening an old Buddy after the Mac was offline over a week (a lapsed local roster) opened it
+  // Security review 2 of #2255: opening an old Swarm session after the Mac was offline over a week (a lapsed local roster) opened it
   // without its role, with no role read at all.
-  it('opens an old Buddy with its role after the local roster lapsed', async () => {
+  it('opens an old Swarm session with its role after the local roster lapsed', async () => {
     rewrite({ startedBy: 'agent' })
     retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: saved.agentId, machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
-    const role = vi.fn(async () => ({ role: 'buddy' as const }))
+    const role = vi.fn(async () => ({ role: 'agent' as const }))
     deps.adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(dir).has(id),
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: () => 0, cancelled: () => false }) })
-    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'buddy', key: saved.agentId } } })
+    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'agent', key: saved.agentId } } })
     expect(role).toHaveBeenCalledOnce()
   })
 
@@ -333,6 +406,14 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('ask')
   })
 
+  // Its browser and its login were kept while it was stopped: the resume starts it again.
+  it('attaches the browser of an agent created with Browser', async () => {
+    const attachBrowser = vi.fn()
+    rewrite({ browser: true })
+    expect(await createResumeAgentService({ ...deps, attachBrowser })(saved.agentId)).toMatchObject({ ok: true })
+    expect(attachBrowser).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, browser: true }))
+  })
+
   it('does not join concurrent Open requests with different permission choices', async () => {
     const stop = deferred<void>(); (deps.stopJobs as Map<string, Promise<void>>).set(saved.agentId, stop.promise)
     const resume = createResumeAgentService(deps)
@@ -376,6 +457,20 @@ describe('production resume handler', () => {
     const stopOrder = vi.mocked(stopConflictingBackgroundJob).mock.invocationCallOrder[0]
     const argvOrder = vi.mocked(buildEngineLaunchArgv).mock.invocationCallOrder[0]
     expect(stopOrder).toBeLessThan(argvOrder)
+    // What the stop reports reaches the daemon's log under the agent's short id.
+    const said = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      vi.mocked(stopConflictingBackgroundJob).mock.calls[0]![0].log!('stopped background job bg-1')
+      expect(said).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} stopped background job bg-1`)
+    } finally { said.mockRestore() }
+  })
+
+  it('builds nothing when the resume is cancelled while the background job stops', async () => {
+    rewrite({ engine: 'claude' })
+    vi.mocked(stopConflictingBackgroundJob).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId) })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('never checks for a background job on a fresh or fork launch (no resumeSessionId)', async () => {

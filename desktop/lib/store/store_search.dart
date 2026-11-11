@@ -324,7 +324,7 @@ class _Field extends StatelessWidget {
                       decoration: InputDecoration(
                         hintText: 'Search harnesses',
                         hintStyle: grid.AppType.body(
-                          color: grid.AppPalette.textSecondary,
+                          color: grid.AppPalette.textFaint,
                         ),
                         isCollapsed: true,
                         constraints: const BoxConstraints(),

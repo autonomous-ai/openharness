@@ -40,7 +40,6 @@ Future<void> _mount(WidgetTester tester, SuperTabController c) async {
       home: Scaffold(
         body: SuperTabView(
           controller: c,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Team Mac',
@@ -55,7 +54,7 @@ void main() {
   testWidgets('the saved view says Updating until the first read lands', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Hello');
+    final server = ConversationServer.chat()..append('Hello');
     final first = _controller(server);
     await first.refresh();
     final view =
@@ -92,7 +91,7 @@ void main() {
   });
 
   testWidgets('a read Swarm says nothing of the kind', (tester) async {
-    final server = ConversationServer()..append('Hello');
+    final server = ConversationServer.chat()..append('Hello');
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();

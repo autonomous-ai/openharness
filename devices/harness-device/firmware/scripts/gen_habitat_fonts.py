@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic fixed-cell, 2-bit font atlases. Requires Pillow 12.2.0.
 
-Geist Mono: SIL OFL, vendored beside Geist. Unscii-8: public domain, from LVGL 9.5.0.
+Geist Mono: SIL OFL, vendored beside Geist.
 No font engine runs on the ESP32. Regenerate from the repository root.
 """
 from pathlib import Path
@@ -9,7 +9,6 @@ from PIL import Image, ImageDraw, ImageFont
 root = Path(__file__).resolve().parents[1]
 dest = root / 'main/ui/habitat/fonts.c'
 mono = root / 'fonts/GeistMono-Regular.ttf'
-pixel = root.parent / 'prototype/habitat/assets/unscii-8.ttf'
 # VIETNAMESE COMES FROM THE PROPORTIONAL SIBLING, and it has to.
 #
 # GeistMono carries 10 of the 98 codepoints Vietnamese needs outside Latin-1, and it is missing the
@@ -21,12 +20,6 @@ viet = root / 'fonts/Geist-Regular.ttf'
 # than given four two-glyph atlases of their own, so the range stays contiguous and ht_font_t keeps its
 # single first/last pair; terminal.c aliases them onto the tail. Order is load-bearing.
 VIET_TAIL = '\u0102\u0103\u0110\u0111\u01a0\u01a1\u01af\u01b0'
-# THE ENGINE MARKS, in the order their codepoints run from U+E020. The order is load-bearing: it is
-# the same list focus.c maps an engine name onto, and renumbering it renames every badge at once.
-# Lifted from the deleted ui/icons_engine.c — see assets/README.md for how, and why some of them
-# survive the reduction to one colour better than others.
-ENGINES = ['claude','codex','cursor','opencode','grok','copilot','amp','devin','kilo','pi',
-           'hermes','muse','agy','commandcode']
 # Geist is proportional, so its widest accented capital overruns the mono cell and neighbouring
 # letters collide. Dropping the point size instead would leave Vietnamese visibly smaller than the
 # Latin beside it, so each face is drawn at full size into a box as wide as its widest glyph and
@@ -37,17 +30,15 @@ ENGINES = ['claude','codex','cursor','opencode','grok','copilot','amp','devin','
 VIET_DRAW_W = {'ht_viet_16': 13, 'ht_viet_20': 15, 'ht_viet_24': 18, 'ht_viet_28': 20}
 fonts = [('ht_mono_16',mono,16,10,22,17),('ht_mono_20',mono,20,12,28,22),
          ('ht_mono_24',mono,24,15,32,26),('ht_mono_28',mono,28,17,38,31),
-         ('ht_pixel_40',pixel,40,40,48,40),('ht_open_20',mono,20,12,28,22),
-         ('ht_nav_32',mono,32,20,44,35),
-         ('ht_lock_dot',pixel,40,40,48,40),('ht_bell_20',mono,20,12,28,22),
-         ('ht_bell_28',mono,28,17,38,31),('ht_bell_footer',mono,28,26,38,31),
+         ('ht_open_20',mono,20,12,28,22),
+         ('ht_bell_20',mono,20,12,28,22),
+         ('ht_bell_28',mono,28,17,38,31),
          ('ht_done_28',mono,28,17,38,31),('ht_failed_28',mono,28,17,38,31),
          ('ht_right_20',mono,20,12,28,22),('ht_right_28',mono,28,17,38,31),
          ('ht_open_28',mono,28,17,38,31),
          ('ht_open_24',mono,24,15,32,26),('ht_right_24',mono,24,15,32,26),
          ('ht_bell_24',mono,24,15,32,26),
          ('ht_spark',mono,40,40,48,40),
-         ('ht_engine',mono,28,24,38,31),
          ('ht_wave',mono,40,6,124,40),
          ('ht_viet_16',viet,16,10,22,17),('ht_viet_20',viet,20,12,28,22),
          ('ht_viet_24',viet,24,15,32,26),('ht_viet_28',viet,28,17,38,31)]
@@ -60,7 +51,7 @@ with dest.open('w') as out:
         data=[]
         bounds=[]
         # Latin-1 keeps common names readable; unknown Unicode renders ?, never changes wire text.
-        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe002,0xe002) if name=='ht_spark' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name in VIET else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (ord('o'),ord('o')) if name=='ht_lock_dot' else (32,255 if name!='ht_pixel_40' else 126)
+        first,last=(0xe010,0xe01f) if name=='ht_wave' else (0xe002,0xe002) if name=='ht_spark' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name in VIET else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (32,255)
         for cp in range(first,last+1):
             # The tail of the Vietnamese atlas is the eight scattered letters, in VIET_TAIL order.
             glyph = VIET_TAIL[cp-0x1efa] if name in VIET and cp >= 0x1efa else chr(cp)
@@ -76,38 +67,12 @@ with dest.open('w') as out:
                 draw.line([(22,26),(22,34)],fill=255,width=6)
                 draw.arc((16,80,28,92),0,180,fill=255,width=6)
                 im=hi.resize((width,height),Image.Resampling.LANCZOS)
-            if name in ('ht_bell_footer','ht_done_28','ht_failed_28','ht_spark','ht_wave','ht_engine'):
-                # The footer bell gets a round 26 px cell instead of squeezing
-                # a dome into a 17 px letter. Small immutable 2-bit atlases only.
+            if name in ('ht_done_28','ht_failed_28','ht_spark','ht_wave'):
+                # Small immutable 2-bit atlases only.
                 hi=Image.new('L',(width*4,height*4));draw=ImageDraw.Draw(hi)
                 def stroke(points):
                     draw.line([(round(x*4),round(y*4)) for x,y in points],fill=255,width=8,joint='curve')
-                if name=='ht_engine':
-                    art = Image.open(root/f'assets/engines/{ENGINES[cp - first]}.png')
-                    # TWO BITS OF COVERAGE, so a logo has to arrive as a SHAPE, not as shading.
-                    # Downsampling a colour mark straight into four levels gives grey mush; pushing
-                    # the midtones apart first keeps an edge an edge. Marks whose whole identity is
-                    # internal colour (see assets/README.md) do not survive this and are not meant to.
-                    floor, ceiling = art.getextrema()   # not `hi`: that is the 4x canvas above
-                    if ceiling > floor:
-                        span = ceiling - floor
-                        art = art.point(lambda p, floor=floor, span=span:
-                                        0 if p <= floor else
-                                        255 if (p - floor) * 255 // span > 96 else
-                                        min(255, (p - floor) * 510 // span))
-                    # A BADGE IS CAP HEIGHT, not cell height.
-                    #
-                    # It sits beside ht_mono_28, whose capitals run from baseline-20 to baseline. Fit
-                    # the mark into exactly that box and a badge shares a top and a bottom with the
-                    # letters next to it; let it use the whole 38 px cell instead and it towers over
-                    # them — which also moves the row's ink upward and breaks the even spacing the
-                    # face is built on (see focus_face() in test/test_character.c).
-                    cap_top, cap_h = (baseline - 20) * 4, 20 * 4
-                    scale = min(width * 4 / art.width, cap_h / art.height)
-                    art = art.resize((max(1,round(art.width*scale)), max(1,round(art.height*scale))),
-                                     Image.Resampling.LANCZOS)
-                    hi.paste(art, ((width*4-art.width)//2, cap_top + (cap_h-art.height)//2))
-                elif name=='ht_wave':
+                if name=='ht_wave':
                     # ONE BAR OF THE METER, in sixteen heights — the cell is 6 px wide because that
                     # is the bar's own width in the old firmware, and the seven bars are placed by
                     # the face at its 22.4 px pitch rather than by this font's advance. A cell wide
@@ -130,19 +95,13 @@ with dest.open('w') as out:
                     art = art.resize((round(art.width*scale), round(art.height*scale)),
                                      Image.Resampling.LANCZOS)
                     hi.paste(art, ((width*4-art.width)//2, (height*4-art.height)//2))
-                elif name=='ht_bell_footer':
-                    draw.arc((18,40,82,104),180,360,fill=255,width=8)
-                    stroke([(4.5,18),(4.5,23),(2,28),(23,28),(20.5,23),(20.5,18)])
-                    stroke([(12.5,7),(12.5,10)])
-                    draw.arc((38,108,62,132),0,180,fill=255,width=8)
                 elif name=='ht_done_28': stroke([(2,22),(6.5,27),(15,15)])
                 else:
                     stroke([(3,17),(14,28)])
                     stroke([(14,17),(3,28)])
                 im=hi.resize((width,height),Image.Resampling.LANCZOS)
             values=[min(3,(v+42)//85) for v in im.get_flattened_data()]
-            if name in ('ht_mono_20','ht_open_20','ht_right_20','ht_bell_20',
-                        'ht_mono_24','ht_open_24','ht_right_24','ht_bell_24'):
+            if name in ('ht_mono_24','ht_open_24','ht_right_24','ht_bell_24'):
                 ink=[(i%width,i//width) for i,a in enumerate(values) if a]
                 bounds.append((min(x for x,y in ink),min(y for x,y in ink),
                                max(x for x,y in ink),max(y for x,y in ink)) if ink else (0,0,0,0))

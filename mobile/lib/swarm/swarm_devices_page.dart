@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'swarm_machine_menu.dart';
 import 'swarm_machines.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -18,7 +19,8 @@ import 'swarm_style.dart';
 /// not, from the list Swarm's start screens read ([SwarmComputers]); then
 /// each Swarm's machines, which its people lend it, with what each can do
 /// and runs ([SwarmMachinesSection]) — the drawer's until it went slim (Lead,
-/// 2026-10-29). Read only. Desktop's Your devices shows the hardware plugged
+/// 2026-10-29). Read only, except a machine's long-press menu: Details, and for the person who lent it Pause or
+/// Resume new work and Remove from Swarm (Huy, 2026-11-02). Desktop's Your devices shows the hardware plugged
 /// into computers; the phone has no read of that, so it lists the computers
 /// (Tony, 2026-10-28).
 class SwarmDevicesPage extends StatelessWidget {
@@ -114,6 +116,9 @@ class SwarmDevicesPage extends StatelessWidget {
               reader: reader,
               swarmName: swarms.length > 1 ? swarm.name : null,
               open: (id) => unawaited(showSwarmMachine(context, reader, id)),
+              menu: (id, name) => unawaited(
+                showSwarmMachineMenu(context, reader, id, name: name),
+              ),
             ),
           ),
     ];

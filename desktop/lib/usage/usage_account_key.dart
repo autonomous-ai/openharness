@@ -19,10 +19,18 @@ import 'usage_window.dart';
 /// different account, so the strip prints one subscription twice. Both suites
 /// pin the same vector (`test/usage_account_key_test.dart` here,
 /// `accountUsage.spec.ts` there) for exactly that reason.
-String usageAccountKey(UsageProvider provider, String accountId) {
-  final digest = const DartSha256().hashSync(
-    utf8.encode('${provider.name}:$accountId'),
-  );
+String usageAccountKey(UsageProvider provider, String accountId) =>
+    _sha16('${provider.name}:$accountId');
+
+/// A Swarm profile (an engine account of a machine), as the CLI, the backend and
+/// this app all name it: the first 16 hex characters of
+/// sha256(`<machineId>:<engine>:<realpath>`), or `...:default` for the engine's
+/// default account. Same contract as the CLI's `profileId`.
+String swarmProfileId(String machineId, String engine, String pathOrDefault) =>
+    _sha16('$machineId:$engine:$pathOrDefault');
+
+String _sha16(String text) {
+  final digest = const DartSha256().hashSync(utf8.encode(text));
   final hex = StringBuffer();
   for (final byte in digest.bytes) {
     hex.write(byte.toRadixString(16).padLeft(2, '0'));

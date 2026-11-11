@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// The machine socket's short-turn cap (lib/shortTurnGuard.ts) on the real handler. The socket harness is the one in
-// teamSessionSockets.test.ts: authentication, the machine row, the bus and the hub are faked.
+// The machine socket's short-turn cap (lib/shortTurnGuard.ts) on the real handler: authentication, the machine row, the bus and
+// the hub are faked.
 const m = vi.hoisted(() => ({
   auth: vi.fn(), upgrade: vi.fn(), resolve: vi.fn(), publishUp: vi.fn(), recordTurn: vi.fn(), nodeRole: vi.fn(), warn: vi.fn(), info: vi.fn(),
 }))

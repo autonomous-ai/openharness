@@ -23,6 +23,7 @@ import {
   interactiveEngineShell,
   isPosixShell,
   commandAvailableInInteractiveShell,
+  commandOutputInInteractiveShell,
   commandSupportsFlagInInteractiveShell,
   dropPermissionFlagIfUnsupported,
   permissionFlagToVerify,
@@ -795,7 +796,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       expect(onWindows(() => buildEngineLaunchArgv('terminal', { cwd: '/work', terminalHint: { machineName: 'box' } }, '/bin/zsh')))
         .toEqual(defaultWindowsShell())
       expect(() => onWindows(() => buildEngineInstallationArgv('codex', engineInstallRecipe('codex')!, { HOME: '/h' })))
-        .toThrow('Harness cannot install codex on Windows yet')
+        .toThrow('The POSIX installer of codex does not run on Windows')
     })
   })
 
@@ -824,14 +825,12 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
-    // A Claude Buddy: what its guard does not allow is refused, never asked (Ken, 10-29).
-    // It reads only its own folder's settings and starts no MCP server: a teammate's committed hook or server would run
-    // with its person's credentials (Lead, 10-29).
-    expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
-      .toEqual([engineBin('claude'), '--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'])
-    // A Codex Buddy: reads in the sandbox, and asks the person at the terminal before anything outside it (Lead, 10-29).
-    expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
-      .toEqual([engineBin('codex'), '--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"', ...CODEX_SCREEN])
+    // The Team-written mode went with Team accounts (backend #3872): no engine has it.
+    expect(permissionModeFlags('claude', 'teamWritten')).toBeNull()
+    expect(permissionModeFlags('codex', 'teamWritten')).toBeNull()
+    // An older Buddy's saved mode is no mode: the registry clears it on load (task #4215).
+    expect(permissionModeFlags('claude', 'buddy')).toBeNull()
+    expect(permissionModeFlags('codex', 'readOnlyAsk')).toBeNull()
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     // A mode the engine lacks falls back to the yes/no.
@@ -969,6 +968,21 @@ describe('a model and effort on launch', () => {
   })
 })
 
+describe('the owner\'s own launch words', () => {
+  it('go last: after the extra arguments, the model and the first prompt, so a trailing flag cannot swallow Harness\'s own', () => {
+    const argv = buildEngineCommandArgv('claude', {
+      extraArgs: ['--append-system-prompt', 'be brief'], launchModel: { model: 'opus', effort: null }, firstPrompt: 'go', ownerArgs: ['--chrome', '--add-dir'],
+    })
+    expect(argv).toEqual([engineBin('claude'), '--append-system-prompt', 'be brief', '--model', 'opus', 'go', '--chrome', '--add-dir'])
+    expect(buildEngineCommandArgv('claude', { ownerArgs: [] })).toEqual([engineBin('claude')])
+  })
+
+  it('reach the pane\'s command line through the shell wrapper as separate items', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: '/work', ownerArgs: ['--add-dir', 'a b'] })
+    expect(argv.slice(-2)).toEqual(['--add-dir', 'a b'])
+  })
+})
+
 describe('a first prompt on launch', () => {
   const PROMPT = 'Start a local model on this machine'
 
@@ -1011,7 +1025,7 @@ describe('a first prompt on launch', () => {
   // prompt_unsupported, 4 in the Oct 21–27 report: the refusal named the engine but not what to do instead.
   it('says what to do instead: leave the first message out, or use an agent that takes one', () => {
     expect(new FirstPromptUnsupportedError('cursor').message).toBe('Cursor cannot start with a first message. Start it without one '
-      + 'and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one.')
+      + 'and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one.')
   })
 
   it('leaves the argv unchanged with no prompt, or an empty one', () => {
@@ -1201,6 +1215,23 @@ describe('commandAvailableInInteractiveShell', () => {
   })
 })
 
+describe('commandOutputInInteractiveShell', () => {
+  it('returns both streams and the exit status from the shell a launch uses, and nothing for a hung command', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-output-'))
+    dirs.push(binDir)
+    writeFileSync(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
+    chmodSync(join(binDir, 'openclaw'), 0o700)
+    writeFileSync(join(binDir, 'stuck'), '#!/bin/sh\nexec /bin/sleep 30\n')
+    chmodSync(join(binDir, 'stuck'), 0o700)
+    process.env.HARNESS_ENGINE_TEST_PATH = `${binDir}:/usr/bin:/bin`
+    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], bashProbeShell())
+    expect(ran?.code).toBe(3)
+    expect(ran?.output).toContain('OpenClaw --version')
+    expect(ran?.output).toContain('a warning')
+    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], bashProbeShell())).resolves.toBeNull()
+  }, 8_000)
+})
+
 /** A fake engine whose `--help` prints exactly `help`, and nothing else. */
 function fakeEngine(dir: string, name: string, help: string): void {
   writeFileSync(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
@@ -1268,22 +1299,6 @@ describe('the permission gates', () => {
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
     expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
     expect(refusal?.detail).not.toContain('choose Ask')
-  })
-
-  it('holds a Buddy\'s relaunch rather than starting it without its mode (security review 1 of #2087)', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    fakeEngine(binDir, 'codex', '--sandbox')
-    const held = await dropPermissionFlagIfUnsupported('codex', { permissionMode: 'readOnlyAsk', bypassPermission: false }, bashProbeShell())
-    expect(held.choice).toEqual({ permissionMode: 'readOnlyAsk', bypassPermission: false })
-    expect(held.droppedFlag).toBeNull()
-    expect(held.nativeHold).toContain('does not support --ask-for-approval')
-    // A Claude Buddy's, too: a Claude Code with no --permission-mode is not relaunched in its own default.
-    fakeEngine(binDir, 'claude', '--resume')
-    const claude = await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'buddy', bypassPermission: false }, bashProbeShell())
-    expect([claude.choice.permissionMode, claude.droppedFlag]).toEqual(['buddy', null])
-    expect(claude.nativeHold).toContain('does not support --permission-mode')
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {

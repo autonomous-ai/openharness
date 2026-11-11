@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -111,6 +112,7 @@ impl Items {
         folder_filter(picker,folder);
     }
 }
+#[cfg(unix)]
 const MAX_DATA: u64 = 8 * 1024 * 1024;
 
 struct Request {
@@ -125,6 +127,11 @@ struct Request {
     started: Instant,
 }
 impl Request {
+    #[cfg(windows)]
+    fn new(_out: &mut File, _kind: &str, _query: &str) -> io::Result<Self> {
+        Err(io::Error::other("This picker needs a Harness shell, which Windows does not have yet. Use hn's own keys."))
+    }
+    #[cfg(unix)]
     fn new(out: &mut File, kind: &str, query: &str) -> io::Result<Self> {
         let token = std::env::var("_HN_CONTEXT").unwrap_or_default();
         if uuid::Uuid::parse_str(&token).is_err() { return Err(io::Error::other("Open this picker from a Harness shell.")) }
@@ -175,10 +182,15 @@ impl Request {
                 let message = STANDARD.decode(data).ok().and_then(|v| String::from_utf8(v).ok()).unwrap_or_default();
                 return Err(io::Error::other(if message.is_empty() { "Picker unavailable.".into() } else { message }));
             }
+            #[cfg(windows)]
+            return Err(io::Error::other("Invalid picker catalog."));
+            #[cfg(unix)]
+            {
             let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(self.path.with_extension("json"))?;
             let m = file.metadata()?;
             if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 || m.len() > MAX_DATA { return Err(io::Error::other("Invalid picker catalog.")) }
             return Ok(Some(serde_json::from_reader(file.take(MAX_DATA + 1))?));
+            }
         }
         if self.sent.elapsed() >= Duration::from_secs(1) { self.send(out)? }
         Ok(None)
@@ -238,6 +250,9 @@ fn wait_line(elapsed:Duration,waiting:&str,cols:u16)->Option<String> {
     // The last column is left free: some terminals wrap on writing it.
     Some(crate::ui::clip(&line,usize::from(cols.saturating_sub(1))))
 }
+#[cfg(windows)]
+fn tty_cols(_:&File)->u16 { terminal::size().map(|(cols,_)|cols).unwrap_or(80) }
+#[cfg(unix)]
 fn tty_cols(tty:&File)->u16 {
     use std::os::fd::AsRawFd;
     let mut size:libc::winsize=unsafe{std::mem::zeroed()};
@@ -256,10 +271,14 @@ fn paint_inline(next:&mut Buffer,area:Rect,picker:&mut Picker,loading:bool,lines
 pub fn exchange(verb:&str,value:&serde_json::Value,waiting:&str)->io::Result<serde_json::Value> {
     use std::sync::atomic::{AtomicBool,Ordering};
     static INTERRUPTED:AtomicBool=AtomicBool::new(false);
+    #[cfg(unix)]
     extern "C" fn interrupted(_:libc::c_int) {INTERRUPTED.store(true,Ordering::Relaxed);}
+    #[cfg(unix)]
     struct Signal(libc::sighandler_t);
+    #[cfg(unix)]
     impl Drop for Signal {fn drop(&mut self){unsafe{libc::signal(libc::SIGINT,self.0);}}}
     INTERRUPTED.store(false,Ordering::Relaxed);
+    #[cfg(unix)]
     let _signal=Signal(unsafe{libc::signal(libc::SIGINT,interrupted as *const () as libc::sighandler_t)});
     let mut out=OpenOptions::new().read(true).write(true).open("/dev/tty")?;
     let mut request=Request::new(&mut out,verb,&value.to_string())?;
@@ -320,6 +339,9 @@ fn configure(picker: &mut Picker, sessions: bool) {
 // crossterm's DSR query writes stdout. During command substitution stdout is the
 // selected-id pipe, so redirect only that query to the controlling TTY. Its event
 // reader preserves keys typed while waiting for the cursor-position response.
+#[cfg(windows)]
+fn tty_position(_: &File) -> io::Result<(u16,u16)> { cursor::position() }
+#[cfg(unix)]
 fn tty_position(out: &File) -> io::Result<(u16,u16)> {
     use std::os::fd::{AsRawFd, FromRawFd};
     struct Restore(File);

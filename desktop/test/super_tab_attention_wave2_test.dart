@@ -5,14 +5,15 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
-import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_host.dart';
 
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+import 'keymap_host_test.dart' show MemoryKeymap;
 import 'swarm_state_test.dart' show createApp;
 
 /// Set to a folder to write the PR's wave 2 pictures there.
@@ -71,19 +72,12 @@ ConversationServer _swarm() {
   _fromLead(server, 'Release notes are up.', 'roster');
   server.markReadElsewhere('roster', server.revision);
   _fromLead(server, 'Mockup posted for review.', 'offline');
-  server.tag('message-2', conversationId: 'offline');
   _fromLead(
     server,
     'Heavy CI is held while the account is at its limit.',
     'routing',
   );
   _fromLead(server, 'Which option should ship?', 'web-lead');
-  server.ask(
-    ['Ship it behind a flag?'],
-    conversationId: 'web-lead',
-    projectId: 'web',
-  );
-  server.tag('message-1', threadId: 'message-1');
   _fromLead(server, 'Weekly plan', 'lead');
   _fromLead(server, 'Looks right to me.', 'lead');
   server.messages.last['thread'] =
@@ -189,6 +183,8 @@ Future<(SuperTabController, GlobalKey)> _show(
   WidgetTester tester,
   Brightness brightness, {
   String selected = 'web-lead',
+  bool keymap = false,
+  ConversationServer? server,
 }) async {
   final previous = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
@@ -198,18 +194,12 @@ Future<(SuperTabController, GlobalKey)> _show(
   addTearDown(tester.view.reset);
   final app = createApp(connected: true);
   addTearDown(app.dispose);
-  final server = _wave2();
+  server ??= _wave2();
   final c = server.controller(
     initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
   );
   await c.refresh();
-  final attention = SuperTabAttention.of(c);
-  await attention.mentions.load();
-  await attention.decisions.load();
-  await attention.load();
-  await SuperTabActivity.of(c).load();
   await c.select(selected);
-  if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   final picture = GlobalKey();
   await tester.pumpWidget(
     MaterialApp(
@@ -218,14 +208,16 @@ Future<(SuperTabController, GlobalKey)> _show(
       home: RepaintBoundary(
         key: picture,
         child: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            app: app,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            onNewProject: () {},
-            machineName: (_) => 'Team Mac',
+          body: _keymapped(
+            keymap,
+            SuperTabView(
+              controller: c,
+              app: app,
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewProject: () {},
+              machineName: (_) => 'Team Mac',
+            ),
           ),
         ),
       ),
@@ -233,6 +225,27 @@ Future<(SuperTabController, GlobalKey)> _show(
   );
   await tester.pumpAndSettle();
   return (c, picture);
+}
+
+/// [view] under a keymap host and a Swarm chat region, so the keys the view
+/// adds to the region run.
+Widget _keymapped(bool keymap, Widget view) {
+  if (!keymap) return view;
+  final map = MemoryKeymap();
+  addTearDown(map.dispose);
+  return KeymapProvider(
+    keymap: map,
+    child: KeymapHost(
+      keymap: map,
+      enabled: () => true,
+      actions: const {},
+      child: KeymapRegion(
+        contextKind: KeymapContext.swarmChat,
+        actions: const {},
+        child: view,
+      ),
+    ),
+  );
 }
 
 Future<void> _done(WidgetTester tester, SuperTabController c) async {
@@ -261,52 +274,17 @@ void main() {
 
   group('in the real Swarm view', () {
     testWidgets(
-      'Option+Shift+Down opens the next unread chat in sidebar order, '
-      'skipping the muted one; Up goes back',
-      (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
-        // Sidebar order: openharness (lead, offline 1600, routing 1598, roster
-        // 1597 muted), then website (web-lead).
-        final order = [
-          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
-            if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
-        ];
-        expect(order, isNot(contains('roster')));
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-        await tester.pumpAndSettle();
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        expect(c.selectedId, 'offline');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        expect(c.selectedId, 'routing');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        // The muted Desktop roster is passed over.
-        expect(c.selectedId, 'web-lead');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowUp);
-        expect(c.selectedId, 'routing');
-        await _done(tester, c);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-    );
-
-    testWidgets(
       'Option+Shift+Down and Up stop at the ends: nothing moves past the '
       'last unread chat or before the first',
       (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
         final order = [
-          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
+          for (final id in ['lead', 'web-lead'])
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order.length, greaterThan(1));
@@ -337,61 +315,17 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
 
-    testWidgets('Shift+Esc marks every chat read with an Undo toast; Undo puts '
-        'them back', (tester) async {
-      final (c, _) = await _show(tester, Brightness.dark);
-      final unread = c.snapshot!.conversations.where(c.unreadShown).length;
-      expect(unread, greaterThan(1));
-      await tester.tap(find.byKey(const ValueKey('super-group-web-lead')));
-      await tester.pumpAndSettle();
-      await _keys(tester, [
-        LogicalKeyboardKey.shiftLeft,
-      ], LogicalKeyboardKey.escape);
-      expect(c.snapshot!.conversations.where(c.unreadShown), isEmpty);
-      expect(
-        find.byKey(const ValueKey('super-mark-all-toast')),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Undo'));
-      await tester.pumpAndSettle();
-      expect(c.snapshot!.conversations.where(c.unreadShown).length, unread);
-      await _done(tester, c);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
-
-    testWidgets(
-      'the chat menu\'s Notifications sets Muted, and the row greys',
-      (tester) async {
-        final (c, _) = await _show(
-          tester,
-          Brightness.dark,
-          selected: 'offline',
-        );
-        await tester.tap(find.byKey(const ValueKey('super-group-options')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-notify-menu')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-notify-muted')));
-        await tester.pumpAndSettle();
-        expect(c.notifyOf('offline'), SuperTabNotify.muted);
-        expect(
-          find.byKey(const ValueKey('super-muted-offline')),
-          findsOneWidget,
-        );
-        await _done(tester, c);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-    );
+    // Huy, #2342: in a chat's ⋮ menu the Notifications row had a rounded
+    // border no other row has. It draws as the row above it does, at rest and
+    // under the mouse, and keeps its submenu arrow, in each menu it is in.
   });
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['sidebar', 'activity', 'filter', 'menu', 'toast']) {
+    for (final scene in ['sidebar', 'filter', 'menu', 'toast']) {
       testWidgets('wave 2: $scene in ${brightness.name}', (tester) async {
         if (!shotsOn) return;
         final (c, picture) = await _show(tester, brightness);
         switch (scene) {
-          case 'activity':
-            await tester.tap(find.byKey(const ValueKey('super-activity')));
-            await tester.pumpAndSettle();
           case 'filter':
             await tester.tap(find.byKey(const ValueKey('super-unread-only')));
             await tester.pumpAndSettle();

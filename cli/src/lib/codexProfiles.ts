@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
+import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
@@ -72,7 +73,7 @@ function writeLinkedPaths(paths: Set<string>): void {
 
 /** Validate + resolve a folder path the same way for both linking and re-checking a saved one. */
 export function resolveCodexProfilePath(path: string): CodexProfile | CodexProfileError {
-  if (!path.startsWith('/') || path.length > 4096 || CONTROL_CHARS_RE.test(path)) {
+  if (!homeIsAbsolute(path) || path.length > 4096 || CONTROL_CHARS_RE.test(path)) {
     return { error: 'INVALID_PATH' }
   }
   let st
@@ -102,6 +103,12 @@ export function linkCodexProfile(path: string): CodexProfile | CodexProfileError
   return profile
 }
 
+/** The Codex account that needs no CODEX_HOME: an inherited CODEX_HOME, or ~/.codex. */
+export function defaultCodexHome(home: string = homedir(), environment: Record<string, string | undefined> = process.env): string {
+  const folder = environment.CODEX_HOME || join(home, '.codex')
+  try { return realpathSync(folder) } catch { return folder }
+}
+
 function processEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -111,7 +118,7 @@ function processEnvironment(): Record<string, string> {
 }
 
 /**
- * Every Codex profile this machine can offer: previously linked folders, `observedPaths` (Codex
+ * Every Codex profile this machine lists: previously linked folders, `observedPaths` (Codex
  * homes the caller already knows about from this same machine's other Codex agents), and freshly
  * discovered folders. Never throws — a discovery scan that fails still returns the linked/observed
  * folders that resolved fine.

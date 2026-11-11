@@ -102,7 +102,7 @@ class SwarmSearchInput extends StatelessWidget {
             height: MediaQuery.textScalerOf(context).scale(17) * 1.45 + 24,
           ),
           hintText: hintText ?? search?.hint ?? kSwarmSearchHint,
-          hintStyle: DesktopChrome.text(size: 17, color: DesktopChrome.muted),
+          hintStyle: DesktopChrome.text(size: 17, color: DesktopChrome.hint),
           hintMaxLines: 1,
           border: InputBorder.none,
           enabledBorder: InputBorder.none,

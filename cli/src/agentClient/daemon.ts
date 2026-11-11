@@ -6,16 +6,14 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
-import { localCredentialHeaders } from '../lib/localCredential.js'
-import { existsSync } from 'node:fs'
+import { LOCAL_JSON_MAX_BYTES, refusedLineText, tooLargeText } from '../lib/localJsonLimit.js'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
-import { savedDaemonPort } from '../lib/daemonEndpoint.js'
+import { localWsTarget } from '../lib/localTransport.js'
 import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
 import { pipeWebSocket } from '../lib/windows/pipeClient.js'
 import { computerId, daemonUnreachableText } from '../lib/daemonState.js'
-import { unixSocketPath } from '../lib/localSocket.js'
 import { paneOwner, sendPane } from '../messages/command.js'
 
 export class AgentClientError extends Error {
@@ -61,19 +59,16 @@ export function whereFor(pane: string | undefined, owner: typeof paneOwner = pan
     harnessPane: !!found || (!!pane && pane.startsWith('p') && sendPane({ HARNESS_PANE: pane }) === pane) }
 }
 
-/** The Unix socket on macOS/Linux, or the authenticated daemon pipe on Windows. The Unix legacy
- *  fallback uses loopback TCP and the local credential; Windows never sends that credential to a
- *  port whose listener may belong to another OS user or outlive a stale daemon record. */
+/** The Unix socket on macOS/Linux, or the authenticated daemon pipe on Windows. Neither falls back to the port:
+ *  its listener may belong to another OS user or outlive a stale daemon record (lib/localTransport.ts). */
 export async function connectSocket(where: Where, options: LocalDaemonOptions = {}): Promise<ClientSocket> {
   if ((options.platform ?? process.platform) === 'win32') {
     const target = await (options.pipe ?? daemonPipe)(where.dataDir, where.port)
     if (!target) throw new AgentClientError('DAEMON_UNREACHABLE', daemonUnreachableText(null, where.dataDir))
     return pipeWebSocket(target)
   }
-  const path = unixSocketPath(where.dataDir, where.port)
-  return path && existsSync(path)
-    ? new WebSocket(`ws+unix://${path}:/api/local-ws`)
-    : new WebSocket(`ws://127.0.0.1:${savedDaemonPort(where.dataDir, where.port)}/api/local-ws`, { headers: localCredentialHeaders(where.dataDir) })
+  const target = localWsTarget(where.dataDir, where.port)
+  return new WebSocket(target.url, { headers: target.headers })
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000
@@ -94,12 +89,16 @@ export async function openDaemon(where: Where, machineId: string = where.machine
     socket.on('error', (error) => failAll(new AgentClientError('DAEMON_UNREACHABLE', daemonUnreachableText(error, where.dataDir))))
     socket.on('close', (code) => failAll(code === 4404
       ? new AgentClientError('NO_PEER_LINK', 'That machine is not linked to this one. Run `harness link` first.')
-      : new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')))
+      // Too big for the transport itself (past its ceiling the daemon never reads the frame to say so).
+      : code === 1009 ? new AgentClientError('REQUEST_TOO_LARGE', refusedLineText(undefined))
+        : new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')))
     socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } })))
     socket.on('message', (raw, binary) => {
       if (binary) return
       let frame: { type?: string; payload?: Record<string, unknown> }
       try { frame = JSON.parse(raw.toString()) } catch { return }
+      // The daemon refused a frame too large for it, and closes the line: what waits on it hears why, with the daemon's own numbers.
+      if (frame.type === 'frame_too_large') { failAll(new AgentClientError('REQUEST_TOO_LARGE', refusedLineText(frame.payload))); return }
       if (frame.type === 'machine_select_error') {
         failAll(new AgentClientError(String(frame.payload?.error ?? 'MACHINE_UNAVAILABLE'), 'That machine is not reachable now. `harness machines` lists which are online.'))
         socket.close()
@@ -113,12 +112,16 @@ export async function openDaemon(where: Where, machineId: string = where.machine
           request: (type, payload = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((done, fail) => {
             if (closed) { fail(new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')); return }
             const requestId = randomUUID()
+            const text = JSON.stringify({ type, payload: { ...payload, requestId } })
+            // Past what the daemon's socket takes, said here with its size: sent, the daemon would refuse it and close the line.
+            const bytes = Buffer.byteLength(text)
+            if (bytes > LOCAL_JSON_MAX_BYTES) { fail(new AgentClientError('REQUEST_TOO_LARGE', tooLargeText(bytes))); return }
             const timer = setTimeout(() => {
               waiting.delete(requestId)
               fail(new AgentClientError('TIMEOUT', `Harness did not answer ${type} in time. Try again.`))
             }, timeoutMs)
             waiting.set(requestId, { done, fail, timer })
-            socket.send(JSON.stringify({ type, payload: { ...payload, requestId } }))
+            socket.send(text)
           }),
         })
         return

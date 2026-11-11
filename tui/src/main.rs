@@ -21,6 +21,8 @@ mod history;
 mod mirror;
 mod server;
 mod settings;
+mod sock;
+mod sys;
 mod ipc;
 mod keys;
 mod preview;
@@ -115,9 +117,15 @@ pub fn bell() {
     let _ = out.flush();
 }
 
+#[cfg(unix)]
 unsafe extern "C" { fn raise(sig: i32) -> i32; }
 /// SIGTSTP, as a shell's job control expects of a program that suspends itself.
+#[cfg(unix)]
 unsafe fn libc_raise_tstp() { unsafe { raise(if cfg!(target_os = "linux") { 20 } else { 18 }); } }
+/// Windows' shells have no job control to come back from, so there is nothing to suspend to. (`raise` of a signal it does not
+/// know ends the program.)
+#[cfg(windows)]
+unsafe fn libc_raise_tstp() {}
 
 /// The terminal's title saved on its stack as tmux saves it at attach (XTWINOPS 22), and given
 /// back when hn leaves (23): the shell's own title returns.
@@ -157,6 +165,7 @@ mod notices {
 }
 
 fn main() -> io::Result<()> {
+    sys::prepare_environment();
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|s| s == "--shell-init") {
         return shell_context::initialize(&args[2..]);
@@ -173,6 +182,7 @@ fn main() -> io::Result<()> {
     // your locale's words, as tmux's are (it sets LC_TIME from the environment too).
     let config = config::load();
     // SAFETY: once, before any other thread, with a valid C string.
+    #[cfg(unix)]
     unsafe { libc::setlocale(libc::LC_TIME, c"".as_ptr()); }
     // A terminal hn cannot use: tmux's words for it, not a program's error dump.
     if let Err(e) = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config)) {
@@ -397,6 +407,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     // NO_COLOR is about a program's own output; the panes mirror OTHER programs' screens, whose
     // colours are content. crossterm would otherwise drop every colour, theirs included.
     crossterm::style::force_color_output(true);
+    sys::prepare_console();
     terminal::enable_raw_mode()?;
     // What the terminal is (XDA), as tmux asks it: its colours and features by its own word.
     if std::env::var("HARNESS_TUI_ASK_TERMINAL").as_deref() != Ok("off") { term_out::ask_terminal() }
@@ -435,9 +446,21 @@ async fn run(config: config::Config) -> io::Result<()> {
     std::thread::spawn(move || term_input::read(keys));
     let resize = tx.clone();
     tokio::spawn(async move {
-        let Ok(mut changes) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) else { return };
-        while changes.recv().await.is_some() {
-            if let Ok((cols, rows)) = terminal::size() { if resize.send(Event::Input(crossterm::event::Event::Resize(cols, rows))).is_err() { break } }
+        #[cfg(unix)] {
+            let Ok(mut changes) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) else { return };
+            while changes.recv().await.is_some() {
+                if let Ok((cols, rows)) = terminal::size() { if resize.send(Event::Input(crossterm::event::Event::Resize(cols, rows))).is_err() { break } }
+            }
+        }
+        // Windows has no such signal: a console's size is looked at.
+        #[cfg(windows)] {
+            let mut was = terminal::size().ok();
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+                let now = terminal::size().ok();
+                if now != was { was = now; if let Some((cols, rows)) = now { if resize.send(Event::Input(crossterm::event::Event::Resize(cols, rows))).is_err() { break } } }
+            }
         }
     });
     let ticks = tx.clone();
@@ -720,9 +743,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // last window went, and the session with it.
     // detach-client -E: the client becomes the command, run by default-shell (client_exec).
     if let Some(cmd) = app.exec_after.take() {
-        use std::os::unix::process::CommandExt;
-        let shell = app.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty())).unwrap_or_else(|| "/bin/sh".into());
-        let e = std::process::Command::new(&shell).arg("-c").arg(&cmd).env("SHELL", &shell).exec();
+        let shell = app.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty())).unwrap_or_else(sys::sh);
+        let e = sys::exec(std::process::Command::new(&shell).args(sys::shell_args(&shell, Some(&cmd))).env("SHELL", &shell));
         eprintln!("execl failed: {e}");
         std::process::exit(1);
     }
@@ -730,6 +752,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     else if app.hup_parent { println!("[detached and SIGHUP (from session {session})]") }
     else { println!("[detached (from session {session})]") }
     // detach-client -P: the shell that started the client is sent SIGHUP.
+    #[cfg(unix)]
     if app.hup_parent { let ppid = unsafe { libc::getppid() }; if ppid > 1 { unsafe { libc::kill(ppid, libc::SIGHUP); } } }
     Ok(())
 }

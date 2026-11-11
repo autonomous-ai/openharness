@@ -91,7 +91,7 @@ fn clean(path: &Path) -> PathBuf {
     out
 }
 
-fn home() -> PathBuf { std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/")) }
+fn home() -> PathBuf { crate::sys::home() }
 
 /// An explorer row: a folder at its depth, or a note under one (why it can't be read, how many
 /// more it has).
@@ -870,7 +870,7 @@ impl Files {
         let Some(c) = self.confirm.take() else { return };
         match c.doom {
             Doom::Trash(path) => match ops::trash(&path, &self.trash) {
-                Ok(_) => { self.gone(&path); self.message = Some(format!("Moved '{}' to the Trash", name_of(&path))); self.reload() }
+                Ok(_) => { self.gone(&path); self.message = Some(format!("Moved '{}' to the {}", name_of(&path), ops::TRASH_NAME)); self.reload() }
                 Err(e) => self.confirm = Some(Confirm { doom: Doom::Purge(path, e.to_string()), focus: 0 }),
             },
             Doom::Purge(path, _) => match ops::remove_all(&path) {
@@ -1025,7 +1025,11 @@ impl Files {
         // (A bounded explorer's from its root, nothing above it.)
         let (mut at, mut parts) = if self.bounded { (self.root.clone(), vec![(name_of(&self.root), self.root.clone())]) }
             else if home != Path::new("/") && self.cwd.starts_with(&home) { (home.clone(), vec![("~".to_string(), home)]) }
-            else { (PathBuf::from("/"), vec![("/".to_string(), PathBuf::from("/"))]) };
+            else {
+                // The top of this path: `/`, or on Windows its drive.
+                let root = self.cwd.ancestors().last().filter(|root| !root.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"));
+                (root.clone(), vec![(root.display().to_string(), root)])
+            };
         let rest = self.cwd.strip_prefix(&at).map(Path::to_path_buf).unwrap_or_default();
         for c in rest.components() { at.push(c); parts.push((c.as_os_str().to_string_lossy().into_owned(), at.clone())) }
         let size = |p: &[(String, PathBuf)], cut: bool| p.iter().map(|(n, _)| n.width() + 3).sum::<usize>() - 2 + if cut { 4 } else { 0 };
@@ -1658,13 +1662,11 @@ fn opened(path: PathBuf, folder: bool, launcher: Option<&str>, spawn: &mut dyn F
 
 /// [program] started on its own (its own session, nothing of this terminal's), not waited for.
 fn launch(program: &str, args: &[String]) -> std::io::Result<()> {
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let mut words = program.split_whitespace();
     let mut c = Command::new(words.next().unwrap_or(program));
     c.args(words).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    // SAFETY: setsid only, between fork and exec.
-    unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    crate::sys::detach(&mut c);
     c.spawn().map(|_| ())
 }
 
@@ -1933,7 +1935,7 @@ mod tests {
         f.standalone = true;
         press(&mut f, KeyCode::Right);
         assert_eq!(press(&mut f, KeyCode::Char('y')), Outcome::Clipboard(s.0.join("a.txt").to_string_lossy().into_owned()));
-        assert!(f.message.as_deref().is_some_and(|m| m.starts_with("Copied /")));
+        assert!(f.message.as_deref().is_some_and(|m| m.starts_with("Copied ")));
         assert_eq!(press(&mut f, KeyCode::Enter), Outcome::Edit(s.0.join("a.txt")));
         assert_eq!(press(&mut f, KeyCode::Char('t')), Outcome::Terminal(s.0.clone()));
         assert_eq!(press(&mut f, KeyCode::Char('n')), Outcome::None, "New Harness is hn's");
@@ -2205,7 +2207,7 @@ mod tests {
         press(&mut f, KeyCode::Enter);
         assert!(!s.0.join("a copy 2.txt").exists());
         assert!(s.0.join(".Trash/files/a copy 2.txt").exists() && s.0.join(".Trash/info/a copy 2.txt.trashinfo").exists());
-        assert_eq!(f.message.as_deref(), Some("Moved 'a copy 2.txt' to the Trash"));
+        assert_eq!(f.message, Some(format!("Moved 'a copy 2.txt' to the {}", ops::TRASH_NAME)));
         // C-x on a.txt, then C-v in dir (from the explorer): moved.
         f.selected = names(&f).iter().position(|n| *n == "a.txt").unwrap();
         ctrl(&mut f, 'x');

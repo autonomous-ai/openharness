@@ -32,7 +32,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -66,7 +65,7 @@ void main() {
   }
 
   ConversationServer server() {
-    final s = ConversationServer()..threads = true;
+    final s = ConversationServer.chat()..threads = true;
     (s.state['people'] as List).add({
       'id': 'peer',
       'email': 'peer@example.com',
@@ -201,7 +200,10 @@ void main() {
     c.openThread('message-1');
     await tester.pumpAndSettle();
 
-    await tester.drag(inPanel(find.byType(LaidOutListView)), const Offset(0, 400));
+    await tester.drag(
+      inPanel(find.byType(LaidOutListView)),
+      const Offset(0, 400),
+    );
     await tester.pumpAndSettle();
     final read = threadScroll(tester).pixels;
     expect(threadScroll(tester).extentAfter, greaterThan(40));
@@ -287,7 +289,9 @@ void main() {
     addTearDown(c.dispose);
     c.openThread('message-1');
     await c.loadThread();
-    await tester.binding.setSurfaceSize(const Size(500, 575));
+    // Just tall enough for all of it, Also send's line under the box included
+    // (#2662), the box's inner padding (#2779) and its 26 px line (11-10).
+    await tester.binding.setSurfaceSize(const Size(500, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(

@@ -2,17 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../core/models.dart' show sameMachineId;
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
-import 'buddy_rows.dart' show SuperTabCountBadge;
+import 'count_badge.dart' show SuperTabCountBadge;
 import 'controller.dart';
-import 'machines.dart' show contributeComputer;
 import 'section_heading.dart' show SuperTabSectionHeading;
-import 'swarm_delete.dart';
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
 /// Swarm the tab shows, and in its menu Personal, every other Swarm the
@@ -45,7 +42,6 @@ class PersonalSwarm extends ChangeNotifier {
   final _pickedIds = <String, String>{};
   final _reads = <String, Future<void>>{};
   final _creating = <String, Future<String>>{};
-  final _adding = <String>{};
 
   /// Swarms taken away from each account while shown here: listed no more,
   /// even once their tab has let them go.
@@ -79,9 +75,8 @@ class PersonalSwarm extends ChangeNotifier {
   bool _usable(String id) =>
       !lost(id) && app.superTabs.peek(id)?.accessRevoked != true;
 
-  /// Personal is being created or set up for the signed-in person.
-  bool get busy =>
-      _creating.containsKey(_account) || _adding.contains(_account);
+  /// Personal is being created for the signed-in person.
+  bool get busy => _creating.containsKey(_account);
 
   /// Why picking Personal in Swarm tab [tab] failed last, if it did.
   String? errorIn(String tab) => switch (_error) {
@@ -202,9 +197,11 @@ class PersonalSwarm extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Shows Personal in Swarm tab [swarmId], creating it first if needed, then
-  /// adds this computer to it. A tab that moved to another Swarm meanwhile,
-  /// or a person who signed out, is left as it is.
+  /// Shows Personal in Swarm tab [swarmId], creating it first if needed. No
+  /// computer is added from here: an agent runs on its own person's computer,
+  /// whose daemon joins the Swarm once one of their agents runs there (cli
+  /// superTabs/host.ts `joinSwarms`). A tab that moved to another Swarm
+  /// meanwhile, or a person who signed out, is left as it is.
   Future<void> show(String swarmId) async {
     final account = _account;
     final shown = _tabShowing(swarmId);
@@ -228,82 +225,10 @@ class PersonalSwarm extends ChangeNotifier {
     }
     if (_account != account || _tabShowing(swarmId) != shown) return;
     app.showSuperTabIn(swarmId, personal, kPersonalSwarmName);
-    await _addThisComputer(account, swarmId, personal);
   }
 
   String? _tabShowing(String swarmId) =>
       app.swarms.where((s) => s.id == swarmId).firstOrNull?.superTabId;
-
-  /// This computer, added as Add machine adds it: only the person's own,
-  /// linked and online, and never a Harness Team account's machine.
-  Future<void> _addThisComputer(
-    String account,
-    String tab,
-    String personal,
-  ) async {
-    final here = app.machineStates.values
-        .where(
-          (m) =>
-              m.isLocalMachine &&
-              !m.machine.isTeamAccount &&
-              !m.belongsToOtherAccount &&
-              !m.needsLink &&
-              !m.isOffline,
-        )
-        .firstOrNull;
-    if (here == null || !_adding.add(account)) return;
-    notifyListeners();
-    SuperTabController? opened;
-    // Let go since (the tab moved on): its answers are no one's now.
-    bool alive() =>
-        _account == account &&
-        opened != null &&
-        !opened.accessRevoked &&
-        identical(app.superTabs.peek(personal), opened);
-    try {
-      final c = opened = await app.superTabs.open(personal);
-      if (c.snapshot == null) await c.refresh();
-      final machineId = here.machine.machineId;
-      final snapshot = c.snapshot;
-      if (!alive() || snapshot == null) return;
-      if (snapshot.machines.any(
-        (m) =>
-            m['machineId'] is String &&
-            sameMachineId(m['machineId'], machineId),
-      )) {
-        return;
-      }
-      await contributeComputer(
-        c,
-        app,
-        machineId,
-        setupId: 'personal-swarm-setup',
-        alive: alive,
-        // As Add machine: where the Swarm runs teammates' work through Team
-        // accounts, this Mac is never lent under its owner's own login.
-        teamAccountOnly: snapshot.teamAccounts,
-        offerTeamAccount: false,
-      );
-    } catch (failure) {
-      // Only while the tab still shows Personal: once it moved on, Personal
-      // was let go, and what was still out (its saved state being read, an
-      // add on its way) answers no one.
-      if (_tabShowing(tab) == personal && (opened == null || alive())) {
-        const headline = 'Could not add this computer to Personal.';
-        final reason = failure is SuperTabFailure ? failure.message : null;
-        _fail(
-          account,
-          tab,
-          reason == null || reason == 'Could not add this machine.'
-              ? headline
-              : '$headline $reason',
-        );
-      }
-    } finally {
-      _adding.remove(account);
-      notifyListeners();
-    }
-  }
 }
 
 /// The Swarms the dropdown lists under Personal, by name: every Swarm the
@@ -329,14 +254,10 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
         (
           id: id,
           name: name.trim().isEmpty ? 'Swarm' : name,
-          waiting: swarmWaiting(app, id),
+          waiting: app.superTabs.agentsAsking(id),
         ),
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 }
-
-/// What a Swarm's tab badge counts: its tags and unread Buddy chat lines.
-int swarmWaiting(AppNotifier app, String id) =>
-    app.superTabs.waitingTags(id) + app.superTabs.waitingBuddy(id);
 
 /// The Swarm tab showing [c]'s Swarm moves to Personal when that Swarm is
 /// taken away, once the person has picked Personal here (read from this
@@ -371,11 +292,15 @@ class SwarmSwitcher extends StatefulWidget {
     required this.controller,
     required this.onNewSwarm,
     required this.row,
+    this.onRename,
   });
 
   final AppNotifier app;
   final SuperTabController controller;
   final VoidCallback onNewSwarm;
+
+  /// Rename, for the Swarm shown; none for Personal, or without it.
+  final VoidCallback? onRename;
   final Widget Function({
     required String label,
     required IconData icon,
@@ -409,24 +334,6 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
     app.showSuperTabIn(tab, choice.id, choice.name);
   }
 
-  DeletedSwarms get deleted => DeletedSwarms.of(app);
-
-  /// Asks its owner to confirm; once deleted, it leaves this dropdown and
-  /// its tab moves on as for any Swarm taken away.
-  Future<void> _delete(BuildContext context) async {
-    _menu.close();
-    final c = widget.controller;
-    if (!await showDeleteSwarmDialog(context, c)) return;
-    unawaited(app.superTabs.refreshTabs());
-    unawaited(deleted.read());
-  }
-
-  /// Restores a deleted Swarm and shows it in this tab.
-  void _restore(String id) {
-    _menu.close();
-    unawaited(deleted.restore(id, tab: _tab));
-  }
-
   void _pickPersonal() {
     _menu.close();
     final tab = _tab;
@@ -435,7 +342,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app, personal, deleted, widget.controller]),
+    listenable: Listenable.merge([app, personal, widget.controller]),
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final c = widget.controller;
@@ -448,10 +355,9 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
           ? 'Swarm'
           : app.superTabName(current) ?? c.snapshot?.name ?? 'Swarm';
       final choices = swarmChoices(app);
-      final restorable = deleted.items;
       final personalWaiting = personalId == null || isPersonal
           ? 0
-          : swarmWaiting(app, personalId);
+          : app.superTabs.agentsAsking(personalId);
       Widget? badge(int count) => count > 0 ? SuperTabCountBadge(count) : null;
       return LayoutBuilder(
         builder: (context, box) {
@@ -460,92 +366,59 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              MenuAnchor(
+              AppDropdown(
                 controller: _menu,
-                consumeOutsideTap: true,
-                alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-                style: grid.AppMenu.style(minWidth: width, maxWidth: width),
+                // The size of every other dropdown, not the sidebar's full
+                // width.
+                width: width > AppDropdown.defaultWidth
+                    ? AppDropdown.defaultWidth
+                    : width,
                 onOpen: () {
                   if (_tab case final tab?) personal.clearError(tab);
-                  unawaited(deleted.read());
                 },
-                // As wide as the row it opens from.
-                menuChildren: [
-                  for (final item in <Widget>[
+                children: [
+                  AppMenuItem(
+                    key: const ValueKey('swarm-switch-personal'),
+                    label: kPersonalSwarmName,
+                    icon: AppIcons.user,
+                    selected: isPersonal,
+                    trailing: personal.busy
+                        ? const SizedBox.square(
+                            dimension: 12,
+                            child: CircularProgressIndicator(strokeWidth: 1.5),
+                          )
+                        : badge(personalWaiting),
+                    onPressed: _pickPersonal,
+                  ),
+                  for (final choice in choices)
                     AppMenuItem(
-                      key: const ValueKey('swarm-switch-personal'),
-                      label: kPersonalSwarmName,
-                      icon: AppIcons.user,
-                      selected: isPersonal,
-                      expandLabel: true,
-                      trailing: personal.busy
-                          ? const SizedBox.square(
-                              dimension: 12,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                              ),
-                            )
-                          : badge(personalWaiting),
-                      onPressed: _pickPersonal,
+                      key: ValueKey('swarm-switch-${choice.id}'),
+                      label: choice.name,
+                      icon: AppIcons.users,
+                      selected: choice.id == current,
+                      trailing: choice.id == current
+                          ? null
+                          : badge(choice.waiting),
+                      onPressed: () => _pick(choice.id),
                     ),
-                    for (final choice in choices)
-                      AppMenuItem(
-                        key: ValueKey('swarm-switch-${choice.id}'),
-                        label: choice.name,
-                        icon: AppIcons.users,
-                        selected: choice.id == current,
-                        expandLabel: true,
-                        trailing: choice.id == current
-                            ? null
-                            : badge(choice.waiting),
-                        onPressed: () => _pick(choice.id),
-                      ),
+                  const AppMenuDivider(),
+                  if (widget.onRename case final rename?
+                      when current != null && !isPersonal)
                     AppMenuItem(
-                      key: const ValueKey('swarm-switch-new'),
-                      label: 'New Swarm',
-                      icon: AppIcons.plus,
-                      expandLabel: true,
+                      key: const ValueKey('swarm-switch-rename'),
+                      label: 'Rename',
+                      icon: AppIcons.pencil,
                       onPressed: () {
                         _menu.close();
-                        widget.onNewSwarm();
+                        rename();
                       },
                     ),
-                    // Its owner's alone, never Personal (backend deletion.ts).
-                    if (current != null &&
-                        !isPersonal &&
-                        c.isOwner &&
-                        c.snapshot != null)
-                      AppMenuItem(
-                        key: const ValueKey('swarm-switch-delete'),
-                        label: 'Delete “$label”…',
-                        icon: AppIcons.trash2,
-                        danger: true,
-                        expandLabel: true,
-                        onPressed: () => _delete(context),
-                      ),
-                    if (restorable.isNotEmpty) const AppMenuDivider(),
-                    for (final swarm in restorable)
-                      AppMenuItem(
-                        key: ValueKey('swarm-switch-restore-${swarm.id}'),
-                        label: 'Restore “${swarm.name}”',
-                        icon: AppIcons.undo2,
-                        expandLabel: true,
-                        detail: deleted.restoreError?.id == swarm.id
-                            ? deleted.restoreError!.message
-                            : 'Deleted · '
-                                  '${restoreTimeLeft(swarm.purgeAt, DateTime.now())}',
-                        trailing: deleted.restoring(swarm.id)
-                            ? const SizedBox.square(
-                                dimension: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.5,
-                                ),
-                              )
-                            : null,
-                        onPressed: () => _restore(swarm.id),
-                      ),
-                  ])
-                    SizedBox(width: width, child: item),
+                  AppMenuItem(
+                    key: const ValueKey('swarm-switch-new'),
+                    label: 'New Swarm',
+                    icon: AppIcons.plus,
+                    onPressed: widget.onNewSwarm,
+                  ),
                 ],
                 builder: (context, menu, _) => Semantics(
                   label: 'Swarm: $label',
@@ -557,7 +430,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                     trailing: Icon(
                       AppIcons.chevronDown,
                       size: 14,
-                      color: DesktopChrome.muted,
+                      color: grid.SidebarInk.muted(context),
                     ),
                   ),
                 ),

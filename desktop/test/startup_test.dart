@@ -113,6 +113,7 @@ void main() {
         uiFamily: 'Helvetica Neue',
         uiSize: 16,
         palette: HarnessPalette.forest,
+        darkPalette: HarnessPalette.forest,
       ),
     );
     expect(nextStats.summary.agentsSpawned, 1);
@@ -177,11 +178,15 @@ void main() {
           'app_ui_font_family',
           'app_ui_font_size',
           'app_color_palette',
+          'app_theme_mode',
+          'app_light_palette',
+          'app_dark_palette',
           'harness_start_background',
           'harness_custom_background',
           'harness_background_behind_harnesses',
           'harness_shade_inactive_panes',
-          'harness_auto_rename_tabs',
+          'harness_panes_v1',
+'harness_auto_rename_tabs',
           'workspace_prompt_v1',
         },
       ]);

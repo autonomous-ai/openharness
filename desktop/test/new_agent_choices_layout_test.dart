@@ -66,17 +66,18 @@ class _ChoicesApp extends AppNotifier {
     bool bypassPermission = false,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? swarmId,
     PaneSplitRequest? split,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
     String? agent,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     createCalls++;
     return null;

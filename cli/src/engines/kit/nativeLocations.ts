@@ -10,7 +10,7 @@ export const LAUNCH_LOCATION_VARIABLES = [
   'HERMES_HOME', 'CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR', 'GROK_HOME', 'AGY_HOME', 'COPILOT_HOME',
   'SHELL', 'ZDOTDIR', 'CLAUDE_PROJECTS_DIR', 'CURSOR_HOME', 'AGY_CONFIG_DIR', 'COMMANDCODE_HOME',
   'DEVIN_HOME', 'DEVIN_CONFIG_PATH', 'OPENCODE_PLUGIN_DIR', 'KILO_PLUGIN_DIR', 'PI_HOME',
-  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR',
+  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR', 'OPENCLAW_STATE_DIR',
 ] as const
 
 /** The shell can unset an inherited location. Absence is part of its snapshot. */
@@ -49,11 +49,14 @@ export function nativeHookLocations(vars: Readonly<Record<string, string>>) {
     OPENCODE_PLUGIN_DIR: vars.OPENCODE_PLUGIN_DIR || join(vars.OPENCODE_CONFIG_DIR || join(config, 'opencode'), 'plugin'),
     KILO_PLUGIN_DIR: vars.KILO_PLUGIN_DIR || join(config, 'kilo', 'plugin'),
     PI_AGENT_DIR: vars.PI_CODING_AGENT_DIR || join(vars.PI_HOME || join(home, '.pi'), 'agent'),
-    HERMES_HOME: vars.HERMES_HOME || join(home, '.hermes'),
+    // Windows: under %LOCALAPPDATA% (Hermes 0.22.7, hermes_constants.py).
+    HERMES_HOME: vars.HERMES_HOME || (process.platform === 'win32' ? join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'hermes') : join(home, '.hermes')),
     COMMANDCODE_HOME: vars.COMMANDCODE_HOME || join(home, '.commandcode'),
     DEVIN_HOME: vars.DEVIN_HOME || join(data, 'devin', 'cli'),
     DEVIN_CONFIG_PATH: vars.DEVIN_CONFIG_PATH || join(config, 'devin', 'config.json'),
     AMP_PLUGIN_DIR: vars.AMP_PLUGIN_DIR || join(config, 'amp', 'plugins'),
+    // Where OpenClaw finds its state when the TUI's open files cannot say (Windows): its own variable, else ~/.openclaw.
+    OPENCLAW_STATE_DIR: vars.OPENCLAW_STATE_DIR || join(home, '.openclaw'),
   }
   if (Object.values(locations).some(path => !isAbsolute(path) || path.includes('\0') || path.length > 4096)) {
     throw Error('Unconfirmed native location')

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -6,6 +7,7 @@ import 'keymap.dart';
 import 'keymap_commands.dart';
 import 'keymap_dispatch.dart';
 import 'keymap_keyboard.dart';
+import 'text_editing_keys.dart';
 
 const composerOwnedStrokes = [
   KeyStroke('w', control: true),
@@ -133,16 +135,41 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
       _notifyPending();
       return KeyEventResult.ignored;
     }
-    final value = context
-        .findAncestorStateOfType<EditableTextState>()
-        ?.widget
-        .controller
-        .value;
+    final editable = context.findAncestorStateOfType<EditableTextState>();
+    final value = editable?.widget.controller.value;
     final composing =
         region?.composing?.call() == true ||
         (value != null &&
             value.composing.isValid &&
             !value.composing.isCollapsed);
+    // A caret in a text field owns the standard editing keys: ⌘← is the line
+    // start there, not "focus the pane to the left". Not so for text that only
+    // reads (selectable text is a read-only field: no caret to move), for text
+    // being composed (the IME owns the keys; Ctrl+K would cut into it), for the
+    // menus built on a field (the picker, the project menu, which keep their
+    // own keys), nor mid-chord (a chord already under way finishes first).
+    final contextKind = region?.contextKind ?? KeymapContext.workspace;
+    if (editable != null &&
+        value != null &&
+        !editable.widget.readOnly &&
+        !composing &&
+        !_dispatch.hasPending &&
+        contextKind != KeymapContext.picker &&
+        contextKind != KeymapContext.project) {
+      final typed = keyStrokeForEvent(event);
+      final platform = defaultTargetPlatform;
+      if (textFieldKillsLine(typed, platform: platform)) {
+        Actions.maybeInvoke(context, killLineIntent);
+        return KeyEventResult.handled;
+      }
+      if (textFieldKeepsStroke(
+        typed,
+        platform: platform,
+        hasText: value.text.isNotEmpty,
+      )) {
+        return KeyEventResult.ignored;
+      }
+    }
     final stroke = keyStrokeForEvent(event);
     final aliasesBlocked =
         region?.contextKind == KeymapContext.terminal &&

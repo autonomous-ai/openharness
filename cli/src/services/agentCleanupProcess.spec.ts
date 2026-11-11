@@ -82,12 +82,15 @@ describe('the agent cleanup in its own process', () => {
   it('keeps the members the Swarm hands it while it is on, and none without it', () => {
     const given: Array<Parameters<typeof createAgentCleanup>[1]> = []
     const create = (_core: CoreApi, deps?: Parameters<typeof createAgentCleanup>[1]) => { given.push(deps); return { port: { closed: vi.fn(), typed: vi.fn(), stop: vi.fn() }, look: vi.fn(), closeStartedBy: vi.fn() } }
-    const retainedHarnesses = vi.fn(() => new Set(['member']))
+    const retainedHarnesses = vi.fn(() => new Set(['member'])), recordCleanupClose = vi.fn()
     const base = { dataDir: dir, socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), create }
-    runAgentCleanupService({ ...base, swarm: { retainedHarnesses } })
+    runAgentCleanupService({ ...base, swarm: { retainedHarnesses, recordCleanupClose } })
     runAgentCleanupService(base)
     expect(given[0]!.retained).toBe(retainedHarnesses)
+    // And the Swarm is told what it closed (superTabs/cleanupCloses.ts).
+    expect(given[0]!.closed).toBe(recordCleanupClose)
     expect(given[1]).not.toHaveProperty('retained')
+    expect(given[1]).not.toHaveProperty('closed')
   })
 
   it('stops its looks with the process', () => {

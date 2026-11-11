@@ -1,9 +1,19 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/runtime_platform.dart';
 import '../core/desktop_window.dart';
+import '../core/test_run.dart';
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+
+/// Windows hides the system caption, so every screen that fills the window
+/// draws [WindowCaptionButtons] itself.
+bool get drawsWindowCaption => RuntimePlatform.isWindows && !kUnderTest;
+
+/// The height of the row [WindowCaptionButtons] sit in when no tab strip sets
+/// one: the tab strip's own.
+const double kWindowCaptionHeight = 40;
 
 /// How far a full-width strip drawn at the very top of the window has to
 /// start from the left to clear the traffic lights.
@@ -106,17 +116,196 @@ class WindowDragArea extends StatelessWidget {
 }
 
 /// A strip along the top of a screen that fills the window, so it can still be
-/// dragged with the title bar gone. Zero height off macOS, where the native
-/// caption bar does this itself.
+/// dragged with the title bar gone. macOS keeps its native caption; Windows
+/// hides it and draws the row itself, so both need this. Zero elsewhere.
 class WindowDragStrip extends StatelessWidget {
   const WindowDragStrip({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final managedTitleRow =
+        RuntimePlatform.isMacOS || RuntimePlatform.isWindows;
     return DragToMoveArea(
       child: SizedBox(
-        height: RuntimePlatform.isMacOS ? windowDragBandHeight : 0,
+        height: managedTitleRow ? windowDragBandHeight : 0,
         width: double.infinity,
+      ),
+    );
+  }
+}
+
+/// The empty part of a caption row the app draws itself.
+///
+/// Drags the window and, like a system caption, restores or maximises it on a
+/// double click. It sits BEHIND the row's controls rather than around them, so
+/// it never joins the gesture arena under a button ([WindowDragArea] explains
+/// why that costs 300 ms).
+class WindowCaptionDragArea extends StatelessWidget {
+  const WindowCaptionDragArea({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasManagedWindow) return const SizedBox.expand();
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (_) => windowManager.startDragging(),
+      onDoubleTap: () async {
+        if (await windowManager.isMaximized()) {
+          await windowManager.unmaximize();
+        } else {
+          await windowManager.maximize();
+        }
+      },
+      child: const SizedBox.expand(),
+    );
+  }
+}
+
+/// Minimise, restore and close for a window whose caption the app draws.
+///
+/// Windows hides the system caption and puts its buttons at the end of the
+/// workspace tab strip, so the tabs, the app's controls and the window's own
+/// controls share the one row every other Windows app uses. Sized like
+/// Windows draws them: 46 wide, the row's full height, the close button filled
+/// red only under the pointer.
+class WindowCaptionButtons extends StatefulWidget {
+  const WindowCaptionButtons({super.key, required this.height});
+
+  /// The row's height, so the buttons fill it edge to edge.
+  final double height;
+
+  static const double buttonWidth = 46;
+
+  @override
+  State<WindowCaptionButtons> createState() => _WindowCaptionButtonsState();
+}
+
+class _WindowCaptionButtonsState extends State<WindowCaptionButtons>
+    with WindowListener {
+  bool _maximized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    windowManager.isMaximized().then((value) {
+      if (mounted) setState(() => _maximized = value);
+    });
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowMaximize() => setState(() => _maximized = true);
+
+  @override
+  void onWindowUnmaximize() => setState(() => _maximized = false);
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: widget.height,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _CaptionButton(
+          key: const ValueKey('windows-window-minimize'),
+          label: 'Minimize',
+          icon: AppIcons.minus,
+          onPressed: windowManager.minimize,
+        ),
+        _CaptionButton(
+          key: const ValueKey('windows-window-maximize'),
+          label: _maximized ? 'Restore' : 'Maximize',
+          icon: _maximized ? AppIcons.copy : AppIcons.square,
+          onPressed: () => _maximized
+              ? windowManager.unmaximize()
+              : windowManager.maximize(),
+        ),
+        _CaptionButton(
+          key: const ValueKey('windows-window-close'),
+          label: 'Close',
+          icon: AppIcons.close,
+          close: true,
+          onPressed: windowManager.close,
+        ),
+      ],
+    ),
+  );
+}
+
+class _CaptionButton extends StatefulWidget {
+  const _CaptionButton({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.close = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool close;
+
+  @override
+  State<_CaptionButton> createState() => _CaptionButtonState();
+}
+
+class _CaptionButtonState extends State<_CaptionButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final hovered = _hovered;
+    final close = widget.close;
+    final background = hovered
+        ? (close ? const Color(0xffc42b1c) : grid.AppSurface.hoverFill)
+        : Colors.transparent;
+    final foreground = hovered && close
+        ? Colors.white
+        : grid.AppPalette.textPrimary;
+    return Semantics(
+      button: true,
+      label: widget.label,
+      onTap: widget.onPressed,
+      child: Tooltip(
+        message: widget.label,
+        excludeFromSemantics: true,
+        waitDuration: const Duration(milliseconds: 500),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: FocusableActionDetector(
+            mouseCursor: SystemMouseCursors.click,
+            onShowFocusHighlight: (value) => setState(() => _hovered = value),
+            actions: {
+              ActivateIntent: CallbackAction<ActivateIntent>(
+                onInvoke: (_) {
+                  widget.onPressed();
+                  return null;
+                },
+              ),
+            },
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onPressed,
+              child: Container(
+                width: WindowCaptionButtons.buttonWidth,
+                color: background,
+                alignment: Alignment.center,
+                child: ExcludeSemantics(
+                  child: Icon(widget.icon, size: 12, color: foreground),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -139,6 +328,12 @@ class FullWindowScreen extends StatelessWidget {
       children: [
         Positioned.fill(child: child),
         const Positioned(top: 0, left: 0, right: 0, child: WindowDragStrip()),
+        if (drawsWindowCaption)
+          const Positioned(
+            top: 0,
+            right: 0,
+            child: WindowCaptionButtons(height: kWindowCaptionHeight),
+          ),
       ],
     );
   }

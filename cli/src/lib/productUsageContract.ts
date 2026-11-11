@@ -78,9 +78,11 @@ export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.fl
  * `phone_offer_after_work` is the same card offered once to a computer that never showed it (a computer that
  * opened signed in was marked offered without it), after one of its own harnesses finished a turn; vocabulary 4.
  * `phone_offer_away_waited` / `_finished`: the card for a person back after five minutes or more away, to a harness
- * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md. */
+ * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md.
+ * `team_account_removal`: how a Team account's removal from the computer ended (anh Dee, 2026-11-10: every Team account
+ * goes): ok removed or already gone, failed when the system refused or kept it, cancelled at the admin prompt; vocabulary 8. */
 export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer_returning', 'phone_offer', 'phone_offer_after_work', 'phone_offer_away_waited',
-  'phone_offer_away_finished', 'share_invite', 'share_accept'] as const
+  'phone_offer_away_finished', 'share_invite', 'share_accept', 'agent_import', 'team_account_removal'] as const
 /** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
  * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
  * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */
@@ -143,7 +145,7 @@ export const PRODUCT_USAGE_SETUP_METRICS = [...PRODUCT_USAGE_SURFACES.flatMap(su
  * codes (listed below). Codes only, never a message. */
 export const LAUNCH_ERROR_CODES = [
   // What a new harness asked for, refused before anything starts (core/agents/launches.ts, lib/engineLaunch.ts).
-  'invalid_codex_home', 'invalid_prompt', 'prompt_too_long', 'prompt_unsupported', 'invalid_agent', 'invalid_session',
+  'invalid_codex_home', 'invalid_claude_home', 'invalid_prompt', 'prompt_too_long', 'prompt_unsupported', 'invalid_agent', 'invalid_session',
   'invalid_started_by', 'agent_unsupported', 'invalid_runtime_profile', 'grid_engine_unsupported', 'codex_cli_too_old',
   'invalid_launch_model', 'launch_model_unsupported',
   // A new project's folder (lib/projectFolder.ts) and the launch's durable receipt (lib/agentCreationReceipt.ts).
@@ -153,7 +155,8 @@ export const LAUNCH_ERROR_CODES = [
   // The engine itself: preparing it (engines/nativeLaunch.ts) and its start (core/agents/newPane.ts).
   'engine_cannot_run', 'engine_install_failed', 'engine_did_not_start', 'engine_not_installed', 'start_timeout',
   'engine_launch_refused',
-  // A Codex launch in a home of its own (a Swarm Product Manager's) the owner's relay cannot sign in (team/relay.ts).
+  // A Codex launch the owner's subscription relay could not sign in. The relay is gone (#4137) and nothing sends it; kept
+  // because the contract is published and only extended.
   'owner_relay_unavailable',
   // A Store harness (core/agents/dshThrough.ts, services/storeLaunch.ts).
   'dsh_not_installed', 'dsh_unavailable', 'dsh_runtime_failed',
@@ -173,7 +176,8 @@ export const LAUNCH_ERROR_CODES = [
   'stop_unconfirmed',
   // A guest on a machine shared with it (core/guestPolicy.ts, core/agents/guestCreate.ts, services/guestLaunches.ts).
   'guest_not_allowed', 'guest_unsupported', 'guest_harness', 'guest_unavailable', 'guest_helper_required',
-  'guest_engine_unsupported', 'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
+  'guest_engine_unsupported', 'guest_engine_check_failed', 'guest_engine_install_failed', 'guest_host_unavailable',
+  'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
   'guest_helper_not_authorized', 'guest_helper_failed',
   // The `setup` kind's own codes, named for a delete or restart refusal (cli/src/lib/productUsageSignals.ts).
   'tmux_unavailable', 'pty_host_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
@@ -215,6 +219,18 @@ export const PRODUCT_USAGE_LAUNCH_METRICS = [
 export const PRODUCT_USAGE_ACTION_MEASURES = ['requests', 'ok', 'failed', 'pending', 'unknown',
   'error_setup', 'error_auth', 'error_unavailable', 'error_invalid', 'error_other',
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
+/** The agent browser's failed states (cli/src/services/agentBrowser/browsers.ts) and its stream's close reasons. */
+export const AGENT_BROWSER_FAILED_STATES = ['needs_setup', 'podman_install_failed', 'podman_manual', 'podman_old', 'podman_memory',
+  'state_unreadable', 'podman_down', 'image_failed', 'browser_stopped', 'profile_unwritable', 'proxy_failed', 'browser_limit',
+  'device_failed'] as const
+export const AGENT_BROWSER_CLOSE_REASONS = ['closed', 'agent', 'rate', 'backlog', 'route'] as const
+/** The agent browser's outcomes, each a counter of its own (`browser_open` already counts a pane opening an address):
+ * from the daemon's service and core, and `agent_browser_opened` from the Desktop. Never an id, URL, host or reason. */
+export const PRODUCT_USAGE_AGENT_BROWSER_METRICS = ['agent_browser_enabled', 'agent_browser_setup_ok', 'agent_browser_setup_failed',
+  'agent_browser_start_ok', 'agent_browser_start_failed', ...AGENT_BROWSER_FAILED_STATES.map(state => `agent_browser_failed_${state}` as const),
+  'agent_browser_limit_dropped', 'agent_browser_proxy_set', 'agent_browser_proxy_removed',
+  'agent_browser_proxy_test_ok', 'agent_browser_proxy_test_failed', 'agent_browser_stream_opened',
+  ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened'] as const
 export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_HEALTH_METRICS,
   'active_installation_days', 'working_installation_days', 'first_work_installations',
@@ -253,6 +269,7 @@ export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS,
   ...PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS,
   'ui_phone_first_open',
+  ...PRODUCT_USAGE_AGENT_BROWSER_METRICS,
   // Written by the backend itself: a report that named counters this backend does not know yet, which
   // it kept without them (routes/productUsage.ts). One per report, never the names.
   'health_cli_report_unknown_metric', 'health_desktop_report_unknown_metric', 'health_phone_report_unknown_metric',

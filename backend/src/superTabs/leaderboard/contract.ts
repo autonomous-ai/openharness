@@ -1,8 +1,11 @@
 /**
- * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=`), the `data` of the usual
- * envelope. Desktop/web (`desktop/lib/super_tabs/leaderboard`) mirror it by hand. Times are epoch milliseconds; people are
+ * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=` or `&period=`), the `data` of
+ * the usual envelope. Asked for a period (rolling.ts), "week" below means that period and "last week" the one of the same
+ * length before it. The phone (`mobile/lib/swarm/swarm_leaderboard_reader.dart`) mirrors it by hand. Times are epoch milliseconds; people are
  * member ids. The only conversation text in it is the titles of conversations the reader may read (details); no message text.
  */
+import type { PeriodName } from './rolling.js'
+
 export type Medal = 'gold' | 'silver' | 'bronze'
 export type UnblockKind = 'decision' | 'approval' | 'needs_human' | 'tag_reply'
 
@@ -13,15 +16,33 @@ export interface PersonDetails {
   unblocked: Array<{ title: string; conversationId: string; kind: UnblockKind; waitedMinutes: number }>
   /** Each machine's busy agent-hours this week, to one decimal, busiest first. */
   lent: Array<{ machineName: string; busyHours: number }>
+  /** Every machine the person brought that the reader may see: what it did this
+   *  week (contributor view, #2444). Absent from a backend before it. Supersedes [lent] for clients that read it. */
+  brought: BroughtMachine[]
+}
+
+/** One machine a person brought. `shipped`: verified requests (shipped with a PR, no fix after merge) whose shipping attempt
+ *  ran on it, anyone's; `busyHours`: its agents' time on other people's tasks, to one decimal; `subscriptions`: each
+ *  contributed engine's weekly window from its last reading, `usedPercent` and `resetsAt` (epoch ms) null when unknown. */
+export interface BroughtMachine {
+  machineId: string
+  machineName: string
+  shipped: number
+  busyHours: number
+  subscriptions: Array<{ engine: string; usedPercent: number | null; resetsAt: number | null }>
 }
 
 export interface PersonScore {
   personId: string
+  /** Weekly org board only: requests first assigned this week, credited once to their requester. */
+  accepted?: number
+  /** Weekly org board only: visible own-account agents currently contributed; never earns points. */
+  agentsBrought?: number
   /** Their profile name, else their email's local part. */
   displayName: string
   points: number
-  /** The same scoring for the week before, for the arrow against last week. */
-  prevWeekPoints: number
+  /** The same scoring for the week before, for the arrow against last week. Null for Last 30d, which has no comparison. */
+  prevWeekPoints: number | null
   /** 1 for the most points; people with the same points share a rank. */
   rank: number
   /** For the top three ranks with points; null otherwise. */
@@ -43,15 +64,13 @@ export interface WeekGoal { shipped: number; points: number; medianAskToShipMs: 
  *  cheaper models without lower quality). */
 export interface ModelShare { attempts: number; grid: number; reviewed: { grid: number; subscription: number }; passedFirst: { grid: number; subscription: number } }
 
-/** A permanent agent of the project, its PM or a Buddy, scored by name like a person (Dee, 2026-10-29). */
+/** A project's PM, scored by name like a person (Dee, 2026-10-29). */
 export interface AgentScore {
   agentId: string
   displayName: string
-  kind: 'pm' | 'buddy'
-  /** A Buddy's person; null for the PM. */
-  personId: string | null
+  kind: 'pm'
   machineId: string
-  /** SHIPPED_POINTS for each request shipped this week: the PM's of groups it led, a Buddy's of groups opened from its proposals. */
+  /** SHIPPED_POINTS for each request shipped this week: of the groups it led. */
   points: number
   rank: number
   shipped: number
@@ -94,18 +113,25 @@ export interface RecentModel {
 export interface Leaderboard {
   projectId: string
   week: number
+  /** The rolling period this sums, when one was asked for; `end` is the read's time. Absent from a week's answer. */
+  period?: { name: PeriodName; start: number; end: number }
+  /** Sums every project the reader may read, and lists everyone in the Swarm: the roster's All projects. Absent otherwise. */
+  allProjects?: true
   /** The team's goal: everyone's points count toward it. */
-  goal: { openRequests: number; thisWeek: WeekGoal; lastWeek: WeekGoal }
+  goal: { openRequests: number; thisWeek: WeekGoal; lastWeek: WeekGoal | null }
   /** Every person who reads the project, most points first. */
   people: PersonScore[]
   /** Agents waiting on a person now: how many per person, in name order. Never ranked, never in the points. */
   waiting: { total: number; people: Array<{ personId: string; count: number; conversationIds: string[] }> }
   /** Absent from a backend before it. */
-  models: { thisWeek: ModelShare; lastWeek: ModelShare }
-  /** The project's PM and Buddies, most points first. Absent from a backend before them. */
+  models: { thisWeek: ModelShare; lastWeek: ModelShare | null }
+  /** The project's PM, most points first. Absent from a backend before them. */
   agents: AgentScore[]
   /** Every model that worked this week, most points first. Absent from a backend before it. */
   byModel: ModelScore[]
   /** The models of the 7 days up to now, most attempts first. Absent from a backend before it. */
   recentModels: RecentModel[]
+  /** People whose machine ran an attempt on the groups summed, this week and last, and how many of last week's ran again
+   *  this week: the PM's contributor targets (per week, kept next week). Counts only. Absent from a backend before it. */
+  contributors: { thisWeek: number; lastWeek: number | null; kept: number | null }
 }

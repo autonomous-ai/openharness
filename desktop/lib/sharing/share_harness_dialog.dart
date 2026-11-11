@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../super_tabs/visible_tick.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
@@ -73,7 +74,8 @@ enum _ShareRow { access, people, options, expiry, comments, stop, copy, retry }
 
 const maxTabInvites = 8;
 
-class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
+class _ShareHarnessDialogState extends State<ShareHarnessDialog>
+    with WidgetsBindingObserver, VisibleTick<ShareHarnessDialog> {
   final _focus = FocusNode(debugLabel: 'share-form');
   final _emailFocus = FocusNode(debugLabel: 'share-emails');
   final _commentsFocus = FocusNode(debugLabel: 'share-comments');
@@ -93,7 +95,6 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   int _days = 30;
   Map<String, dynamic>? _link;
   bool _collaboration = false, _manualCopy = false;
-  Timer? _presence;
   int _revision = 0;
   bool _refreshing = false;
   @override
@@ -105,16 +106,22 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     unawaited(_load());
     // A shared tab's people come from the roster the app already holds; it
     // reads again after each action, so nothing polls while the form is open.
-    if (!widget.tabMode) {
-      _presence = Timer.periodic(const Duration(seconds: 5), (_) {
-        if (!_busy) unawaited(_load(quiet: true));
-      });
-    }
+    // A harness's list is read every 5 seconds while the dialog can be seen.
+    if (!widget.tabMode) visibleTick(const Duration(seconds: 5));
+  }
+
+  @override
+  void onTick() {
+    if (!_busy) unawaited(_load(quiet: true));
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen && !widget.tabMode) onTick();
   }
 
   @override
   void dispose() {
-    _presence?.cancel();
     _emails.dispose();
     _focus.dispose();
     _emailFocus.dispose();
@@ -140,7 +147,9 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   void _accept(Map<String, dynamic> response) {
     final removable = _removable;
     final recipientId =
-        _row == _ShareRow.people && _choice >= 2 && _choice - 2 < removable.length
+        _row == _ShareRow.people &&
+            _choice >= 2 &&
+            _choice - 2 < removable.length
         ? removable[_choice - 2]['id']
         : null;
     _collaboration = !widget.tabMode && response['collaboration'] == true;
@@ -152,7 +161,9 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         Map<String, dynamic>.from(row as Map),
     ];
     if (recipientId != null) {
-      final index = _removable.indexWhere((share) => share['id'] == recipientId);
+      final index = _removable.indexWhere(
+        (share) => share['id'] == recipientId,
+      );
       _choice = index < 0 ? 0 : index + 2;
       if (_picking && index < 0) _focusPane();
     }
@@ -196,7 +207,8 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         emails.length > most ||
         emails.any((e) => !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(e))) {
       setState(() {
-        _error = 'Enter up to $most valid email addresses, separated by commas.';
+        _error =
+            'Enter up to $most valid email addresses, separated by commas.';
         _notice = null;
       });
       return;
@@ -888,7 +900,9 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
           children: [
             Expanded(
               child: Text(
-                widget.tabMode ? 'People you invite see a notice in Harness.' : 'Keep your machine online.',
+                widget.tabMode
+                    ? 'People you invite see a notice in Harness.'
+                    : 'Keep your machine online.',
                 style: DesktopChrome.metadata(),
               ),
             ),
@@ -1064,13 +1078,13 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                         focusNode: _emailFocus,
                         enabled: !_disabled,
                         keyboardType: TextInputType.emailAddress,
-                        style: DesktopChrome.text(size: 14),
+                        style: DesktopChrome.text(size: 13),
                         cursorColor: DesktopChrome.accent,
                         decoration: InputDecoration(
                           hintText: 'Add emails',
                           hintStyle: DesktopChrome.text(
-                            size: 14,
-                            color: DesktopChrome.muted,
+                            size: 13,
+                            color: DesktopChrome.hint,
                           ),
                           isDense: true,
                           filled: true,

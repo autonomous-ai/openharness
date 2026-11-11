@@ -12,6 +12,7 @@ import '../shared/widgets/skeleton.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../core/test_run.dart';
 import '../state/app_state.dart';
+import '../super_tabs/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
 import 'device_artwork.dart';
 import 'device_settings.dart';
@@ -26,13 +27,19 @@ final harnessDeviceShopUrl = Uri.parse(
 );
 
 class DevicesTab extends StatefulWidget {
-  const DevicesTab({super.key, required this.notifier});
+  const DevicesTab({super.key, required this.notifier, this.refreshEvery});
   final AppNotifier notifier;
+
+  /// How often the machines' devices are read again while the tab is seen. Null: every 10
+  /// seconds, and never under test (where a test passes its own).
+  @visibleForTesting
+  final Duration? refreshEvery;
   @override
   State<DevicesTab> createState() => _DevicesTabState();
 }
 
-class _DevicesTabState extends State<DevicesTab> {
+class _DevicesTabState extends State<DevicesTab>
+    with WidgetsBindingObserver, VisibleTick<DevicesTab> {
   late final controller = DevicesController(
     hosts: widget.notifier.deviceHosts,
     accountId: widget.notifier.currentUser?.id ?? 'guest',
@@ -45,22 +52,26 @@ class _DevicesTabState extends State<DevicesTab> {
   late final wifi = WifiRobotsController(
     onLocalNetworkBlocked: widget.notifier.localNetworkBlocked,
   );
-  Timer? _refresh;
+  late final _every =
+      widget.refreshEvery ?? (kUnderTest ? null : const Duration(seconds: 10));
   @override
   void initState() {
     super.initState();
     unawaited(widget.notifier.refreshDevices());
-    if (!kUnderTest) {
-      _refresh = Timer.periodic(
-        const Duration(seconds: 10),
-        (_) => unawaited(widget.notifier.refreshDevices()),
-      );
-    }
+    // Again on the interval while the tab can be seen, and once as it is seen again.
+    if (_every case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() => unawaited(widget.notifier.refreshDevices());
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen && _every != null) onTick();
   }
 
   @override
   void dispose() {
-    _refresh?.cancel();
     controller.dispose();
     wifi.dispose();
     super.dispose();
@@ -75,6 +86,9 @@ class _DevicesTabState extends State<DevicesTab> {
       showCompanion: widget.notifier.experimentalFeatures.enabled(
         ExperimentalFeature.focusBarCreature,
       ),
+      // Under a Swarm's Manage, whose own title and tabs already say where this
+      // is.
+      underManage: widget.notifier.activeSwarm.isSuperTab,
       onRefresh: () async {
         await Future.wait([widget.notifier.refreshDevices(), wifi.refresh()]);
       },
@@ -88,6 +102,7 @@ class DevicesScreen extends StatefulWidget {
     required this.controller,
     this.wifi,
     this.showCompanion = false,
+    this.underManage = false,
     this.openShop,
     this.onRefresh,
     this.pickPetFile,
@@ -101,6 +116,10 @@ class DevicesScreen extends StatefulWidget {
 
   /// Whether the desktop companion is on (Experimental), for the rows that follow it.
   final bool showCompanion;
+
+  /// Drawn under Manage's title and tabs: no second title, and on the page's
+  /// content edge.
+  final bool underManage;
   final Future<bool> Function(Uri)? openShop;
   final Future<void> Function()? onRefresh;
 
@@ -113,7 +132,8 @@ class DevicesScreen extends StatefulWidget {
   State<DevicesScreen> createState() => _DevicesScreenState();
 }
 
-class _DevicesScreenState extends State<DevicesScreen> {
+class _DevicesScreenState extends State<DevicesScreen>
+    with WidgetsBindingObserver, VisibleTick<DevicesScreen> {
   String? _selectedKey;
   String? _shopError;
   final _cards = ScrollController();
@@ -154,6 +174,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
     unawaited(widget.controller.load());
     widget.wifi?.start();
   }
+
+  // The robots are read again only while the screen can be seen.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    widget.wifi?.seen = onScreen;
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => widget.wifi?.seen = onScreen;
 
   @override
   void didUpdateWidget(DevicesScreen oldWidget) {
@@ -350,27 +380,20 @@ class _DevicesScreenState extends State<DevicesScreen> {
       ),
     );
     if (widget.wifi == null) return button;
-    return MenuAnchor(
+    return AppDropdown(
       controller: _addMenu,
-      consumeOutsideTap: true,
-      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(),
-      menuChildren: [
+      children: [
         AppMenuItem(
           key: const Key('devices-add-usb'),
           label: 'USB cable',
-          onPressed: () {
-            _addMenu.close();
-            unawaited(_setup());
-          },
+          leadingSlot: false,
+          onPressed: () => unawaited(_setup()),
         ),
         AppMenuItem(
           key: const Key('devices-add-wifi'),
           label: 'Wi-Fi code',
-          onPressed: () {
-            _addMenu.close();
-            unawaited(_pairWifi());
-          },
+          leadingSlot: false,
+          onPressed: () => unawaited(_pairWifi()),
         ),
       ],
       child: button,
@@ -390,7 +413,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return ColoredBox(
-      color: grid.AppPalette.windowBg,
+      color: grid.AppPalette.swarmWelcome,
       child: ListenableBuilder(
         listenable: widget.controller,
         builder: (context, _) => LayoutBuilder(
@@ -412,11 +435,20 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 devices.firstOrNull;
             _selectedKey = selected?.key;
             final pet = _petFor(selected);
-            final pad = bounds.maxWidth < 640 ? 20.0 : 40.0;
+            final pad = widget.underManage
+                ? grid.AppDesktop.panelPadding
+                : bounds.maxWidth < 640
+                ? 20.0
+                : 40.0;
             return SingleChildScrollView(
               key: const PageStorageKey('devices-page'),
               controller: _page,
-              padding: EdgeInsets.fromLTRB(pad, 36, pad, 40),
+              padding: EdgeInsets.fromLTRB(
+                pad,
+                widget.underManage ? grid.AppDesktop.groupGap : 36,
+                pad,
+                40,
+              ),
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 1120),
@@ -429,19 +461,27 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         spacing: 24,
                         runSpacing: 18,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Devices', style: grid.AppType.display()),
-                              const SizedBox(height: 7),
-                              Text(
-                                'All your devices. Across your computers.',
-                                style: DesktopChrome.text(
-                                  color: DesktopChrome.muted,
-                                ),
+                          if (widget.underManage)
+                            Text(
+                              'All your devices. Across your computers.',
+                              style: DesktopChrome.text(
+                                color: DesktopChrome.muted,
                               ),
-                            ],
-                          ),
+                            )
+                          else
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Devices', style: grid.AppType.display()),
+                                const SizedBox(height: 7),
+                                Text(
+                                  'All your devices. Across your computers.',
+                                  style: DesktopChrome.text(
+                                    color: DesktopChrome.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
                           Wrap(
                             spacing: 10,
                             runSpacing: 10,
@@ -506,13 +546,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
                             radius: 18,
                           ),
                         )
-                      else if (selected == null)
-                        _EmptyDevices(
-                          onAdd: () => _setup(),
-                          onShop: _shop,
-                          returning: widget.controller.devices.isNotEmpty,
-                        )
-                      else ...[
+                      // The welcome is for a first device. Back with none connected, the page shows nothing: Add
+                      // device is in its header (an empty list shows nothing).
+                      else if (widget.controller.devices.isEmpty)
+                        _EmptyDevices(onAdd: () => _setup(), onShop: _shop)
+                      else if (selected != null) ...[
                         Text(
                           '${devices.length} ${devices.length == 1 ? 'device' : 'devices'}',
                           style: DesktopChrome.metadata(),
@@ -888,13 +926,8 @@ class _Beside {
 }
 
 class _EmptyDevices extends StatelessWidget {
-  const _EmptyDevices({
-    required this.onAdd,
-    required this.onShop,
-    this.returning = false,
-  });
+  const _EmptyDevices({required this.onAdd, required this.onShop});
   final VoidCallback onAdd, onShop;
-  final bool returning;
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -905,16 +938,12 @@ class _EmptyDevices extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              returning
-                  ? 'No devices connected'
-                  : 'A little closer\nto your work.',
+              'A little closer\nto your work.',
               style: grid.AppType.display(),
             ),
             const SizedBox(height: 18),
             Text(
-              returning
-                  ? 'Connect a device by USB-C to a computer running Harness. It will appear here automatically.'
-                  : 'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
+              'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
               style: DesktopChrome.text(color: DesktopChrome.muted),
             ),
             const SizedBox(height: 28),
@@ -924,9 +953,7 @@ class _EmptyDevices extends StatelessWidget {
               children: [
                 FilledButton(
                   onPressed: onAdd,
-                  child: Text(
-                    returning ? 'Add device' : 'Add your first device',
-                  ),
+                  child: const Text('Add your first device'),
                 ),
                 TextButton(
                   onPressed: onShop,

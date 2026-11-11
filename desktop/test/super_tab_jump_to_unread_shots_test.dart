@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -19,7 +18,6 @@ final _picture = GlobalKey();
 
 const _line = ValueKey('super-new-messages-line');
 const _jump = ValueKey('super-jump-unread');
-const _buddyChat = 'buddy-peer-lead';
 
 const _updates = [
   'Reading the offline queue before the reconnect.',
@@ -41,8 +39,8 @@ Future<void> _shot(WidgetTester tester, String name) async {
   });
 }
 
-/// A Swarm read by the peer: the Lead chat and the peer's own Buddy chat,
-/// each with 60 messages from an agent, read on another device up to 20.
+/// A Swarm read by the peer: the Lead chat with 60 messages from an agent,
+/// read on another device up to 20.
 ConversationServer _swarm() {
   final server = ConversationServer();
   server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
@@ -50,30 +48,19 @@ ConversationServer _swarm() {
     {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
     {'id': 'peer', 'email': 'scholes@example.com', 'role': 'collaborator'},
   ];
-  server.state['conversations'] = [
-    conversationFixture('lead', 'Lead'),
-    {
-      ...conversationFixture(_buddyChat, "scholes's Buddy"),
-      'projectId': 'lead',
-      'kind': 'buddy',
-      'buddyOwnerId': 'peer',
-    },
-  ];
-  for (final (chat, author) in [
-    ('lead', {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'}),
-    (_buddyChat, {'kind': 'agent', 'id': 'buddy-agent', 'name': 'Buddy'}),
-  ]) {
-    for (var i = 1; i <= 60; i++) {
-      server.append(
-        '${_updates[i % _updates.length]} ($i)',
-        conversationId: chat,
-      );
-      server.messages.last['author'] = author;
-    }
+  server.state['conversations'] = [conversationFixture('lead', 'Lead')];
+  for (var i = 1; i <= 60; i++) {
+    server.append(
+      '${_updates[i % _updates.length]} ($i)',
+      conversationId: 'lead',
+    );
+    server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'lead-agent',
+      'name': 'Lead',
+    };
   }
-  server
-    ..markReadElsewhere('lead', 20, reader: 'peer')
-    ..markReadElsewhere(_buddyChat, 81, reader: 'peer');
+  server.markReadElsewhere('lead', 20, reader: 'peer');
   return server;
 }
 
@@ -97,7 +84,6 @@ Future<SuperTabController> _show(
       home: Scaffold(
         body: SuperTabView(
           controller: c,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Team Mac',
@@ -152,8 +138,8 @@ void main() {
       await _shot(tester, 'project-read-past-line-$theme');
       expect(find.byKey(_line).hitTestable(), findsNothing);
       expect(position.extentAfter, greaterThan(40));
-      // Seen when the chat opened at it: reading on needs no way back.
-      expect(find.byKey(_jump), findsNothing);
+      // Above the screen now, seen or not: the bar is the way back.
+      expect(find.text('40 new messages · Jump'), findsOne);
       _coversNoMessage(tester, 'lead');
     });
 
@@ -167,59 +153,6 @@ void main() {
       expect(find.byKey(_line).hitTestable(), findsNothing);
       expect(find.byKey(_jump), findsNothing);
       _coversNoMessage(tester, 'lead');
-    });
-
-    testWidgets('Buddy chat with Decisions for you, read past the line '
-        '($theme)', (tester) async {
-      final server = _swarm()
-        ..ask([
-          'Ship the offline queue this week?',
-        ], conversationId: _buddyChat);
-      final c = await _show(tester, server, brightness);
-      await c.select(_buddyChat);
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Decisions for you'), findsOne);
-      await _wheel(tester, _buddyChat, 700);
-      await _shot(tester, 'buddy-read-past-line-$theme');
-      expect(find.byKey(_line).hitTestable(), findsNothing);
-      expect(find.byKey(_jump), findsNothing);
-      _coversNoMessage(tester, _buddyChat);
-    });
-
-    testWidgets('Buddy chat opened at a linked message, with Decisions for '
-        'you ($theme)', (tester) async {
-      final server = _swarm()
-        ..ask([
-          'Ship the offline queue this week?',
-        ], conversationId: _buddyChat);
-      final c = await _show(tester, server, brightness);
-      // The Buddy chat's newest message: its messages are 61 to 120.
-      c.openMessageLink(
-        const SwarmMessageLink(
-          tabId: 'tab',
-          conversationId: _buddyChat,
-          messageId: 'message-118',
-        ),
-      );
-      await tester.pumpAndSettle();
-      await _shot(tester, 'buddy-opened-at-link-$theme');
-      expect(c.selectedId, _buddyChat);
-      expect(find.byKey(_jump), findsOne);
-      final decisions = tester.getRect(
-        find.byKey(const ValueKey('super-pm-decisions')),
-      );
-      final pill = tester.getRect(find.byKey(_jump));
-      // Below Decisions for you, above the messages: covering neither.
-      expect(pill.top, greaterThanOrEqualTo(decisions.bottom));
-      _coversNoMessage(tester, _buddyChat);
-      await tester.tap(find.byKey(_jump));
-      await tester.pumpAndSettle();
-      await _shot(tester, 'buddy-back-at-line-$theme');
-      expect(find.byKey(_jump), findsNothing);
-      expect(
-        tester.getRect(find.byKey(const ValueKey('super-pm-decisions'))),
-        decisions,
-      );
     });
   }
 }

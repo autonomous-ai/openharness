@@ -1,6 +1,7 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { cacheSecret, githubAppConfig, GitHubAppError, HARNESS_CO_AUTHOR, readPrivateKey,
+  TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 
@@ -143,6 +144,100 @@ describe('installation tokens', () => {
     await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
   })
 
+  // Scholes, task #2755 (Ken approved): an agent's token also pushes workflow files and writes issues, where the
+  // installation has granted them. Asking for one it has not granted would refuse every token on it.
+  const today = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
+  const minted = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+
+  it('asks for workflows and issues on an agent\'s token, for its one repository, where the installation granted them', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+  })
+
+  it('asks for no more than each granted level, and only what is granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, issues: 'read', administration: 'write' })
+    await app.createToken(77, repo)
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, issues: 'read' } }])
+  })
+
+  it('asks for today\'s set where workflows and issues are not granted, and still gets its token', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('asks for today\'s set when GitHub does not say what the installation granted', async () => {
+    const { app, github } = setup()
+    // The fake answers 404 for an installation it lists no grants for.
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('says so, with the installation and why, each time the grant cannot be read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { app, github, time } = setup()
+      await app.createToken(77, repo)
+      expect(warn).toHaveBeenCalledWith("[github] installation 77's permissions unreadable (HTTP 404); agent tokens ask for today's set alone")
+      time.advance(60_001)
+      github.control.down = true
+      await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE' })
+      expect(warn).toHaveBeenLastCalledWith("[github] installation 77's permissions unreadable (GITHUB_UNAVAILABLE); agent tokens ask for today's set alone")
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('ghs_')
+    } finally { warn.mockRestore() }
+  })
+
+  it('remembers an installation\'s grant ten minutes', async () => {
+    const { app, github, time } = setup()
+    github.grants.set(77, { ...today, workflows: 'write' })
+    await app.createToken(77, repo)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    time.advance(10 * 60_000 + 1)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    expect(minted(github).at(-1)).toEqual({ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } })
+  })
+
+  it('reads the grant again after a permission refusal, and asks once more with what is granted now', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    await app.createToken(77, repo)
+    // An owner takes workflows away inside the ten minutes: the remembered grant is wrong.
+    github.grants.set(77, { ...today, issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_2')
+    expect(minted(github).slice(1)).toEqual([
+      { repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } },
+      { repositories: ['app'], permissions: { ...today, issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    // The fresh grant is remembered.
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('still refuses, asking once, when even today\'s set is not granted and the fresh grant changes nothing', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { contents: 'read', metadata: 'read' })
+    await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS', status: 409 })
+    expect(minted(github)).toHaveLength(1)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('never widens a narrow token, whatever the installation granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    const narrow = { pull_requests: 'read', metadata: 'read' } as const
+    await app.createToken(77, repo, narrow)
+    expect(minted(github).map(b => (b as { permissions: unknown }).permissions)).toEqual([narrow])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(0)
+  })
+
   it('leaves the install link out when no app name is configured', async () => {
     const { app } = setup({ slug: null })
     expect(app.installUrl()).toBeNull()
@@ -150,35 +245,9 @@ describe('installation tokens', () => {
     expect(app.notInstalled(repo).message).toBe('The Harness GitHub App is not installed on acme/app. Ask an owner of acme to install it.')
   })
 
-  // A Harness Team account's commits are the app's (PR #1934): its bot account, as GitHub names it.
-  it('names the app\'s bot account as its commit identity, reading the bot\'s id once', async () => {
-    const { app, github } = setup()
-    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    const asked = github.calls.filter(c => c.path.startsWith('/users/'))
-    expect(asked).toEqual([expect.objectContaining({ method: 'GET', path: '/users/harness-fixture%5Bbot%5D', auth: '' })])
-    // With no app name configured, the app's own answer names it.
-    // With a token, asked with it: unsigned requests from a server's shared address can be refused (PR #1948).
-    const signed = setup()
-    await signed.app.commitIdentity('ghs_issued')
-    expect(signed.github.calls.find(c => c.path.startsWith('/users/'))?.auth).toBe('Bearer ghs_issued')
-    const unnamed = setup({ slug: null })
-    expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app', '/users/harness-fixture%5Bbot%5D'])
-  })
-
-  it('has no commit identity while GitHub cannot say, and asks again ten minutes later', async () => {
-    const { app, github, time } = setup()
-    github.control.botId = null
-    expect(await app.commitIdentity()).toBeNull()
-    github.control.botId = 4242
-    expect(await app.commitIdentity()).toBeNull()
-    time.advance(10 * 60_000)
-    github.control.down = true
-    expect(await app.commitIdentity()).toBeNull()
-    github.control.down = false
-    time.advance(10 * 60_000)
-    expect(await app.commitIdentity()).toMatchObject({ email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+  // Dee, task #2136: a commit reads as Claude's line does.
+  it('names Harness by Autonomous as its co-author', () => {
+    expect(HARNESS_CO_AUTHOR).toBe('Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>')
   })
 
   it('revokes a token with the token itself, takes one already ended as done, and reports any other failure', async () => {
@@ -227,190 +296,45 @@ describe('default branch protection', () => {
     expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'main', protection: 'none' })
   })
 
-  it('reads whether a pull request is open, merged or closed, with a token for its repository alone', async () => {
-    const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
-    expect(github.calls.at(-1)!.body).toMatchObject({ repositories: ['app'], permissions: { pull_requests: 'read', metadata: 'read' } })
-    github.pulls.set('acme/app#1', { state: 'open', merged_at: null })
-    github.pulls.set('acme/app#2', { state: 'closed', merged_at: '2026-10-27T08:00:00Z' })
-    github.pulls.set('acme/app#3', { state: 'closed', merged_at: null })
-    expect(await app.pullRequestState(repo, 1, token)).toBe('open')
-    expect(await app.pullRequestState(repo, 2, token)).toBe('merged')
-    expect(await app.pullRequestState(repo, 3, token)).toBe('closed')
-    expect(github.calls.at(-1)).toMatchObject({ method: 'GET', path: '/repos/acme/app/pulls/3', auth: `Bearer ${token}` })
-  })
-
-  it('answers null, never a guess, when GitHub cannot say', async () => {
-    const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
-    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
-    github.pulls.set('acme/app#9', { state: 'open', merged_at: null })
-    expect(await app.pullRequestState(repo, 9, 'ghs_not_issued')).toBeNull()
-    github.control.down = true
-    expect(await app.pullRequestState(repo, 9, token)).toBeNull()
-  })
-
   it('never talks to the real GitHub in these tests', () => {
     expect(FAKE_API).not.toContain('api.github.com')
   })
 })
 
-describe('the CI load', () => {
-  const job = (status: string, ...labels: string[]) => ({ status, labels: labels.length ? labels : ['ubuntu-latest'] })
-  const busy = () => {
-    const env = setup()
-    env.github.installed.set('acme/app', 77)
-    env.github.actions.set('acme/app', [
-      { id: 1, status: 'in_progress', jobs: [job('in_progress'), job('in_progress', 'macos-15'), job('completed'), job('queued', 'macos-15')] },
-      { id: 2, status: 'queued', jobs: [job('waiting'), job('pending'), job('requested'), job('queued', 'self-hosted', 'macOS', 'arm64')] },
-      { id: 3, status: 'completed', jobs: [job('in_progress')] },
-    ])
-    return env
-  }
-  it('counts the running and waiting jobs, in all and on macOS, of runs in progress or queued', async () => {
-    const { app } = busy()
-    expect(await app.ciLoad(repo)).toEqual({ running: 2, queued: 5, macosRunning: 1, macosQueued: 2 })
-  })
-  it('reads with a token that only reads workflow runs, for that repository alone, revoked at once', async () => {
-    const { app, github } = busy()
-    await app.ciLoad(repo)
-    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens'))
-    expect(minted).toHaveLength(1)
-    expect(minted[0]!.body).toEqual({ repositories: ['app'], permissions: ACTIONS_READ_PERMISSIONS })
-    expect(ACTIONS_READ_PERMISSIONS).toEqual({ actions: 'read', metadata: 'read' })
-    expect(github.revoked).toHaveLength(1)
-    expect(github.issued.size).toBe(0)
-  })
-  it('keeps a load for its time, routes asking at once share one read, and a later route reads again', async () => {
-    const { app, github, time } = busy()
-    const [x, y] = await Promise.all([app.ciLoad(repo), app.ciLoad(repo)])
-    expect(x).toEqual(y)
-    await app.ciLoad(githubRepository('https://github.com/ACME/App')!)
-    const runReads = () => github.calls.filter(c => c.path.endsWith('/actions/runs')).length
-    expect(runReads()).toBe(2)
-    time.advance(CI_LOAD_TTL_MS)
-    github.actions.set('acme/app', [])
-    expect(await app.ciLoad(repo)).toEqual({ running: 0, queued: 0, macosRunning: 0, macosQueued: 0 })
-    expect(runReads()).toBe(4)
-  })
-  it('reads at most its limit of runs, and counts every run beyond it as one waiting job', async () => {
-    const { app, github } = busy()
-    github.actions.set('acme/app', [...Array.from({ length: 30 }, (_, i) => ({ id: i + 1, status: 'in_progress', jobs: [job('in_progress')] })),
-      ...Array.from({ length: 4 }, (_, i) => ({ id: 100 + i, status: 'queued', jobs: [job('queued', 'macos-15')] }))])
-    expect(await app.ciLoad(repo)).toEqual({ running: CI_MAX_RUNS, queued: 34 - CI_MAX_RUNS, macosRunning: 0, macosQueued: 0 })
-    expect(github.calls.filter(c => c.path.endsWith('/jobs'))).toHaveLength(CI_MAX_RUNS)
-  })
-  // Lead, 10-31: a read's GitHub calls are counted and capped.
-  it('makes at most its limit of GitHub calls in one read, from the token to its revoke', async () => {
-    const { app, github } = busy()
-    github.actions.set('acme/app', Array.from({ length: 40 }, (_, i) => ({ id: i + 1, status: i % 2 ? 'queued' : 'in_progress', jobs: [job('in_progress')] })))
-    await app.ciLoad(repo)
-    const first = github.calls.findIndex(c => c.path.endsWith('/access_tokens'))
-    const read = github.calls.slice(first)
-    expect(read.at(-1)).toMatchObject({ method: 'DELETE', path: '/installation/token' })
-    expect(read.length).toBeLessThanOrEqual(CI_MAX_CALLS)
-    // Per server process: every pod production may run, reading its full budget, stays about 5% of the installation's 5,000.
-    expect(CI_MAX_CALLS * CI_READS_PER_HOUR * SERVER_PROCESSES_MAX).toBeLessThanOrEqual(5000 * 0.05)
-  })
-  it('reads one repository at most its hourly number of times, then answers the last load for a few minutes, then none', async () => {
-    const { app, github, time } = busy()
-    for (let i = 0; i < CI_READS_PER_HOUR; i++) { await app.ciLoad(repo); time.advance(CI_LOAD_TTL_MS) }
-    const reads = () => github.calls.filter(c => c.path.endsWith('/access_tokens')).length
-    expect(reads()).toBe(CI_READS_PER_HOUR)
-    github.actions.set('acme/app', [])
-    // Spent: the last load read, while it is recent, and no call to GitHub.
-    expect(await app.ciLoad(repo)).toMatchObject({ running: 2 })
-    expect(reads()).toBe(CI_READS_PER_HOUR)
-    time.advance(CI_STALE_MS)
-    await expect(app.ciLoad(repo)).rejects.toMatchObject({ code: 'GITHUB_CI_BUDGET', status: 429 })
-    expect(reads()).toBe(CI_READS_PER_HOUR)
-    // An hour after the first read, reads come back.
-    time.advance(3_600_000 - CI_READS_PER_HOUR * CI_LOAD_TTL_MS - CI_STALE_MS)
-    expect(await app.ciLoad(repo)).toEqual({ running: 0, queued: 0, macosRunning: 0, macosQueued: 0 })
-    expect(reads()).toBe(CI_READS_PER_HOUR + 1)
-  })
-  it('reads the same run listed under both statuses once', async () => {
-    const { github, time } = busy()
-    github.actions.set('acme/app', [{ id: 9, status: 'in_progress', jobs: [job('in_progress')] }])
-    const fetch = github.fetch
-    let second = false
-    // A run that moved from queued to in progress between the two reads is listed by both.
-    github.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(String(input))
-      if (url.pathname.endsWith('/actions/runs') && url.searchParams.get('status') === 'queued') return new Response(JSON.stringify({ total_count: 1, workflow_runs: [{ id: 9 }, { id: 'x' }, null] }), { status: 200 })
-      // An answer without its list or count reads as none.
-      if (url.pathname.endsWith('/actions/runs') && url.searchParams.get('status') === 'in_progress' && second) return new Response('{}', { status: 200 })
-      return fetch(input, init)
-    }) as typeof globalThis.fetch
-    const twice = fakeApp(key.privateKey, github, { now: time.now })
-    expect(await twice.ciLoad(repo)).toEqual({ running: 1, queued: 0, macosRunning: 0, macosQueued: 0 })
-    second = true
-    time.advance(CI_LOAD_TTL_MS)
-    expect(await twice.ciLoad(repo)).toEqual({ running: 1, queued: 0, macosRunning: 0, macosQueued: 0 })
-  })
-  it('a read that fails after a newer one took its place leaves the newer one cached', async () => {
-    const { github, time } = busy()
-    let failFirst: (() => void) | undefined
-    const fetch = github.fetch
-    let held = true
-    github.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(String(input))
-      // The first read's run list waits, then GitHub fails it.
-      if (held && url.pathname.endsWith('/actions/runs') && url.searchParams.get('status') === 'in_progress') {
-        held = false
-        await new Promise<void>(resolve => { failFirst = resolve })
-        return new Response('{}', { status: 500 })
-      }
-      return fetch(input, init)
-    }) as typeof globalThis.fetch
-    const app = fakeApp(key.privateKey, github, { now: time.now })
-    const slow = app.ciLoad(repo).catch(error => error)
-    await new Promise(resolve => setTimeout(resolve, 10))
-    time.advance(CI_LOAD_TTL_MS)
-    const newer = await app.ciLoad(repo)
-    failFirst!()
-    expect(await slow).toMatchObject({ code: 'GITHUB_UNAVAILABLE' })
-    await new Promise(resolve => setTimeout(resolve, 0))
-    // The newer read is still the cached one: asking again reads nothing from GitHub.
-    const tokens = github.calls.filter(c => c.path.endsWith('/access_tokens')).length
-    expect(await app.ciLoad(repo)).toEqual(newer)
-    expect(github.calls.filter(c => c.path.endsWith('/access_tokens')).length).toBe(tokens)
-  })
-  it('is null where the app is not installed, minting nothing', async () => {
-    const { app, github } = setup()
-    expect(await app.ciLoad(repo)).toBeNull()
+describe('what installation tokens may never carry (task #1788)', () => {
+  it('installation tokens never ask for administration or repository creation', async () => {
+    const app = await import('./app.js')
+    const sets = Object.entries(app).filter(([name]) => name.endsWith('_PERMISSIONS')) as Array<[string, Record<string, string>]>
+    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['TOKEN_PERMISSIONS', 'GRANTED_TOKEN_PERMISSIONS']))
+    for (const [, permissions] of sets) {
+      for (const never of app.NEVER_ON_INSTALLATION_TOKENS) expect(Object.keys(permissions)).not.toContain(never)
+    }
+    const { github, app: gh } = setup()
+    github.installed.set('acme/app', 91)
+    for (const never of app.NEVER_ON_INSTALLATION_TOKENS) {
+      await expect(gh.createToken(91, repo, { [never]: 'write', metadata: 'read' })).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS_FORBIDDEN' })
+    }
     expect(github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
   })
-  it('says GitHub could not say, still revokes the token, and keeps no failed read', async () => {
-    for (const fault of ['actionsStatus', 'jobsStatus'] as const) {
-      const { app, github } = busy()
-      github.control[fault] = 500
-      await expect(app.ciLoad(repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
-      expect(github.revoked).toHaveLength(1)
-      github.control[fault] = 200
-      expect(await app.ciLoad(repo)).toMatchObject({ running: 2 })
-    }
-  })
-  it('a token GitHub would not revoke is said without the token, and the counts still come back', async () => {
-    const { app, github } = busy()
-    github.control.revokeStatus = 500
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      expect(await app.ciLoad(repo)).toMatchObject({ running: 2 })
-      expect(warn).toHaveBeenCalledTimes(1)
-      expect(String(warn.mock.calls[0]![0])).not.toContain('ghs_')
-    } finally { warn.mockRestore() }
-  })
-  it('leaves the expired loads of many repositories behind', async () => {
-    const { app, github, time } = busy()
-    for (let i = 0; i < 199; i++) await app.ciLoad(githubRepository(`https://github.com/acme/r${i}`)!)
-    // Past the hour too, so their read counts go as well.
-    time.advance(3_600_000)
-    await app.ciLoad(repo)
-    github.installed.set('acme/fresh', 78)
-    expect(await app.ciLoad(githubRepository('https://github.com/acme/fresh')!)).toEqual({ running: 0, queued: 0, macosRunning: 0, macosQueued: 0 })
-    // The fresh one stays beside the new one; the 199 expired ones are gone.
-    expect([...(app as unknown as { ciLoads: Map<string, unknown> }).ciLoads.keys()]).toEqual(['acme/app', 'acme/fresh'])
-    expect([...(app as unknown as { ciReads: Map<string, unknown> }).ciReads.keys()]).toEqual(['acme/app', 'acme/fresh'])
+})
+
+describe('whether an organization lets Harness create repositories (task #1788)', () => {
+  it('says whether an organization lets Harness create repositories', async () => {
+    const { app, github, time } = setup()
+    expect(await app.ownerReadiness('acme')).toEqual({ state: 'not-installed', installUrl: 'https://github.com/apps/harness-fixture/installations/new' })
+    expect(github.calls.map(c => c.path)).toEqual(['/orgs/acme/installation'])
+    github.owners.set('acme', 91)
+    time.advance(60_001)
+    github.grants.set(91, { contents: 'write', metadata: 'read' })
+    expect(await app.ownerReadiness('acme')).toEqual({ state: 'not-accepted' })
+    time.advance(10 * 60_000 + 1)
+    github.grants.set(91, { contents: 'write', metadata: 'read', repository_creation: 'write' })
+    expect(await app.ownerReadiness('acme')).toEqual({ state: 'ready', installation: 91, canAdd: false })
+    time.advance(10 * 60_000 + 1)
+    github.grants.set(91, { repository_creation: 'write', installation_repositories: 'write' })
+    expect(await app.ownerReadiness('Acme')).toEqual({ state: 'ready', installation: 91, canAdd: true })
+    const asked = github.calls.length
+    expect(await app.ownerReadiness('ACME')).toEqual({ state: 'ready', installation: 91, canAdd: true })
+    expect(github.calls).toHaveLength(asked)
   })
 })

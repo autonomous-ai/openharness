@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/terminal/terminal_look.dart';
 
 import 'phone_status.dart' show PhoneMachineStatus, phoneMachineWord;
 import 'tty.dart';
@@ -41,10 +42,16 @@ class TerminalTitle extends StatelessWidget {
     this.daemon,
     this.away = false,
     this.sample = false,
+    this.backInset = 0,
   });
 
   final String name;
   final bool sample;
+
+  /// Room kept at the left for the back chevron the page draws over the title's corner
+  /// (`terminal_page.dart`, only while Swarm Home is behind the terminal), so the name does not
+  /// run under it. Zero otherwise: the title is as it was.
+  final double backInset;
 
   /// `machine:folder` — where the harness works.
   final String? place;
@@ -103,7 +110,7 @@ class TerminalTitle extends StatelessWidget {
   ///
   /// With [asking] the whole stack is its button — a tap opens Find, which is also the way off an
   /// agent whose machine is away. Without it the words are the title's, like the rest of it.
-  Widget? _notes(Tty tty, double height) {
+  Widget? _notes(BuildContext context, Tty tty, double height) {
     final asking = this.asking;
     if (asking == null && !away) return null;
     Text note(String text, Color color, {Key? key}) => Text(
@@ -133,10 +140,11 @@ class TerminalTitle extends StatelessWidget {
                 if (asking != null) note(asking, tty.yellow),
                 // The app's warning amber, not the terminal's red: a machine offline is something
                 // to know, not an error — and the 16 ANSI colours have no orange.
+                // On the terminal's palette, as the title is ([TerminalLook]).
                 if (away)
                   note(
                     _awayWords,
-                    AppPalette.warn,
+                    TerminalLook.read(context, () => AppPalette.warn),
                     key: const ValueKey('terminal-title-away'),
                   ),
               ],
@@ -191,7 +199,10 @@ class TerminalTitle extends StatelessWidget {
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: height),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+              padding: EdgeInsets.only(
+                left: Tty.origin + backInset,
+                right: Tty.origin,
+              ),
               child: Row(
                 children: [
                   Expanded(
@@ -250,7 +261,7 @@ class TerminalTitle extends StatelessWidget {
                         size: TtySize.meta,
                       ),
                     ),
-                  ?_notes(tty, height),
+                  ?_notes(context, tty, height),
                   ?daemon,
                 ],
               ),

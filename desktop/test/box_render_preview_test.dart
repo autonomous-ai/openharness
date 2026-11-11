@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
@@ -126,7 +128,14 @@ class _PreviewConnection extends WsConn {
 ///
 ///     BOX_RENDER_DIR=/tmp/box flutter test --update-goldens \\
 ///         test/box_render_preview_test.dart
-Future<void> loadPreviewFonts() async {
+/// Roboto bundled with the tests (Apache-2.0, test/fonts/LICENSE-Roboto.txt): the face a machine with no system face and
+/// no Flutter SDK cache draws in. A path from the package root, where `flutter test` runs.
+const bundledRoboto = 'test/fonts/Roboto-Regular.ttf';
+
+Future<void> loadPreviewFonts({
+  String systemFace = '/System/Library/Fonts/SFNS.ttf',
+  String? flutterRoot,
+}) async {
   Future<void> load(String family, List<String> files) async {
     final loader = FontLoader(family);
     var any = false;
@@ -140,12 +149,28 @@ Future<void> loadPreviewFonts() async {
     if (any) await loader.load();
   }
 
-  final flutterRoot = Platform.environment['FLUTTER_ROOT'] ?? '';
-  final materialFonts = '$flutterRoot/bin/cache/artifacts/material_fonts';
-  const system = '/System/Library/Fonts/SFNS.ttf';
-  // Whatever the theme asks for, draw it in the system face.
-  for (final family in ['Roboto', '.AppleSystemUIFont', '.SF NS', 'Inter']) {
-    await load(family, [system, '$materialFonts/Roboto-Regular.ttf']);
+  final root = flutterRoot ?? Platform.environment['FLUTTER_ROOT'] ?? '';
+  final materialFonts = '$root/bin/cache/artifacts/material_fonts';
+  final system = systemFace;
+  // Whatever the theme asks for, draw it in the system face, else the SDK's Roboto, else the Roboto these tests bundle
+  // (test/fonts): Linux CI has neither of the first two, and drew every glyph one em wide (task #3511). On Linux the app
+  // asks for Ubuntu Sans and its fallbacks (lib/shared/theme/app_type.dart), so those families get the same face.
+  final sans = [system, '$materialFonts/Roboto-Regular.ttf'];
+  final faces = sans.any((path) => File(path).existsSync())
+      ? sans
+      : [bundledRoboto];
+  for (final family in [
+    'Roboto',
+    '.AppleSystemUIFont',
+    '.SF NS',
+    'Inter',
+    'Ubuntu Sans',
+    'Ubuntu',
+    'Noto Sans',
+    'DejaVu Sans',
+    'sans-serif',
+  ]) {
+    await load(family, faces);
   }
   for (final family in [
     '.AppleSystemUIFontMonospaced',
@@ -156,16 +181,7 @@ Future<void> loadPreviewFonts() async {
     await load(family, ['/System/Library/Fonts/Menlo.ttc']);
   }
   await load('MaterialIcons', ['$materialFonts/MaterialIcons-Regular.otf']);
-  final home = Platform.environment['HOME'] ?? '';
-  final lucideRoot = Directory('$home/.pub-cache/hosted/pub.dev')
-      .listSync()
-      .whereType<Directory>()
-      .where((dir) => dir.path.contains('/lucide_icons_flutter-'))
-      .map((dir) => dir.path)
-      .fold<String?>(
-        null,
-        (best, path) => best == null || path.compareTo(best) > 0 ? path : best,
-      );
+  final lucideRoot = _packageRoot('lucide_icons_flutter');
   if (lucideRoot != null) {
     await load('packages/lucide_icons_flutter/Lucide', [
       '$lucideRoot/assets/lucide.ttf',
@@ -176,6 +192,25 @@ Future<void> loadPreviewFonts() async {
       ]);
     }
   }
+}
+
+/// Where pub put [package], from the package config `flutter test` runs with,
+/// so it is found on every OS: Windows keeps the pub cache under
+/// `%LOCALAPPDATA%\Pub\Cache` and has no `HOME` (run 42364609130). Read
+/// synchronously, since widget tests call this inside their fake clock.
+String? _packageRoot(String package) {
+  final config = File('.dart_tool/package_config.json');
+  if (!config.existsSync()) return null;
+  final packages =
+      (jsonDecode(config.readAsStringSync()) as Map)['packages'] as List;
+  for (final entry in packages.cast<Map>()) {
+    if (entry['name'] != package) continue;
+    return Directory.current.uri
+        .resolve('.dart_tool/')
+        .resolve(entry['rootUri'] as String)
+        .toFilePath();
+  }
+  return null;
 }
 
 void main() {

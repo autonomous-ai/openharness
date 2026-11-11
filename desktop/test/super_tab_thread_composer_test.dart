@@ -10,8 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/new_harness_paste.dart';
+import 'package:path/path.dart' as p;
 
 import 'support/super_tab_fixture.dart';
 
@@ -93,6 +95,7 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     String account = 'owner',
+    Map<String, dynamic>? initial,
   }) async {
     // One logical pixel per device pixel, so the platform's drop position
     // needs no scaling on any host.
@@ -100,7 +103,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final c = shown = server.controller(account: account);
+    final c = shown = server.controller(account: account, initial: initial);
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
@@ -108,7 +111,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -123,7 +125,7 @@ void main() {
 
   /// A root and two replies in the lead's thread.
   ConversationServer threaded() {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Should we do thread replies?');
     server.append('Yes, like Slack.');
     server.messages.last
@@ -378,7 +380,9 @@ void main() {
 
     testThread('a dropped file becomes a chip', (tester) async {
       final c = await openThread(tester, threaded());
-      final file = File('${Directory.systemTemp.path}/swarm-thread-drop.log');
+      final file = File(
+        p.join(Directory.systemTemp.path, 'swarm-thread-drop.log'),
+      );
       await tester.runAsync(() => file.writeAsString('boom'));
       addTearDown(() => file.deleteSync());
       final inside = tester.getCenter(surface);
@@ -535,10 +539,742 @@ void main() {
     });
   });
 
+  // Diego: a reply being written was gone after switching Swarms or quitting, while the main chat's draft came back.
+  group('a reply being written survives the Swarm being let go', () {
+    // A save is on a timer: on a busy machine it comes later, never sooner.
+    Future<void> savedSoon(bool Function() done) async {
+      for (var n = 0; n < 200 && !done(); n++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+    }
+
+    Future<SuperTabController> again(ConversationServer server) async {
+      final next = server.controller(account: 'owner', initial: server.saved);
+      addTearDown(next.dispose);
+      return next;
+    }
+
+    test('its text and its tags come back', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.openThread('message-1');
+      c.setThreadDraft('message-1', 'Half a thought @Kestrel');
+      c.threadMention('agent-1', '@Kestrel');
+      await c.flush();
+      c.dispose();
+
+      final next = await again(server);
+      expect(next.threadDraft('message-1'), 'Half a thought @Kestrel');
+      expect(next.threadMentions('lead', 'message-1'), {'agent-1': '@Kestrel'});
+    });
+
+    test('typing saves soon, with no flush', () async {
+      final server = threaded();
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      c.setThreadDraft('message-1', 'typing', conversationId: 'lead');
+      await savedSoon(() => jsonEncode(server.saved).contains('typing'));
+      expect(jsonEncode(server.saved), contains('typing'));
+    });
+
+    test('an emptied reply comes back as nothing', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.setThreadDraft('message-1', 'gone soon', conversationId: 'lead');
+      c.setThreadDraft('message-1', '', conversationId: 'lead');
+      await c.flush();
+      c.dispose();
+      expect(jsonEncode(server.saved), isNot(contains('gone soon')));
+      expect((await again(server)).threadDraft('message-1'), isEmpty);
+    });
+
+    test('a sent reply does not come back', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.openThread('message-1');
+      await c.loadThread();
+      c.setThreadDraft('message-1', 'sent now');
+      await c.sendThreadReply();
+      await c.flush();
+      c.dispose();
+      expect((await again(server)).threadDraft('message-1'), isEmpty);
+    });
+
+    test(
+      'each conversation keeps its open thread when switching away',
+      () async {
+        final server = threaded();
+        server.append('Offline topic.', conversationId: 'offline');
+        final c = server.controller();
+        addTearDown(c.dispose);
+        await c.refresh();
+
+        c.openThread('message-1');
+        await c.select('offline');
+        c.openThread('message-6');
+        await c.select('lead');
+        expect(c.threadOnScreen, 'message-1');
+        await c.select('offline');
+        expect(c.threadOnScreen, 'message-6');
+      },
+    );
+
+    testThread('returning to a chat reads its thread only once', (
+      tester,
+    ) async {
+      final server = threaded();
+      final c = await openThread(tester, server);
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      var reads = 0;
+      server.onRead = (path) {
+        if (Uri.parse(path).queryParameters['thread'] == 'message-1') reads++;
+      };
+
+      await c.select('lead');
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(reads, 1);
+
+      (server.state['conversations'] as List).first['title'] = 'Renamed lead';
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(reads, 1);
+    });
+
+    testThread('losing the selected chat restores the fallback thread', (
+      tester,
+    ) async {
+      final server = threaded();
+      final c = await openThread(tester, server);
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      expect(panel, findsNothing);
+      var reads = 0;
+      server.onRead = (path) {
+        if (Uri.parse(path).queryParameters['thread'] == 'message-1') reads++;
+      };
+
+      (server.state['conversations'] as List).removeWhere(
+        (chat) => chat['id'] == 'offline',
+      );
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(c.threadOnScreen, 'message-1');
+      expect(panel, findsOneWidget);
+      expect(reads, 1);
+    });
+
+    test(
+      'open threads survive a saved view restart per conversation',
+      () async {
+        final server = threaded();
+        server.append('Offline topic.', conversationId: 'offline');
+        final c = server.controller();
+        await c.refresh();
+
+        c.openThread('message-1');
+        await c.select('offline');
+        c.openThread('message-6');
+        await c.flush();
+        expect(server.saved?['openThreads'], {
+          'lead': 'message-1',
+          'offline': 'message-6',
+        });
+        expect(server.saved?['selectedId'], 'offline');
+        c.dispose();
+
+        final next = await again(server);
+        await next.refresh();
+        expect(next.threadOnScreen, 'message-6');
+        await next.select('lead');
+        expect(next.threadOnScreen, 'message-1');
+      },
+    );
+
+    test('closing one conversation thread keeps the others saved', () async {
+      final server = threaded();
+      server.append('Offline topic.', conversationId: 'offline');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+
+      c.openThread('message-1');
+      await c.select('offline');
+      c.openThread('message-6');
+      c.closeThread();
+      await c.flush();
+      await c.select('lead');
+      expect(c.threadOnScreen, 'message-1');
+      expect(server.saved?['openThreads'], {'lead': 'message-1'});
+    });
+
+    test('saved open threads keep only the newest 500 conversations', () async {
+      final server = threaded();
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'openThreads': {for (var n = 0; n < 501; n++) 'chat-$n': 'root-$n'},
+        },
+      );
+      addTearDown(c.dispose);
+
+      c.openThread('message-1');
+      await c.flush();
+      final saved = server.saved?['openThreads'] as Map;
+      expect(saved, hasLength(500));
+      expect(saved.containsKey('chat-0'), isFalse);
+      expect(saved['chat-500'], 'root-500');
+      expect(saved['lead'], 'message-1');
+    });
+
+    test('a saved legacy root outside the chat page restores open', () async {
+      final server = threaded()..messagePage = 1;
+      server.messages.first.remove('thread');
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThreads': {'lead': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.threadOnScreen, 'message-1');
+      expect(c.threadMessages('message-1').first.id, 'message-1');
+    });
+
+    test('a saved thread whose root is gone restores closed', () async {
+      final server = threaded();
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'lead', 'root': 'deleted-root'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.openedThread, isNull);
+    });
+
+    test('a saved thread whose root cannot be read restores closed', () async {
+      final server = threaded()
+        ..messages.removeWhere((message) => message['id'] == 'message-1')
+        ..forbidMessageReads.add('lead');
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.openedThread, isNull);
+    });
+
+    testThread('project switching restores each conversation thread in view', (
+      tester,
+    ) async {
+      final server = threaded()
+        ..append('Offline topic.', conversationId: 'offline');
+      final c = await show(tester, server);
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      expect(panel, findsOneWidget);
+
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      c.openThread('message-6');
+      await tester.pumpAndSettle();
+      await c.select('lead');
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(panel, findsOneWidget);
+
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-6');
+      expect(panel, findsOneWidget);
+    });
+
+    testThread('Back and Forward restore the recorded thread place', (
+      tester,
+    ) async {
+      final server = threaded();
+      final c = await show(tester, server);
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      final places = SuperTabPlaces.of(c);
+      expect(places.canGoBack, isTrue);
+
+      places.step(-1);
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, isNull);
+      expect(panel, findsNothing);
+
+      places.step(1);
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(panel, findsOneWidget);
+    });
+
+    test(
+      'the newest 500 are kept, and writing in one again makes it newest',
+      () async {
+        final server = threaded();
+        final c = server.controller();
+        await c.refresh();
+        for (var n = 0; n < 502; n++) {
+          c.setThreadDraft('root-$n', 'draft $n', conversationId: 'lead');
+        }
+        c.setThreadDraft('root-0', 'again', conversationId: 'lead');
+        await c.flush();
+        c.dispose();
+        final next = await again(server);
+        expect(next.threadDraft('root-0'), 'again');
+        expect(next.threadDraft('root-1'), isEmpty);
+        expect(next.threadDraft('root-2'), isEmpty);
+        expect(next.threadDraft('root-3'), 'draft 3');
+        expect(next.threadDraft('root-501'), 'draft 501');
+      },
+    );
+
+    test('goes when its conversation goes for this reader', () async {
+      final server = threaded();
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      c.setThreadDraft('message-1', 'private words', conversationId: 'offline');
+      c.setThreadDraft('message-2', 'kept', conversationId: 'lead');
+      await c.flush();
+      (server.state['conversations'] as List).removeWhere(
+        (g) => (g as Map)['id'] == 'offline',
+      );
+      await c.refresh();
+      await c.flush();
+      expect(c.threadDraft('message-1'), isEmpty);
+      expect(c.threadDraft('message-2'), 'kept');
+      expect(jsonEncode(server.saved), isNot(contains('private words')));
+    });
+
+    test(
+      'the thread open beside the chat opens again, with its replies',
+      () async {
+        final server = threaded();
+        final c = server.controller();
+        await c.refresh();
+        c.openThread('message-1');
+        await c.flush();
+        c.dispose();
+        final next = await again(server);
+        expect(next.openedThread, (conversationId: 'lead', root: 'message-1'));
+        await next.refresh();
+        await pumpEventQueue();
+        expect(next.threadMessages('message-1'), isNotEmpty);
+      },
+    );
+
+    // The read mark is the account's, on every device: a controller can open with nothing on screen.
+    group('a thread that opened again', () {
+      Future<(ConversationServer, SuperTabController)> restored() async {
+        final server = threaded();
+        final c = server.controller();
+        await c.refresh();
+        c.openThread('message-1');
+        await c.flush();
+        await pumpEventQueue();
+        c.dispose();
+        server.threadMarkPosts.clear();
+        // From someone else: a reader's own reply is never unread.
+        server.append('A reply while the Swarm was closed.');
+        server.messages.last
+          ..['thread'] = 'message-1'
+          ..['replyTo'] = 'message-1'
+          ..['author'] = {
+            'kind': 'person',
+            'id': 'member',
+            'name': 'member@example.com',
+          };
+        return (server, await again(server));
+      }
+
+      test('marks nothing read while its pane is not on screen', () async {
+        final (server, next) = await restored();
+        await next.refresh();
+        await pumpEventQueue();
+        await next.refresh();
+        await pumpEventQueue();
+        expect(next.threadMessages('message-1'), isNotEmpty);
+        expect(server.threadMarkPosts, isEmpty);
+        final thread = next.thread('lead', 'message-1')!;
+        expect(next.threadUnread(thread), isTrue);
+      });
+
+      test('marks it read once its pane is shown', () async {
+        final (server, next) = await restored();
+        await next.refresh();
+        await pumpEventQueue();
+        next.threadPaneShown();
+        await pumpEventQueue();
+        expect(server.threadMarkPosts, isNotEmpty);
+        final thread = next.thread('lead', 'message-1')!;
+        expect(next.threadUnread(thread), isFalse);
+      });
+
+      test('opened by hand marks it read as before', () async {
+        final (server, next) = await restored();
+        await next.refresh();
+        await pumpEventQueue();
+        next.openThread('message-1');
+        await next.loadThread();
+        await pumpEventQueue();
+        expect(server.threadMarkPosts, isNotEmpty);
+      });
+
+      // A thread left open behind another Swarm or an app in the background:
+      // the Swarm is still read, and its replies must stay unread.
+      test(
+        'a hidden thread pane marks no new reply read until it is shown again',
+        () async {
+          final server = threaded();
+          final c = server.controller();
+          addTearDown(c.dispose);
+          await c.refresh();
+          c.openThread('message-1');
+          await c.loadThread();
+          c.threadPaneShown();
+          await pumpEventQueue();
+          server.threadMarkPosts.clear();
+          c.threadPaneHidden();
+          server.append('A reply while the pane was hidden.');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['author'] = {
+              'kind': 'person',
+              'id': 'member',
+              'name': 'member@example.com',
+            };
+          final reply = server.messages.last['sequence'] as int;
+          await c.refresh();
+          await pumpEventQueue();
+          expect(server.threadMarkPosts, isEmpty);
+          expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+          c.threadPaneShown();
+          await pumpEventQueue();
+          expect(server.threadMarkPosts, [
+            {'conversationId': 'lead', 'root': 'message-1', 'sequence': reply},
+          ]);
+          expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+        },
+      );
+
+      // A Swarm's view can be built while hidden: the canvas stays Offstage on a utility tab, and the app can start in the background.
+      Map<String, dynamic> savedOpen() => {
+        'tabId': 'tab',
+        'accountId': 'owner',
+        'selectedId': 'lead',
+        'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+      };
+      Future<void> mountHidden(
+        WidgetTester tester,
+        SuperTabController c, {
+        required bool hidden,
+      }) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: TickerMode(
+                enabled: !hidden,
+                child: Offstage(
+                  offstage: hidden,
+                  child: SuperTabView(
+                    controller: c,
+                    onAddAgent: (_) {},
+                    onOpenTerminal: (_) {},
+                    machineName: (_) => 'Team Mac',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      testThread('a hidden pane marks nothing, and marks once it is shown', (
+        tester,
+      ) async {
+        await tester.binding.setSurfaceSize(const Size(1400, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final server = threaded();
+        final c = shown = server.controller(initial: savedOpen());
+        addTearDown(c.dispose);
+        await c.refresh();
+        await mountHidden(tester, c, hidden: true);
+        expect(
+          find.byKey(const ValueKey('super-thread-panel'), skipOffstage: false),
+          findsOneWidget,
+        );
+        expect(server.threadMarkPosts, isEmpty);
+        await mountHidden(tester, c, hidden: false);
+        expect(server.threadMarkPosts, isNotEmpty);
+      });
+
+      testThread(
+        'an app in the background marks nothing, and marks once it is back',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(1400, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          addTearDown(
+            () => tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.resumed,
+            ),
+          );
+          final server = threaded();
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.inactive,
+          );
+          final c = shown = server.controller(initial: savedOpen());
+          addTearDown(c.dispose);
+          await c.refresh();
+          await mountHidden(tester, c, hidden: false);
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(server.threadMarkPosts, isEmpty);
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+          await tester.pumpAndSettle();
+          expect(server.threadMarkPosts, isNotEmpty);
+        },
+      );
+
+      // A thread opened by hand and seen, then left open while the pane goes
+      // away: the poll goes on bringing replies, and none is marked read.
+      group('a pane seen, then hidden', () {
+        late ConversationServer server;
+        late int reply;
+        Future<SuperTabController> seen(WidgetTester tester) async {
+          await tester.binding.setSurfaceSize(const Size(1400, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          server = threaded();
+          final c = shown = server.controller();
+          addTearDown(c.dispose);
+          await c.refresh();
+          c.openThread('message-1');
+          await mountHidden(tester, c, hidden: false);
+          expect(server.threadMarkPosts, isNotEmpty);
+          server.threadMarkPosts.clear();
+          return c;
+        }
+
+        Future<void> replyArrives(
+          WidgetTester tester,
+          SuperTabController c,
+        ) async {
+          server.append('A reply while the pane was hidden.');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['author'] = {
+              'kind': 'person',
+              'id': 'member',
+              'name': 'member@example.com',
+            };
+          reply = server.messages.last['sequence'] as int;
+          await c.refresh();
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(server.threadMarkPosts, isEmpty);
+        }
+
+        List<Map<String, Object>> markedThroughReply() => [
+          {'conversationId': 'lead', 'root': 'message-1', 'sequence': reply},
+        ];
+
+        testThread(
+          'sent to the background marks no new reply, and marks once it is back',
+          (tester) async {
+            addTearDown(
+              () => tester.binding.handleAppLifecycleStateChanged(
+                AppLifecycleState.resumed,
+              ),
+            );
+            final c = await seen(tester);
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.inactive,
+            );
+            await replyArrives(tester, c);
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.resumed,
+            );
+            await tester.pumpAndSettle();
+            expect(server.threadMarkPosts, markedThroughReply());
+          },
+        );
+
+        testThread(
+          'put offstage marks no new reply, and marks once it is shown',
+          (tester) async {
+            final c = await seen(tester);
+            await mountHidden(tester, c, hidden: true);
+            await replyArrives(tester, c);
+            await mountHidden(tester, c, hidden: false);
+            expect(server.threadMarkPosts, markedThroughReply());
+          },
+        );
+
+        testThread('let go of, as for another Swarm, marks no new reply', (
+          tester,
+        ) async {
+          final c = await seen(tester);
+          await tester.pumpWidget(const SizedBox());
+          await replyArrives(tester, c);
+          await mountHidden(tester, c, hidden: false);
+          expect(server.threadMarkPosts, markedThroughReply());
+        });
+      });
+
+      testThread('the real pane says it is shown', (tester) async {
+        final server = threaded();
+        await show(
+          tester,
+          server,
+          initial: {
+            'tabId': 'tab',
+            'accountId': 'owner',
+            'selectedId': 'lead',
+            'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+          },
+        );
+        expect(panel, findsOneWidget);
+        await tester.pumpAndSettle();
+        expect(server.threadMarkPosts, isNotEmpty);
+      });
+    });
+
+    test('a thread closed before the Swarm was let go stays closed', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.openThread('message-1');
+      c.closeThread();
+      await c.flush();
+      c.dispose();
+      expect((await again(server)).openedThread, isNull);
+    });
+
+    test('opening or closing a thread saves soon, with no flush', () async {
+      final server = threaded();
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      c.openThread('message-1');
+      await savedSoon(() => server.saved?['openThread'] != null);
+      expect(server.saved!['openThread'], isNotNull);
+      c.closeThread();
+      await savedSoon(() => server.saved!['openThread'] == null);
+      expect(server.saved!['openThread'], isNull);
+    });
+
+    test(
+      'a saved thread in a conversation no longer read does not open',
+      () async {
+        final server = threaded();
+        final c = server.controller(
+          initial: {
+            'tabId': 'tab',
+            'accountId': 'owner',
+            'selectedId': 'lead',
+            'openThread': {'conversationId': 'not-mine', 'root': 'message-1'},
+          },
+        );
+        addTearDown(c.dispose);
+        await c.refresh();
+        expect(c.openedThread, isNull);
+      },
+    );
+
+    test('a malformed saved thread opens nothing', () {
+      final server = threaded();
+      for (final open in <Object?>[
+        'nope',
+        {'conversationId': 1, 'root': 'message-1'},
+        {'conversationId': 'lead'},
+      ]) {
+        final c = server.controller(
+          initial: {'tabId': 'tab', 'accountId': 'owner', 'openThread': open},
+        );
+        addTearDown(c.dispose);
+        expect(c.openedThread, isNull);
+      }
+    });
+
+    test('another account finds none of them', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.setThreadDraft('message-1', 'mine', conversationId: 'lead');
+      await c.flush();
+      c.dispose();
+      final other = server.controller(account: 'member', initial: server.saved);
+      addTearDown(other.dispose);
+      expect(other.threadDraft('message-1'), isEmpty);
+    });
+
+    test(
+      'state from an older client, or a malformed entry, loads with none',
+      () {
+        final server = threaded();
+        for (final drafts in <Object?>[
+          null,
+          'nope',
+          {'a': 'not a map'},
+          {
+            'b': {'conversationId': 1, 'text': 'x'},
+          },
+          {
+            'c': {'conversationId': 'lead', 'text': 2},
+          },
+          {
+            'd': {'conversationId': 'lead', 'text': 'kept', 'mentions': 'nope'},
+          },
+        ]) {
+          final c = server.controller(
+            initial: {
+              'tabId': 'tab',
+              'accountId': 'owner',
+              'threadDrafts': drafts,
+            },
+          );
+          addTearDown(c.dispose);
+          for (final root in ['a', 'b', 'c']) {
+            expect(c.threadDraft(root), isEmpty);
+          }
+        }
+      },
+    );
+  });
+
   group('privacy and lifecycle', () {
     test('each conversation\'s thread keeps its own files, even for the same '
         'root id', () {
-      final c = ConversationServer().controller();
+      final c = ConversationServer.chat().controller();
       addTearDown(c.dispose);
       final here = c.threadAttachments('lead', 'message-1');
       final there = c.threadAttachments('offline', 'message-1');
@@ -614,7 +1350,6 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Team Mac',

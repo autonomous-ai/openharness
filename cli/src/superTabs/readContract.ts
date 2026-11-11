@@ -15,7 +15,7 @@ export const UPDATE_MESSAGE = 'Update Harness to keep using this Swarm.'
 export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
 /** A live part (`data`), a removed one (`deleted`, never with data), or a group that left the active set (`dormant`).
  *  A group's `data` has its own `messageSeq`, and `dormant`/`audience` only when set; an agent's never has the values that
- *  come in `derived` (`downSince`, `limitedUntil`, `roleId`). */
+ *  come in `derived` (`downSince`, `limitedUntil`). */
 export interface PartEnvelope<T = Json> {
   key: string
   version: number
@@ -27,14 +27,18 @@ export interface PartEnvelope<T = Json> {
 
 /** Values the server recomputes for every response and the client overlays on the parts (design 4.1). */
 export interface Derived {
-  /** Every agent the reader can see. `workDecision` null when the stored value stands; `roleId` null outside Custom. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
+  /** Every agent the reader can see. `workDecision` null when the stored value stands. */
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null }>
   /** Every contributed machine the reader can see. */
   machines: Record<string, Json>
   /** A Lead agent only. */
   otherProjectsWork?: Json[]
-  /** A person only. */
-  mentionsWaiting?: number
+  /** The board's pulse of each project the reader sees, by project id (backend superTabs/pulse.ts, task #3384). */
+  pulse?: Record<string, Json>
+  /** A person only: a digest of which of their tags wait, moving when one is made, answered or expires. */
+  mentionsDigest?: string
+  /** A person only: a digest of which decisions asked of them are open (backend read/views.ts). */
+  decisionsDigest?: string
   /** False only in a Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm). */
   teamAccounts?: false
 }
@@ -56,11 +60,12 @@ export interface PartsPayload extends ReadMeta {
   groups: PartEnvelope[]
   machines: PartEnvelope[]
   starts: PartEnvelope[]
-  progress: PartEnvelope[]
+  /** Always empty since Swarm v4; the backend stops sending it 30 days after the CLI release that reads it as optional (S19). */
+  progress?: PartEnvelope[]
   derived: Derived
 }
 /** `GET /api/super-tabs/:tabId/parts` (design 4.3). */
-export interface FirstLoad extends PartsPayload { tabId: string; githubApp?: true; /** The backend opens steps (task steps design). */ steps?: true }
+export interface FirstLoad extends PartsPayload { tabId: string }
 /** `GET /api/super-tabs/:tabId/changes?cursor=` (design 4.4); `{ reload: true }` asks for a first load instead. */
 export type ChangedParts = PartsPayload & { reload: false }
 export type Changes = ChangedParts | { reload: true }

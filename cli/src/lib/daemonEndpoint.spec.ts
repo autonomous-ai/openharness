@@ -1,12 +1,17 @@
 import { createServer } from 'node:http'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest'
 import { loadOrCreateHookCredential } from './hookAuth.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus, saveDaemonPort, savedDaemonPort } from './daemonEndpoint.js'
 import { readDaemonRecord } from './daemonRecord.js'
 import { listenLocalSocket, localSocketPath } from './localSocket.js'
+import type { PipeTarget } from './windows/pipeClient.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -122,30 +127,30 @@ describe('per-user daemon discovery', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
     const port = (server.address() as { port: number }).port
-    const dataDir = directory()
+    // Too long to hold a socket: the one case where the credential goes to the port.
+    const dataDir = join(directory(), 'd'.repeat(100))
+    mkdirSync(dataDir, { mode: 0o700 })
     const credential = loadOrCreateHookCredential(dataDir)
     expect(await legacyDaemonStatus(port, 43210, 'this-user', dataDir)).toEqual(status)
     expect(await legacyDaemonStatus(port, 43210, 'this-user')).toEqual(status)
     expect(seen).toEqual([credential, undefined])
   })
 
-  it("shows this user's credential when a Windows control call falls back to TCP", async () => {
+  // Audit W1 (docs/security/2026-11-02-team-account-windows.md): it fell back to the port with this user's credential, and
+  // the Team account's daemon, started at boot, can hold that port.
+  it.each([
+    ['no pipe', async (): Promise<PipeTarget | null> => null],
+    ['nothing listening on the pipe', async (): Promise<PipeTarget | null> => ({ pipe: join(directory(), `harness-${'0'.repeat(32)}`), token: Buffer.alloc(32, 1) })],
+  ] as const)('never tries the port on Windows: with %s it fails as a daemon that is down', async (_name, pipe) => {
     const dataDir = directory()
-    const credential = loadOrCreateHookCredential(dataDir)
-    let seen: string | null = null
-    const response = await localDaemonCall(dataDir, 19418, 'POST', '/api/pair', { code: 'one-use' }, {
-      platform: 'win32',
-      pipe: async () => null,
-      tcpPort: 24567,
-      fetch: async (url, init) => {
-        expect(String(url)).toBe('http://127.0.0.1:24567/api/pair')
-        const headers = new Headers(init?.headers)
-        expect(headers.get('x-adapter-local')).toBe('1')
-        seen = headers.get('x-harness-local')
-        return new Response('{}', { status: 200 })
-      },
-    })
-    expect(response.ok).toBe(true)
-    expect(seen).toBe(credential)
+    loadOrCreateHookCredential(dataDir)
+    let called = false
+    const failed = await localDaemonCall(dataDir, 19418, 'POST', '/api/pair', { code: 'one-use' }, {
+      platform: 'win32', pipe, tcpPort: 24567,
+      fetch: async () => { called = true; return new Response('{}', { status: 200 }) },
+    }).catch((error: unknown) => error)
+    expect(failed).toBeInstanceOf(TypeError)
+    expect((failed as TypeError).message).toBe('fetch failed')
+    expect(called).toBe(false)
   })
 })

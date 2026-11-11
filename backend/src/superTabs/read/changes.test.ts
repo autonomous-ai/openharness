@@ -13,15 +13,15 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 function scene(closed = false) {
   const s = richSwarm()
   s.contribute('mac', 'swarm')
-  // peer's Buddy chat, or with no kind their Chat with PM from before Buddies replaced it (projects.ts isClosedPmChat).
+  // peer's 1:1 chat with an agent, or with no kind their Chat with PM from before (projects.ts isClosedPmChat).
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'buddy' }, audience: { people: [{ id: peer.userId, generation }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'agent-chat' }, audience: { people: [{ id: peer.userId, generation }] } })
   })
   return { s, privateId, parts: store.split(s.state, { tabId: 'tab', version: R, now: NOW }) }
 }
-type Kind = 'members' | 'agents' | 'groups' | 'machines' | 'starts' | 'progress'
+type Kind = 'members' | 'agents' | 'groups' | 'machines' | 'starts'
 /** A later write of one part: its version moves and `change` applies to the stored part (data, tombstone or dormant flag). */
 function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) => void): Part {
   const part = (parts[kind] as Part[]).find(p => p.key === key)!
@@ -32,16 +32,16 @@ function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) 
 }
 /** What the reader receives: its view of the active (live) parts, then the changed parts run through its read check. */
 function receive(parts: SwarmParts, changed: Part[], actor: Actor) {
-  const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts', 'progress'] as Kind[])
+  const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts'] as Kind[])
     .map(kind => [kind, (parts[kind] as Part[]).filter(p => !p.deleted && !p.dormant)])) } as SwarmParts
-  return changesFor(readerView(active, actor, LATER, { teamMachines: [] }), changed, actor)
+  return changesFor(readerView(active, actor, LATER, {}), changed, actor)
 }
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('changes since a cursor (design 4.4)', () => {
   it('sends nothing but derived when nothing changed, and the head only when it changed', () => {
     const { parts } = scene()
-    expect(receive(parts, [], peer)).toMatchObject({ head: null, members: [], agents: [], groups: [], machines: [], starts: [], progress: [] })
+    expect(receive(parts, [], peer)).toMatchObject({ head: null, members: [], agents: [], groups: [], machines: [], starts: [] })
     const head = { ...parts.head, version: R + 1, changedAt: LATER }
     parts.head = head
     expect(receive(parts, [head], peer).head).toMatchObject({ key: 'head', version: R + 1 })
@@ -56,7 +56,7 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(keys(receive(parts, changed, owner).groups)).toEqual([s.web, s.secretGroup])
   })
 
-  it('sends a Buddy chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
+  it('sends a 1:1 chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
     const { s, privateId } = scene()
     for (const change of [(p: Part) => { (p.data as { title: string }).title = 'x' }, (p: Part) => { p.deleted = true }, (p: Part) => { p.dormant = true }]) {
       const { parts: fresh } = scene()
@@ -106,41 +106,75 @@ describe('changes since a cursor (design 4.4)', () => {
     const changed = [write(fresh, 'starts', `start-${s.web}`, p => { p.deleted = true }), write(fresh, 'starts', `start-${s.secretGroup}`, p => { p.deleted = true })]
     expect(keys(receive(fresh, changed, peer).starts)).toEqual([`start-${s.web}`])
     expect(keys(receive(fresh, changed, owner).starts)).toEqual([`start-${s.web}`, `start-${s.secretGroup}`])
-    // A Buddy reads no starts, not even a removal's id, though it reads their group (security review 2 of #2258).
-    s.edit(state => {
-      const generation = state.people.find(p => p.id === peer.userId)!.generation, worker = state.agents.find(a => a.id === s.worker)!
-      state.agents.push({ ...worker, id: 'buddy', harnessId: 'buddy-harness', contributorId: peer.userId, membershipGeneration: generation,
-        name: 'Buddy', buddyOf: { personId: peer.userId, generation } })
-    })
-    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const removed = [write(withBuddy, 'starts', `start-${s.web}`, p => { p.deleted = true })]
-    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
-    expect(keys(receive(withBuddy, [write(withBuddy, 'groups', s.web, () => {})], buddy).groups)).toEqual([s.web])
-    expect(receive(withBuddy, removed, buddy).starts).toEqual([])
-    expect(keys(receive(withBuddy, removed, peer).starts)).toEqual([`start-${s.web}`])
-  })
-
-  it('sends changed project progress only to readers of the project', () => {
-    const { s } = scene()
-    s.edit(state => { for (const p of state.projects!) p.progress = { since: 1, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} } })
-    const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const changed = [write(fresh, 'progress', 'lead', () => {}), write(fresh, 'progress', s.secret, () => {})]
-    expect(receive(fresh, changed, peer).progress).toEqual([{ key: 'lead', version: R + 1, changedAt: LATER,
-      data: { since: 1, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {}, requestedAt: null } }])
   })
 
   it('hands a reader only the required machines they see, whole and in changes', () => {
     const { s } = scene()
     // Only an agent of the private project runs on 'secret-mac', so the peer does not see that machine.
     s.add('secret-harness', s.secretGroup, false, owner, 'secret-mac')
-    s.run({ type: 'work.define', conversationId: s.done, task: { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
-      requires: { machines: ['secret-mac', 'mac'] } }, checks: [{ description: 'It answers.', independent: false }] })
+    // A task whose requirements were defined before Swarm v4, which defines none.
+    s.edit(state => { state.conversations.find(c => c.id === s.done)!.task = { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
+      requires: { machines: ['secret-mac', 'mac'] } } })
     const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const requires = (groups: Array<{ key: string }>) => (groups.find(g => g.key === s.done) as unknown as { data: { task: { requires: unknown } } }).data.task.requires
-    expect(requires(readerView(fresh, owner, LATER, { teamMachines: [] }).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })
-    expect(requires(readerView(fresh, peer, LATER, { teamMachines: [] }).parts.groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
+    expect(requires(readerView(fresh, owner, LATER, {}).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })
+    expect(requires(readerView(fresh, peer, LATER, {}).parts.groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
     const changed = [write(fresh, 'groups', s.done, () => {})]
     expect(requires(receive(fresh, changed, peer).groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
     expect(requires(receive(fresh, changed, owner).groups)).toEqual({ machines: ['secret-mac', 'mac'] })
+  })
+})
+
+// A client that asks for it gets a line for a machine's own reading (Ken's machine-cap plan, 2026-11-04).
+describe('a machine\'s reading, for a client that asks for lines', () => {
+  const SINCE = NOW + 1_000
+  const lightly = (parts: SwarmParts, changed: Part[], actor: Actor) => {
+    const view = readerView(parts, actor, LATER, {})
+    return changesFor(view, changed, actor, { since: SINCE })
+  }
+  const reading = (parts: SwarmParts, change: (p: Part) => void = () => {}) => {
+    const part = parts.machines.find(p => p.key === 'mac')! as Part
+    part.version += 1
+    part.readAt = LATER
+    const data = part.data as { contribution: { observation?: unknown } }
+    data.contribution.observation = { receivedAt: LATER, resources: {}, quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] }
+    change(part)
+    return part
+  }
+
+  it('is a line when only the reading moved', () => {
+    const { parts } = scene()
+    const out = lightly(parts, [reading(parts)], peer)
+    expect(out.machines).toEqual([])
+    expect(out.machineReadings).toEqual([{ key: 'mac', version: R + 1, receivedAt: LATER }])
+  })
+
+  it('is the whole part when its content changed since the cursor', () => {
+    const { parts } = scene()
+    const out = lightly(parts, [reading(parts, p => { p.contentAt = LATER })], peer)
+    expect(keys(out.machines)).toEqual(['mac'])
+    expect(out.machineReadings).toEqual([])
+  })
+
+  it('is the whole part when anything else changed since the cursor, and a line when its content changed before it', () => {
+    const { parts } = scene()
+    expect(keys(lightly(parts, [reading(parts, p => { p.changedAt = LATER })], peer).machines)).toEqual(['mac'])
+    const { parts: older } = scene()
+    expect(lightly(older, [reading(older, p => { p.contentAt = SINCE - 1 })], peer).machines).toEqual([])
+  })
+
+  it('is a removal, never a line, when the machine left', () => {
+    const { parts } = scene()
+    const gone = write(parts, 'machines', 'mac', p => { p.deleted = true; p.readAt = LATER })
+    const out = changesFor(readerView({ ...parts, machines: [] }, peer, LATER, {}), [gone], peer, { since: SINCE })
+    expect(out.machines).toEqual([{ key: 'mac', version: R + 1, changedAt: LATER, deleted: true }])
+    expect(out.machineReadings).toEqual([])
+  })
+
+  it('leaves the reply as it was for a client that did not ask', () => {
+    const { parts } = scene()
+    const out = receive(parts, [reading(parts)], peer)
+    expect(keys(out.machines)).toEqual(['mac'])
+    expect(out).not.toHaveProperty('machineReadings')
   })
 })

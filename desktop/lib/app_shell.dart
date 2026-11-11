@@ -3,6 +3,7 @@ import 'core/app_version.dart';
 import 'dart:async';
 
 import 'measurement/product_runtime_health.dart';
+import 'measurement/speed_marks.dart';
 
 import 'dart:ui' show AppExitResponse;
 
@@ -36,6 +37,7 @@ import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
 import 'widgets/in_window_menu_bar.dart';
+import 'widgets/old_team_account.dart';
 import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
 import 'widgets/transient_menus.dart';
@@ -84,6 +86,7 @@ Future<void> startHarness({
   /// [TerminalTransportPlugin]); the desktop passes none.
   TerminalTransportPluginFactory? transportPlugins,
 }) async {
+  speedMarks.start();
   if (!kIsWeb) ProductRuntimeHealth.launched();
   // Share links and OAuth own the browser URL. Flutter's default hash routing would
   // erase the share's pinned identity on the first navigation or window resize.
@@ -100,8 +103,12 @@ Future<void> startHarness({
   // Keyboard configuration has its own file and watchers. It can load beside
   // the appearance, but both must be ready before the window becomes usable.
   await Future.wait([loadPersistedSettings(), keymap.start()]);
+  speedMarks.launch('settings loaded');
+  // Match macOS repaints the app when the computer's own setting flips.
+  appearancePrefsStore.followSystemBrightness();
   // Apply the saved palette to native chrome as well as the Flutter theme.
   await configureDesktopWindow(palette: appearancePrefsStore.value.palette);
+  speedMarks.launch('window configured');
   runApp(
     ProviderScope(
       child: HarnessApp(
@@ -122,7 +129,15 @@ class HarnessApp extends StatelessWidget {
     this.keymap,
     required this.authenticatedScreen,
     this.frame,
+    this.deferFirstScreen,
   });
+
+  /// Whether the first frame draws only the window colour, leaving the app
+  /// state and the screen to the next frame (task #3563). Null: on, except in
+  /// widget tests, which expect the screen on their first pump, and on the web,
+  /// which this change did not measure.
+  final bool? deferFirstScreen;
+
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
   final AppFrameBuilder? frame;
@@ -137,6 +152,10 @@ class HarnessApp extends StatelessWidget {
 
   Widget _app(AppearancePrefs prefs) {
     grid.AppTheme.palette.value = prefs.palette;
+    // Also the brightness `AppPalette.windowBg` resolves against: the
+    // placeholder of the first frame is drawn before `_GridTokenScope` (inside
+    // the deferred shell) would set it, and a light palette must not flash dark.
+    grid.AppTheme.brightness.value = prefs.palette.brightness;
     return MaterialApp(
       title: 'Harness',
       // OAuth callback paths are consumed by the sign-in adapter during boot.
@@ -147,10 +166,11 @@ class HarnessApp extends StatelessWidget {
       // 2026-09-16). It never appears in a release build whatever this says.
       // A preview capture that wants a clean corner passes
       // `--dart-define=HARNESS_CLEAN_PREVIEW=true` instead of turning it off
-      // for everyone.
-      debugShowCheckedModeBanner: !const bool.fromEnvironment(
-        'HARNESS_CLEAN_PREVIEW',
-      ),
+      // for everyone. Not on Windows, where the corner it covers is the window's
+      // close button.
+      debugShowCheckedModeBanner:
+          !RuntimePlatform.isWindows &&
+          !const bool.fromEnvironment('HARNESS_CLEAN_PREVIEW'),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
       // The chosen palette owns the appearance; platform text scaling remains
@@ -163,18 +183,70 @@ class HarnessApp extends StatelessWidget {
       // Desktop forms respect the platform's text size. Fixed-grid terminal
       // surfaces own their no-scaling boundary alongside terminal zoom.
       builder: (context, child) {
-        final app = child ?? const SizedBox.shrink();
-        final framed = frame?.call(app) ?? app;
-        return _GridTokenScope(
-          child: keymap == null
-              ? framed
-              : KeymapProvider(keymap: keymap!, child: framed),
-        );
+        Widget shell() {
+          final app = child ?? const SizedBox.shrink();
+          final framed = frame?.call(app) ?? app;
+          return _GridTokenScope(
+            child: keymap == null
+                ? framed
+                : KeymapProvider(keymap: keymap!, child: framed),
+          );
+        }
+
+        return deferFirstScreen ?? !(kUnderTest || kIsWeb)
+            ? _AfterFirstFrame(build: shell)
+            : shell();
       },
       home: StatsLifecycle(
         child: RootShell(authenticatedScreen: authenticatedScreen),
       ),
     );
+  }
+}
+
+/// Draws only the window's own colour on the first frame, then [build] on the
+/// next one (task #3563).
+///
+/// The app state (its bootstrap starts when it is first read), the menu and
+/// device strips, the keymap and the screen are built inside [build]. The
+/// first frame no longer waits for them: its mark moves from ~82 ms to ~55 ms
+/// after the window is configured, and the boot screen is on screen about
+/// 10 ms earlier than before, because the next frame starts straight after
+/// this one. The window colour matches the screen's, so nothing flashes.
+class _AfterFirstFrame extends StatefulWidget {
+  const _AfterFirstFrame({required this.build});
+
+  final Widget Function() build;
+
+  @override
+  State<_AfterFirstFrame> createState() => _AfterFirstFrameState();
+}
+
+class _AfterFirstFrameState extends State<_AfterFirstFrame> {
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _ready = true);
+      speedMarks.launch('first screen built');
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => speedMarks.launch('first screen painted'),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return ColoredBox(
+        key: const Key('first-frame-placeholder'),
+        color: grid.AppPalette.windowBg,
+      );
+    }
+    return widget.build();
   }
 }
 
@@ -270,6 +342,10 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // The Windows tab strip's ☰ is built below this shell, so it dispatches
+    // through the sink instead of a callback threaded through three
+    // constructors (desktop/design/windows-app-menu.md).
+    appMenuActionSink = runAppMenuAction;
     // Available from startup, including sign-in and setup.
     if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
@@ -279,6 +355,7 @@ class _RootShellState extends ConsumerState<RootShell>
     flushAppLog();
     WidgetsBinding.instance.removeObserver(this);
     _appMenuChannel.setMethodCallHandler(null);
+    appMenuActionSink = null;
     super.dispose();
   }
 
@@ -455,7 +532,11 @@ class _RootShellState extends ConsumerState<RootShell>
           );
         }
         _home = home;
-        final framed = home ? screen : FullWindowScreen(child: screen);
+        // The workspace asks once a launch about an old Team account left on
+        // this computer (widgets/old_team_account.dart).
+        final framed = home
+            ? OldTeamAccountAsk(child: screen)
+            : FullWindowScreen(child: screen);
         // The band takes a row of its own rather than floating over one. As an
         // overlay it landed on the rail's head — covering the wordmark and the
         // three buttons beside it, which is the one strip of this window that
@@ -467,10 +548,14 @@ class _RootShellState extends ConsumerState<RootShell>
         final deviceBands = home && shared == null;
         return Column(
           children: [
-            // The app's commands as a menu strip (Linux and Windows; macOS
-            // carries them in its native menu bar, and this renders nothing
-            // there).
-            InWindowMenuBar(onAction: runAppMenuAction),
+            // The app's commands as a menu strip. Linux always (on GNOME it
+            // is the title bar); macOS carries them in its native menu bar and
+            // renders nothing. Windows draws a ☰ in the workspace tab strip
+            // instead, but the screens before it — sign-in, setup, the tour —
+            // have no tab strip, so they keep the strip until the workspace is
+            // up.
+            if (!RuntimePlatform.isWindows || !home)
+              InWindowMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
                 !signInStep &&

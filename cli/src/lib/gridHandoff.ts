@@ -135,12 +135,27 @@ export async function handOffToGrid(
   const ended = await gridCallStarted()
   return await new Promise<GridHandoffResult>((resolve) => {
     const command = gridCommand(binary, args)
-    const child = spawn(command.file, command.args, {
-      stdio: ['pipe', opts.json ? 'pipe' : 'inherit', opts.json ? 'pipe' : 'inherit'],
-      // The human path inherits stderr, which is a terminal — exactly where grid would offer
-      // `grid update` for a binary the harness pins. See GRID_NO_UPDATE_CHECK_VAR in gridExec.ts.
-      env: gridChildEnv(),
-    })
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command.file, command.args, {
+        stdio: ['pipe', opts.json ? 'pipe' : 'inherit', opts.json ? 'pipe' : 'inherit'],
+        // The human path inherits stderr, which is a terminal — exactly where grid would offer
+        // `grid update` for a binary the harness pins. See GRID_NO_UPDATE_CHECK_VAR in gridExec.ts.
+        env: gridChildEnv(),
+      })
+    } catch (error) {
+      // Windows' application control refuses an unsigned program synchronously (UNKNOWN). The
+      // hand-off reports every failure through its result, and an install waits on this counter.
+      ended()
+      resolve({
+        code: 'GRID_LOGIN_FAILED',
+        exitCode: 1,
+        message: `Could not run \`${binary}\`: ${error instanceof Error ? error.message : String(error)}`,
+        stdout: '',
+        stderr: '',
+      })
+      return
+    }
     let stdout = ''
     let stderr = ''
     child.stdout?.on('data', (chunk: Buffer) => { stdout = capped(stdout, chunk) })

@@ -1,7 +1,8 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
+import { randomBytes } from 'crypto'
 import { createServer } from 'http'
-import { createServer as createNetServer } from 'net'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { connect as netConnect, createServer as createNetServer } from 'net'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -9,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
+import { hookTokenPath } from './lib/hookAuth.js'
+import { isTrustedLocal, listenLocalSocket, localSocketName, socketPathIn } from './lib/localSocket.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
 // and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
@@ -22,6 +25,13 @@ const CLOCK_SHIFT = fileURLToPath(new URL('../e2e/harness/clockShift.mjs', impor
 const servers: ReturnType<typeof createServer>[] = []
 const netServers: ReturnType<typeof createNetServer>[] = []
 const tmpDirs: string[] = []
+/** The daemon's pipe servers of the Windows cases, each closed with its own close. */
+const pipeServers: Array<() => Promise<void>> = []
+
+/** A pid that ran and has exited: a daemon that is gone. */
+function exitedPid(): number {
+  return spawnSync(process.execPath, ['-e', '']).pid!
+}
 
 function writeLegacyStateFile(path: string, value: string): void {
   writeFileSync(path, value, { mode: 0o644 })
@@ -31,8 +41,44 @@ function writeLegacyStateFile(path: string, value: string): void {
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
   await Promise.all(netServers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+  await Promise.all(pipeServers.splice(0).map((close) => close()))
   for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
+
+/**
+ * The daemon's socket, as the hook now reaches it (audit H1), in front of a test's fake daemon on [port]. A connection
+ * to a port nobody holds is cut, as a daemon that is down. A folder that does not exist yet stays without one.
+ */
+/** A home short enough to hold the hook's socket folder (lib/localSocket.ts shortSocketFolder) on any machine, even under
+ *  an agent's long TMPDIR, so a case about the socket route takes it. */
+function shortHome(): string {
+  const home = mkdtempSync('/tmp/hh-')
+  tmpDirs.push(home)
+  return home
+}
+
+/** The daemon's way in, where the hook looks for it (lib/localSocket.ts socketPathIn, mirrored in hook/notify.mjs): its
+ *  socket beside the data, or in a short folder under `home` when that path is too long for a socket. With no path short
+ *  enough the hook posts to the port with the hook-only token, which the daemon keeps beside its data. */
+async function daemonSocketFor(port: number, dataDir: string | undefined, home?: string): Promise<void> {
+  if (!dataDir || !existsSync(dataDir)) return
+  const path = socketPathIn(dataDir, localSocketName(port), home)
+  if (!path) {
+    try { writeFileSync(hookTokenPath(dataDir), `${'b'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
+    return
+  }
+  if (existsSync(path)) return
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const proxy = createNetServer((client) => {
+    const upstream = netConnect(port, '127.0.0.1')
+    client.on('error', () => upstream.destroy())
+    upstream.on('error', () => client.destroy())
+    client.pipe(upstream).pipe(client)
+  })
+  netServers.push(proxy)
+  await new Promise<void>((resolve) => { proxy.listen(path, resolve) })
+  chmodSync(path, 0o600)
+}
 
 interface RunHookOpts {
   port: number
@@ -49,6 +95,8 @@ interface RunHookOpts {
   /** Override the fixture's ps `comm` and full argv to exercise install-root-independent matching. */
   processExecutable?: string
   processArgs?: string
+  /** The hook's parent is Hermes' shared gateway (a child of the pane's Hermes), as every hook is from Hermes 0.22. */
+  viaHermesGateway?: boolean
   /** Kernel birth evidence for the synthetic process; never read an unrelated host pid. */
   nativeProcess?: 'linux' | 'missing' | 'changed' | 'lock-replaced' | 'boot-replaced' | 'registry-replaced'
     | 'zombie' | 'registry-zombie' | 'registry-command' | 'registry-reparented' | 'short' | 'wrong-pid'
@@ -62,7 +110,7 @@ interface RunHookOpts {
   cursorHome?: string
   hermesHome?: string
   /** Fake Hermes SQLite source; null means the session row has not appeared. */
-  hermesSource?: 'cli' | 'tui' | 'subagent' | null
+  hermesSource?: 'cli' | 'tui' | 'subagent' | null | { source: string; created_source: string | null }
   /** How long Hermes' store takes to answer, in the shipped hook's seconds: a loaded machine. Stretched
    *  as the hook stretches its own step limits under HARNESS_HOOK_DEADLINE_MS (notify.mjs STEP_SCALE),
    *  so the delay keeps the same share of the sqlite3 limit whatever the budget. */
@@ -122,7 +170,9 @@ function runHook(opts: RunHookOpts): Promise<string> {
         env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
         writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       } else {
-        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+        // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
+        const gateway = opts.viaHermesGateway ? ` '7002 7001 python3 Mon Aug 10 10:00:02 2026 python3 -m hermes_cli.main gateway run --quiet --idle-exit'` : ''
+        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       }
       const nativeFixture = join(binDir, 'native-process.mjs')
       writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
@@ -163,7 +213,8 @@ fs.readFileSync = (path, ...args) => {
         symlinkSync(target, join(binDir, 'grok'))
       }
       if (opts.hermesSource !== undefined) {
-        const rows = opts.hermesSource === null ? '[]' : JSON.stringify([{ source: opts.hermesSource }])
+        const rows = opts.hermesSource === null ? '[]'
+          : JSON.stringify([typeof opts.hermesSource === 'object' ? opts.hermesSource : { source: opts.hermesSource }])
         const stepScale = Number(env.HARNESS_HOOK_DEADLINE_MS) / 4500
         const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds * stepScale}\n` : ''
         writeFileSync(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`, { mode: 0o755 })
@@ -184,6 +235,7 @@ fs.readFileSync = (path, ...args) => {
       mkdirSync(hookDataDir, { recursive: true, mode: 0o700 })
       try { writeFileSync(join(hookDataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     }
+    daemonSocketFor(opts.port, hookDataDir, env.HOME).then(() => {
     const child = spawn(process.execPath, args, {
       env,
       stdio: ['pipe', 'pipe', 'inherit'],
@@ -198,6 +250,7 @@ fs.readFileSync = (path, ...args) => {
       session_id: 'session-test',
       reason: 'logout',
     }))
+    }, reject)
   })
 }
 
@@ -300,7 +353,8 @@ describe('hook notify terminal scope', () => {
     symlinkSync(target, join(dataDir, 'hook-credential'))
     const { port, requests } = await collect()
 
-    await runHook({ port, tmuxPane: '%42', dataDir })
+    // The credential goes only over the socket: a home that holds one, whatever this machine's TMPDIR.
+    await runHook({ port, tmuxPane: '%42', dataDir, env: { HOME: shortHome() } })
 
     expect(requests).toEqual([])
   })
@@ -523,6 +577,23 @@ describe('hook notify terminal scope', () => {
     expect(requests).toHaveLength(2)
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-end', '/api/hook/session-end'])
   })
+
+  // An agent's temporary folder on a Mac (~/.harness/cli/data/agent-tmp/…) leaves no room for a socket beside a test's
+  // data folder. The hook then looks where the daemon would have put it (#4381): in a short folder under home, or, with
+  // home too long as well, nowhere, and it posts to the port with the hook-only token.
+  it.each([['a short folder under home', 'short'], ['the port with the hook token', 'tcp']] as const)(
+    'reaches the daemon through %s when its data folder is too long for a socket', async (_route, route) => {
+      const { port, requests } = await collect()
+      const dir = mkdtempSync(join(tmpdir(), 'hl-'))
+      tmpDirs.push(dir)
+      const dataDir = join(dir, 'd'.repeat(100))
+      const home = route === 'short' ? shortHome() : join(dir, 'h'.repeat(100))
+      mkdirSync(home, { recursive: true })
+
+      await runHook({ port, tmuxPane: '%42', dataDir, env: { HOME: home } })
+
+      expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-end'])
+    })
 
   it('drops standalone SessionEnd but forwards tmux SessionEnd', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
@@ -903,6 +974,28 @@ describe('hook notify terminal scope', () => {
     }
   })
 
+  it('offline Hermes fallback binds a Hermes 0.23 local session only when its CLI or TUI created it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-local-'))
+    tmpDirs.push(dir)
+    const common = {
+      port: 9, tmuxPane: '%82', engine: 'hermes' as const, processEngine: 'hermes' as const, processExecutable: 'python3',
+      processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes', hermesHome: join(dir, 'hermes'),
+    }
+    const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+    const cases = [
+      ['cli', { source: 'local', created_source: 'cli' }, true], ['tui', { source: 'local', created_source: 'tui' }, true],
+      ['acp', { source: 'local', created_source: 'acp' }, false], ['unknown', { source: 'local', created_source: 'unknown' }, false],
+      ['child', { source: 'subagent', created_source: null }, false],
+    ] as const
+    for (const [index, [name, row, binds]] of cases.entries()) {
+      const dataDir = join(dir, `${name}-data`)
+      await runHook({ ...common, dataDir, hermesSource: row, input: { hook_event_name: 'on_session_start', session_id: local(index + 1) } })
+      if (binds) {
+        expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: local(index + 1), engine: 'hermes' }])
+      } else expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf8')).toThrow()
+    }
+  })
+
   it.each(['recovers', 'full', 'resolving', 'disconnects'] as const)('Hermes live admission %s retries within a bound and never writes an offline registry', async outcome => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-held-'))
     tmpDirs.push(dir)
@@ -963,6 +1056,24 @@ describe('hook notify terminal scope', () => {
     ])
     await runHook({ ...common, dataDir: join(dir, 'unrelated'), processArgs: `python3 worker.py -c ${source}` })
     expect(() => readFileSync(join(dir, 'unrelated', 'registry.json'), 'utf8')).toThrow()
+  })
+
+  // From Hermes 0.22 every session's hook runs in one gateway, which the first Hermes client started and which sits under
+  // that client's pane: the pane in the hook's environment and its parents are that one, whichever pane the session is in.
+  // Offline, the hook cannot tell which pane, so it writes nothing (the daemon reads the session's own pane instead).
+  it('writes no offline registration for a Hermes hook from its shared gateway, which belongs to no pane', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-gateway-'))
+    tmpDirs.push(dir)
+    const common = {
+      port: 9, tmuxPane: '%84', engine: 'hermes' as const, processEngine: 'hermes' as const,
+      processExecutable: 'python3', processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes',
+      hermesHome: join(dir, 'hermes'), hermesSource: 'cli' as const,
+      input: { hook_event_name: 'on_session_start', session_id: '20260810_120004_a1b2c3' },
+    }
+    await runHook({ ...common, dataDir: join(dir, 'direct') })
+    expect(JSON.parse(readFileSync(join(dir, 'direct', 'registry.json'), 'utf8'))).toMatchObject([{ engine: 'hermes', tmuxPane: '%84' }])
+    await runHook({ ...common, dataDir: join(dir, 'gateway'), viaHermesGateway: true })
+    expect(() => readFileSync(join(dir, 'gateway', 'registry.json'), 'utf8')).toThrow()
   })
 
   it('still binds a CLI Hermes session when its store is slow to answer, as on a loaded machine', async () => {
@@ -1798,6 +1909,7 @@ describe('a hook reaches the daemon that made its pane', () => {
     const atDev = await collect({}, dev.credential)
     publishHookRoute(release.dataDir, atRelease.port, routes)
     publishHookRoute(dev.dataDir, atDev.port, routes)
+    await daemonSocketFor(atRelease.port, release.dataDir)
     // The dev daemon started last: the command is its own. The pane is the release daemon's.
     await runHook({
       port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%7', paneOwner: release.tag,
@@ -1872,6 +1984,7 @@ describe('a hook reaches the daemon that made its pane', () => {
     expect(atDev.requests).toHaveLength(6)
     // And with the record in order, the same hook goes to the release daemon.
     publishHookRoute(release.dataDir, atRelease.port, routes)
+    await daemonSocketFor(atRelease.port, release.dataDir)
     await hook(release.tag)
     expect(atRelease.requests).toHaveLength(1)
   })
@@ -1934,37 +2047,145 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
     expect(empty.requests).toEqual([])
   })
+})
 
-  it('reads its credential on Windows, where NTFS reports no owner and no private mode', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
-    writeFileSync(join(dataDir, 'hook-credential'), `${'b'.repeat(43)}\n`, { mode: 0o644 })
-    const preload = join(dataDir, 'win32.mjs')
-    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
-    const { port, requests } = await collect({}, 'b'.repeat(43))
-    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+/**
+ * Audit W1 (docs/security/2026-11-02-team-account-windows.md): on Windows the hook posted the full local credential to
+ * the daemon's TCP port, which the Team account's daemon can hold from boot. It now posts over the daemon's pipe, proving
+ * the daemon's token, and with no live pipe it posts nothing, as on macOS with no socket. Node on a Mac cannot open a
+ * Windows pipe, so a preload sets the platform to win32 and dials a Unix socket named for the pipe's id instead.
+ */
+describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
+  const sessionStart = () => {
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
+  }
+
+  /** A data folder short enough for a socket, with the daemon's token, and a preload that runs the hook as on Windows. */
+  function windowsData(): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
+    const dataDir = mkdtempSync('/tmp/hkp-'); tmpDirs.push(dataDir)
+    const token = randomBytes(32), id = randomBytes(16).toString('hex')
+    writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
+    const preload = join(dataDir, 'win32-pipe.mjs')
+    writeFileSync(preload, [
+      "import http from 'node:http'",
+      "Object.defineProperty(process, 'platform', { value: 'win32' })",
+      'const dial = http.Agent.prototype.createConnection',
+      'http.Agent.prototype.createConnection = function (options, ...rest) {',
+      // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
+      '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
+      `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
+      '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
+      '}',
+    ].join('\n') + '\n')
+    return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
+  }
+
+  function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
+    writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
+  }
+
+  /** The daemon's pipe server, as the daemon serves it (lib/localSocket.ts): every request proves the token. */
+  async function pipeDaemon(socket: string, token: Buffer, answer: (res: import('http').ServerResponse) => void = (res) => res.end('{}')) {
+    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown }> = []
+    const server = await listenLocalSocket((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'] })
+        answer(res)
+      })
+    }, socket, { token })
+    pipeServers.push(server.close)
+    return requests
+  }
+
+  const run = (port: number, dataDir: string, preload: string, extra: Partial<RunHookOpts> = {}) =>
+    runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart(), ...extra })
+
+  it('posts over the daemon\'s pipe, with the pipe auth and no credential, and nothing to the port', async () => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests = await pipeDaemon(socket, token)
+    await run(tcp.port, dataDir, preload)
+    expect(requests).toEqual([{ url: '/api/hook/session-start', trusted: true, hookToken: undefined, credential: undefined }])
+    expect(tcp.requests).toEqual([])
+  })
+
+  it('finds the daemon by its record when the hook was given the port it bound, not the one it was configured with', async () => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    writeFileSync(join(dataDir, 'daemon-18473.json'), JSON.stringify({ port: tcp.port, pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid }))
+    const requests = await pipeDaemon(socket, token)
+    await run(tcp.port, dataDir, preload)
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+    expect(tcp.requests).toEqual([])
   })
 
-  it('refuses a linked credential on Windows', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
-    const elsewhere = mkdtempSync(join(tmpdir(), 'adapter-hook-other-')); tmpDirs.push(elsewhere)
-    writeFileSync(join(elsewhere, 'token'), `${'b'.repeat(43)}\n`)
-    symlinkSync(join(elsewhere, 'token'), join(dataDir, 'hook-credential'))
-    const preload = join(dataDir, 'win32.mjs')
-    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
-    const { port, requests } = await collect({}, 'b'.repeat(43))
-    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+  it.each([
+    ['no record', () => undefined],
+    ['a record with no pipe', () => ({ pid: process.pid })],
+    ['a record with no pid', (id: string) => ({ pipe: `\\\\.\\pipe\\harness-${id}` })],
+    ['a pipe on another computer', (id: string) => ({ pipe: `\\\\fileserver\\pipe\\harness-${id}`, pid: process.pid })],
+    ['a file named as a pipe', (id: string) => ({ pipe: `C:\\Users\\Public\\harness-${id}`, pid: process.pid })],
+    ['a daemon that has exited', (id: string) => ({ pipe: `\\\\.\\pipe\\harness-${id}`, pid: exitedPid() })],
+    // The daemon is this account's: a pid another account runs (EPERM; pid 1 is root's) is one reused since it exited,
+    // and whoever has it may have created the pipe of the recorded name (Quinn 2's review of #2605).
+    ...(process.getuid?.() === 0 ? [] : [['a pid another account runs now', (id: string) => ({ pipe: `\\\\.\\pipe\\harness-${id}`, pid: 1 })] as const]),
+  ] as const)('posts nothing, to the pipe or the port, with %s', async (_name, fields) => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    const value = fields(id)
+    if (value) record(dataDir, tcp.port, value)
+    const requests = await pipeDaemon(socket, token)
+    await run(tcp.port, dataDir, preload)
     expect(requests).toEqual([])
+    expect(tcp.requests).toEqual([])
   })
 
-  it('refuses a credential that links to a file inside the data folder: the link itself is refused', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
-    writeFileSync(join(dataDir, 'token'), `${'b'.repeat(43)}\n`)
-    symlinkSync(join(dataDir, 'token'), join(dataDir, 'hook-credential'))
-    const preload = join(dataDir, 'win32.mjs')
-    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
-    const { port, requests } = await collect({}, 'b'.repeat(43))
-    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+  it.each(['missing', 'linked', 'not a token'] as const)('posts nothing, to the pipe or the port, when the daemon\'s token is %s', async (fault) => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    rmSync(join(dataDir, 'daemon-token'))
+    if (fault === 'linked') {
+      // A link is refused even to a token file inside the data folder: NTFS gives the hook no owner to check.
+      writeFileSync(join(dataDir, 'token'), `${token.toString('hex')}\n`)
+      symlinkSync(join(dataDir, 'token'), join(dataDir, 'daemon-token'))
+    }
+    if (fault === 'not a token') writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex').toUpperCase()}\n`)
+    const requests = await pipeDaemon(socket, token)
+    await run(tcp.port, dataDir, preload)
     expect(requests).toEqual([])
+    expect(tcp.requests).toEqual([])
+  })
+
+  // What the hook does with an answer: a held Hermes admission is retried (four posts in all). Whatever answers on the
+  // pipe without the daemon's proof is not the daemon, and its answer is not taken: one post, then the hook moves on.
+  it.each([['the daemon\'s proof', 4], ['a wrong proof', 1]] as const)('takes an answer only with the daemon\'s proof: %s', async (proof, posts) => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const held = (res: import('http').ServerResponse) => { res.writeHead(202); res.end(JSON.stringify({ pending: false, retry: true })) }
+    let attempts = 0
+    if (proof === 'a wrong proof') {
+      const impostor = createServer((req, res) => {
+        req.resume()
+        req.on('end', () => { attempts++; res.setHeader('x-harness-proof', 'a'.repeat(64)); held(res) })
+      })
+      servers.push(impostor)
+      await new Promise<void>((resolve) => { impostor.listen(socket, resolve) })
+    } else {
+      const requests = await pipeDaemon(socket, token, (res) => { attempts++; held(res) })
+      void requests
+    }
+    await run(tcp.port, dataDir, preload, {
+      tmuxPane: '%82', engine: 'hermes', processEngine: 'hermes', windowsProcessTable: true,
+      processExecutable: 'python3', processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes',
+      hermesHome: join(dataDir, 'hermes'), hermesSource: 'cli',
+      input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
+    })
+    expect(attempts).toBe(posts)
+    expect(tcp.requests).toEqual([])
   })
 })

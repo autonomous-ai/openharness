@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'runtime_platform.dart';
 import '../shared/theme/color_palette.dart';
 import 'build_identity.dart';
+import '../measurement/speed_marks.dart';
 
 /// Whether this build runs inside a window the app is allowed to manage.
 ///
@@ -18,33 +19,57 @@ bool get hasManagedWindow =>
 /// Configures the native window before the first Flutter frame.
 ///
 /// On macOS, AppKit places Swarm tabs beside the system traffic lights in a
-/// compact unified title bar. Flutter starts below that row. Windows and Linux
-/// keep their native caption bar and use the Flutter Swarm-tab fallback.
+/// compact unified title bar. Flutter starts below that row. On Windows the
+/// system caption is hidden: the workspace tab strip is the title row, with the
+/// window's minimise, restore and close buttons at its end and the empty space
+/// dragging the window (`widgets/window_chrome.dart`,
+/// `desktop/design/windows-app-menu.md`). Linux keeps its native caption and
+/// the Flutter Swarm-tab fallback.
 Future<void> configureDesktopWindow({
   HarnessPalette palette = HarnessPalette.graphite,
 }) async {
   if (!hasManagedWindow) return;
   await windowManager.ensureInitialized();
+  speedMarks.launch('window manager ready');
   final options = WindowOptions(
     size: const Size(1280, 800),
     minimumSize: const Size(880, 560),
     title: desktopAppName,
     center: true,
-    titleBarStyle: TitleBarStyle.normal,
+    // Windows: no system caption. window_manager keeps the resize border and
+    // the windows 11 maximised inset through WM_NCCALCSIZE; the app draws the
+    // caption row itself.
+    titleBarStyle: RuntimePlatform.isWindows
+        ? TitleBarStyle.hidden
+        : TitleBarStyle.normal,
   );
   // The plugin's optional callback is a VoidCallback: an async callback would
   // return before native setup finishes and detach any error from this future.
   await windowManager.waitUntilReadyToShow(options);
+  speedMarks.launch('window ready to show');
   if (RuntimePlatform.isMacOS) {
     await const MethodChannel('harness/swarm_tabs').invokeMethod('configure', {
       'palette': palette.nativeColors,
     });
+    speedMarks.launch('titlebar configured');
   }
   // Always open filling the screen (owner, 2026-09-15): the tabs, a viewer
   // beside its terminal and the rail all want the width. The options above
   // stay the frame the green button returns to.
-  await windowManager.maximize();
+  //
+  // Maximise AFTER show: a maximise asked of a window that has not been shown
+  // is dropped on Windows, which left the app opening at the 1280x800 default.
   await windowManager.show();
+  speedMarks.launch('window shown');
+  // macOS: the window manager's maximize is AppKit's animated zoom, which
+  // blocks the main thread for ~400-500 ms before the first frame (task #3559).
+  // The native channel zooms the same way without the animation.
+  if (RuntimePlatform.isMacOS) {
+    await const MethodChannel('harness/swarm_tabs').invokeMethod('maximize');
+  } else {
+    await windowManager.maximize();
+  }
+  speedMarks.launch('window maximized');
   await windowManager.focus();
 }
 

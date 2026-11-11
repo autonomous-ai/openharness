@@ -33,6 +33,13 @@ void main() {
     for (final family in ['.AppleSystemUIFont', 'Roboto']) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
     }
+    // The title's monospace, as the other shots tests load it.
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    for (final family in ['.AppleSystemUIFontMonospaced', 'monospace']) {
+      await (FontLoader(family)..addFont(Future.value(mono))).load();
+    }
     final manifest =
         jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
     for (final entry in manifest.cast<Map<String, dynamic>>()) {
@@ -77,6 +84,62 @@ void main() {
           ),
           'displayName': 'Diego',
           'prevWeekPoints': 20,
+          'details': {
+            'shipped': [
+              for (final (i, title) in [
+                'Phone: the leaderboard shows what each number is made of',
+                'Desktop: a machine shows its agents as one count',
+                'Swarm digest pauses with the Swarm',
+                'CLI: resume keeps the last model',
+                'Backend: the board reads only what changed',
+                'Phone: Undo after answering a decision',
+                'Desktop: Models list leaves out unnamed records',
+                'Daemon: idle timers stop while nothing changed',
+              ].indexed)
+                {
+                  'title': title,
+                  'prUrl': 'https://github.com/o/r/pull/${2800 - i}',
+                },
+            ],
+            'unblocked': [
+              {
+                'title': 'Which sign-in page ships first?',
+                'conversationId': 'c1',
+                'kind': 'decision',
+                'waitedMinutes': 96,
+              },
+            ],
+            'lent': [
+              {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 31.5},
+              {'machineName': 'build-box', 'busyHours': 8.5},
+            ],
+            // A server that reads Brought shows it in place of Lent.
+            'brought': [
+              {
+                'machineId': 'studio',
+                'machineName': 'MACs-Mac-Studio.local',
+                'shipped': 5,
+                'busyHours': 31.5,
+                'subscriptions': [
+                  {
+                    'engine': 'claude',
+                    'usedPercent': 38,
+                    'resetsAt': DateTime.now()
+                        .add(const Duration(days: 3, hours: 2))
+                        .millisecondsSinceEpoch,
+                  },
+                  {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+                ],
+              },
+              {
+                'machineId': 'box',
+                'machineName': 'build-box',
+                'shipped': 0,
+                'busyHours': 8.5,
+                'subscriptions': <Object>[],
+              },
+            ],
+          },
         },
         {
           ...scoreData('ken', points: 21, rank: 2, shipped: 3, unblocked: 4),
@@ -141,6 +204,36 @@ void main() {
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
         await File('$shots/phone-leaderboard-${brightness.name}.png')
             .writeAsBytes(png!.buffer.asUint8List());
+      });
+      // A person's week: their points and what the numbers are made of.
+      await tester.tap(
+        find.byKey(const ValueKey('swarm-leaderboard-person-diego')),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/phone-leaderboard-person-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+      });
+      // Scrolled to its end: what the machines they brought did.
+      await tester.drag(
+        find.byKey(const ValueKey('swarm-leaderboard-details')),
+        const Offset(0, -600),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File(
+          '$shots/phone-leaderboard-person-brought-${brightness.name}.png',
+        ).writeAsBytes(png!.buffer.asUint8List());
       });
       await tester.pumpWidget(const SizedBox());
       host.dispose();

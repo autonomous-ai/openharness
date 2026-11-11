@@ -13,9 +13,11 @@ import type { SwarmSkill } from './savedSkill.js'
  * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
+import { agentTmpLaunch } from './agentTmp.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
+import { launchModelArgs, type LaunchModel } from './launchModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
 import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
 import { profileEnvironment } from './engineHomes.js'
@@ -37,6 +39,8 @@ import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
+import { browserMcpArgs } from './browserMcpArgs.js'
+import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
@@ -47,6 +51,9 @@ export interface LaunchOverrides {
   env: Record<string, string>
   /** Appended to the engine's argv (`-c model_providers…`, `-m …`, `--mcp-config …`). */
   extraArgs: string[]
+  /** The owner's own launch words, checked at this launch: they go LAST on the command line (`ownerArgs` of
+   *  engineLaunch.ts), not into `extraArgs`. Absent when there are none, or when one is now refused. */
+  ownerArgs?: string[]
   /** Vendor credentials the launch must hide from the engine — see `gridConflictingEnvToClear`. */
   clearEnv: string[]
   /**
@@ -104,22 +111,18 @@ export interface LaunchOverridesDeps {
    * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
-  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
-   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
-  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
-  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | { refused: string } | null>
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
-  /** What the Swarm prepares on every relaunch of a session it started: its skill file and instructions
-   *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+  /** What the Swarm gives every relaunch of a session it started: the team's basics (lib/swarmSkills.ts) and the Harness
+   *  GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
    *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
-    prepare(workspace: string, saved: SwarmSkill): { instructions: string }
+    basics(lead: boolean, own?: { cwd: string | null; name: string | null }): string
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
   }
@@ -139,6 +142,12 @@ export interface LaunchSource extends NativeLaunchSource {
    * engine decide", which is what happens for an engine with no cited mechanism.
    */
   subscriptionModel?: string | null
+  /**
+   * The model and effort the session was launched with, or a person moved it onto since — the registry row's
+   * `launchModel`. Passed again on every relaunch on the engine's own login, after a model remembered off a grid, which
+   * names the model the session is coming back to.
+   */
+  launchModel?: LaunchModel
   /** The DSH the agent was created as; its env rides on every relaunch (`HARNESS_DSH` included). */
   dsh?: string | null
   /** The session-scoped runtime bundle. Older rows use their stable agent id. */
@@ -146,6 +155,9 @@ export interface LaunchSource extends NativeLaunchSource {
   swarmSkill?: SwarmSkill
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
+  /** The name it was started under (the registry row's `defaultName`): a Swarm agent's own instructions are in its folder's
+   *  `agents/<name>.md`, carried in at each relaunch. */
+  name?: string | null
   /**
    * What the workspace's SCM needs re-applied to the pane — the registry row's `scmLaunch`. A git
    * worktree asks for nothing. Absent or null: no SCM prepared this folder, or the row predates it.
@@ -159,6 +171,11 @@ export interface LaunchSource extends NativeLaunchSource {
   agent?: string | null
   /** `agent` when another agent started it (the row's `startedBy`): every relaunch keeps its pull request line. */
   startedBy?: StartedBy | null
+  /** The owner's extra launch words (the registry row's `launchArgs`). Checked again at each launch (`checkLaunchWords`):
+   *  a row edited by hand, or a flag a later release refuses, applies none. */
+  launchArgs?: string[]
+  /** The registry row's `browser`: the agent was created with Browser, and every relaunch gives it its browser tools. */
+  browser?: true
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
@@ -289,7 +306,8 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
-    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    // A session started for another person's project before the App's removal keeps git and gh on it at every relaunch, until
+    // its task token stops (backend #3723, 2026-12-10; lib/swarmGitHub.ts).
     if (source.swarmSkill?.github) {
       let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
       try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
@@ -305,26 +323,35 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again. Never
-    // a Buddy's (core/agents/create.ts).
-    const machineMcp = source.swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, source.cwd ?? null)
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
+    const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
+    // A Browser agent's `browser` MCP server (lib/browserMcpArgs.ts), in the slot `agent_create` gave it.
+    if (source.browser && (engine === 'claude' || engine === 'codex')) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...browserMcpArgs(engine, 'harness')] }
     // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
     if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
+    // The owner's own flags (`agent_restart`'s `launchArgs`) are the owner's, so they come last on the command line, in a
+    // slot of their own (`ownerArgs`). Checked again here, as they were when typed: a row edited by hand, or a flag a
+    // later release refuses, applies none, and the log says why.
+    if (source.launchArgs?.length) {
+      const checked = checkLaunchWords(engine, source.launchArgs)
+      if (checked.ok) overrides = { ...overrides, ownerArgs: [...source.launchArgs] }
+      else console.warn(`[launch] ${configKey.slice(0, 8)} saved launch flags not applied · ${checked.detail}`)
+    }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
-    let swarmInstructions: string | undefined
-    if (source.swarmSkill) {
-      try {
-        if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
-        swarmInstructions = swarm!.prepare(source.cwd, source.swarmSkill).instructions
-      } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
-    }
+    const swarmInstructions = source.swarmSkill
+      ? swarm!.basics(source.swarmSkill.role === 'coordinator', { cwd: source.cwd ?? null, name: source.name ?? null }) : undefined
     const told = agentLaunchArgs(engine, source.startedBy, {
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
-    return { ok: true, overrides: { ...overrides, ...(native ? { native, env: { ...overrides.env, ...native.environment } } : {}), clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
+    // The private temporary folder, as at agent_create: a relaunch rebuilds the engine's arguments, so a Swarm agent's folder is
+    // added again (lib/agentTmp.ts, task #4395). The launch's own variables win over it.
+    const tmp = agentTmpLaunch(engine, source.swarmSkill)
+    if (tmp.args.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...tmp.args] }
+    const launchEnv = { ...tmp.env, ...overrides.env, ...native?.environment }
+    return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }
 }
 
@@ -349,21 +376,22 @@ async function prepareBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
-    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
-    // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
-    // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).
-    const offered = await (engine === 'codex' && source.codexHome ? deps.ownerRelay?.(engine, source.codexHome) : deps.ownerRelay?.(engine)) ?? null
-    // A Codex home of its own the relay cannot sign in (a Product Manager's, its relay not yet published after a reboot): held
-    // with why, as a launch that waits is, never relaunched signed out (team/relay.ts).
-    if (offered && 'refused' in offered) return { ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: offered.refused }
-    const relay = offered
+    const remembered = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
+    // The flags it was launched with hold for that launch alone: reopened without them, a Product Manager launched on Opus at
+    // xhigh ran its engine's own default, the machine's last-used Claude Code model (task #3395, anh Dee 11-05). They outrank
+    // the model remembered when it left for a grid: that one is a model alone and stays after the move home, so ranked
+    // first a PM back from a grid lost its xhigh on every relaunch, and a later pick lost too (task #3449). A launch model
+    // that names no model keeps the remembered one beside its effort; an engine with no launch flags keeps the remembered one.
+    const launched = source.launchModel ? launchModelArgs(engine, source.launchModel) : []
+    const restored = !launched.length ? remembered
+      : source.launchModel?.model || !remembered ? { env: {}, args: launched }
+      : { ...remembered, args: [...remembered.args, ...launched] }
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
-    const provider = relay ? relay.args : ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
-    if (restored || provider.length || relay) {
+    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length) {
       ownLogin = {
-        env: { ...(relay?.env ?? {}), ...(restored?.env ?? {}) },
+        env: { ...(restored?.env ?? {}) },
         extraArgs: [...provider, ...(restored?.args ?? [])],
         clearEnv: [],
         ...(restored?.sessionModel ? { sessionModel: restored.sessionModel } : {}),

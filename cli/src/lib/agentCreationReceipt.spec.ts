@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from './agentCreationReceipt.js'
+import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from './agentCreationReceipt.js'
 
 const roots: string[] = []
 function fixture() {
@@ -23,6 +23,34 @@ vi.mock('node:fs', async (original) => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('agent creation receipts', () => {
+  // Task #3861 (stone7890's Mac, 11-06): the folder was owned by root, every status read threw CREATION_STORAGE_FAILED with nothing
+  // else, and the start stayed Queued for hours. The error now names the folder and that it is a permissions problem.
+  it.skipIf(process.getuid?.() === 0)('names the folder and the permissions when the account cannot open the receipts folder', () => {
+    const { directory, receipts } = fixture()
+    mkdirSync(directory, { mode: 0o700 })
+    chmodSync(directory, 0o000)
+    try {
+      let thrown: unknown
+      try { receipts.status(id) } catch (error) { thrown = error }
+      expect(thrown).toBeInstanceOf(AgentCreationReceiptError)
+      const error = thrown as AgentCreationReceiptError
+      expect(error.code).toBe('CREATION_STORAGE_FAILED')
+      expect(error.detail).toContain(directory)
+      expect(error.detail).toMatch(/permission/i)
+      expect(error.detail).toContain('mode 700')
+      expect(error.detail).not.toMatch(/sudo/)
+    } finally { chmodSync(directory, 0o700) }
+  })
+
+  it('gives no detail for a storage failure that is not about permissions', () => {
+    const { directory, receipts } = fixture()
+    mkdirSync(directory, { mode: 0o700 })
+    writeFileSync(join(directory, `${id}.json`), '{not json', { mode: 0o600 })
+    let thrown: unknown
+    try { receipts.status(id) } catch (error) { thrown = error }
+    expect((thrown as AgentCreationReceiptError).detail).toBeUndefined()
+  })
+
   it('shares an in-flight launch and recovers its result after a lost reply and daemon restart', async () => {
     const { directory, receipts } = fixture()
     let finish!: (outcome: AgentCreationOutcome) => void
@@ -410,6 +438,23 @@ describe('recoverable undispatched creation intents', () => {
     for await (const item of receipts.pendingIntents()) if (item) found.push(item)
     expect(found).toEqual([])
     expect(prepare).not.toHaveBeenCalled()
+  })
+})
+
+// The core scans for pending intents every minute, for its whole life. Each scan made the folder if it was missing
+// and fsynced its parent even when it was there: an idle core's second largest cost (#3880, profiled 2026-11-10).
+// A scan only reads.
+describe('a scan for pending intents', () => {
+  it('writes nothing to the disk, with no folder yet or with one', async () => {
+    const { directory, receipts } = fixture()
+    const scan = async () => { const found = []; for await (const item of receipts.pendingIntents()) if (item) found.push(item); return found }
+    vi.mocked(fs.fsyncSync).mockClear()
+
+    expect(await scan()).toEqual([])
+    expect(fs.existsSync(directory), 'no folder made by a scan').toBe(false)
+    mkdirSync(directory, { mode: 0o700 })
+    expect(await scan()).toEqual([])
+    expect(fs.fsyncSync).not.toHaveBeenCalled()
   })
 })
 

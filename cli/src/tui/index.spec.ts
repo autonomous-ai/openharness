@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { findTuiBinary, opensClient, platformKey, TUI_UNAVAILABLE_ON_WINDOWS, tuiCommand } from './index.js'
+import { findTuiBinary, opensClient, platformKey, TUI_NOT_IN_PAYLOAD, tuiCommand } from './index.js'
 import { localDaemonStatus } from '../lib/daemonEndpoint.js'
 vi.mock('../lib/daemonEndpoint.js', () => ({ localDaemonStatus: vi.fn() }))
 
@@ -135,21 +135,30 @@ describe('harness tui launcher', () => {
     expect(vi.mocked(spawnSync).mock.calls.every(([command]) => command === binary)).toBe(true)
   })
 
-  it('says the terminal app is not available on Windows, and starts or downloads nothing', async () => {
+  it('says how to get it on a Windows install whose payload has none, and starts or downloads nothing', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    expect(await tuiCommand([], { port: 19418, platform: 'win32' })).toBe(1)
-    expect(await tuiCommand(['--install'], { port: 19418, platform: 'win32' })).toBe(1)
-    expect(errors.mock.calls.flat().join('\n')).toContain(TUI_UNAVAILABLE_ON_WINDOWS)
+    const none = { port: 19418, platform: 'win32' as const, find: () => null }
+    expect(await tuiCommand([], none)).toBe(1)
+    expect(await tuiCommand(['--install'], none)).toBe(1)
+    expect(errors.mock.calls.flat().join('\n')).toContain(TUI_NOT_IN_PAYLOAD)
     expect(spawnSync).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(localDaemonStatus).not.toHaveBeenCalled()
   })
 
-  it('answers --where on Windows without looking for a binary', async () => {
+  it('runs the one in the payload on Windows, with nothing to download', async () => {
     const logs = vi.spyOn(console, 'log').mockImplementation(() => {})
-    expect(await tuiCommand(['--where'], { port: 19418, platform: 'win32' })).toBe(0)
-    expect(logs).toHaveBeenCalledWith('(not available on Windows)')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const here = { port: 19418, platform: 'win32' as const, find: () => 'C:\\pty\\harness-tui.exe' }
+    expect(await tuiCommand(['--where'], here)).toBe(0)
+    expect(logs).toHaveBeenCalledWith('C:\\pty\\harness-tui.exe')
+    expect(await tuiCommand(['--install'], here)).toBe(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+    vi.mocked(spawnSync).mockReturnValue({ status: 0 } as never)
+    expect(await tuiCommand(['--version'], here)).toBe(0)
+    expect(vi.mocked(spawnSync).mock.calls.at(-1)![0]).toBe('C:\\pty\\harness-tui.exe')
   })
 })

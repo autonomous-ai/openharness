@@ -15,6 +15,7 @@
  * everything else is asked of the core when it is needed, or told to it. The core keeps what the windows
  * said and tells it again each time this process connects.
  */
+import type { BackendNotice } from '../core/api.js'
 import { env } from '../config/env.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
@@ -112,6 +113,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   const tell = (kind: string, payload: Record<string, unknown> = {}): void => { core?.notice?.(kind, payload) }
 
   // What the devices never ask of the core, answered as every service in its own process answers it.
+  /** Who hears the account's notices in this process (the fleet), told them as the core forwards each. */
+  const noticeListeners = new Set<(notice: BackendNotice) => void>()
   const unasked = processCoreApi(options.dataDir, 'devices')
   const account = accountLink((query, payload) => ask(query, payload))
   const api: CoreApi = {
@@ -171,6 +174,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       // The core's sign-in and the gateway's seal, asked at every use: this process holds no credential and
       // no E2EE identity (services/accountLink.ts).
       ...account,
+      // The account's notices the core forwards (core/main.ts `onAccountNotice`): the fleet reads the machine list on
+      // `machines_changed`, and only every 5 minutes otherwise (spec 2026-11-02 poll cost, Part 4.4).
+      onNotice: (listener) => { noticeListeners.add(listener); return () => { noticeListeners.delete(listener) } },
       signedIn: () => view.signedIn,
       environment: () => view.environment,
       machines: async () => {
@@ -217,6 +223,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
 
   /** What the core tells the devices (`service_event`), by kind: the port's own calls, across the link. */
   const heard: Record<string, (payload: Record<string, unknown>) => void> = {
+    notice: ({ notice }) => { if (notice && typeof notice === 'object') for (const listener of noticeListeners) listener(notice as BackendNotice) },
     card: ({ frame }) => port.card(object(frame)),
     desk: ({ agentIds, foreground }) => port.desk(strings(agentIds), foreground !== false),
     swarms: ({ swarms }) => port.swarms(swarms && typeof swarms === 'object' ? swarms as AppSwarms : null),

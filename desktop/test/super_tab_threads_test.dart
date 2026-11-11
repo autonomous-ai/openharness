@@ -1,8 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -11,6 +12,7 @@ import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -32,7 +34,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -97,6 +98,8 @@ void main() {
       findsOneWidget,
     );
     expect(line('message-4'), findsNothing);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('a reply also sent to the chat shows in both, marked as a '
@@ -112,6 +115,8 @@ void main() {
       find.descendant(of: line('message-1'), matching: find.text('2 replies')),
       findsOneWidget,
     );
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('the reply line opens the thread beside the chat, and its '
@@ -131,6 +136,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('super-thread-close')));
     await tester.pumpAndSettle();
     expect(panel(), findsNothing);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('lost access closes the thread and forgets its rows and '
@@ -341,7 +348,6 @@ void main() {
         'username': 'pia',
         'role': 'collaborator',
         'avatar': peerAvatar,
-        'status': {'text': 'Coffee break', 'emoji': '☕'},
       });
       (server.state['agents'] as List).add(riverRow());
       server.append('Who wants this?');
@@ -364,7 +370,7 @@ void main() {
         )
         .toList();
 
-    testWidgets('a person their uploaded picture and status, an agent its '
+    testWidgets('a person their uploaded picture, an agent its '
         'avatar, and someone who left the face their name gives', (
       tester,
     ) async {
@@ -373,23 +379,20 @@ void main() {
       expect(person.identity, 'person:peer');
       expect(person.name, 'pia');
       expect(person.picture, isA<SuperTabUploadedAvatar>());
-      expect(person.status?.text, 'Coffee break');
       expect(agent.identity, 'agent:river');
       expect(agent.name, 'River');
       expect(agent.picture, isA<SuperTabPresetAvatar>());
-      expect(agent.pattern, isTrue);
+      expect(agent.face, isTrue);
       // The row names the engine already where an agent writes; its reply
       // line does not badge it either.
       expect(agent.engine, isNull);
       expect(left.identity, 'person:gone');
       expect(left.name, 'gone');
       expect(left.picture, isNull);
-      expect(left.status, isNull);
-      // Its size is unchanged.
-      expect(
-        tester.getSize(find.byWidget(person)).width,
-        grid.AppDesktop.iconSize,
-      );
+      // Faces about 24 points, as Slack's (Huy, 2026-11-03, #2315).
+      expect(tester.getSize(find.byWidget(person)).width, 24);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a person with a preset shows it', (tester) async {
@@ -405,6 +408,8 @@ void main() {
         find.descendant(of: line('message-1'), matching: find.text('🦉')),
         findsOneWidget,
       );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a person who leaves and an agent removed while the chat is '
@@ -424,7 +429,6 @@ void main() {
       await tester.pumpAndSettle();
       var [person, agent, _] = faces(tester);
       expect(person.picture, isNull);
-      expect(person.status, isNull);
       expect(person.name, 'peer');
       expect(agent.name, 'Rio');
       expect(agent.picture, isA<SuperTabPresetAvatar>());
@@ -433,7 +437,7 @@ void main() {
       await tester.pumpAndSettle();
       [_, agent, _] = faces(tester);
       expect(agent.picture, isNull);
-      expect(agent.pattern, isTrue);
+      expect(agent.face, isTrue);
       expect(agent.name, 'River');
       expect(find.text('🦊'), findsNothing);
       expect(find.text('🦉'), findsNothing);
@@ -508,61 +512,6 @@ void main() {
     expect(panel(), findsNothing);
   });
 
-  testWidgets('a reply from the thread composer goes to the root, and '
-      '"Also post to #Pilot" sends it to both', (tester) async {
-    final server = threaded();
-    final c = await show(tester, server);
-    // The test platform's touch handles sit under a typed reply's end:
-    // where the wide pane puts it, over send. Leaving the box hides them.
-    void hideHandles() => FocusManager.instance.primaryFocus?.unfocus();
-    await tester.tap(line('message-1'));
-    await tester.pumpAndSettle();
-    // The label shortens where the test font leaves no room; its hint keeps
-    // the full wording (super_tab_reply_box_test.dart covers the label).
-    expect(
-      inPanel(find.byTooltip('Also post to #Pilot as well as this thread')),
-      findsOneWidget,
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('super-thread-composer')),
-      'In the thread only.',
-    );
-    await tester.pump();
-    hideHandles();
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('super-thread-send')));
-    await tester.pumpAndSettle();
-    Map sentLast() => server.posts
-        .map((post) => post['command'] as Map)
-        .lastWhere((command) => command['type'] == 'message.send');
-    final sent = sentLast();
-    expect(sent['replyTo'], 'message-1');
-    expect(sent.containsKey('alsoSend'), isFalse);
-    expect(inPanel(find.text('In the thread only.')), findsOneWidget);
-    expect(row('message-5'), findsNothing);
-
-    await tester.tap(find.byKey(const ValueKey('super-thread-also-send')));
-    await tester.enterText(
-      find.byKey(const ValueKey('super-thread-composer')),
-      'Everyone should see this.',
-    );
-    await tester.pump();
-    hideHandles();
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('super-thread-send')));
-    await tester.pumpAndSettle();
-    expect(sentLast()['alsoSend'], isTrue);
-    expect(inPanel(find.text('Everyone should see this.')), findsOneWidget);
-    expect(row('message-6'), findsOneWidget);
-    expect(
-      find.descendant(of: line('message-1'), matching: find.text('4 replies')),
-      findsOneWidget,
-    );
-    expect(c.messages('lead').map((m) => m.id), contains('message-6'));
-    // The read mark's save.
-    await tester.pump(const Duration(seconds: 1));
-  });
-
   testWidgets('Reply on a message opens its thread; on a message from before '
       'threads it keeps the inline reply', (tester) async {
     final server = threaded();
@@ -626,6 +575,8 @@ void main() {
     });
     await show(tester, server, account: 'third');
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('the reader\'s own last reply leaves the thread read', (
@@ -642,6 +593,8 @@ void main() {
       ),
     );
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   test('a thread read on another device, with no mark kept here, shows as '
@@ -827,6 +780,8 @@ void main() {
     final c = await show(tester, server);
     expect(row('message-5'), findsNothing);
     expect(c.unread(c.snapshot!.conversation('lead')!), isFalse);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   test('a reply only in its thread leaves the chat neither bold nor counted; '
@@ -913,5 +868,165 @@ void main() {
     );
     expect(find.text('1 reply'), findsOneWidget);
     expect(find.text('Last reply 2 min ago'), findsOneWidget);
+  });
+
+  // Huy, 2026-11-03 (#2315): the line under a thread's root was hard to click.
+  // Like Slack's, it is one padded bar: hover or focus fills and frames it,
+  // reads View thread and shows a chevron, and a click anywhere opens it.
+  group('the reply bar', () {
+    final bar = find.byKey(const ValueKey('super-thread-bar-m1'));
+    final chevron = find.byKey(const ValueKey('super-thread-chevron-m1'));
+
+    Future<List<String>> pump(
+      WidgetTester tester, {
+      double width = 800,
+      int authors = 2,
+    }) async {
+      final opened = <String>[];
+      final people = [for (var i = 0; i < authors; i++) 'p$i'];
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: width,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SuperTabThreadLine(
+                      thread: SuperTabThread.fromJson({
+                        'id': 'm1',
+                        'replies': 17,
+                        'lastSequence': 2,
+                        'lastAt': DateTime.now()
+                            .toUtc()
+                            .subtract(const Duration(minutes: 2))
+                            .toIso8601String(),
+                        'authors': [
+                          for (final id in people)
+                            {'kind': 'person', 'id': id, 'name': '$id@x.com'},
+                        ],
+                        'people': people,
+                      }),
+                      unread: false,
+                      onOpen: () => opened.add('m1'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      return opened;
+    }
+
+    BoxDecoration frame(WidgetTester tester) =>
+        tester
+                .widget<DecoratedBox>(
+                  find
+                      .descendant(of: bar, matching: find.byType(DecoratedBox))
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    double chevronOpacity(WidgetTester tester) => tester
+        .widget<Opacity>(
+          find.ancestor(of: chevron, matching: find.byType(Opacity)).first,
+        )
+        .opacity;
+
+    testWidgets(
+      'hovering anywhere on it highlights it and offers View thread',
+      (tester) async {
+        await pump(tester);
+        final resting = tester.getSize(bar);
+        expect(find.text('Last reply 2 min ago'), findsOneWidget);
+        expect(chevronOpacity(tester), 0);
+        expect(frame(tester).color, isNot(grid.AppSurface.hoverFill));
+
+        final mouse = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+          pointer: 1,
+        );
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+        // Its right end, past the words: still the bar.
+        await mouse.moveTo(
+          tester.getRect(bar).centerRight - const Offset(3, 0),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('View thread'), findsOneWidget);
+        expect(find.text('Last reply 2 min ago'), findsNothing);
+        expect(chevronOpacity(tester), 1);
+        expect(frame(tester).color, grid.AppSurface.hoverFill);
+        expect((frame(tester).border! as Border).top.color, DesktopChrome.rim);
+        expect(
+          RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+          SystemMouseCursors.click,
+        );
+        // Hover moves nothing.
+        expect(tester.getSize(bar), resting);
+      },
+    );
+
+    testWidgets('one click anywhere on it opens the thread', (tester) async {
+      final opened = await pump(tester);
+      expect(tester.getSize(bar).height, greaterThanOrEqualTo(32));
+      expect(tester.getSize(find.byType(SuperTabAvatar).first).height, 24);
+
+      await tester.tapAt(tester.getRect(bar).topLeft + const Offset(3, 3));
+      await tester.pump();
+      expect(opened, ['m1']);
+      await tester.tapAt(tester.getCenter(chevron));
+      await tester.pump();
+      expect(opened, ['m1', 'm1']);
+    });
+
+    testWidgets('Tab reaches it and Enter opens the thread', (tester) async {
+      final opened = await pump(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pumpAndSettle();
+      expect(find.text('View thread'), findsOneWidget);
+      expect(chevronOpacity(tester), 1);
+      expect(
+        (frame(tester).border! as Border).top.color,
+        DesktopChrome.focusRing,
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(opened, ['m1']);
+    });
+
+    // Huy, 2026-11-03 (#2373): as wide as Slack's, about 600 points, or the
+    // message column when the chat is narrower; its arrow at the right end.
+    testWidgets(
+      'it is 600 wide, or the column\'s width, its arrow at the end',
+      (tester) async {
+        final opened = await pump(tester);
+        final wide = tester.getRect(bar);
+        expect(wide.width, 600);
+        expect(wide.right - tester.getRect(chevron).right, lessThan(12));
+        // Its right end, far past the words, is still the bar.
+        await tester.tapAt(wide.centerRight - const Offset(3, 0));
+        await tester.pump();
+        expect(opened, ['m1']);
+
+        // Many repliers in a narrow chat: the column's width, a few faces, and
+        // nothing overflows.
+        await pump(tester, width: 300, authors: 12);
+        expect(tester.takeException(), isNull);
+        expect(tester.getSize(bar).width, 300);
+        expect(
+          tester.getRect(bar).right - tester.getRect(chevron).right,
+          lessThan(12),
+        );
+        expect(find.byType(SuperTabAvatar), findsNWidgets(5));
+      },
+    );
   });
 }

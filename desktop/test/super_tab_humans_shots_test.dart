@@ -42,7 +42,6 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
@@ -50,8 +49,6 @@ void main() {
           ),
         ),
       );
-      c.expandedProjects.clear();
-      if (!c.projectsGroupOpen) c.toggleProjectsGroup();
       await tester.pumpAndSettle();
 
       Future<void> shot(String name) => tester.runAsync(() async {

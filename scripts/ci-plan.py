@@ -22,6 +22,10 @@ _spec = importlib.util.spec_from_file_location("ci_evidence", Path(__file__).wit
 ci = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ci)
 
+_local_spec = importlib.util.spec_from_file_location("local_checks", Path(__file__).with_name("local-checks.py"))
+local_checks = importlib.util.module_from_spec(_local_spec)
+_local_spec.loader.exec_module(local_checks)
+
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
 EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
@@ -30,7 +34,8 @@ JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
     "desktop": {"desktop-tests"},
-    "tui": {"tui-test"}, "backend": {"backend-desk"}, "companions": {"companion-subsystems"},
+    # backend-integration: the Super Tab integration suite (backend/integration) in four shards (task #2459).
+    "tui": {"tui-test"}, "backend": {"backend-desk", "backend-integration"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
 }
 MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for name in SUITES}}
@@ -53,6 +58,18 @@ ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
 # Any other file in scripts/ui-style-allowlist/ stays a shared input.
 STYLE_ALLOWLISTS = {"scripts/ui-style-allowlist/desktop.json": "desktop", "scripts/ui-style-allowlist/mobile.json": "mobile"}
 ALSO.update(STYLE_ALLOWLISTS)
+# The Desktop VM runner and the measured file times it splits the shards by (task #3458): a change to either runs those
+# shards, so a split that runs short cannot merge on process checks alone.
+ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
+# The desktop files the phone's tests read (mobile/test): the Swarm models the phone carries as copies or must parse alike
+# (swarm/desktop_parity_test.dart), the words and helpers its other tests compare. A desktop-only change to one runs
+# mobile-checks too; it once failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
+# test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
+ALSO.update({f"desktop/{path}": "mobile" for path in (
+    "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
+    "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart",
+    "lib/super_tabs/live_card.dart", "lib/widgets/engine_identity.dart", "lib/super_tabs/tasks/personal_tasks.dart",
+    "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -62,10 +79,18 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
-    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts", "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/buddies.dart", "mobile/lib/measurement/",
+    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
+    # reads the CLI's super-tab usage line.
+    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
+                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
+                "daemons/frames.json",
+                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
-    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
+    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
+    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+            "backend/src/superTabs/processNotes.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
@@ -92,32 +117,58 @@ DEPENDS = {
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
 }
-# Folders inside a suite's own component that its PR jobs never read: the backend unit suite
-# runs src/**/*.test.ts, and the CLI's typecheck and unit tests cover src/ (end to end runs elsewhere).
+# Folders inside a suite's own component that its PR jobs never read: the CLI's typecheck and unit
+# tests cover src/ (end to end runs elsewhere). backend/integration is read: backend-integration runs it.
 # CrossReadTests fails when a file outside the folder refers into it.
-NOT_READ = {"backend": ("backend/integration/",), "cli": ("cli/e2e/",)}
+NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
-# test data, or a script run only by hand. {source: (why, {path the scan reports})}.
+# test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
+# A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
-       for source in ("backend/src/superTabs/commands.test.ts",)},
+       for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
+    # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
+    **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
+                                                                 "os/", "tests/", "website/"})
+       for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
+                      "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
+                      "backend/src/superTabs/dispatch.test.ts",
+                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
+                      "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
+                      "backend/src/superTabs/prHistory.test.ts",
+                      "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
+                      "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
+                      "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
+                      "backend/src/superTabs/reviewTable.test.ts", "backend/src/superTabs/stepOs.test.ts")},
+    **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
+                                                                               "devices/", "docs/", "installer/", "mobile/",
+                                                                               "pty/", "term/", "tui/", "website/"})
+       for source in ("backend/src/superTabs/releases.ts",
+                      "backend/src/superTabs/reviewTable.ts")},
+    **{source: ("test data: a task's owned paths", {"docs/"})
+       for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
+    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
+                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/buddyGuard.claude.spec.ts": ("test data: files in a temporary repository", {"docs/"}),
+    "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
+    "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
     "desktop/test/p2p/mobile_parity_test.dart": ("reads ../mobile/<file> only for the phone files desktop-tests' sparse "
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
+    "desktop/test/swarm_instructions_shared_test.dart": ("test data: a project's instruction file names",
+                                                         {"AGENTS.md", "CLAUDE.md"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
@@ -247,50 +298,139 @@ REUSE_ERRORS = (OSError, RuntimeError, ValueError, KeyError, TypeError, Attribut
                 zipfile.BadZipFile, json.JSONDecodeError)
 
 
-def plan_reuse(root, head, base, suites, evidence):
-    """Reuse what the passed head's exact ci/required run proved, for suites main's commits left alone.
+BATCH_MEMBERS_MAX = 40
 
-    Fails closed: any doubt or unreadable evidence leaves every suite to run as before."""
+
+def batch_members(root, head, base):
+    """The tested heads a batch branch merged, in merge order: read from its own merges, never from the PR's text.
+
+    Every commit on the head's first-parent line down to the base branch is a two-parent merge; its second parent is a
+    member PR's tested head, or a main commit merged again, which brings only main's commits."""
+    members, commit = [], head
+    for _ in range(BATCH_MEMBERS_MAX + 1):
+        if is_ancestor(root, commit, base):
+            break
+        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+        if len(parents) != 2:
+            raise Rerun(f"{commit[:12]} on its first-parent line is not a merge and not on the base branch")
+        first, second = (sha(value) for value in parents)
+        if not is_ancestor(root, second, base) and second not in members:
+            members.append(second)
+        commit = first
+    else:
+        raise Rerun(f"its first-parent line has more than {BATCH_MEMBERS_MAX} merges before the base branch")
+    if not members:
+        raise Rerun("it merges no member PR")
+    return members[::-1]
+
+
+def reuse_sources(root, head, base):
+    """The commits whose passed runs may stand for this head's components, and how they were found: the passed head of
+    GitHub's Update branch (its second parent is a main commit), or the member heads a batch branch merged."""
+    parents = git(root, "rev-list", "--parents", "-n", "1", head).split()[1:]
+    if len(parents) == 2 and is_ancestor(root, sha(parents[1]), base):
+        passed, main = update_parents(root, head, base)
+        return [passed], dict(kind="update", passed_head=passed, main_parent=main)
+    members = batch_members(root, head, base)
+    return members, dict(kind="batch", members=members)
+
+
+def passed_receipt(evidence, commit):
+    """The exact passed ci/required run of a tested commit, or ValueError."""
+    gate = evidence.passed_gate(commit)
+    receipt = gate["receipt"]
+    if receipt["source_sha"] != commit or receipt["status"] != "passed":
+        raise ValueError("the passed head's ci/required receipt names another source")
+    return gate
+
+
+def run_origin(evidence, commit, gate, suite):
+    """Where a passed run's result for this suite was proved: the run itself, or the run it reused (an earlier one)."""
+    receipt = gate["receipt"]
+    earlier = receipt.get("reused") or {}
+    if suite in earlier:
+        record = earlier[suite]
+        origin, run_id, attempt = sha(record["origin_sha"]), record["run_id"], record["run_attempt"]
+        found = evidence.ran(origin, run_id, attempt, suite)
+        return origin, run_id, attempt, found["tree"], found["url"]
+    return commit, gate["run_id"], gate["run_attempt"], receipt["source_tree"], gate["url"]
+
+
+def plan_reuse(root, head, base, suites, evidence):
+    """Reuse what an exact passed ci/required run proved, for suites nothing else in this head changed the inputs of.
+
+    After Update branch the run is the passed head's; in a batch PR, a member PR's (task #2720). Fails closed: any doubt
+    or unreadable evidence leaves the suite, or every suite, to run as before."""
     reuse = dict(status="none", reason=None, passed_head=None, main_parent=None, rerun={})
     reused = {}
     try:
         if evidence is None:
             raise Rerun("no CI evidence reader")
-        passed, main = update_parents(root, head, base)
-        reuse.update(passed_head=passed, main_parent=main)
+        origins, source = reuse_sources(root, head, base)
+        reuse.update(source)
         changed = own_shared_change(root, head, base)
         if changed:
             raise Rerun(f"this PR changes {changed}, which its own CI run reads")
-        gate = evidence.passed_gate(passed)
-        receipt = gate["receipt"]
-        if receipt["source_sha"] != passed or receipt["status"] != "passed":
-            raise ValueError("the passed head's ci/required receipt names another source")
-        earlier = receipt.get("reused") or {}
+        probed = {}
+        if source["kind"] == "update":
+            try:
+                probed[origins[0]] = passed_receipt(evidence, origins[0])
+            except REUSE_ERRORS:
+                # A batch PR that merged main again: its earlier head never ran alone, but its members did.
+                try:
+                    origins = batch_members(root, head, base)
+                    reuse.update(kind="batch", members=origins, passed_head=None, main_parent=None)
+                except Rerun:
+                    pass
+        batch = reuse["kind"] == "batch"
+        gates, unread = [], {}
+        for commit in origins:
+            if not batch:
+                # An update has one source: doubt reruns all.
+                gates.append((commit, probed[commit] if commit in probed else passed_receipt(evidence, commit)))
+                continue
+            try:
+                gates.append((commit, passed_receipt(evidence, commit)))
+            except REUSE_ERRORS as error:
+                # Its changes stay in every other member's diff to the head: it is only no candidate.
+                unread[commit] = str(error) or type(error).__name__
+        if batch and not gates:
+            raise Rerun("no member's passed run could be verified: " + "; ".join(f"{c[:12]}: {e}" for c, e in unread.items()))
         for suite in sorted(suites):
-            if suite not in receipt["suites"]:
-                reuse["rerun"][suite] = "the passed head's run did not run it"
-                continue
-            if suite in earlier:
-                record = earlier[suite]
-                origin, run_id, attempt = sha(record["origin_sha"]), record["run_id"], record["run_attempt"]
-                found = evidence.ran(origin, run_id, attempt, suite)
-                tree, url = found["tree"], found["url"]
+            reasons = []
+            for commit, gate in gates:
+                if suite not in gate["receipt"]["suites"]:
+                    reasons.append(f"member {commit[:12]}'s run did not run it" if batch else "the passed head's run did not run it")
+                    continue
+                if batch:
+                    try:
+                        origin, run_id, attempt, tree, url = run_origin(evidence, commit, gate, suite)
+                    except REUSE_ERRORS as error:
+                        reasons.append(f"member {commit[:12]}'s earlier run could not be verified: {str(error) or type(error).__name__}")
+                        continue
+                else:
+                    origin, run_id, attempt, tree, url = run_origin(evidence, commit, gate, suite)
+                scope, reason = reuse_blocker(root, suite, origin, head)
+                if scope == "all":
+                    raise Rerun(reason)
+                if scope == "suite":
+                    reasons.append(reason)
+                    continue
+                why = (f"passed in run {run_id} on {origin[:12]}, merged here as member {commit[:12]}; nothing else in the "
+                       f"batch or on main changes its inputs ({reason})" if batch else
+                       f"passed in run {run_id} on {origin[:12]}; main's new commits change none of its inputs ({reason})")
+                reused[suite] = dict(origin_sha=origin, origin_tree=sha(tree), run_id=run_id, run_attempt=attempt, run_url=url,
+                                     reason=why)
+                break
             else:
-                origin, run_id, attempt, tree, url = passed, gate["run_id"], gate["run_attempt"], receipt["source_tree"], gate["url"]
-            scope, reason = reuse_blocker(root, suite, origin, head)
-            if scope == "all":
-                raise Rerun(reason)
-            if scope == "suite":
-                reuse["rerun"][suite] = reason
-                continue
-            reused[suite] = dict(origin_sha=origin, origin_tree=sha(tree), run_id=run_id, run_attempt=attempt, run_url=url,
-                                 reason=f"passed in run {run_id} on {origin[:12]}; main's new commits change none of its inputs ({reason})")
+                reasons += [f"member {c[:12]}'s passed run could not be read: {e}" for c, e in unread.items()]
+                reuse["rerun"][suite] = "; ".join(reasons)
     except Rerun as refusal:
         return {}, dict(reuse, rerun={}, reason=str(refusal))
     except REUSE_ERRORS as error:
         return {}, dict(reuse, rerun={}, reason=f"earlier evidence could not be verified: {str(error) or type(error).__name__}")
-    reuse.update(status="applied" if reused else "none",
-                 reason=f"reused {len(reused)} of {len(suites)} suites from the passed head's run")
+    whence = "the batch's member runs" if reuse.get("kind") == "batch" else "the passed head's run"
+    reuse.update(status="applied" if reused else "none", reason=f"reused {len(reused)} of {len(suites)} suites from {whence}")
     return reused, reuse
 
 
@@ -386,7 +526,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     for start in (top, str(PurePosixPath(source).parent))):
                 continue
             known = existing(target)
-            if known is None or known in data:
+            if known is None or any(covers(entry, known) for entry in data):
                 continue
             probe = known + "x" if known.endswith("/") else known
             if not shared_input(probe) and not reads(suite, probe):
@@ -404,13 +544,17 @@ def verify_reuse(root, receipt, base, evidence):
     reused = check_reused_records(receipt.get("reused"), receipt.get("suites") or [], head, receipt.get("event"))
     if not reused:
         return {}
+    reuse = receipt.get("reuse")
+    if not isinstance(reuse, dict):
+        raise ValueError("reused results name no update merge or batch")
     try:
-        passed, main = update_parents(root, head, base)
+        if reuse.get("kind") == "batch":
+            if reuse.get("members") != batch_members(root, head, base):
+                raise ValueError("reused results name other members than the batch head's merges")
+        elif (reuse.get("passed_head"), reuse.get("main_parent")) != update_parents(root, head, base):
+            raise ValueError("reused results name other parents than the head's update merge")
     except Rerun as refusal:
         raise ValueError(f"reused results refused: {refusal}") from None
-    reuse = receipt.get("reuse")
-    if not isinstance(reuse, dict) or (reuse.get("passed_head"), reuse.get("main_parent")) != (passed, main):
-        raise ValueError("reused results name other parents than the head's update merge")
     changed = own_shared_change(root, head, base)
     if changed:
         raise ValueError(f"reused results refused: this PR changes {changed}, which its own CI run reads")
@@ -438,7 +582,11 @@ def main_planner(root, base):
     import tempfile
     try:
         with tempfile.TemporaryDirectory(prefix="main-ci-plan-") as folder:
-            for name in ("ci-plan.py", "record-ci-validation.py"):
+            names = ["ci-plan.py", "record-ci-validation.py"]
+            # Older reviewed bases predate the local-receipt module.
+            if git(root, "ls-tree", sha(base), "--", "scripts/local-checks.py"):
+                names.append("local-checks.py")
+            for name in names:
                 data = subprocess.check_output(["git", "show", f"{sha(base)}:scripts/{name}"], cwd=root,
                                                stderr=subprocess.PIPE, timeout=15)
                 (Path(folder) / name).write_bytes(data)
@@ -483,7 +631,12 @@ def read_gate(client, run):
     if not isinstance(suites, list) or not set(suites) <= SUITES:
         raise ValueError("required-gate receipt has invalid suites")
     reused = check_reused_records(receipt.get("reused", {}), suites, receipt["source_sha"], receipt["event"])
-    if receipt["required_jobs"] != sorted({"process-checks"} | set().union(*(JOBS[name] for name in set(suites) - set(reused)))):
+    # Every job this planner requires must have run and passed (checked above for each listed job). A receipt may list more:
+    # the merge helper runs from main, so a PR that adds a CI job brings jobs main does not know yet (#2804, batch #2815).
+    # Only adding works: a PR that removes or renames a job main requires still fails here until main has the change.
+    required = receipt["required_jobs"]
+    if (required != sorted(set(required))
+            or not {"process-checks"} | set().union(*(JOBS[name] for name in set(suites) - set(reused))) <= set(required)):
         raise ValueError("required-gate receipt does not run every suite it did not reuse")
     after = client.api(f"actions/runs/{run['id']}")
     ci.check_run(after, client.repository, run["id"])
@@ -576,6 +729,7 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
     return dict(schema=1, kind="ci-plan", event=event_name, head=head, base=base, draft=draft,
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
+                local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
 
 
@@ -607,10 +761,17 @@ def verify(plan, needs, source):
     for job, result in needs.items():
         if result.get("result") not in {"success", "skipped"}:
             raise ValueError(f"CI job did not complete successfully: {job}")
+    required_local = local_checks.planned_checks(plan)
+    try:
+        receipts = json.loads(needs.get("process-checks", {}).get("outputs", {}).get("local_receipts", "[]"))
+    except (ValueError, TypeError):
+        raise local_checks.missing(required_local) from None
+    receipts = local_checks.validate_receipts(required_local, receipts, plan["head"])
     return dict(schema=1, kind="ci-required", status="passed", source_sha=plan["head"],
                 source_tree=plan["tree"], event=plan["event"], base=plan["base"],
                 suites=suites, required_jobs=sorted(expected), results={k: v["result"] for k, v in needs.items()},
                 reused=reused, reuse=plan.get("reuse"),
+                local_receipts=receipts,
                 run_id=int(os.environ.get("GITHUB_RUN_ID", "0")), run_attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
 
 
@@ -672,6 +833,8 @@ def main():
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
         summary.write(f"Source: `{record.get('head', record.get('source_sha'))}`\n\n")
         summary.write("Automatic suites: " + ", ".join(record["suites"] or ["repository process checks"]) + ".\n")
+        if record.get("local_checks"):
+            summary.write("\nRequired local receipts: " + ", ".join(record["local_checks"]) + ".\n")
         for suite, reused in sorted((record.get("reused") or {}).items()):
             summary.write(f"\nReused `{suite}` from [run {reused['run_id']}]({reused['run_url']}) "
                           f"(attempt {reused['run_attempt']}, `{reused['origin_sha']}`): {reused['reason']}.\n")

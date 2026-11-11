@@ -42,6 +42,11 @@ pub enum Command {
         reexec: bool,
     },
     Version,
+    PeerAccount {
+        peer_port: u16,
+        own_port: u16,
+        daemon_pid: u32,
+    },
     Ps,
 }
 
@@ -53,6 +58,29 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             Some("--json") => Ok(Command::Ps),
             _ => Err("ps needs --json".into()),
         },
+        Some("peer-account") => {
+            let (mut peer_port, mut own_port, mut daemon_pid) = (None, None, None);
+            while let Some(arg) = args.next() {
+                let value = args.next().ok_or("peer-account flags need values")?;
+                let bad = || format!("peer-account: {arg} takes a number");
+                match arg {
+                    "--peer-port" => peer_port = Some(value.parse().map_err(|_| bad())?),
+                    "--own-port" => own_port = Some(value.parse().map_err(|_| bad())?),
+                    "--daemon-pid" => daemon_pid = Some(value.parse().map_err(|_| bad())?),
+                    _ => return Err(USAGE.into()),
+                }
+            }
+            match (peer_port, own_port, daemon_pid) {
+                (Some(peer_port @ 1..), Some(own_port @ 1..), Some(daemon_pid)) => {
+                    Ok(Command::PeerAccount {
+                        peer_port,
+                        own_port,
+                        daemon_pid,
+                    })
+                }
+                _ => Err("peer-account needs --peer-port, --own-port and --daemon-pid".into()),
+            }
+        }
         Some("serve") => {
             let mut home = None;
             let mut history_limit = DEFAULT_HISTORY_LIMIT;
@@ -89,6 +117,11 @@ pub fn main() {
     match parse(&args) {
         Ok(Command::Version) => println!("{}", version_line()),
         Ok(Command::Ps) => ps(),
+        Ok(Command::PeerAccount {
+            peer_port,
+            own_port,
+            daemon_pid,
+        }) => peer_account(peer_port, own_port, daemon_pid),
         Ok(Command::Serve {
             home,
             history_limit,
@@ -113,6 +146,22 @@ pub fn main() {
             eprintln!("{err}\n{USAGE}");
             std::process::exit(2);
         }
+    }
+}
+
+/// `peer-account`: `yes` or `no: <why>` on Windows; elsewhere exit 3, where the daemon has its own
+/// lookup (cli/src/lib/peerAccount.ts).
+fn peer_account(peer_port: u16, own_port: u16, daemon_pid: u32) {
+    #[cfg(windows)]
+    match crate::peer::ask(peer_port, own_port, daemon_pid) {
+        crate::peer::Verdict::Yes => println!("yes"),
+        crate::peer::Verdict::No(why) => println!("no: {why}"),
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (peer_port, own_port, daemon_pid);
+        println!("{{\"unsupported\":true}}");
+        std::process::exit(3);
     }
 }
 
@@ -342,6 +391,59 @@ mod tests {
     fn parses_commands() {
         assert_eq!(parse(&args(&["version"])), Ok(Command::Version));
         assert_eq!(parse(&args(&["ps", "--json"])), Ok(Command::Ps));
+        assert_eq!(
+            parse(&args(&[
+                "peer-account",
+                "--peer-port",
+                "5000",
+                "--own-port",
+                "18473",
+                "--daemon-pid",
+                "42"
+            ])),
+            Ok(Command::PeerAccount {
+                peer_port: 5000,
+                own_port: 18473,
+                daemon_pid: 42
+            })
+        );
+        assert!(parse(&args(&["peer-account", "--peer-port", "5000"])).is_err());
+        assert!(
+            parse(&args(&[
+                "peer-account",
+                "--peer-port",
+                "0",
+                "--own-port",
+                "1",
+                "--daemon-pid",
+                "1"
+            ]))
+            .is_err()
+        );
+        assert!(
+            parse(&args(&[
+                "peer-account",
+                "--peer-port",
+                "x",
+                "--own-port",
+                "1",
+                "--daemon-pid",
+                "1"
+            ]))
+            .is_err()
+        );
+        assert!(
+            parse(&args(&[
+                "peer-account",
+                "--peer-port",
+                "70000",
+                "--own-port",
+                "1",
+                "--daemon-pid",
+                "1"
+            ]))
+            .is_err()
+        );
         assert_eq!(
             parse(&args(&["serve", "--home", "/h"])),
             Ok(Command::Serve {

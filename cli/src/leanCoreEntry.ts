@@ -17,6 +17,7 @@
  * update runs it. Without it this core cannot know the CLI, and dies before it beats: its master then
  * starts it from cli.js (harnessd/leanServices.ts).
  */
+import './lib/connectWait.js'
 import { LEAN_CORE_SCRIPT_ENV } from './harnessd/protocol.js'
 
 const [, , command] = process.argv

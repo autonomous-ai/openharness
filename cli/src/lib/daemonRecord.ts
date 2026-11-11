@@ -4,7 +4,7 @@
  * pid (lib/windows/pipeAuth.ts). Both are new on each start, so a client cannot derive them as it derives a Unix
  * socket's path. Written once the core is bound.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isPipePath } from './windows/pipeAuth.js'
 
@@ -30,6 +30,23 @@ export function readDaemonRecord(dataDir: string, configuredPort: number, platfo
   } catch {
     return null // a first start, or an unreadable old record
   }
+}
+
+/**
+ * The port whose record holds the daemon on [port]. [port] may be the one the daemon was given rather than the one it was
+ * configured with (`daemonPort` hands that to every command), when another account holds the configured one, as a Harness
+ * Team account on the same PC does. [port] itself when no record says otherwise.
+ */
+export function configuredPortOf(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): number {
+  if (readDaemonRecord(dataDir, port, platform)) return port
+  let names: string[] = []
+  try { names = readdirSync(dataDir) } catch { return port }
+  for (const name of names) {
+    if (!name.startsWith('daemon-') || !name.endsWith('.json')) continue
+    const configured = Number(name.slice('daemon-'.length, -'.json'.length))
+    if (readDaemonRecord(dataDir, configured, platform)?.port === port) return configured
+  }
+  return port
 }
 
 export function writeDaemonRecord(dataDir: string, configuredPort: number, port: number, pipe?: DaemonPipeRecord): void {

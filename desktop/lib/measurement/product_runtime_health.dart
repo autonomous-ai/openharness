@@ -203,8 +203,10 @@ class ProductRuntimeHealth {
     measurement.milestone(ProductHealthMeasure.funnelWorkspaceReady);
   }
 
+  /// Only while the window is in sight: a hidden one made a report every minute for this sample
+  /// alone (task #2953), and what it would say is the memory of an app nobody is using.
   void sampleResources() {
-    if (!_active || !measurement.sharing) return;
+    if (!_active || !measurement.sharing || _hidden(_lifecycle())) return;
     try {
       final rss = ProcessInfo.currentRss;
       measurement.health(

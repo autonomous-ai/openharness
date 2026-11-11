@@ -1318,24 +1318,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('the tab row\'s Add Phone opens the dialog', (tester) async {
-      final usage = AddPhoneRecorder();
-      final app = createApp(productMeasurement: usage)
-        ..status = AppStatus.authenticated;
-      addTearDown(app.dispose);
-      await mount(tester, app);
-      await tester.tap(find.byKey(const ValueKey('swarm-add-phone-button')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.byType(AddPhoneDialog), findsOneWidget);
-      expect(usage.openings, [AddPhoneOpening.titlebar]);
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      expect(find.byType(AddPhoneDialog), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    });
-
     testWidgets('the account menu\'s Add Phone opens the dialog', (
       tester,
     ) async {

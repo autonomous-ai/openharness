@@ -32,7 +32,6 @@ static atomic_uint last_activity;
 static atomic_uint requested_brightness = 40;
 #define ESP_LOGI(...) ((void)0)
 static int esp_lcd_panel_co5300_set_brightness(int p, unsigned level) { (void)p; assert(level <= 100); return 0; }
-static void ht_illustrated_prepare(ht_scene_t *scene) { (void)scene; }
 static ht_scene_t scenes[2];
 static bool painted;
 static void (*power_cb)(bool);

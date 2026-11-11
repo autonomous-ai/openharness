@@ -104,7 +104,7 @@ describe('SessionInputController', () => {
       inject: async (_id, text) => { typed.push(text); return true }, capture: async () => claudeBox(''),
       sendKey: async () => true, beforeTeamWrite: async () => 'team_waiting_dialog', onError })
     controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'person', undefined, undefined, receipt)
+    controller.submit('s1', 'person', undefined, receipt)
     await vi.advanceTimersByTimeAsync(1)
     controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
     await vi.advanceTimersByTimeAsync(30_000)
@@ -147,12 +147,12 @@ describe('SessionInputController', () => {
       inject: async (_id, text) => { typed.push(text); return true }, capture: async () => claudeBox(draft),
       sendKey: async () => true, beforeTeamWrite: async () => null, onError: vi.fn() })
     controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'continue', undefined, undefined, firstReceipt)
+    controller.submit('s1', 'continue', undefined, firstReceipt)
     await vi.advanceTimersByTimeAsync(1)
     controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
     await vi.advanceTimersByTimeAsync(3_001)
     expect(reads).toBe(1)
-    controller.submit('s1', 'continue', undefined, undefined, secondReceipt)
+    controller.submit('s1', 'continue', undefined, secondReceipt)
     await vi.advanceTimersByTimeAsync(1)
     draft = 'continue'
     resolveOld({ composer: true, draft: false, nativeDraft: 'clear' })
@@ -271,7 +271,7 @@ describe('SessionInputController', () => {
     controller.submit('s1', 'Swarm follow-up', 'team:service:superTabs:old-check')
     await vi.advanceTimersByTimeAsync(9_001)
     expect(captures).toBe(6)
-    controller.submit('s1', 'person follow-up', undefined, undefined, personReceipt)
+    controller.submit('s1', 'person follow-up', undefined, personReceipt)
     await vi.advanceTimersByTimeAsync(7_501)
     resolveOld(null)
     await vi.advanceTimersByTimeAsync(1)
@@ -420,25 +420,6 @@ describe('SessionInputController', () => {
     controller.forget('s1')
   })
 
-  it('retains each composed message context while waiting for the pane lock and the preceding turn', async () => {
-    vi.useFakeTimers()
-    const inject = vi.fn(async () => true)
-    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
-      getSession: () => session(), validateRuntime: async () => true, inject, sendKey: async () => true,
-      capture: async () => codexComposer(''), onError: vi.fn() })
-    const release = controller.acquireControl('s1')!
-    controller.submit('s1', 'first', undefined, 'first-native-context')
-    controller.submit('s1', 'second', undefined, 'second-native-context')
-    expect(inject).not.toHaveBeenCalled()
-    release()
-    await vi.advanceTimersByTimeAsync(1)
-    expect(inject).toHaveBeenNthCalledWith(1, 'h1', 'first', 'first-native-context')
-    controller.onTurnStarted('s1', 'first'); controller.onTurnEnded('s1')
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(inject).toHaveBeenNthCalledWith(2, 'h1', 'second', 'second-native-context')
-    controller.forget('s1')
-  })
-
   describe('a message not typed because of what its pane shows', () => {
     const held = (reason: string): TerminalActionResult => ({ state: 'failed', dispatch: 'not_started', reason })
 
@@ -472,6 +453,107 @@ describe('SessionInputController', () => {
       await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'sent while it starts'))
       expect(inject).toHaveBeenCalledTimes(3)
       expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    // Claude Code's and Codex's readers run in a process of their own, started on demand: Claude Code's took 26 s on a Mac at load
+    // 40 (2026-11-10). A message sent within a second of the agent's start waited the lease's 15 s for a screen nobody could read,
+    // and was lost with an error. Now it waits for the reader, bounded, says so once, and is typed once.
+    // The person hears of the wait; a team delivery is automatic, and its mailbox hears how it ends.
+    it.each([[undefined, 'a person\'s message', 1], ['team:service:superTabs:A', 'a delivery', 0]] as const)(
+      'waits for its engine\'s reader to start, says so, and types it once it is up (%s, %s)', async (deliveryId, _what, said) => {
+        let up = false
+        let started: (ok: boolean) => void = () => {}
+        const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
+        const onError = vi.fn(), onSubmitted = vi.fn(), onWaiting = vi.fn()
+        const engineStarting = vi.fn(() => up ? null : new Promise<boolean>(resolve => { started = resolve }))
+        const inject = vi.fn(async (): Promise<TerminalActionResult> => up ? { state: 'succeeded', dispatch: 'executed' } : held('screen_unreadable'))
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+          validateRuntime: async () => true, inject, injectTeam: inject, beforeTeamWrite: async () => null, sendKey: async () => true, onError, onSubmitted,
+          onWaiting, engineStarting, now: time.now, sleep: time.sleep })
+        controller.submit('s1', 'sent within a second of its start', deliveryId)
+        await vi.waitFor(() => expect(engineStarting).toHaveBeenCalled())
+        expect(inject).not.toHaveBeenCalled()
+        // 26 s later, as measured: the reader is up.
+        time.at += 26_000
+        up = true
+        started(true)
+        await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+        if (!deliveryId) await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'sent within a second of its start'))
+        expect(onError).not.toHaveBeenCalled()
+        expect(onWaiting.mock.calls).toEqual(said ? [['s1', 'engine_starting']] : [])
+        controller.forget('s1')
+      })
+
+    it('types nothing when the agent was closed, or its process ended, while its reader started', async () => {
+      for (const ending of ['closed', 'ended'] as const) {
+        let started: (ok: boolean) => void = () => {}
+        let alive = true
+        const onError = vi.fn()
+        const inject = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+          validateRuntime: async () => alive, inject, sendKey: async () => true, onError, onWaiting: vi.fn(),
+          engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
+        controller.submit('s1', 'sent as it started')
+        await vi.waitFor(() => expect(inject).not.toHaveBeenCalled())
+        await new Promise(resolve => setTimeout(resolve, 0))
+        if (ending === 'closed') controller.forget('s1')
+        else alive = false
+        started(true)
+        await new Promise(resolve => setTimeout(resolve, 0))
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(inject, ending).not.toHaveBeenCalled()
+        if (ending === 'ended') expect(onError).toHaveBeenCalledWith('s1', 'This agent process is no longer running.')
+        controller.forget('s1')
+      }
+    })
+
+    // The frame comes once: a window that connects meanwhile reads the wait off the agent's row (standard 9).
+    it('says the agent waits for its engine while its reader starts, and nothing once it is up', async () => {
+      let started: (ok: boolean) => void = () => {}
+      const onSubmitted = vi.fn(), onWaitChanged = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
+        onSubmitted, onWaiting: vi.fn(), onWaitChanged, injectTeam: async () => ({ state: 'succeeded', dispatch: 'executed' }), beforeTeamWrite: async () => null,
+        engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
+      expect(controller.waitingFor('a1')).toBeNull()
+      controller.submit('a1', 'sent as it started')
+      await vi.waitFor(() => expect(controller.waitingFor('a1')).toBe('engine'))
+      // Every window hears the change: once as the wait starts, once as it ends.
+      expect(onWaitChanged.mock.calls).toEqual([['a1']])
+      started(true)
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+      expect(controller.waitingFor('a1')).toBeNull()
+      expect(onWaitChanged.mock.calls).toEqual([['a1'], ['a1']])
+      controller.forget('a1')
+      // A team delivery's wait is logged, not shown (no message_waiting), so not on the frame either.
+      controller.submit('a2', 'from the Swarm', 'team:service:superTabs:A')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(controller.waitingFor('a2')).toBeNull()
+      started(true)
+      controller.forget('a2')
+    })
+
+    it('ends the wait on the frame even when the wait itself fails', async () => {
+      let failed: (error: Error) => void = () => {}
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
+        onWaiting: vi.fn(), engineStarting: () => new Promise<boolean>((_, reject) => { failed = reject }) })
+      controller.submit('a1', 'sent as it started')
+      await vi.waitFor(() => expect(controller.waitingFor('a1')).toBe('engine'))
+      failed(new Error('gone'))
+      await vi.waitFor(() => expect(controller.waitingFor('a1')).toBeNull())
+      controller.forget('a1')
+    })
+
+    it('says nothing of a wait when its engine\'s reader is up', async () => {
+      const onWaiting = vi.fn(), onSubmitted = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(), onSubmitted,
+        onWaiting, engineStarting: () => null })
+      controller.submit('s1', 'typed at once')
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+      expect(onWaiting).not.toHaveBeenCalled()
       controller.forget('s1')
     })
 
@@ -1423,10 +1505,12 @@ describe('SessionInputController', () => {
     const release = controller.acquireControl('s1')
     expect(release).toBeTypeOf('function')
     expect(controller.acquireControl('s1')).toBeNull()
+    expect(controller.controlHeld('s1')).toBe(true)
     controller.submit('s1', 'wait behind control')
     expect(injected).toEqual([])
 
     release?.()
+    expect(controller.controlHeld('s1')).toBe(false)
     await vi.waitFor(() => expect(injected).toEqual(['wait behind control']))
     controller.forget('s1')
   })
@@ -1631,6 +1715,142 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.forget('s1')
   })
 
+  // Seen once in seven Codex Stop runs (2026-11-10): a message sent within a second of Stop was typed while the
+  // Ctrl-C was still on its way, then the cancel's bookkeeping, done after the key, settled it as cancelled and
+  // dropped its submit check, so it was received and never typed into a turn.
+  it.each(['cancel', 'cancelConfirmed'] as const)('types a message sent while %s is still pressing Ctrl-C after the key, and keeps it', async (how) => {
+    vi.useFakeTimers()
+    let pressed!: (ok: boolean) => void
+    const keys: string[] = [], typed: string[] = [], said: string[] = []
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('codex'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return true },
+      sendKey: (_id, key) => { keys.push(key); return key === 'C-c' ? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true) },
+      capture: async () => codexComposer(''), onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    const cancelled = how === 'cancel' ? (controller.cancel('s1'), Promise.resolve(true)) : controller.cancelConfirmed('s1')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(keys).toEqual(['C-c'])
+    controller.submit('s1', 'after stop', undefined, (outcome) => { said.push(outcome) })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(typed).toEqual([])
+    pressed(true)
+    expect(await cancelled).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(typed).toEqual(['after stop'])
+    expect(said).toEqual([])
+    controller.onTurnStarted('s1', 'after stop')
+    expect(said).toEqual(['started'])
+    controller.forget('s1')
+  })
+
+  describe('while a cancel presses Ctrl-C', () => {
+    const pressing = (over: { validateRuntime?: () => Promise<boolean>; inject?: (text: string) => Promise<boolean>; key?: () => Promise<boolean> } = {}) => {
+      let pressed!: (ok: boolean) => void
+      const typed: string[] = [], said: Record<string, string[]> = {}, onError = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('codex'), validateRuntime: over.validateRuntime ?? (async () => true),
+        inject: async (_id, text) => { typed.push(text); return over.inject ? over.inject(text) : true },
+        sendKey: (_id, key) => key === 'C-c' ? over.key?.() ?? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true),
+        capture: async () => codexComposer(''), onError })
+      const send = (text: string) => controller.submit('s1', text, undefined, (outcome) => { (said[text] ??= []).push(outcome) })
+      return { controller, typed, said, onError, send, press: (ok = true) => pressed(ok) }
+    }
+
+    it('holds a device\'s control, then gives it', async () => {
+      vi.useFakeTimers()
+      const t = pressing()
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(t.controller.acquireControl('s1', { forAnswer: true })).toBeNull()
+      t.press()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(t.controller.acquireControl('s1', { forAnswer: true })).not.toBeNull()
+      t.controller.forget('s1')
+    })
+
+    it('types every message sent meanwhile, after the key and in order, without waiting for a turn', async () => {
+      vi.useFakeTimers()
+      const t = pressing()
+      t.controller.setTurnOpen('s1', true)
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      for (const text of ['a', 'b', 'c']) t.send(text)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual([])
+      t.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['a', 'b', 'c'])
+      t.controller.forget('s1')
+    })
+
+    it('holds a write already on its way whose turn to be typed comes meanwhile, and types it first', async () => {
+      vi.useFakeTimers()
+      let written!: (ok: boolean) => void
+      const t = pressing({ inject: (text) => text === 'one' ? new Promise<boolean>(resolve => { written = resolve }) : Promise.resolve(true) })
+      t.controller.setTurnOpen('s1', true)
+      t.send('one'); t.send('two')
+      await vi.advanceTimersByTimeAsync(1)
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      t.send('three')
+      written(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['one'])
+      t.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['one', 'two', 'three'])
+      t.controller.forget('s1')
+    })
+
+    it('lets what it held go on at once when the process is gone, the agent was forgotten meanwhile, or the key fails', async () => {
+      vi.useFakeTimers()
+      const gone = pressing({ validateRuntime: async () => { await new Promise(resolve => setTimeout(resolve, 100)); return false } })
+      gone.controller.cancel('s1')
+      gone.send('to nobody')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(gone.said).toEqual({ 'to nobody': ['runtime_gone'] })
+      expect(gone.onError).toHaveBeenCalledWith('s1', 'This agent process is no longer running.')
+      const forgotten = pressing()
+      forgotten.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      forgotten.send('to a forgotten agent')
+      forgotten.controller.forget('s1')
+      forgotten.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(forgotten.typed).toEqual(['to a forgotten agent'])
+      const failed = pressing({ key: () => Promise.reject(new Error('the terminal is gone')) })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      failed.controller.cancel('s1')
+      failed.send('after a failed stop')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(failed.onError).toHaveBeenCalledWith('s1', 'Stop did not reach this agent.')
+      expect(failed.typed).toEqual(['after a failed stop'])
+      warn.mockRestore()
+    })
+
+    it('holds a message for at most 5 s behind a key that does not go, and a held one can be cancelled', async () => {
+      vi.useFakeTimers()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const t = pressing()
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      t.send('waiting')
+      t.controller.submit('s1', 'withdrawn', 'delivery-withdrawn')
+      expect(t.controller.cancelDelivery('delivery-withdrawn')).toBe(true)
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(t.typed).toEqual([])
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(t.typed).toEqual(['waiting'])
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cancel still pressing after 5000 ms'))
+      t.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['waiting'])
+      warn.mockRestore()
+      t.controller.forget('s1')
+    })
+  })
+
   it('reports the original legacy cancellation error for a vanished process', async () => {
     const onError = vi.fn()
     const sendKey = vi.fn(async () => true)
@@ -1696,7 +1916,7 @@ describe('what became of a person\'s message, for its measurement', () => {
 
   it('started once its turn begins, and said once', async () => {
     const { controller, onSubmitted, said, receipt } = setup()
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
     expect(said).toEqual([])
     controller.onTurnStarted('s1', 'hello')
@@ -1708,7 +1928,7 @@ describe('what became of a person\'s message, for its measurement', () => {
 
   it('a turn that is not the one typed leaves it unknown', async () => {
     const { controller, onSubmitted, said, receipt } = setup({ getSession: () => session('commandcode') })
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
     controller.onTurnStarted('s1', 'something else')
     expect(said).toEqual(['prompt_mismatch'])
@@ -1719,9 +1939,9 @@ describe('what became of a person\'s message, for its measurement', () => {
     const { controller, onSubmitted, said, receipt } = setup()
     const later: string[] = []
     controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'first', undefined, undefined, receipt)
+    controller.submit('s1', 'first', undefined, receipt)
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1))
-    controller.submit('s1', 'second', undefined, undefined, (outcome) => { later.push(outcome) })
+    controller.submit('s1', 'second', undefined, (outcome) => { later.push(outcome) })
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(2))
     expect(said).toEqual(['taken'])
     controller.onTurnEnded('s1')
@@ -1732,7 +1952,7 @@ describe('what became of a person\'s message, for its measurement', () => {
   it('taken once it left the composer, without a turn seen yet', async () => {
     vi.useFakeTimers()
     const { controller, onError, said, receipt } = setup()
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(onError).not.toHaveBeenCalled()
     expect(said).toEqual(['taken'])
@@ -1745,7 +1965,7 @@ describe('what became of a person\'s message, for its measurement', () => {
   ] as const)('%s when the person is told so after the paste', async (outcome, overrides) => {
     vi.useFakeTimers()
     const { controller, onError, said, receipt } = setup(overrides)
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(onError).toHaveBeenCalledTimes(1)
     expect(said).toEqual([outcome])
@@ -1759,7 +1979,7 @@ describe('what became of a person\'s message, for its measurement', () => {
     ['paste_failed', { inject: async (): Promise<boolean> => false }],
   ] as const)('%s, refused at the paste', async (outcome, overrides) => {
     const { controller, onError, said, receipt } = setup(overrides)
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
     expect(said).toEqual([outcome])
     controller.forget('s1')
@@ -1769,13 +1989,13 @@ describe('what became of a person\'s message, for its measurement', () => {
     let there = true
     const { controller, said, receipt, inject } = setup({ getSession: () => there ? session('commandcode') : undefined })
     controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'queued', undefined, undefined, receipt)
+    controller.submit('s1', 'queued', undefined, receipt)
     expect(said).toEqual([])
     there = false
     controller.onTurnEnded('s1')
     expect(said).toEqual(['agent_gone'])
     const now: string[] = []
-    controller.submit('s1', 'to nobody', undefined, undefined, (o) => { now.push(o) })
+    controller.submit('s1', 'to nobody', undefined, (o) => { now.push(o) })
     expect(now).toEqual(['agent_gone'])
     expect(inject).not.toHaveBeenCalled()
     controller.forget('s1')
@@ -1786,12 +2006,12 @@ describe('what became of a person\'s message, for its measurement', () => {
     const { controller, inject } = setup({ getSession: () => session('commandcode') })
     controller.setTurnOpen('s1', true)
     const outcomes: string[][] = Array.from({ length: 9 }, () => [])
-    for (let i = 0; i < 9; i++) controller.submit('s1', `m${i}`, undefined, undefined, (o) => { outcomes[i]!.push(o) })
+    for (let i = 0; i < 9; i++) controller.submit('s1', `m${i}`, undefined, (o) => { outcomes[i]!.push(o) })
     expect(outcomes[8]).toEqual(['queue_full'])
     expect(outcomes.slice(0, 8).flat()).toEqual([])
     await vi.advanceTimersByTimeAsync(5 * 60_000 + 1)
     const fresh: string[] = []
-    controller.submit('s1', 'fresh', undefined, undefined, (o) => { fresh.push(o) })
+    controller.submit('s1', 'fresh', undefined, (o) => { fresh.push(o) })
     expect(outcomes.slice(0, 8)).toEqual(Array.from({ length: 8 }, () => ['queue_expired']))
     expect(fresh).toEqual([])
     controller.forget('s1')
@@ -1801,13 +2021,13 @@ describe('what became of a person\'s message, for its measurement', () => {
 
   it('cancelled by the person, and ambiguous for a harness gone while it waited', async () => {
     const { controller, onSubmitted, said, receipt } = setup()
-    controller.submit('s1', 'one', undefined, undefined, receipt)
+    controller.submit('s1', 'one', undefined, receipt)
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1))
     expect(await controller.cancelConfirmed('s1')).toBe(true)
     expect(said).toEqual(['cancelled'])
 
     const later: string[] = []
-    controller.submit('s1', 'two', undefined, undefined, (o) => { later.push(o) })
+    controller.submit('s1', 'two', undefined, (o) => { later.push(o) })
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(2))
     controller.forget('s1')
     expect(later).toEqual(['ambiguous'])
@@ -1815,7 +2035,7 @@ describe('what became of a person\'s message, for its measurement', () => {
 
   it('a write that throws is unknown, and fails as before', async () => {
     const { controller, said, receipt } = setup({ inject: async () => { throw new Error('PRIVATE') } })
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.waitFor(() => expect(said).toEqual(['ambiguous']))
     controller.forget('s1')
   })
@@ -1823,7 +2043,7 @@ describe('what became of a person\'s message, for its measurement', () => {
   it('a receipt that throws changes nothing about the message', async () => {
     const { controller, onSubmitted, onError, inject } = setup()
     const receipt = vi.fn(() => { throw new Error('measurement broke') })
-    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    controller.submit('s1', 'hello', undefined, receipt)
     await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
     controller.onTurnStarted('s1', 'hello')
     controller.onTurnEnded('s1')
@@ -1883,7 +2103,7 @@ describe('while the agent changes host', () => {
       capture: async () => codexComposer(''), onError, moveGate: gate })
     gate.hold('h1')
     const outcomes: string[] = []
-    for (let i = 0; i < 9; i++) controller.submit('s1', `m${i}`, undefined, undefined, (o) => { outcomes.push(o) })
+    for (let i = 0; i < 9; i++) controller.submit('s1', `m${i}`, undefined, (o) => { outcomes.push(o) })
     expect(outcomes).toEqual(['queue_full'])
     expect(onError).toHaveBeenCalledWith('s1', 'This agent already has too many queued messages. Try again after the current operation finishes.')
     controller.forget('s1')

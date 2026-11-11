@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' show AppControl;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 
 /// [child] at the top left of a screen, as big as it asks to be.
@@ -51,49 +53,6 @@ void main() {
     });
   });
 
-  group('a count badge', () {
-    testWidgets('is a pill 22 points tall', (tester) async {
-      await show(tester, const UnconstrainedBox(child: SwarmBadge(3)));
-
-      expect(tester.getSize(find.byType(SwarmBadge)).height, 22);
-      final decoration = tester
-          .widget<Container>(
-            find.descendant(
-              of: find.byType(SwarmBadge),
-              matching: find.byType(Container),
-            ),
-          )
-          .decoration;
-      expect(decoration, isA<ShapeDecoration>());
-      expect((decoration! as ShapeDecoration).shape, const StadiumBorder());
-    });
-
-    testWidgets('takes dark ink on the warning fill, white on the accent', (
-      tester,
-    ) async {
-      await show(tester, const SwarmBadge(3, warn: true));
-      expect(
-        tester.widget<Text>(find.text('3')).style?.color,
-        const Color(0xFF1A1200),
-      );
-
-      await show(tester, const SwarmBadge(3));
-      expect(
-        tester.widget<Text>(find.text('3')).style?.color,
-        const Color(0xFFFFFFFF),
-      );
-    });
-
-    testWidgets('keeps the room of its figure: 8 points each side', (
-      tester,
-    ) async {
-      await show(tester, const UnconstrainedBox(child: SwarmBadge(1234)));
-
-      final text = tester.getSize(find.text('1234')).width;
-      expect(tester.getSize(find.byType(SwarmBadge)).width, text + 16);
-    });
-  });
-
   group('a button', () {
     Future<double> room(WidgetTester tester, SwarmButtonStyle style) async {
       await show(
@@ -125,6 +84,81 @@ void main() {
               as RoundedRectangleBorder;
       expect(shape.borderRadius, BorderRadius.circular(10));
       expect(shape.side, isNot(BorderSide.none));
+    });
+
+    /// What [button] draws: its face, inside the box it is laid out in.
+    Rect drawn(WidgetTester tester, Finder button) => tester.getRect(
+      find.descendant(of: button, matching: find.byType(Material)).first,
+    );
+
+    testWidgets('is drawn 44 tall; compact, drawn at a control\'s height in a '
+        'box 44 tall', (tester) async {
+      await show(tester, SwarmButton(label: 'Reply', onPressed: () {}));
+      final button = find.byType(SwarmButton);
+      expect(drawn(tester, button).height, minTouchTarget);
+
+      await show(
+        tester,
+        SwarmButton(label: 'Reply', compact: true, onPressed: () {}),
+      );
+      expect(drawn(tester, button).height, AppControl.height);
+      expect(tester.getSize(button).height, minTouchTarget);
+      expect(drawn(tester, button).center, tester.getCenter(button));
+    });
+
+    testWidgets('compact, has 12 points of room either side', (tester) async {
+      for (final style in SwarmButtonStyle.values) {
+        await show(
+          tester,
+          SwarmButton(
+            label: 'Reply',
+            style: style,
+            compact: true,
+            onPressed: () {},
+          ),
+        );
+        expect(
+          drawn(tester, find.byType(SwarmButton)).width -
+              tester.getSize(find.text('Reply')).width,
+          2 * 12,
+          reason: '$style',
+        );
+      }
+    });
+
+    testWidgets('compact, is pressed across its 44-point box, in a row as '
+        'tall as its words too, and not past it', (tester) async {
+      var presses = 0;
+      // A row shorter than a thumb, as an Activity row's words can be.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 36, child: Text('Fix login')),
+                  SwarmButton(
+                    label: 'Reply',
+                    compact: true,
+                    onPressed: () => presses++,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      final face = drawn(tester, find.byType(SwarmButton));
+      final reach = (minTouchTarget - face.height) / 2;
+
+      await tester.tapAt(face.topCenter - Offset(0, reach - 1));
+      await tester.tapAt(face.bottomCenter + Offset(0, reach - 1));
+      expect(presses, 2);
+
+      await tester.tapAt(face.topCenter - Offset(0, reach + 2));
+      await tester.tapAt(face.bottomCenter + Offset(0, reach + 2));
+      expect(presses, 2);
     });
 
     testWidgets('writes the main action in white on the accent', (
@@ -193,6 +227,31 @@ void main() {
     });
   });
 
+  group('a caption with a control', () {
+    testWidgets('has it at its right end, centred on its words, a thumb '
+        'tall', (tester) async {
+      const control = ValueKey('control');
+      await show(
+        tester,
+        const SwarmCaption(
+          'Projects',
+          trailing: SizedBox(key: control, width: 44, height: 44),
+        ),
+      );
+
+      final caption = find.byType(SwarmCaption);
+      expect(
+        tester.getTopRight(find.byKey(control)).dx,
+        tester.getTopRight(caption).dx,
+      );
+      expect(
+        tester.getCenter(find.text('Projects')).dy,
+        closeTo(tester.getCenter(find.byKey(control)).dy, .5),
+      );
+      expect(tester.getSize(caption).height, greaterThanOrEqualTo(44));
+    });
+  });
+
   group('a card row on its way', () {
     testWidgets("puts its mark 16 points in, as the real row's words are", (
       tester,
@@ -202,6 +261,25 @@ void main() {
       final row = find.byType(SwarmSkeletonRow);
       final mark = find.descendant(of: row, matching: find.byType(Skeleton));
       expect(tester.getTopLeft(mark.first).dx - tester.getTopLeft(row).dx, 16);
+    });
+
+    testWidgets("a project's on Home: its name's bar alone, 16 points in, on "
+        'one line a thumb tall', (tester) async {
+      await show(
+        tester,
+        SwarmSkeletonRows(id: 'rows', rows: 1, nameOnly: true),
+      );
+
+      final row = find.byType(SwarmSkeletonRow);
+      expect(
+        find.descendant(of: row, matching: find.byType(SkeletonText)),
+        findsOneWidget,
+        reason: 'no line under the name',
+      );
+      final bar = find.descendant(of: row, matching: find.byType(Skeleton));
+      expect(bar, findsOneWidget, reason: 'no mark before the name');
+      expect(tester.getTopLeft(bar).dx - tester.getTopLeft(row).dx, 16);
+      expect(tester.getSize(row).height, minTouchTarget);
     });
   });
 }

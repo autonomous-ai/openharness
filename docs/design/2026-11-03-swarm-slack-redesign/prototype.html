@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swarm Mobile Redesign</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a quiet review shell (tabs, thesis, notes) around one interactive phone per direction.
+   Shell follows the viewer's theme; the phones keep the app's own Graphite dark palette on purpose. */
+:root{
+  --bg:#f5f5f2; --fg:#1b1b19; --muted:#5d5c56; --line:#dad9d3; --chip:#ebebe6; --mark:#2f5bea; --frame:#0d0d0d;
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"Roboto Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111110;--fg:#ecebe7;--muted:#a3a29b;--line:#2d2d2a;--chip:#1f1f1d;--mark:#7d98ff;--frame:#000;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#111110;--fg:#ecebe7;--muted:#a3a29b;--line:#2d2d2a;--chip:#1f1f1d;--mark:#7d98ff;--frame:#000;color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--ui);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 56px}
+.wrap{max-width:1160px;margin:0 auto}
+.top h1{font:650 17px/1.3 var(--ui);margin:0;text-wrap:balance}
+.top p{margin:4px 0 0;color:var(--muted);font-size:13px;max-width:80ch}
+.top code,.thesis code{font:12px var(--mono)}
+.wrap a{color:var(--mark)}
+#dirtabs{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:16px;scrollbar-width:none}
+#dirtabs [role=tab]{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:10px 12px;font:600 13px var(--ui);color:var(--muted);white-space:nowrap;cursor:pointer}
+#dirtabs [role=tab]:hover{color:var(--fg)}
+#dirtabs [role=tab][aria-selected=true]{color:var(--fg);border-bottom-color:var(--fg)}
+#dirtabs [role=tab]:focus-visible,.jump button:focus-visible{outline:2px solid var(--mark);outline-offset:2px;border-radius:4px}
+.thesis{margin:14px 0 22px;max-width:80ch;font-size:14px}
+.thesis b{font-weight:650}
+.stage{display:grid;grid-template-columns:auto minmax(0,1fr);gap:36px;align-items:start}
+.notes{min-width:0;display:grid;gap:22px;max-width:62ch}
+.notes h3{font:650 12px/1.3 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.notes ul{margin:0;padding-left:18px;display:grid;gap:6px}
+.notes .try{margin:10px 0 0;font-size:13px;color:var(--muted)}
+.jump{display:flex;flex-wrap:wrap;gap:6px}
+.jump button{border:1px solid var(--line);background:var(--chip);color:var(--fg);border-radius:999px;padding:6px 11px;font:500 12.5px var(--ui);cursor:pointer}
+.jump button:hover{border-color:var(--muted)}
+.jump button[aria-current=true]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.why{display:grid;gap:10px;margin:0}
+.why div{border-top:1px solid var(--line);padding-top:10px}
+.why dt{font-weight:650}
+.why dd{margin:2px 0 0;color:var(--muted);font-size:13.5px}
+.why dd b{color:var(--fg);font-weight:600}
+.now{display:grid;grid-template-columns:auto minmax(0,1fr);gap:36px;align-items:start}
+.shot{width:300px;max-width:100%;border:8px solid var(--frame);border-radius:40px;overflow:hidden;background:#181818}
+.shot img{display:block;width:100%}
+.diag{display:grid;gap:22px;max-width:66ch;min-width:0}
+.diag ol,.diag ul{margin:0;padding-left:20px;display:grid;gap:6px}
+.diag .big{border-left:3px solid var(--mark);padding:2px 0 2px 12px;margin:0}
+.diag h3{font:650 12px/1.3 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.cmp{overflow-x:auto}
+.cmp table{border-collapse:collapse;width:100%;min-width:720px;font-size:13.5px}
+.cmp th,.cmp td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+.cmp thead th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.cmp tbody th{font-weight:600;white-space:nowrap}
+.cmp .pick{color:var(--mark);font-weight:650}
+.rec{max-width:80ch;margin-top:24px;display:grid;gap:10px}
+.rec p{margin:0}
+@media (max-width:860px){.stage,.now{grid-template-columns:minmax(0,1fr)}.phone,.shot{margin-inline:auto}}
+
+/* ───────────── Phone: the app's Graphite palette and its real sizes ───────────── */
+.phone{
+  --g:#181818; --card:#202020; --srf:#2c2c2c; --sheet:#1f1f1f; --hair:rgba(255,255,255,.12);
+  --t1:#f5f5f5; --t2:#a8a8a2; --t3:#6e6e68; --blue:#2f5bea; --green:#3fb950; --yellow:#ffb020; --inky:#1a1200; --red:#f2544b;
+  --agent:#5cc8db; --human:#6ad08a;
+  width:375px;max-width:100%;height:780px;border:10px solid var(--frame);border-radius:50px;background:var(--g);color:var(--t1);
+  position:relative;overflow:hidden;display:flex;flex-direction:column;font:15px/1.35 var(--ui);user-select:none;-webkit-user-select:none;
+  box-shadow:0 1px 0 var(--line),0 24px 48px -24px rgba(0,0,0,.45);box-sizing:border-box}
+.phone *{box-sizing:border-box}
+:where(.phone) button{appearance:none;background:none;border:0;color:inherit;font:inherit;padding:0;cursor:pointer;text-align:left}
+.phone button:focus-visible{outline:2px solid #8aa4ff;outline-offset:-2px;border-radius:8px}
+.phone .ic{width:20px;height:20px;flex:none;stroke-width:1.6}
+:where(.phone) i.ic::before{content:"•"}
+.phone .s14{width:14px;height:14px}.phone .s16{width:16px;height:16px}.phone .s18{width:18px;height:18px}.phone .s22{width:22px;height:22px}.phone .s24{width:24px;height:24px}.phone .s26{width:26px;height:26px}
+.phone .t2{color:var(--t2)}.phone .t3{color:var(--t3)}
+.phone .grow{flex:1}
+.sb{height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 26px 0;font:600 15px var(--ui);position:relative}
+.sb .island{position:absolute;left:50%;top:9px;width:108px;height:30px;margin-left:-54px;background:#000;border-radius:20px}
+.sb .sbr{display:flex;gap:5px;align-items:center}
+.scr{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;touch-action:pan-y}
+.scroll::-webkit-scrollbar{display:none}
+.pullin{transition:transform .18s ease}
+.hdr{display:flex;align-items:center;gap:6px;padding:4px 12px 4px 16px;min-height:52px;flex:none}
+.ws{display:flex;align-items:center;gap:8px;min-height:44px;min-width:0}
+.wtile{width:28px;height:28px;border-radius:7px;background:var(--srf);display:grid;place-items:center;font:600 14px var(--ui);color:var(--t1);flex:none}
+.wname{font:600 20px var(--mono);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.htitle{font:600 20px var(--mono)}
+.ib{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;color:var(--t1);position:relative}
+.ib:hover,.ib:active{background:rgba(255,255,255,.06)}
+.ib:disabled{color:var(--t3)}
+.av{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font:600 13px var(--ui);color:#fff;flex:none;position:relative}
+.avbtn{width:44px;height:44px;display:grid;place-items:center}
+.avbtn .av{background:#1d5bd6}
+.av .sd{position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;background:var(--green);box-shadow:0 0 0 2px var(--g)}
+.searchwrap{flex:none;padding:0 16px 10px;max-height:56px;overflow:hidden;transition:max-height .2s ease,opacity .16s ease,padding .2s ease}
+.phone.collapsed .searchwrap{max-height:0;opacity:0;padding-bottom:0}
+.spill{width:100%;height:38px;border-radius:10px;background:var(--srf);display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--t2);font-size:15px}
+.pullhint{height:0;overflow:visible;text-align:center;font-size:12.5px;color:var(--t2);position:relative;top:-28px;transition:color .12s}
+.pullhint.ready{color:var(--t1)}
+.tiles{display:flex;gap:8px;overflow-x:auto;padding:4px 16px 14px;scroll-snap-type:x mandatory;scrollbar-width:none;touch-action:pan-x pan-y}
+.tiles::-webkit-scrollbar{display:none}
+.tile{flex:none;scroll-snap-align:start;width:96px;min-height:66px;border-radius:12px;background:var(--card);padding:10px;display:flex;flex-direction:column;justify-content:space-between;gap:6px}
+.tile:hover,.tile:active{background:#262626}
+.tile.wide{width:214px}
+.tile .tt span{overflow:hidden;text-overflow:ellipsis}
+.tile .tt{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--t2);white-space:nowrap}
+.tile .tv{display:flex;align-items:center;gap:6px;font:600 15px var(--ui);white-space:nowrap;font-variant-numeric:tabular-nums}
+.g{color:var(--green)}.y{color:var(--yellow)}.r{color:var(--red)}
+.badge{min-width:22px;height:22px;border-radius:11px;padding:0 7px;display:inline-grid;place-items:center;font:600 12.5px var(--ui);font-variant-numeric:tabular-nums;flex:none}
+.badge.b{background:var(--blue);color:#fff}.badge.yb{background:var(--yellow);color:var(--inky)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--t3);flex:none;display:inline-block}
+.dot.green{background:var(--green)}.dot.yellow{background:var(--yellow)}.dot.red{background:var(--red)}.dot.idle{background:#4a4a46}
+.sech{display:flex;align-items:center;gap:6px;padding:8px 16px 4px;font:600 13px var(--ui);color:var(--t2);min-height:36px;width:100%}
+.sech .ic{transition:transform .15s}
+.sech.shut .ic{transform:rotate(-90deg)}
+.prow{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:0 16px}
+.prow:hover,.prow:active{background:rgba(255,255,255,.04)}
+.prow .pn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:16px;color:var(--t2)}
+.prow.unread .pn{color:var(--t1);font-weight:650}
+.prow .tm{font-size:12.5px;color:var(--t3);font-variant-numeric:tabular-nums}
+.prow.quiet .pn{color:var(--t3)}
+.prow .hash{color:var(--t3);font-weight:400;margin-right:1px}
+.fab{position:absolute;right:16px;bottom:96px;width:56px;height:56px;border-radius:50%;background:var(--blue);display:grid;place-items:center;color:#fff;box-shadow:0 8px 20px rgba(0,0,0,.45);z-index:3}
+.fab:hover{filter:brightness(1.08)}
+.tabbar{flex:none;display:flex;border-top:1px solid var(--hair);padding:7px 0 26px;background:var(--g);position:relative}
+.tabbar::after{content:"";position:absolute;left:50%;bottom:8px;width:134px;height:5px;margin-left:-67px;border-radius:3px;background:rgba(255,255,255,.55)}
+.tb{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--t2);font:500 12.5px var(--ui);min-height:52px;text-align:center}
+.tb[aria-selected=true]{color:var(--t1);font-weight:650}
+.tb .gl{position:relative;height:26px}
+.tb .gl .badge{position:absolute;left:15px;top:-7px;height:20px;min-width:20px;font-size:11.5px;padding:0 6px}
+.tb .gl .bd{position:absolute;right:-2px;bottom:0;width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 0 1.5px var(--g)}
+/* chips (the app's 44pt stadium pills, drawn smaller here) */
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 16px 12px;flex:none;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;height:34px;border-radius:17px;background:var(--srf);padding:0 13px;display:flex;align-items:center;gap:6px;font:500 14px var(--ui);color:var(--t1);white-space:nowrap}
+.chip[aria-pressed=true]{background:var(--t1);color:#181818}
+.chip .n{font-variant-numeric:tabular-nums;opacity:.75}
+/* activity rows */
+.arow{display:flex;gap:12px;padding:12px 16px;align-items:flex-start;width:100%}
+.arow:hover{background:rgba(255,255,255,.03)}
+.arow .bd1{flex:1;min-width:0;display:grid;gap:3px}
+.arow .cap{font-size:13px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arow .tl{font-size:15.5px;line-height:1.3;color:var(--t1)}
+.arow.unread .tl{font-weight:620}
+.arow .sub{font-size:13px;color:var(--t2)}
+.arow.done{opacity:.55}
+.arow .doneword{display:flex;align-items:center;gap:4px;font-size:13px;color:var(--t2)}
+.btn{height:34px;border-radius:10px;padding:0 13px;font:600 14px var(--ui);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
+.btn.fill{background:var(--blue);color:#fff}.btn.fill.confirm{background:var(--yellow);color:var(--inky)}
+.btn.soft{background:var(--srf);color:var(--t1)}
+.btn.ghost{color:var(--t2);padding:0 8px}
+.av.sq{border-radius:9px}
+.empty{padding:28px 16px;color:var(--t2);text-align:center;font-size:14px}
+/* sheets */
+.veil{position:absolute;inset:0;background:rgba(0,0,0,0);z-index:8;transition:background .2s}
+.veil.open{background:rgba(0,0,0,.5)}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:90%;overflow-y:auto;background:var(--sheet);border-radius:18px 18px 0 0;padding:8px 0 30px;z-index:9;transform:translateY(100%);transition:transform .24s cubic-bezier(.2,.8,.2,1);scrollbar-width:none}
+.sheet.open{transform:none}
+.sheet.static,.veil.static{transition:none}
+.grab{width:36px;height:5px;border-radius:3px;background:#4a4a46;margin:2px auto 10px}
+.shead{display:flex;align-items:center;gap:8px;padding:0 12px 8px 16px}
+.shead .st{flex:1;min-width:0;font:600 17px var(--mono)}
+.ssub{padding:0 16px 12px;color:var(--t2);font-size:13.5px;margin-top:-6px}
+.cap2{padding:14px 16px 6px;font:600 13px var(--ui);color:var(--t2)}
+.grp{margin:0 12px;border-radius:12px;background:var(--card);overflow:hidden}
+.srow{display:flex;align-items:center;gap:12px;min-height:52px;padding:0 14px;width:100%}
+.srow+.srow{border-top:1px solid var(--hair)}
+.srow:hover{background:rgba(255,255,255,.04)}
+.srow .lb{flex:1;min-width:0}
+.srow .vl{color:var(--t2);font-size:14px;white-space:nowrap}
+.srow.danger{color:var(--red)}
+.quick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:4px 12px 6px}
+.qb{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 4px;border-radius:12px;background:var(--card);font-size:13px;color:var(--t1);text-align:center}
+.qb:hover{background:#262626}
+.tick{color:var(--t1)}
+.you-top{display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 16px 8px}
+.you-top .av{width:64px;height:64px;font-size:24px}
+.you-top .nm{font:600 22px var(--ui)}
+.you-top .sw{color:var(--t2);font-size:14px}
+/* chat */
+.chdr{display:flex;align-items:center;gap:4px;padding:2px 6px 6px 4px;min-height:52px;border-bottom:1px solid var(--hair);flex:none}
+.ctitle{flex:1;min-width:0;display:grid;gap:1px;padding:4px 6px;border-radius:10px}
+.ctitle:hover{background:rgba(255,255,255,.04)}
+.ctitle .a{display:flex;align-items:center;gap:6px;font:600 17px var(--mono);white-space:nowrap;overflow:hidden}
+.ctitle .b{display:flex;align-items:center;gap:3px;font-size:13px;color:var(--t2);white-space:nowrap}
+.day{display:flex;align-items:center;gap:10px;color:var(--t2);font-size:12.5px;padding:10px 16px}
+.day::before,.day::after{content:"";flex:1;height:1px;background:var(--hair)}
+.msg{display:flex;gap:10px;padding:6px 16px 8px;position:relative}
+.msg.me{background:rgba(47,91,234,.12)}
+.msg.me::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#5b7cff}
+.msg .who{display:flex;align-items:baseline;gap:6px;font-size:13.5px}
+.msg .who b{font-weight:600}
+.msg .who .agent{color:var(--agent)}.msg .who .human{color:var(--human)}
+.role{font-size:11px;border:1px solid var(--hair);border-radius:8px;padding:0 6px;color:var(--t2)}
+.msg .hh{font:12px var(--mono);color:var(--t3)}
+.msg .tx{font-size:15.5px;line-height:1.38;margin-top:2px}
+.msg .mn{color:#8fa8ff;font-weight:600}
+.live{margin-top:8px;border-radius:12px;background:var(--card);padding:10px 12px 10px 14px;border-left:4px solid var(--blue);display:grid;gap:6px}
+.live .lt{font:600 15px var(--ui)}
+.live .ls{font-size:13px;color:var(--t2);display:flex;align-items:center;gap:6px}
+.live .pr{display:flex;align-items:center;gap:8px;font-size:13.5px}
+.decide{margin-top:8px;border-radius:12px;background:var(--card);padding:12px;display:grid;gap:10px}
+.decide .q{font-weight:600}
+.decide .row{display:flex;gap:8px;flex-wrap:wrap}
+.composer{flex:none;padding:6px 10px 8px}
+.ccard{border-radius:24px;background:var(--card);border:1px solid var(--hair);padding:10px 8px 6px 14px}
+.cfield{color:var(--t3);font-size:16px;padding:2px 0 10px}
+.ctool{display:flex;align-items:center;gap:4px}
+.cb{width:36px;height:36px;display:grid;place-items:center;border-radius:18px;color:var(--t2)}
+.tagchip{height:30px;border-radius:15px;background:var(--srf);padding:0 10px;display:flex;align-items:center;gap:4px;font-size:13.5px;color:var(--t1)}
+.send{width:36px;height:36px;border-radius:18px;background:var(--srf);display:grid;place-items:center;color:var(--t3)}
+/* search */
+.shdr{display:flex;align-items:center;gap:10px;padding:4px 16px 10px;flex:none}
+.field{flex:1;height:38px;border-radius:10px;background:var(--srf);display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--t2)}
+.field input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--t1);font:16px var(--ui);user-select:text;-webkit-user-select:text}
+.field input::placeholder{color:var(--t2)}
+.cancel{color:var(--t1);font-size:16px;min-height:44px}
+.rrow{display:flex;align-items:center;gap:12px;min-height:56px;padding:6px 16px;width:100%}
+.rrow:hover{background:rgba(255,255,255,.04)}
+.rrow .rk{width:32px;height:32px;border-radius:9px;background:var(--srf);display:grid;place-items:center;color:var(--t2);flex:none}
+.rrow .rt{font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .rs{font-size:13px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .rb{flex:1;min-width:0}
+.swipehint{text-align:center;font-size:12px;color:var(--t3);padding:10px 0 18px}
+/* agents and terminal */
+.mrow{display:flex;align-items:center;gap:8px;padding:14px 16px 6px;font-size:13px;color:var(--t2)}
+.term{flex:1;min-height:0;background:#0c0c0c;font:12.5px/1.55 var(--mono);color:#d6d6d0;padding:12px 14px;overflow:auto;white-space:pre-wrap}
+.term .p{color:#6ad08a}.term .q{color:#ffb020}.term .c{color:#7a7a74}
+.keybar{flex:none;display:flex;gap:6px;padding:8px 10px 10px;background:#141414;border-top:1px solid var(--hair);overflow-x:auto;scrollbar-width:none}
+.key{flex:none;height:34px;min-width:44px;padding:0 10px;border-radius:8px;background:var(--srf);display:grid;place-items:center;font:12.5px var(--mono)}
+/* B inbox */
+.sum{padding:2px 16px 10px;font-size:13.5px;color:var(--t2)}
+.card{margin:0 12px 8px;border-radius:12px;background:var(--card);padding:12px;display:grid;gap:8px}
+.card .cap{font-size:13px;color:var(--t2)}
+.card .tl{font-size:15.5px;font-weight:600;line-height:1.3}
+.card .row{display:flex;gap:8px}
+.card.done{opacity:.55}
+.caught{display:flex;flex-direction:column;align-items:center;gap:6px;padding:28px 16px 40px;color:var(--t2);font-size:14px}
+/* C */
+.cgrp{margin:0 16px;border-radius:12px;background:var(--card);overflow:hidden}
+.crow{display:flex;align-items:center;gap:10px;min-height:48px;padding:0 14px;width:100%}
+.crow+.crow{border-top:1px solid var(--hair)}
+.ccap{padding:16px 18px 6px;font:500 13px var(--ui);color:var(--t2)}
+@media (prefers-reduced-motion: reduce){.phone *,.phone{transition:none!important;scroll-behavior:auto}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Swarm Mobile, modeled on Slack · prototype</h1>
+    <p>Built from <code>feat/mobile-ios-android</code> @ <code>90d2ce56d</code>, following the article <a href="https://slack.design/articles/re-designing-slack-on-mobile/" target="_blank" rel="noopener">Re-designing Slack on Mobile</a>. Every phone is tappable: bottom tabs, tiles, rows, avatar, Approve. The data is sample data (project names come from the real screen). The terminal is unchanged.</p>
+  </header>
+
+  <nav role="tablist" aria-label="Design direction" id="dirtabs">
+    <button role="tab" id="tab-now" aria-controls="panel-now" aria-selected="false" tabindex="-1">Current</button>
+    <button role="tab" id="tab-a" aria-controls="panel-a" aria-selected="true">A · Slack trio</button>
+    <button role="tab" id="tab-b" aria-controls="panel-b" aria-selected="false" tabindex="-1">B · Inbox</button>
+    <button role="tab" id="tab-c" aria-controls="panel-c" aria-selected="false" tabindex="-1">C · Light tune</button>
+    <button role="tab" id="tab-cmp" aria-controls="panel-cmp" aria-selected="false" tabindex="-1">Compare</button>
+  </nav>
+  <p class="thesis" id="thesis"></p>
+
+  <section role="tabpanel" id="panel-now" aria-labelledby="tab-now" hidden>
+    <div class="now">
+      <div class="shot"><img alt="Current Swarm Home: autonomous.ai header, While you were away card 34 done 4 need you, Threads card @2, project list with 2-line rows, blue + button, 4 tabs Home Buddy Activity You" src="data:image/jpeg;base64,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ph/vCgCaioftMP8AeFH2mH+8KAJqKh+0w/3hR9ph/vCgCaioftMP94UfaYf7woAmoqH7TD/eFH2mH+8KAJqKh+0w/wB4UfaYf7woAmoqH7TD/eFH2mH+8KAJqKh+0w/3hR9ph/vCgCaioftMP94UfaYf7woAmoqH7TD/AHhR9ph/vCgCaioftMP94UfaYf7woAmoqH7TD/eFH2mH+8KAJqKh+0w/3hR9ph/vCgCaioftMP8AeFRvdxKPl+Y0AVL05mH0qpTnYuxZupptAH//1/xfooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA//Q/F+nIjyuI4wWZjgAckk9AKbWroTrHrdm7kKouIySeAAGFAC6noOuaLt/tmzuLTeSF8+J48kdcbgM4rJr3j/hIPDE/i1vDsKTT2l1rgubp7+VGhxHI4wirgBW3HLE8jAqn4c+waraQ3q2ulnzLx11MTLDGIrYKuzywxBVcbssnzEgZNIDxue0urZI5LiNkWZd8ZYYDLkjI9RkEVXr33SdL8KIYnhhjed9OMlmsixN5jfaXUsVnZY2fyx0Y9uBmqz2mlubx/C1lpzXAu1W4hvHgdY4PL+YoS5VVL53GMkrwAaLgeGlHChyCA3QkcHHpTa9xsby2vdH0C3nt7G6gt7q7jkhDQxkM2DGN0mCQeSu/wCVsAE1wHjq0t7PWwtu8Lb4Ud1hjSIoxzlXSJnjD8c7DjkcA5ouBxtFFFMAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAP/0fxfooqWGJpm2jp3NAEXtSYB61rraQgYIzTvssHpQBTvdQvdSZHv5WmMcaxJvOdqL0UegFUsA9a2fssHpR9lg9KAMbApenArY+ywelH2WD0oAx6K2PssHpR9lg9KAMeitj7LB6UfZYPSgDHorY+ywelH2WD0oAx6K2PssHpR9lg9KAMeitj7LB6UfZYPSgDHorY+ywelH2WD0oAx6K2PssHpR9lg9KAMeitj7LB6UfZYPSgDHorY+ywelH2WD0oAx6K2PssHpR9lg9KAMeitj7LB6UfZYPSg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"></div>
+      <div class="diag">
+        <div>
+          <h3>Problems</h3>
+          <ol>
+            <li>Two cards (While you were away, Threads) take up ~⅓ of the screen before the first project.</li>
+            <li>Project rows have 2 lines; line 2, "7 humans", is identical on every row.</li>
+            <li>Almost every row has an unread dot, so the dot no longer tells you anything.</li>
+            <li>Things that need you live in 6 places: the Home card, Activity, Work, Team, Status, the Buddy chat.</li>
+            <li>Swarm has no Search; Harness is reachable only through 4 "Open terminal" menu items; You takes up a whole tab.</li>
+          </ol>
+        </div>
+        <p class="big"><b>Biggest problem:</b> open the app and, within 3 seconds, you cannot see "what needs me", because everything has the same visual weight.</p>
+        <div>
+          <h3>What the Slack article says (short version)</h3>
+          <ul>
+            <li>People open the app 15–20 times a day, for 20–30 seconds each time. Goal: get more done per visit, not make visits longer.</li>
+            <li>The tab bar went from 5 tabs to 3. Tabs must have labels: the unlabeled version was dropped because it was confusing and poor for accessibility.</li>
+            <li>A row of tiles on Home for unreads and secondary surfaces (Threads, Later, Huddles…).</li>
+            <li>The overlapping "Jump to" and Search tab were merged into one Search, opened by pulling down; swipe sideways to change the result kind.</li>
+            <li>Activity is one feed for every priority item (threads, mentions, alerts, invitations), so there is less jumping between tabs.</li>
+            <li>Each tab has a filter, opened as a bottom sheet (on Android too). The header collapses on scroll.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section role="tabpanel" id="panel-a" aria-labelledby="tab-a">
+    <div class="stage"><div class="phone" id="phone-a"></div><aside class="notes" id="notes-a" aria-live="polite"></aside></div>
+  </section>
+  <section role="tabpanel" id="panel-b" aria-labelledby="tab-b" hidden>
+    <div class="stage"><div class="phone" id="phone-b"></div><aside class="notes" id="notes-b" aria-live="polite"></aside></div>
+  </section>
+  <section role="tabpanel" id="panel-c" aria-labelledby="tab-c" hidden>
+    <div class="stage"><div class="phone" id="phone-c"></div><aside class="notes" id="notes-c" aria-live="polite"></aside></div>
+  </section>
+
+  <section role="tabpanel" id="panel-cmp" aria-labelledby="tab-cmp" hidden>
+    <div class="cmp">
+      <table>
+        <thead><tr><th></th><th>A · Slack trio <span class="pick">(recommended)</span></th><th>B · Inbox</th><th>C · Light tune</th></tr></thead>
+        <tbody>
+          <tr><th>Best for</th><td>People who open the app many times a day to skim, then act fast</td><td>People who open the app only to approve/reply</td><td>Keeping the shipping pace without changing user habits</td></tr>
+          <tr><th>Tabs</th><td>3: Home · Buddy · Activity; You moves to the avatar</td><td>3: Inbox · Projects · Buddy; You moves to the avatar</td><td>4, as before</td></tr>
+          <tr><th>Projects visible on the first screen</th><td>~10 (1-line rows, 66pt tiles)</td><td>0 in Inbox; ~12 in the Projects tab</td><td>~9</td></tr>
+          <tr><th>Biggest strength</th><td>Fixes all 5 problems; close to Slack, so little to learn; adds a way into Harness, and Search</td><td>Only 1 tap from opening the app to Approve</td><td>Low risk, few broken tests</td></tr>
+          <tr><th>What it costs</th><td>You is 1 more tap away; reverses 2 earlier decisions (You tab, Threads row on Home); pull down to search replaces pull to refresh</td><td>Far from Slack; 2 lists to learn; the list reorders itself under your finger; the most code</td><td>Still 4 tabs; Harness still hidden; Threads still in 2 places; does not fix things that need you being scattered</td></tr>
+          <tr><th>With 10× projects</th><td>Good: 1-line rows, collapsible sections, filter</td><td>Inbox grows long, needs grouping</td><td>Okay for now, still 1 line</td></tr>
+          <tr><th>Build effort</th><td>Medium (~4–6 small PRs, mostly Home, tab bar, new Search)</td><td>High (new Inbox screen, merge logic, split out Projects)</td><td>Low (1–2 PRs)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="rec">
+      <p><b>Recommendation: A.</b> A fixes exactly the 5 problems in the Current tab: the tile bar gives back ⅓ of the screen, 1-line rows use bold text instead of dots, Activity gathers what needs you in one place, Search and the Agents tile open a way into Harness, and the You tab goes away. Almost every change rearranges screens that already exist; only Search is a new screen.</p>
+      <p><b>The cost:</b> You is one more tap away, and Home no longer has pull to refresh (data updates on its own; there is still a button in the filter sheet). Two earlier decisions are reversed: the You tab and the Threads row on Home.</p>
+    </div>
+  </section>
+</div>
+
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script>
+(() => {
+// ───────────── Sample data (project names from the real Home; the rest is sample) ─────────────
+const SW = 'autonomous.ai';
+const PROJECTS = [
+  {id:'lampos', st:'yellow', unread:true, m:0, t:'now', humans:7, agents:0},
+  {id:'computer', st:'idle', unread:false, m:0, t:'now', humans:7, agents:0},
+  {id:'openharness', st:'red', unread:true, m:1, t:'now', humans:7, agents:1},
+  {id:'focus-pod', st:'idle', unread:true, m:1, t:'1m', humans:7, agents:0},
+  {id:'spaceship', st:'yellow', unread:true, m:0, t:'3m', humans:7, agents:0},
+  {id:'garage-pod', st:'idle', unread:false, m:0, t:'5m', humans:7, agents:0},
+  {id:'docs-site', st:'idle', unread:false, m:0, t:'12m', humans:4, agents:0},
+  {id:'mobile-app', st:'idle', unread:true, m:0, t:'40m', humans:5, agents:0},
+  {id:'billing', st:'idle', unread:false, m:0, t:'2h', humans:3, agents:0},
+  {id:'design-kit', st:'idle', unread:false, m:0, t:'6h', humans:4, agents:0},
+];
+const QUIET = ['infra','hiring','offsite','old-site','research','press','grants','labs','archive'];
+const ACT = [
+  {id:'n1', f:'needs', p:'openharness', who:'River', k:'agent', t:'3m', title:'Merge PR #2466 into main?', act:'Approve'},
+  {id:'n2', f:'needs', p:'lampos', who:'Juniper', k:'agent', t:'12m', title:'Which login page ships: A (email first) or B (Google first)?', act:'Reply'},
+  {id:'n3', f:'needs', p:'openharness', who:'River', k:'agent', t:'20m', title:'Can I restart build-box to free disk space?', act:'Approve'},
+  {id:'n4', f:'needs', p:'spaceship', who:'River', k:'agent', t:'2h', title:'Review the release notes before I post them', act:'Reply'},
+  {id:'m1', f:'mentions', p:'openharness', who:'dee', k:'human', t:'5m', title:'@tony can we ship this before Friday?'},
+  {id:'m2', f:'mentions', p:'focus-pod', who:'khoa', k:'human', t:'40m', title:'@tony screenshots are in the thread'},
+  {id:'h1', f:'threads', p:'lampos', who:'Juniper', k:'agent', t:'8m', title:'Login redirect loops on Android', sub:'2 new replies'},
+  {id:'h2', f:'threads', p:'garage-pod', who:'mai', k:'human', t:'1h', title:'Which camera do we order?', sub:'1 new reply'},
+  {id:'r1', f:'reactions', p:'openharness', who:'dee', k:'human', t:'30m', title:'PR #2466 is ready for review', sub:'👍 3   🎉 1', read:true},
+  {id:'i1', f:'invites', p:null, who:'linh', k:'human', t:'1d', title:'linh invited you to the Swarm bvm-labs'},
+];
+const AGENTS = [
+  {m:'mac-studio', on:true, list:[{n:'openharness-pm', e:'Claude', st:'green', w:'Working'}, {n:'fix-login', e:'Codex', st:'yellow', w:'Waiting for you'}]},
+  {m:'build-box', on:true, list:[{n:'lampos-dev', e:'Claude', st:'idle', w:'Idle'}]},
+  {m:'tony-mbp', on:false, list:[]},
+];
+const PEOPLE = [['dee','Active'],['khoa','🎯 Focusing'],['linh','Away'],['mai','Active']];
+const CHATS = [
+  {t:'#openharness', s:'Project chat · 7 humans · 1 agent running', go:'chat:openharness', k:'hash'},
+  {t:'Wren', s:'Your Buddy · autonomous.ai', go:'tab:buddy', k:'message-circle'},
+  {t:'Fix login redirect', s:'Work chat · #lampos', go:'chat:lampos', k:'messages-square'},
+  {t:'Release notes', s:'Work chat · #spaceship', go:'chat:spaceship', k:'messages-square'},
+];
+const RECENT = [
+  {t:'#openharness', s:'7 humans · 1 agent running', go:'chat:openharness', k:'hash'},
+  {t:'Wren', s:'Your Buddy · autonomous.ai', go:'tab:buddy', k:'message-circle'},
+  {t:'Login redirect loops on Android', s:'Thread · #lampos · 2 new replies', go:'chat:lampos', k:'messages-square'},
+  {t:'fix-login', s:'Codex · mac-studio · waiting for you', go:'term:fix-login', k:'square-terminal'},
+  {t:'dee', s:'Active · autonomous.ai', go:'', k:'@d'},
+  {t:'#lampos', s:'7 humans', go:'chat:lampos', k:'hash'},
+];
+const AVC = {River:'#0f766e', Juniper:'#6d28d9', Wren:'#15803d', dee:'#be123c', khoa:'#a65a08', mai:'#4e5d78', linh:'#a21caf', tony:'#1d5bd6'};
+
+// ───────────── Small builders ─────────────
+const ic = (n, c='') => `<i data-lucide="${n}" class="ic ${c}" aria-hidden="true"></i>`;
+const av = (who, sq=false) => `<span class="av ${sq?'sq':''}" style="background:${AVC[who]||'#4b5f9b'}" aria-hidden="true">${who[0].toUpperCase()}</span>`;
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+const proj = id => PROJECTS.find(p => p.id === id) || {id, humans:7, agents:0};
+const projLine = p => `${p.humans} humans${p.agents ? ` · ${p.agents} agent running` : ''}`;
+
+const statusBar = () => `<div class="sb"><span>12:19</span><span class="island"></span><span class="sbr">${ic('signal','s16')}${ic('wifi','s16')}${ic('battery-full','s22')}</span></div>`;
+const avatarBtn = () => `<button class="avbtn" data-act="sheet:you" aria-label="You: tony, Active">${'<span class="av">T<span class="sd"></span></span>'}</button>`;
+const wsBtn = (chev=true) => `<button class="ws" data-act="sheet:switcher" aria-label="Swarm: ${SW}. Switch Swarm"><span class="wtile">a</span><span class="wname">${SW}</span>${chev?ic('chevron-down','s16 t2'):''}</button>`;
+
+function tabBar(s, tabs){
+  const needs = needsLeft(s);
+  return `<div class="tabbar" role="tablist" aria-label="App tabs">${tabs.map(t => {
+    const on = s.tab === t.k;
+    const badge = t.badge === 'needs' && needs ? `<span class="badge yb">${needs}</span>` : '';
+    const dot = t.dot ? '<span class="bd" aria-hidden="true"></span>' : '';
+    return `<button class="tb" role="tab" aria-selected="${on}" data-act="tab:${t.k}"><span class="gl">${ic(t.icon,'s26')}${badge}${dot}</span>${t.label}</button>`;
+  }).join('')}</div>`;
+}
+const needsLeft = s => ACT.filter(a => a.f === 'needs' && !s.done.has(a.id)).length;
+
+// project rows
+function prow(p, {time=false, quiet=false}={}){
+  const right = p.m ? `<span class="badge b" aria-label="${p.m} mention">@${p.m}</span>` : '';
+  const label = `#${p.id}${p.unread?', new messages':''}`;
+  return `<button class="prow ${p.unread?'unread':''} ${quiet?'quiet':''}" data-act="chat:${p.id}" aria-label="${label}"><span class="dot ${p.st||'idle'}"></span><span class="pn"><span class="hash">#</span>${p.id}</span>${time?`<span class="tm">${p.t}</span>`:''}${right}</button>`;
+}
+
+// activity rows (shared by A and C)
+function arow(s, a){
+  const done = s.done.has(a.id);
+  const cap = a.p ? `#${a.p} · ${a.who} · ${a.t}` : `${a.who} · ${a.t}`;
+  let tail = '';
+  if (a.f === 'needs') {
+    if (done) tail = `<span class="doneword">${ic('check','s16')}${a.act==='Approve'?'Approved':'Answered'}</span>`;
+    else if (a.act === 'Approve') tail = `<button class="btn fill ${s.confirm===a.id?'confirm':''}" data-act="approve:${a.id}">${s.confirm===a.id?'Approve?':'Approve'}</button>`;
+    else tail = `<button class="btn soft" data-act="chat:${a.p}">Reply</button>`;
+  } else if (a.f === 'invites') {
+    tail = done ? `<span class="doneword">${ic('check','s16')}Joined</span>` : `<button class="btn fill" data-act="join:${a.id}">Join</button>`;
+  }
+  const go = a.p ? `chat:${a.p}` : 'noop';
+  const lead = a.f === 'invites' ? `<span class="av sq" style="background:#2c2c2c;color:#a8a8a2">${ic('hexagon','s18')}</span>` : av(a.who);
+  return `<div class="arow ${a.read||done?'':'unread'} ${done?'done':''}">${lead}<button class="bd1" data-act="${go}"><span class="cap">${cap}</span><span class="tl">${esc(a.title)}</span>${a.sub?`<span class="sub">${a.sub}</span>`:''}</button>${tail}</div>`;
+}
+
+// ───────────── Screens ─────────────
+const S = {};
+
+// A · Home: avatar, search pill, tile bar, one-line rows, sections
+S.homeA = s => {
+  const shown = s.sec ? PROJECTS : [];
+  return `<div class="hdr">${wsBtn()}<span class="grow"></span><button class="ib" data-act="sheet:filter" aria-label="Sort and filter">${ic('list-filter','s22')}</button>${avatarBtn()}</div>
+  <div class="searchwrap"><button class="spill" data-act="go:search">${ic('search','s16')}<span>Search chats, projects, agents</span></button></div>
+  <div class="scroll" data-pull="1"><div class="pullin"><div class="pullhint">${ic('arrow-down','s14')} Pull down to search</div>
+    <div class="tiles" role="list">
+      <button class="tile wide" role="listitem" data-act="tabf:activity:needs"><span class="tt">${ic('clock','s16')}<span>While you were away · 21h</span></span><span class="tv"><span class="g">34</span><span class="t2" style="font-weight:400">done</span>&nbsp;<span class="y">${needsLeft(s)}</span><span class="t2" style="font-weight:400">need you</span></span></button>
+      <button class="tile" role="listitem" data-act="tabf:activity:threads"><span class="tt">${ic('messages-square','s16')}Threads</span><span class="tv"><span class="badge b">@2</span></span></button>
+      <button class="tile" role="listitem" data-act="go:agents"><span class="tt">${ic('square-terminal','s16')}Agents</span><span class="tv"><span class="dot green"></span>1 working</span></button>
+    </div>
+    <button class="sech ${s.sec?'':'shut'}" data-act="toggle:sec" aria-expanded="${!!s.sec}">${ic('chevron-down','s16')}Projects</button>
+    ${shown.map(p => prow(p)).join('')}
+    <button class="sech ${s.other?'':'shut'}" data-act="toggle:other" aria-expanded="${!!s.other}">${ic('chevron-down','s16')}Other projects · ${QUIET.length}</button>
+    ${s.other ? QUIET.map(q => prow({id:q, st:'idle'}, {quiet:true})).join('') : ''}
+    <div style="height:84px"></div>
+  </div></div>
+  <button class="fab" data-act="noop" aria-label="New message">${ic('plus','s26')}</button>`;
+};
+
+// Search (A, and C's search pill): recents first, swipe or chips for kinds
+const CATS = [['recent','Recent'],['projects','Projects'],['chats','Chats'],['people','People'],['agents','Agents']];
+function searchItems(cat){
+  if (cat === 'recent') return RECENT;
+  if (cat === 'projects') return [...PROJECTS.map(p => ({t:'#'+p.id, s:projLine(p), go:'chat:'+p.id, k:'hash'})), ...QUIET.map(q => ({t:'#'+q, s:'Quiet for a day', go:'chat:'+q, k:'hash'}))];
+  if (cat === 'chats') return CHATS;
+  if (cat === 'people') return [...PEOPLE.map(([n,st]) => ({t:n, s:st, go:'', k:'@'+n})), {t:'River', s:'Agent · PM · #openharness', go:'', k:'@River'}, {t:'Juniper', s:'Agent · Dev · #lampos', go:'', k:'@Juniper'}];
+  return AGENTS.flatMap(m => m.list.map(a => ({t:a.n, s:`${a.e} · ${m.m} · ${a.w.toLowerCase()}`, go:'term:'+a.n, k:'square-terminal'})));
+}
+function searchResults(s){
+  const q = (s.q||'').trim().toLowerCase();
+  let items = q ? CATS.flatMap(([c]) => c==='recent'?[]:searchItems(c)).filter(i => (i.t+' '+i.s).toLowerCase().includes(q)) : searchItems(s.cat);
+  if (!items.length) return `<div class="empty">Nothing matches "${esc(s.q)}".<br>Messages inside chats come in phase 2.</div>`;
+  const lead = i => i.k.startsWith('@') ? av(i.k.slice(1)) : `<span class="rk">${ic(i.k,'s18')}</span>`;
+  return (q?'':`<div class="cap2">${CATS.find(c=>c[0]===s.cat)[1]}</div>`) + items.map(i => `<button class="rrow" data-act="${i.go?i.go:'noop'}">${lead(i)}<span class="rb"><span class="rt" style="display:block">${esc(i.t)}</span><span class="rs" style="display:block">${esc(i.s)}</span></span></button>`).join('') + (q?'':`<div class="swipehint">Swipe sideways to change kind · ${CATS.map(c=>c[1]).join(' · ')}</div>`);
+}
+S.search = s => `<div class="shdr"><label class="field">${ic('search','s16')}<input id="${s.dir}-q" type="search" placeholder="Search" value="${esc(s.q||'')}" autocomplete="off" aria-label="Search chats, projects, people and agents"></label><button class="cancel" data-act="back">Cancel</button></div>
+  <div class="chips" role="group" aria-label="Kind">${CATS.map(([k,l]) => `<button class="chip" aria-pressed="${s.cat===k && !s.q}" data-act="cat:${k}">${l}</button>`).join('')}</div>
+  <div class="scroll" data-swipe="1" id="${s.dir}-results">${searchResults(s)}</div>`;
+
+// Activity: A adds All + Invitations; C only renames "@" to Mentions
+function activityScreen(s, withAll){
+  const F = withAll ? [['all','All'],['needs','Needs you'],['mentions','Mentions'],['threads','Threads'],['reactions','Reactions']] : [['needs','Needs you'],['mentions','Mentions'],['threads','Threads'],['reactions','Reactions']];
+  const f = s.f || (withAll ? 'all' : 'needs');
+  const count = k => k==='needs' ? needsLeft(s) : k==='all' ? 0 : ACT.filter(a => a.f===k && !a.read).length;
+  const rows = ACT.filter(a => f==='all' ? (withAll || a.f!=='invites') : a.f===f);
+  const head = withAll ? `<div class="hdr"><span class="htitle">Activity</span><span class="grow"></span>${avatarBtn()}</div>` : `<div class="hdr"><span class="htitle">Activity</span></div>`;
+  return `${head}<div class="chips" role="group" aria-label="Filter">${F.map(([k,l]) => `<button class="chip" aria-pressed="${f===k}" data-act="flt:${k}">${l}${count(k)?` <span class="n">${count(k)}</span>`:''}</button>`).join('')}</div>
+  <div class="scroll">${rows.length ? rows.map(a => arow(s,a)).join('') : '<div class="empty">Nothing needs you.</div>'}<div style="height:16px"></div></div>`;
+}
+S.activityA = s => activityScreen(s, true);
+S.activityC = s => activityScreen(s, false);
+
+// Buddy chat (all directions; A/B make the title the Swarm switcher)
+S.buddy = s => {
+  const sw = s.dir !== 'c';
+  return `<div class="chdr"><button class="ctitle" ${sw?'data-act="sheet:switcher" aria-label="Wren, your Buddy in autonomous.ai. Switch Swarm"':'data-act="noop"'}><span class="a"><span class="dot green"></span>Wren${sw?ic('chevron-down','s16 t2'):''}</span><span class="b">Buddy · ${SW}</span></button><button class="ib" data-act="noop" aria-label="Buddy menu">${ic('ellipsis-vertical','s22')}</button></div>
+  <div class="scroll"><div class="day">Today</div>
+    ${msg('Wren','agent','','08:02',`Morning. 3 PRs merged overnight in <b>#openharness</b>. One needs you:`, decideCard(s))}
+    ${msg('tony','human','','08:05','What is blocking #lampos?')}
+    ${msg('Wren','agent','','08:05','Juniper is waiting on your pick for the login page, A or B. Everything else is moving.')}
+  </div>
+  ${composer('Message Wren', true)}`;
+};
+function decideCard(s){
+  if (s.done.has('n1')) return `<div class="decide"><span class="q">Merge PR #2466 into main?</span><span class="doneword">${ic('check','s16')}You chose: Approve</span></div>`;
+  return `<div class="decide"><span class="q">Merge PR #2466 into main?</span><div class="row"><button class="btn fill ${s.confirm==='n1'?'confirm':''}" data-act="approve:n1">${s.confirm==='n1'?'Approve?':'Approve'}</button><button class="btn soft" data-act="noop">Let River decide</button><button class="btn ghost" data-act="noop">Not now</button></div></div>`;
+}
+function msg(who, kind, role, hh, html, extra='', me=false){
+  return `<div class="msg ${me?'me':''}">${av(who)}<div style="flex:1;min-width:0"><div class="who"><b class="${kind}">${who}</b>${role?`<span class="role">${role}</span>`:''}<span class="hh">${hh}</span></div><div class="tx">${html}</div>${extra}</div></div>`;
+}
+const composer = (ph, buddy=false) => `<div class="composer"><div class="ccard"><div class="cfield">${ph}</div><div class="ctool"><button class="cb" data-act="noop" aria-label="Attach">${ic('plus','s22')}</button>${buddy?`<button class="tagchip" data-act="noop">${ic('message-square-plus','s14')}New session</button>`:`<button class="tagchip" data-act="noop">${ic('at-sign','s14')}Tag</button>`}<span class="grow"></span><button class="cb" data-act="noop" aria-label="Voice">${ic('mic','s22')}</button><button class="send" disabled aria-label="Send">${ic('arrow-up','s18')}</button></div></div></div>`;
+
+// Project chat: A/B open details from the title; C keeps the ⋮ menu
+S.chat = s => {
+  const p = proj(s.pid || 'openharness');
+  const tapTitle = s.dir !== 'c';
+  const title = `<span class="a">#${p.id}</span><span class="b">${projLine(p)}${tapTitle?ic('chevron-right','s14'):''}</span>`;
+  const head = `<div class="chdr"><button class="ib" data-act="back" aria-label="Back">${ic('chevron-left','s26')}</button>${tapTitle?`<button class="ctitle" data-act="sheet:details" aria-label="#${p.id} details">${title}</button>`:`<div class="ctitle">${title}</div>`}${tapTitle?'':`<button class="ib" data-act="sheet:menu" aria-label="Project menu">${ic('ellipsis-vertical','s22')}</button>`}</div>`;
+  const body = p.id === 'openharness'
+    ? msg('River','agent','PM','16:40','Fix login redirect is ready. PR #2466 passes CI.', `<div class="live"><span class="lt">Fix login redirect</span><span class="ls"><span class="dot yellow"></span>In review · waiting on a person</span><span class="pr">${ic('git-pull-request','s16 g')}#2466 Fix login redirect loop<span class="grow"></span>${ic('external-link','s14 t2')}</span></div>`)
+      + msg('dee','human','','16:44','<span class="mn">@tony</span> can we ship this before Friday?', '', true)
+      + msg('Juniper','agent','Dev','16:47','Android build is green too.')
+    : msg('Juniper','agent','Dev','16:31',`Two login pages are ready in <b>#${p.id}</b>. A puts email first, B puts Google first.`)
+      + msg('mai','human','','16:38','B tested better with the pilot group.')
+      + msg('Juniper','agent','Dev','16:40','<span class="mn">@tony</span> which one ships?', '', true);
+  return `${head}<div class="scroll"><div class="day">Today</div>${body}</div>${composer('Message #'+p.id)}`;
+};
+
+// Agents (Harness) list, reached from the Agents tile and Search
+S.agents = s => `<div class="chdr"><button class="ib" data-act="back" aria-label="Back">${ic('chevron-left','s26')}</button><div class="ctitle"><span class="a">Agents</span><span class="b">Harness · on your computers</span></div></div>
+  <div class="scroll">${AGENTS.map(m => `<div class="mrow"><span class="dot ${m.on?'green':'idle'}"></span>${m.m} · ${m.on?'online':'offline'}</div>${m.list.length ? `<div class="grp">${m.list.map(a => `<button class="srow" data-act="term:${a.n}"><span class="dot ${a.st}"></span><span class="lb"><span style="display:block;font:600 15px var(--mono)">${a.n}</span><span style="display:block;font-size:13px;color:var(--t2)">${a.e} · ${a.w}</span></span>${ic('chevron-right','s18 t3')}</button>`).join('')}</div>` : `<div style="padding:0 16px;color:var(--t3);font-size:13.5px">No agents</div>`}`).join('')}<div style="height:20px"></div></div>`;
+
+S.term = s => `<div class="chdr"><button class="ib" data-act="back" aria-label="Back">${ic('chevron-left','s26')}</button><div class="ctitle"><span class="a">${s.term||'fix-login'}</span><span class="b">mac-studio · Codex</span></div></div>
+  <div class="term"><span class="c"># Terminal stays 100% as it is today</span>
+<span class="p">›</span> Fix the login redirect loop on Android
+• Read src/auth/redirect.ts
+• Patched the redirect guard (+12 −4)
+• Ran unit tests: 48 passed
+<span class="q">? Run the Android e2e suite now? (y/n)</span>
+</div><div class="keybar">${['esc','tab','ctrl','↑','↓','y','n','⏎'].map(k=>`<span class="key">${k}</span>`).join('')}</div>`;
+
+// B · Inbox: one list ordered by urgency, actions in place
+S.inbox = s => {
+  const needs = ACT.filter(a => a.f==='needs');
+  const replies = ACT.filter(a => a.f==='mentions' || a.f==='threads');
+  const news = [['lampos','Juniper','Android build is green','8m'],['mobile-app','mai','Build 1.0.12 (79) is on TestFlight','40m']];
+  const card = a => {
+    const done = s.done.has(a.id);
+    const tail = done ? `<span class="doneword">${ic('check','s16')}${a.act==='Approve'?'Approved':'Answered'}</span>`
+      : a.act==='Approve' ? `<div class="row"><button class="btn fill ${s.confirm===a.id?'confirm':''}" data-act="approve:${a.id}">${s.confirm===a.id?'Approve?':'Approve'}</button><button class="btn ghost" data-act="noop">Not now</button></div>`
+      : `<div class="row"><button class="btn soft" data-act="chat:${a.p}">Reply</button><button class="btn ghost" data-act="noop">Not now</button></div>`;
+    return `<div class="card ${done?'done':''}"><span class="cap">#${a.p} · ${a.who} · ${a.t}</span><span class="tl">${esc(a.title)}</span>${tail}</div>`;
+  };
+  return `<div class="hdr"><span class="htitle">Inbox</span><span class="grow"></span><button class="ib" data-act="sheet:switcher" aria-label="Swarm: ${SW}. Switch Swarm"><span class="wtile">a</span></button>${avatarBtn()}</div>
+  <div class="scroll"><div class="sum">While you were away · 21h · <span class="g">34 done</span></div>
+    <div class="cap2">Needs you · ${needsLeft(s)}</div>${needs.map(card).join('')}
+    <div class="cap2">Mentions and replies · ${replies.length}</div>${replies.map(a => arow(s,a)).join('')}
+    <div class="cap2">New in projects</div>${news.map(([p,w,t,tm]) => `<button class="arow unread" data-act="chat:${p}"><span class="av sq" style="background:#2c2c2c;color:#a8a8a2">#</span><span class="bd1"><span class="cap">#${p} · ${tm}</span><span class="tl">${w}: ${t}</span></span></button>`).join('')}
+    <div class="caught">${ic('circle-check','s24 g')}You're caught up</div></div>`;
+};
+S.projectsB = s => `<div class="hdr"><span class="htitle">Projects</span><span class="grow"></span><button class="ib" data-act="sheet:filter" aria-label="Sort and filter">${ic('list-filter','s22')}</button>${avatarBtn()}</div>
+  <div class="searchwrap"><button class="spill" data-act="noop">${ic('search','s16')}<span>Search</span></button></div>
+  <div class="scroll"><button class="sech" data-act="noop">${ic('chevron-down','s16')}Projects</button>${PROJECTS.map(p => prow(p)).join('')}<button class="sech shut" data-act="noop">${ic('chevron-down','s16')}Other projects · ${QUIET.length}</button><div style="height:84px"></div></div>
+  <button class="fab" data-act="noop" aria-label="New message">${ic('plus','s26')}</button>`;
+
+// C · Home: today's structure, tighter
+S.homeC = s => `<div class="hdr">${wsBtn()}<span class="grow"></span><button class="ib" data-act="sheet:filter" aria-label="Sort and filter">${ic('list-filter','s22')}</button><button class="ib" data-act="noop" aria-label="Mark all read">${ic('check-check','s22')}</button></div>
+  <div class="searchwrap"><button class="spill" data-act="go:search">${ic('search','s16')}<span>Search</span></button></div>
+  <div class="scroll"><div class="cgrp">
+    <button class="crow" data-act="tabf:activity:needs">${ic('clock','s18 t2')}<span class="grow">While you were away · 21h</span><span class="g" style="font-weight:600">34</span><span class="t2" style="font-size:13px">done</span><span class="y" style="font-weight:600;margin-left:6px">${needsLeft(s)}</span><span class="t2" style="font-size:13px">need you</span></button>
+    <button class="crow" data-act="tabf:activity:threads">${ic('messages-square','s18 t2')}<span class="grow">Threads</span><span class="badge b">@2</span></button>
+  </div>
+  <div class="ccap">Projects</div><div class="cgrp">${PROJECTS.map(p => prow(p,{time:true}).replace('class="prow','class="prow crow')).join('')}</div>
+  <div style="height:90px"></div></div>
+  <button class="fab" data-act="noop" aria-label="New message">${ic('plus','s26')}</button>`;
+
+// You: the same rows as today's You tab
+const youBody = () => `<div class="you-top"><span class="av" style="background:#1d5bd6">T</span><span class="nm">tony</span><span class="sw">${SW}</span></div>
+  <div class="cap2">Status</div><div class="grp"><button class="srow" data-act="noop"><span class="dot green" style="width:10px;height:10px"></span><span class="lb">🎯 Focusing</span><span class="vl">Change ›</span></button></div>
+  <div class="cap2">Username</div><div class="grp"><button class="srow" data-act="noop">${ic('at-sign','s18 t2')}<span class="lb">tony</span><span class="vl">Change ›</span></button></div>
+  <div style="height:12px"></div><div class="grp"><button class="srow" data-act="noop">${ic('cpu','s18 t2')}<span class="lb">Your models</span><span class="vl">3 ready now ›</span></button><button class="srow" data-act="noop">${ic('laptop','s18 t2')}<span class="lb">Your devices</span><span class="vl">2 online · 1 offline ›</span></button></div>
+  <div style="height:12px"></div><div class="grp"><button class="srow" data-act="noop">${ic('settings','s18 t2')}<span class="lb">Settings</span><span class="vl">›</span></button></div>`;
+S.youC = s => `<div class="hdr"><span class="htitle">You</span></div><div class="scroll">${youBody()}<div style="height:20px"></div></div>`;
+
+// Sheets
+const SHEETS = {
+  you: s => `<div class="grab"></div><div class="shead"><span class="st">You</span><button class="ib" data-act="close" aria-label="Close">${ic('x','s22')}</button></div>${youBody()}`,
+  switcher: s => `<div class="grab"></div><div class="grp">
+    <button class="srow" data-act="close">${ic('layers','s18 t2')}<span class="lb">All Swarms</span></button>
+    <button class="srow" data-act="close"><span class="wtile">a</span><span class="lb">${SW}</span>${ic('check','s18 tick')}</button>
+    <button class="srow" data-act="close"><span class="wtile">b</span><span class="lb">bvm-labs</span><span class="badge yb">2</span></button>
+  </div><div style="height:10px"></div><div class="grp"><button class="srow" data-act="close">${ic('plus','s18 t2')}<span class="lb">Join or create a Swarm</span></button></div>`,
+  filter: s => {
+    const opt = (l, on) => `<button class="srow" data-act="noop"><span class="lb">${l}</span>${on?ic('check','s18 tick'):''}</button>`;
+    return `<div class="grab"></div><div class="shead"><span class="st">Sort and filter</span><button class="ib" data-act="close" aria-label="Close">${ic('x','s22')}</button></div>
+    <div class="cap2">Sort by</div><div class="grp">${opt('Sections',true)}${opt('Newest to oldest',false)}</div>
+    <div class="cap2">Unreads and mentions</div><div class="grp">${opt('Show in order',true)}${opt('Move to the top',false)}</div>
+    <div class="cap2">Filter</div><div class="grp">${opt('All projects',true)}${opt('Unread',false)}${opt('Mentions',false)}</div>
+    ${s.dir!=='c'?`<div style="height:12px"></div><div class="grp"><button class="srow" data-act="close">${ic('check-check','s18 t2')}<span class="lb">Mark all read</span></button><button class="srow" data-act="close">${ic('refresh-cw','s18 t2')}<span class="lb">Refresh</span></button></div>`:''}`;
+  },
+  details: s => {
+    const p = proj(s.pid || 'openharness');
+    const row = (i,l,v,go='noop') => `<button class="srow" data-act="${go}">${ic(i,'s18 t2')}<span class="lb">${l}</span><span class="vl">${v} ›</span></button>`;
+    return `<div class="grab"></div><div class="shead"><span class="st">#${p.id}</span><button class="ib" data-act="close" aria-label="Close">${ic('x','s22')}</button></div><div class="ssub">${SW} · ${p.humans} humans · 3 agents</div>
+    <div class="quick"><button class="qb" data-act="noop">${ic('bell','s22')}All messages</button><button class="qb" data-act="noop">${ic('user-plus','s22')}Invite</button><button class="qb" data-act="term:openharness-pm">${ic('square-terminal','s22')}Open terminal</button></div>
+    <div style="height:8px"></div><div class="grp">${row('activity','Status','updated 16:52')}${row('list-checks','Work','2 waiting on you')}${row('users','Team',`${p.humans} humans · 3 agents`)}${row('trophy','Leaderboard','')}</div>`;
+  },
+  menu: s => `<div class="grab"></div><div class="grp">${['Open terminal','Status','Leaderboard','Work','Team','Notifications'].map(l => `<button class="srow" data-act="close"><span class="lb">${l}</span></button>`).join('')}</div><div class="ssub" style="padding-top:12px">Menu ⋮ as today (6 items).</div>`,
+};
+
+// ───────────── Directions: tabs, screens, notes, jumps ─────────────
+const DIRS = {
+  a: {
+    tabs:[{k:'home',label:'Home',icon:'house'},{k:'buddy',label:'Buddy',icon:'message-circle',dot:true},{k:'activity',label:'Activity',icon:'bell',badge:'needs'}],
+    root:{home:'homeA', buddy:'buddy', activity:'activityA'},
+    jumps:[['Home',{tab:'home'}],['Search (pull down)',{tab:'home',push:'search'}],['Activity',{tab:'activity'}],['Buddy',{tab:'buddy'}],['Project chat',{tab:'home',push:'chat',pid:'openharness'}],['Project details',{tab:'home',push:'chat',pid:'openharness',sheet:'details'}],['You (avatar)',{tab:'home',sheet:'you'}],['Agents → terminal',{tab:'home',push:'agents'}]],
+    notes:{
+      homeA:{t:'Home', b:['Header: the Swarm name ▾ to switch Swarm, a filter button, and your avatar on the right (replaces the You tab).','The Search box is always visible. Scrolling the list collapses it to make room (like Slack).','A row of tiles replaces the two cards: While you were away, Threads, Agents. 66pt tall instead of ~170pt.','Rows are 1 line, 44pt. Bold means new messages; a blue badge means someone mentioned you. The "7 humans" line and the time are gone.','The Agents tile is a way into Harness right from Swarm.'], try:'Try: pull the list down while at the top (opens Search), scroll to see the header collapse, tap each tile, tap the avatar.'},
+      search:{t:'Search', b:['One place to search both Swarm and Harness. Today the app has no Search in Swarm, and Find exists only in the terminal.','Open it by tapping the Search box or pulling Home down. Shows recent items by default.','Swipe sideways or tap a chip to change kind: Projects · Chats · People · Agents.','Typing searches every kind at once. Searching message content needs backend work, so it waits for phase 2.'], try:'Try: type "login" or "mac"; swipe sideways on the list.'},
+      activityA:{t:'Activity', b:['One feed for everything that needs you: Needs you, Mentions, Threads, Reactions, and Invitations (moved over from Home).','Adds an All chip. The "@" chip becomes "Mentions" so it is clearer and VoiceOver can read it.','The separate Threads page is gone; the Threads tile opens the Threads chip here directly.','Approve still asks you to confirm once, as today; the tab badge drops right after you approve.'], try:'Try: tap Approve twice and watch the row fade and the tab count drop.'},
+      buddy:{t:'Buddy', b:['The second tab is still the Buddy chat. It is the 1:1 chat you use most, the same role as the DMs tab in Slack.','Tap the Buddy name ▾ to switch Swarm (today you have to go through ⋮ › Swarm).','Decisions in the Buddy chat share state with Activity: approve in one place and the other updates too.']},
+      chat:{t:'Project chat', b:['Tap the project name or the "7 humans · 1 agent running ›" line to open Details, like tapping a channel name in Slack. Replaces the 6-item ⋮ menu.','The composer stays exactly as approved on Nov 1 (floating card, + · Tag · mic · Send).','Messages that mention you have a colored bar on the left, as today.']},
+      details:{t:'Project details', b:['Status, Work, Team, Leaderboard, Notifications and Open terminal are gathered into one sheet.','Invite becomes a quick button. Today it is buried in ⋮ › Leaderboard and only the owner sees it; permissions stay the same.','Open terminal for the PM lives here, so no separate item is needed.']},
+      you:{t:'You', b:['The content stays exactly as in the current You tab: Status, Username, Your models, Your devices, Settings.','Only the way in changes: the avatar in the Home and Activity headers. The green dot on the avatar is your status.']},
+      agents:{t:'Agents (Harness)', b:['Harnesses listed by machine; status uses the same dot colors as Home.','Tapping one opens the terminal as it does now; the terminal stays 100% the same.','Ways in: the Agents tile, Search › Agents, and the existing Open terminal buttons.']},
+      term:{t:'Terminal', b:['The terminal does not change at all. Back returns to Swarm.']},
+      filter:{t:'Sort and filter', b:['Keeps the existing sheet. Adds Mark all read (moved here from the header) and Refresh (replaces pull to refresh).']},
+      switcher:{t:'Switch Swarm', b:['Keeps the existing sheet. Home and Buddy open the same sheet.']},
+    },
+    why:[
+      ['3 labeled tabs: Home · Buddy · Activity','Not 4 tabs, because You is opened only a few times a week yet takes ¼ of the tab bar. Not icon-only tabs, because Slack tried them and dropped them as confusing and hard for VoiceOver.'],
+      ['You is the avatar at the right of the header','Not a drawer, because drawers are hard to find and the app already dropped one. Not tucked into Settings, because status and username belong to the person, while Settings belong to the device.'],
+      ['A row of tiles replaces the two cards','Not keeping the cards, because the two cards cost ~170pt. Not dropping them entirely, because While you were away was settled as always visible on Nov 2; the tile keeps it, just more compact.'],
+      ['1-line rows: bold means new, a badge means a mention','Not 2 lines, because line 2 is the same on every row. No last-message preview, because agents post constantly, so the preview keeps changing and is hard to read.'],
+      ['Search in the header, plus pull down','No Search tab, because it spends a whole tab on something done a few times a day. Not gesture-only, because nobody discovers pull down on their own.'],
+      ['Activity is a single feed','Not keeping the Threads page and Invitations on Home, because when the same thing lives in two places you have to jump back and forth.'],
+    ],
+  },
+  b: {
+    tabs:[{k:'inbox',label:'Inbox',icon:'inbox',badge:'needs'},{k:'projects',label:'Projects',icon:'hash'},{k:'buddy',label:'Buddy',icon:'message-circle',dot:true}],
+    root:{inbox:'inbox', projects:'projectsB', buddy:'buddy'},
+    jumps:[['Inbox',{tab:'inbox'}],['Projects',{tab:'projects'}],['Buddy',{tab:'buddy'}],['Project chat',{tab:'projects',push:'chat',pid:'lampos'}],['You (avatar)',{tab:'inbox',sheet:'you'}]],
+    notes:{
+      inbox:{t:'Inbox', b:['Home and Activity merge into one list ordered by urgency: Needs you (Approve right on the card), then Mentions and replies, then new messages in projects, and finally "You\'re caught up".','No tile bar and no Activity tab. While you were away shrinks to one line.','Works best when you open the app only to deal with tasks: open it and you can Approve right away.'], try:'Try: Approve twice; the card fades and the Inbox badge drops.'},
+      projectsB:{t:'Projects', b:['The project list moves to its own tab, with 1-line rows like A.','Two lists to learn: Inbox (tasks) and Projects (places).']},
+      buddy:{t:'Buddy', b:['Same as A.']},
+      chat:{t:'Project chat', b:['Same as A: tap the title to open Details.']},
+      details:{t:'Project details', b:['Same as A.']},
+      you:{t:'You', b:['Same as A: avatar in the header.']},
+      switcher:{t:'Switch Swarm', b:['The "a" square in the Inbox header.']},
+      filter:{t:'Sort and filter', b:['Same as A.']},
+      term:{t:'Terminal', b:['Unchanged.']},
+    },
+    why:[
+      ['Gains','The fewest taps for approving and replying. No need to understand how Activity differs from Home.'],
+      ['Costs','Far from Slack, so it can lean less on existing habits. The list reorders itself when new tasks arrive, right under your finger. Inbox grows long with 10× the tasks. Needs a new screen and merge logic, so it is the most work.'],
+      ['Why not this one','The Slack article keeps Home (places) separate from Activity (tasks) on purpose. B merges the two, so it is less predictable.'],
+    ],
+  },
+  c: {
+    tabs:[{k:'home',label:'Home',icon:'house'},{k:'buddy',label:'Buddy',icon:'message-circle',dot:true},{k:'activity',label:'Activity',icon:'bell',badge:'needs'},{k:'you',label:'You',icon:'circle-user'}],
+    root:{home:'homeC', buddy:'buddy', activity:'activityC', you:'youC'},
+    jumps:[['Home',{tab:'home'}],['Search',{tab:'home',push:'search'}],['Activity',{tab:'activity'}],['Buddy',{tab:'buddy'}],['You',{tab:'you'}],['Project chat',{tab:'home',push:'chat',pid:'openharness'}]],
+    notes:{
+      homeC:{t:'Home', b:['Keeps the 4 tabs, the header and the buttons as today.','The two cards merge into two lines in one card. Adds a Search box.','1-line rows that keep the time on the right; bold means new, a badge means a mention.'], try:'How it differs from A: the You tab stays, Threads stays on Home, and there is no way into Harness.'},
+      activityC:{t:'Activity', b:['Only renames "@" to "Mentions". Invitations stay on Home, and there is no All chip.']},
+      youC:{t:'You', b:['The You tab, as before.']},
+      buddy:{t:'Buddy', b:['As before: switching Swarm still goes through ⋮ › Swarm.']},
+      search:{t:'Search', b:['The same Search screen as A.']},
+      chat:{t:'Project chat', b:['Keeps the 6-item ⋮ menu, as before.']},
+      menu:{t:'Menu ⋮', b:['As before.']},
+      filter:{t:'Sort and filter', b:['As before.']},
+      switcher:{t:'Switch Swarm', b:['As before.']},
+      term:{t:'Terminal', b:['Unchanged.']},
+    },
+    why:[
+      ['Gains','Low risk, few broken tests, ships in 1–2 PRs. Users do not have to relearn anything.'],
+      ['Costs','Still 4 tabs. Harness is still reachable only through the menu. Threads are still in two places. Things that need you are still scattered. It fixes density but not the organization.'],
+    ],
+  },
+};
+
+// ───────────── Phone engine ─────────────
+const STATE = {};
+for (const dir of Object.keys(DIRS)) {
+  const first = DIRS[dir].tabs[0].k;
+  STATE[dir] = {dir, tab:first, stack:[DIRS[dir].root[first]], sheet:null, shownSheet:null, done:new Set(), confirm:null, f:null, cat:'recent', q:'', sec:true, other:false, pid:null, term:null};
+}
+
+function render(dir){
+  const s = STATE[dir], d = DIRS[dir], el = document.getElementById('phone-'+dir);
+  const top = s.stack[s.stack.length-1];
+  const isRoot = s.stack.length === 1;
+  const sheetOpen = s.sheet ? `<div class="veil ${s.shownSheet===s.sheet?'open static':''}" data-act="close"></div><div class="sheet ${s.shownSheet===s.sheet?'open static':''}" role="dialog" aria-label="${s.sheet}">${SHEETS[s.sheet](s)}</div>` : '';
+  const keep = el.dataset.top === top + '|' + s.stack.length ? (el.querySelector('.scr .scroll')?.scrollTop || 0) : 0;
+  el.classList.remove('collapsed');
+  el.innerHTML = statusBar() + `<div class="scr">${S[top](s)}</div>` + (isRoot ? tabBar(s, d.tabs) : '') + sheetOpen;
+  if (s.sheet && s.shownSheet !== s.sheet) {
+    requestAnimationFrame(() => requestAnimationFrame(() => { el.querySelector('.veil')?.classList.add('open'); el.querySelector('.sheet')?.classList.add('open'); }));
+    s.shownSheet = s.sheet;
+  }
+  if (!s.sheet) s.shownSheet = null;
+  el.dataset.top = top + '|' + s.stack.length;
+  const sc = el.querySelector('.scr .scroll');
+  if (sc && keep) { sc.scrollTop = keep; if (top === 'homeA') el.classList.toggle('collapsed', keep > 12); }
+  icons(el);
+  bindScreen(dir, el, top);
+  renderNotes(dir);
+}
+
+function icons(root){
+  if (window.lucide && lucide.createIcons) { try { lucide.createIcons({attrs:{'stroke-width':1.6}, root}); } catch(e) { try { lucide.createIcons({attrs:{'stroke-width':1.6}}); } catch(_){} } }
+}
+
+function bindScreen(dir, el, top){
+  const s = STATE[dir];
+  const sc = el.querySelector('.scroll');
+  if (top === 'homeA' && sc) {
+    sc.addEventListener('scroll', () => el.classList.toggle('collapsed', sc.scrollTop > 12), {passive:true});
+    bindPull(sc, () => { s.stack.push('search'); s.q=''; s.cat='recent'; render(dir); setTimeout(() => document.getElementById(dir+'-q')?.focus({preventScroll:true}), 60); });
+  }
+  if (top === 'search') {
+    const input = document.getElementById(dir+'-q');
+    input?.addEventListener('input', e => { s.q = e.target.value; const r = document.getElementById(dir+'-results'); r.innerHTML = searchResults(s); icons(r); el.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(!s.q && c.dataset.act === 'cat:'+s.cat))); });
+    bindSwipe(document.getElementById(dir+'-results'), step => { const i = CATS.findIndex(c => c[0]===s.cat); const n = Math.max(0, Math.min(CATS.length-1, i+step)); if (n!==i){ s.cat = CATS[n][0]; s.q=''; render(dir);} });
+  }
+}
+
+// Pull down at the top of Home opens Search (mouse drag and touch)
+function bindPull(sc, open){
+  const inner = sc.querySelector('.pullin'), hint = sc.querySelector('.pullhint');
+  let y0 = null, dy = 0;
+  const start = y => { dy = 0; y0 = sc.scrollTop <= 0 ? y : null; };
+  const move = (y, ev) => { if (y0 == null) return; dy = y - y0; if (dy > 0 && sc.scrollTop <= 0) { ev?.cancelable && ev.preventDefault(); inner.style.transition='none'; inner.style.transform = `translateY(${Math.min(dy*.5, 70)}px)`; hint.classList.toggle('ready', dy > 90); } };
+  const end = () => { if (y0 == null) return; const go = dy > 90; y0 = null; inner.style.transition=''; inner.style.transform = ''; hint.classList.remove('ready'); if (go) { sc.dataset.pulled = '1'; open(); } };
+  sc.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') start(e.clientY); });
+  sc.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') move(e.clientY, e); });
+  sc.addEventListener('pointerup', e => { if (e.pointerType === 'mouse') end(); });
+  sc.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') end(); });
+  sc.addEventListener('touchstart', e => start(e.touches[0].clientY), {passive:true});
+  sc.addEventListener('touchmove', e => move(e.touches[0].clientY, e), {passive:false});
+  sc.addEventListener('touchend', end);
+  sc.addEventListener('click', e => { if (Math.abs(dy) > 8) { e.stopPropagation(); e.preventDefault(); dy = 0; } }, true);
+}
+
+// Horizontal swipe on Search results changes the kind
+function bindSwipe(node, step){
+  if (!node) return;
+  let x0 = null, y0 = 0;
+  node.addEventListener('pointerdown', e => { x0 = e.clientX; y0 = e.clientY; });
+  node.addEventListener('pointerup', e => { if (x0 == null) return; const dx = e.clientX - x0, dy = e.clientY - y0; x0 = null; if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)*1.5) { node.dataset.swiped = '1'; step(dx < 0 ? 1 : -1); } });
+  node.addEventListener('click', e => { if (node.dataset.swiped) { delete node.dataset.swiped; e.stopPropagation(); e.preventDefault(); } }, true);
+}
+
+function act(dir, a){
+  const s = STATE[dir], d = DIRS[dir];
+  const [k, v, w] = a.split(':');
+  const hadConfirm = s.confirm != null;
+  if (k !== 'approve') s.confirm = null;
+  switch (k) {
+    case 'noop': if (hadConfirm) render(dir); return;
+    case 'tab': s.tab = v; s.stack = [d.root[v]]; s.sheet = null; if (v==='activity') s.f = null; break;
+    case 'tabf': s.tab = v; s.stack = [d.root[v]]; s.sheet = null; s.f = (dir==='c' && w==='all') ? 'needs' : w; break;
+    case 'go': s.stack.push(v); s.sheet = null; if (v==='search'){ s.q=''; s.cat='recent'; } break;
+    case 'back': if (s.stack.length > 1) s.stack.pop(); break;
+    case 'sheet': s.sheet = v; break;
+    case 'close': s.sheet = null; break;
+    case 'flt': s.f = v; break;
+    case 'cat': s.cat = v; s.q = ''; break;
+    case 'toggle': s[v] = !s[v]; break;
+    case 'chat': s.pid = v; s.sheet = null; s.stack.push('chat'); break;
+    case 'term': s.term = v; s.sheet = null; s.stack.push('term'); break;
+    case 'join': s.done.add(v); break;
+    case 'approve': if (s.confirm === v) { s.done.add(v); s.confirm = null; } else s.confirm = v; break;
+  }
+  if (s.stack.length > 6) s.stack.splice(1, s.stack.length - 6);
+  render(dir);
+  if (k === 'go' && v === 'search') setTimeout(() => document.getElementById(dir+'-q')?.focus({preventScroll:true}), 60);
+}
+
+for (const dir of Object.keys(DIRS)) {
+  document.getElementById('phone-'+dir).addEventListener('click', e => {
+    const t = e.target.closest('[data-act]');
+    if (!t || t.disabled) return;
+    act(dir, t.dataset.act);
+  });
+}
+
+// Notes beside each phone follow the screen on it
+function renderNotes(dir){
+  const s = STATE[dir], d = DIRS[dir];
+  const top = s.stack[s.stack.length-1];
+  const key = s.sheet || top;
+  const n = d.notes[key] || d.notes[top] || {t:'', b:[]};
+  const cur = JSON.stringify(currentJump(s));
+  document.getElementById('notes-'+dir).innerHTML = `
+    <div><h3>Jump to screen</h3><div class="jump">${d.jumps.map(([l, j], i) => `<button data-jump="${i}" aria-current="${JSON.stringify(j)===cur}">${l}</button>`).join('')}</div></div>
+    <div><h3>On this screen · ${n.t}</h3><ul>${n.b.map(x => `<li>${x}</li>`).join('')}</ul>${n.try?`<p class="try">${n.try}</p>`:''}</div>
+    <div><h3>${dir==='a'?'Why this and not the alternatives':'Gains and costs'}</h3><dl class="why">${d.why.map(([t, x]) => `<div><dt>${t}</dt><dd>${x}</dd></div>`).join('')}</dl></div>`;
+}
+function currentJump(s){
+  const top = s.stack[s.stack.length-1];
+  const j = {tab:s.tab};
+  if (s.stack.length > 1) { j.push = top; if (top === 'chat') j.pid = s.pid; }
+  if (s.sheet) j.sheet = s.sheet;
+  return j;
+}
+for (const dir of Object.keys(DIRS)) {
+  document.getElementById('notes-'+dir).addEventListener('click', e => {
+    const b = e.target.closest('[data-jump]'); if (!b) return;
+    const [, j] = DIRS[dir].jumps[+b.dataset.jump];
+    const s = STATE[dir];
+    s.tab = j.tab; s.stack = [DIRS[dir].root[j.tab]]; s.sheet = j.sheet || null; s.shownSheet = null; s.confirm = null; s.f = null;
+    if (j.push) { s.stack.push(j.push); if (j.pid) s.pid = j.pid; if (j.push === 'search') { s.q=''; s.cat='recent'; } }
+    render(dir);
+  });
+}
+
+// ───────────── Shell tabs ─────────────
+const THESIS = {
+  'tab-now':'<b>Current.</b> The Swarm Home screen running on the simulator, captured from <code>feat/mobile-ios-android</code>, with the 5 main problems and a summary of the Slack article.',
+  'tab-a':'<b>A · Slack trio.</b> 3 tabs, Home · Buddy · Activity; You moves to the avatar. The bet: the way Slack organizes things (a row of tiles, 1-line rows, pull-down Search, one Activity feed) maps almost 1-to-1 onto Swarm.',
+  'tab-b':'<b>B · Inbox.</b> Merges Home and Activity into one inbox ordered by urgency; projects move to their own tab. The bet: on a phone, people open the app only to handle what needs them.',
+  'tab-c':'<b>C · Light tune.</b> Keeps the 4 tabs and every screen, and only fixes density and hierarchy. The bet: the current organization is right, it is just not presented tightly enough.',
+  'tab-cmp':'<b>Compare.</b> The three directions side by side, with a recommendation.',
+};
+const tabs = [...document.querySelectorAll('#dirtabs [role=tab]')];
+function selectTab(t, focus){
+  tabs.forEach(x => { const on = x === t; x.setAttribute('aria-selected', on); x.tabIndex = on ? 0 : -1; document.getElementById(x.getAttribute('aria-controls')).hidden = !on; });
+  document.getElementById('thesis').innerHTML = THESIS[t.id];
+  if (focus) t.focus();
+}
+tabs.forEach((t, i) => {
+  t.addEventListener('click', () => selectTab(t));
+  t.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); selectTab(tabs[(i + (e.key==='ArrowRight'?1:-1) + tabs.length) % tabs.length], true); }
+  });
+});
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input,textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= tabs.length) selectTab(tabs[n-1], true);
+});
+
+selectTab(document.getElementById('tab-a'));
+for (const dir of Object.keys(DIRS)) render(dir);
+})();
+</script>
+
+</body>
+</html>

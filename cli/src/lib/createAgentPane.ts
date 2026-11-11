@@ -23,12 +23,14 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
+import type { LaunchModel } from './launchModel.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
 export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> {
   tmuxBackend: Pick<TerminalBackend<Ref>, 'create' | 'kill'>
   registry: { openPendingAgent: (input: {
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -37,7 +39,9 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     grid?: { baseUrl: string; model: string | null } | null
     gridLaunchRecord?: GridLaunchRecord | null
     scmLaunchRecord?: ScmLaunchRecord | null
+    launchModel?: LaunchModel | null
     codexHome?: string | null
+    claudeHome?: string | null
     dsh?: string | null
     swarmSkill?: SwarmSkill
     dshRuntime?: string | null
@@ -51,8 +55,11 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     startedBy?: StartedBy | null
     parentAgentId?: string | null
     guest?: string | null
+    browser?: boolean
   }) => RegisteredSession | null }
   nativeToken?: string
+  /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
+  agentId?: string
   engine: AgentEngine
   cwd?: string | null
   bypassPermission?: boolean
@@ -78,8 +85,13 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   /** What the workspace's SCM needs re-applied on every relaunch (`scmLaunch` on the row); null or
    *  absent for a folder no SCM prepared. The record, not the launch — `env` already carries it. */
   scmLaunchRecord?: ScmLaunchRecord | null
+  /** The model and effort the engine was launched with as flags, kept on the row so every relaunch passes them again
+   *  (`launchModel` on the row); absent for a launch with none. */
+  launchModel?: LaunchModel | null
   /** The CODEX_HOME folder this agent was launched against, if the caller chose one; codex only. */
   codexHome?: string | null
+  /** The CLAUDE_CONFIG_DIR folder (a Claude profile) this agent was launched against, if the caller chose one; claude only. */
+  claudeHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
   swarmSkill?: SwarmSkill
@@ -97,6 +109,8 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   externalResume?: ExternalResumeIntent
   /** The guest (an email) whose harness this is: it runs as their own OS user (core/agents/guestCreate.ts). */
   guest?: string | null
+  /** Browser ticked, recorded on the row (registry.ts `browser`). */
+  browser?: boolean
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
   onDispatch?: () => void
@@ -124,7 +138,8 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       command: deps.argv,
       ...(deps.current ? { current: deps.current } : {}),
       ...(deps.onDispatch ? { onDispatch: deps.onDispatch } : {}),
-      ...(deps.env ? { env: deps.env } : {}),
+      // The caller's own variables win over the pane's PATH rule (lib/windows/engineStart.ts `windowsPaneLaunch`).
+      ...(deps.paneLaunch?.env || deps.env ? { env: { ...(deps.paneLaunch?.env ?? {}), ...(deps.env ?? {}) } } : {}),
     })
     if (spawned.state !== 'succeeded') {
       console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${spawned.reason ?? ''}`)
@@ -132,6 +147,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
     }
     const pending = deps.registry.openPendingAgent({
+      ...(deps.agentId ? { agentId: deps.agentId } : {}),
       ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
       engine: deps.engine,
       runtimes: [spawned.runtime],
@@ -140,7 +156,9 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       grid: deps.grid,
       gridLaunchRecord: deps.gridLaunchRecord,
       scmLaunchRecord: deps.scmLaunchRecord,
+      ...(deps.launchModel ? { launchModel: deps.launchModel } : {}),
       codexHome: deps.codexHome,
+      claudeHome: deps.claudeHome,
       dsh: deps.dsh,
       dshRuntime: deps.dshRuntime,
       ...(deps.swarmSkill ? { swarmSkill: deps.swarmSkill } : {}),
@@ -154,6 +172,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
       ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
       ...(deps.guest ? { guest: deps.guest } : {}),
+      ...(deps.browser ? { browser: true } : {}),
     })
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `

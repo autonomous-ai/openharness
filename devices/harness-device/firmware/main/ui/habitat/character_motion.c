@@ -1,5 +1,4 @@
 #include "character_types.h"
-#include "perf_bench.h"
 
 static bool due(uint32_t now, uint32_t deadline) { return (int32_t)(now - deadline) >= 0; }
 static void deadline(ht_character_reaction_t *m, uint32_t now, uint32_t at)
@@ -32,9 +31,8 @@ bool ht_character_reaction_tick(ht_character_reaction_t *m, uint32_t now, ht_cha
             }
         }
         if (down) {
-            // The eyes follow the finger relative to the middle of the FACE, not to 233 — which is
-            // the dial's centre and a third of the way across the Pro's, so every touch there read
-            // as a look to the right.
+            // The eyes follow the finger relative to the middle of the FACE (HT_WIDTH / 2), not to a
+            // hard-coded 233.
             int gaze = (x - HT_WIDTH / 2) / 40;
             p.look = gaze < -2 ? -2 : gaze > 2 ? 2 : gaze;
             p.pressed = true;
@@ -80,9 +78,6 @@ bool ht_character_motion_step(ht_character_motion_t *m, const ht_character_anima
                               bool down, int x, unsigned level, uint32_t activity, bool animate)
 {
     if (!a || !a->frames || !a->duration || !a->ends) return false;
-#ifdef DEVICE_OCTOPUS_BENCH
-    animate = animate && octopus_perf_animate();
-#endif
     bool changed = ht_character_reaction_tick(&m->reaction, now, mood, quiet, visible, down, x, level, activity);
     bool running = animate && visible && !quiet && !down &&
         mood != HT_CHARACTER_ASLEEP && mood != HT_CHARACTER_OFFLINE;

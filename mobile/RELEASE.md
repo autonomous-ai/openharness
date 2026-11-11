@@ -144,9 +144,18 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.10 (73)` | 2026-10-23 | TestFlight. The phone's first session: task chips, one suggestion with a Send button, the keyboard over its task and a mic that sends the prompt, and Desktop's engine choice; a Harness OS computer signed out, its password changed, SSH turned on; Version lists releases and takes a newer OS release only; a pasted image waits for its transcode before uploading. 1.0.9 had been submitted, so it went up as 1.0.10. Built from `feat/mobile-ios-android` at `3c024672` |
 | `1.0.11 (74)` | 2026-10-26 | TestFlight. Claude Code scroll keeps up with the finger. 1.0.10 is approved, so it went up as 1.0.11 to carry refreshed App Store screenshots. Built from `feat/mobile-ios-android` at `13b9b38b` |
 | `1.0.12 (75)` | 2026-10-30 | TestFlight. A Harness OS computer signs in to GitHub, checks for updates, sets up Intern 3 and offers Computer use; Settings ▸ Experimental with Swarm, off by default; WebSocket reconnects back off; terminal uploads no longer freeze. 1.0.11 had been submitted, so it went up as 1.0.12. Built from `feat/mobile-ios-android` at `3a258bb8` |
+| `1.0.12 (76)` | 2026-10-30 | TestFlight. Set up Intern 3 from Computers goes back to that list when done; in Swarm, a calmer Home, a simpler chat, Not delivered yet and Jump to first unread. Built from `feat/mobile-ios-android` at `3ab12ed5` |
+| `1.0.12 (77)` | 2026-11-02 | TestFlight. Start opens the new computer's harness, with a keep-on warning while updating and a bar while an agent installs; in Swarm, the floating chat composer, invitations, task steps and chat files up to 256 MB. Built from `feat/mobile-ios-android` at `78c63a84` |
+| `1.0.12 (78)` | 2026-11-02 | TestFlight. In Swarm only, nothing else in `mobile/lib` changed since 77: the Buddy tab opens your one Swarm Buddy chat, Home's Sort by and Filter menu and always-on While you were away, a long press on a machine opens its menu. Built from `feat/mobile-ios-android` at `2c6939e6` |
+| `1.0.12 (79)` | 2026-11-03 | TestFlight. In Swarm only, nothing else in `mobile/lib` changed since 78: invitations on Home with Join and Not now, Older chats from Home, a project's number counts only its own chat, the Buddy picker says when a machine is paused. Built from `feat/mobile-ios-android` at `e8620dbe` |
+| `1.0.12 (80)` | 2026-11-03 | TestFlight. The iPhone joins the Intern 3 setup hotspot itself, and Set up Intern 3 reads a computer whose key is not logged yet as connecting, with a bar, on a slow Wi-Fi; in Swarm, the Slack-style Home and chat, Markdown in messages, route rows, terminal notes and proposals drawn as on Desktop, drafts and Not sent kept per account, search, and writes sent with the phone's own sign-in. Signed without its entitlements (see 83), so this build cannot join the setup hotspot itself. Built from `feat/mobile-ios-android` at `7814f059` |
+| `1.0.12 (81)` | 2026-11-04 | TestFlight. Set up Intern 3 tries the hotspot again, checks the Wi-Fi, falls back to Settings, keeps Wi-Fi passwords and says when a setup failed; a stopped agent can be resumed; in Swarm, voice messages, editing and deleting your own message, Mark unread and Remind me, link previews, adding and removing agents, project sharing and settings, and the System, Dark or Light theme. Signed without its entitlements, like 80. Built from `feat/mobile-ios-android` at `4aa17808` |
+| `1.0.12 (82)` | 2026-11-05 | TestFlight. Push notifications (APNs) and fewer repeated question notices. Signed without its entitlements, so it has no push and no setup hotspot: use 83. Built from `feat/mobile-ios-android` at `0c47f4f8` |
+| `1.0.12 (83)` | 2026-11-05 | TestFlight. The same code as 82, the first build signed with its entitlements: `aps-environment` (production) and the setup hotspot. 80 to 82 went up without them because the archive is unsigned and the export signs only what the app carries; `release-ios.sh` now signs them onto the archived app and checks the exported app before it uploads. Built from `feat/mobile-ios-android` at `0c47f4f8` |
+| `1.0.12 (84)` | 2026-11-06 | TestFlight, uploaded from another Mac with `--build-number=84` (#3303). Whether it carries its entitlements was not checked. Built from `main` at `b8b8c8ea` |
 
-`pubspec.yaml` is now at `1.0.12+76`, the next build number. Build 75 (1.0.12) is the last build, for both
-TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is at `1.0.12+85` with #3303, the next build number. Build 84 (1.0.12) is the last TestFlight build and
+79 the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -230,14 +239,18 @@ terminal,tmux,ssh,claude,codex,cursor,coding,agent,developer,remote,shell,devops
 
 ## App Privacy
 
-Answer these from what the code actually does, not from habit. The app has **no third-party SDK**:
-analytics go to Autonomous's own `event_tracking` endpoint (`lib/analytics/`), and crash records are
-written to a local `errors.log` and never leave the device (`lib/core/crash_log.dart`).
+Answer these from what the code actually does, not from habit. The app has **one third-party SDK,
+on Android only**: Firebase Cloud Messaging (`firebase-messaging`, no Analytics), which is how a push
+reaches an Android app that is not running (`android/app/src/main/kotlin/ai/autonomous/harness/android/PushService.kt`).
+iOS pushes go through Apple's own APNs, with no SDK. Analytics go to Autonomous's own
+`event_tracking` endpoint (`lib/analytics/`), and crash records are written to a local `errors.log`
+and never leave the device (`lib/core/crash_log.dart`).
 
 | Data type | Collected | Linked to the user | Purpose |
 | --- | --- | --- | --- |
 | Contact Info ▸ Email Address | Yes | Yes | App Functionality, Analytics |
 | Identifiers ▸ User ID | Yes | Yes | App Functionality, Analytics |
+| Identifiers ▸ Device ID | Yes | Yes | App Functionality: the push token, so the backend can notify this phone (`docs/design/2026-11-05-phone-push.md`) |
 | Usage Data ▸ Product Interaction | Yes | Yes | Analytics |
 | Diagnostics | No | — | crash log stays on device |
 
@@ -339,8 +352,9 @@ team's password manager.**
    - *Ads*: no. *Content rating*: fill the questionnaire (a utility, no user-generated content shown
      to others). *Target audience*: 18+.
    - *Data safety*: the [App Privacy](#app-privacy) table above, restated — email address and user ID
-     (app functionality, analytics), app interactions (analytics); all encrypted in transit; no data
-     shared with third parties; crash logs stay on the device.
+     (app functionality, analytics), app interactions (analytics), device or other IDs (the push
+     token: app functionality); all encrypted in transit; no data shared with third parties (FCM
+     carries the push as a service provider); crash logs stay on the device.
      ⚠️ **Plus Audio ▸ Voice or sound recordings (app functionality)**, which that table leaves out:
      voice input uploads the recording to the backend's `/api/voice/stt` to be transcribed. Declare it
      *processed ephemerally* only if the backend keeps nothing — TODO(BE): confirm. The same gap is on
@@ -377,3 +391,5 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `73` (1.0.10) | 2026-10-23 | Built, same code as iOS 1.0.10 (73); to be uploaded by hand |
 | `74` (1.0.11) | 2026-10-26 | Built at a pulled-back pubspec number, same `mobile/` code as iOS 1.0.11 (74); whether it was uploaded is not recorded, so do not reuse 74 |
 | `75` (1.0.12) | 2026-10-30 | Built, same code as iOS 1.0.12 (75); to be uploaded by hand |
+| `78` (1.0.12) | 2026-11-02 | Built, same code as iOS 1.0.12 (78); to be uploaded by hand |
+| `79` (1.0.12) | 2026-11-03 | Built, same code as iOS 1.0.12 (79), from `e8620dbe`; to be uploaded by hand |

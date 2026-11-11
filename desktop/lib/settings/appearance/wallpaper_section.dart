@@ -140,9 +140,7 @@ class _BackgroundCard extends StatelessWidget {
             padding: const WidgetStatePropertyAll(EdgeInsets.zero),
             side: WidgetStateProperty.resolveWith(
               (states) => BorderSide(
-                color: states.contains(WidgetState.focused)
-                    ? grid.AppDesktop.focus
-                    : Colors.transparent,
+                color: Colors.transparent,
                 width: grid.AppDesktop.focusWidth,
               ),
             ),

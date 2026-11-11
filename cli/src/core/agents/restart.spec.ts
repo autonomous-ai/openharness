@@ -58,6 +58,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
       byAgent: vi.fn(() => refreshed ?? undefined),
       updateProcessIdentity: vi.fn(),
       setActive: vi.fn(),
+      setLaunchArgs: vi.fn(() => true),
     } as unknown as RestartDeps['registry'],
     purgeBusy: vi.fn(() => false),
     stopJobs: new Map(),
@@ -170,20 +171,20 @@ describe('restarting an agent', () => {
     expect(restartAgent).toHaveBeenCalledOnce()
   })
 
-  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Buddy
+  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Swarm session
   // without its role.
-  it('restarts an old Buddy with its role after the local roster lapsed', async () => {
+  it('restarts an old Swarm session with its role after the local roster lapsed', async () => {
     const data = mkdtempSync(join(tmpdir(), 'restart-roster-'))
     try {
       retainContributions(data, 'machine', [{ tabId: 'tab', agent: { harnessId: 'a1', machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
       const session = agent({ startedBy: 'agent' })
-      const role = vi.fn(async () => ({ role: 'buddy' as const }))
+      const role = vi.fn(async () => ({ role: 'agent' as const }))
       const adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(data).has(id),
         authority: createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false }) })
       const run = setup(session, { adoptSwarmSkill })
       expect(await run.restart('a1')).toMatchObject({ ok: true })
       expect(role).toHaveBeenCalledOnce()
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'buddy', key: 'a1' } }),
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'a1' } }),
         expect.anything(), expect.any(Function), undefined)
     } finally { rmSync(data, { recursive: true, force: true }) }
   })
@@ -251,6 +252,76 @@ describe('restarting an agent', () => {
     expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+  })
+
+  describe('with new launch words', () => {
+    const WORDS = ['--chrome']
+
+    it('builds the relaunch with them and saves them on the record only after the engine is back', async () => {
+      const order: string[] = []
+      const run = setup(agent(), {
+        relaunchOverrides: vi.fn(async () => { order.push('build'); return { ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } } }),
+      })
+      vi.mocked(run.deps.registry.setLaunchArgs).mockImplementation(() => { order.push('save'); return true })
+      vi.mocked(restartAgent).mockImplementationOnce(async () => { order.push('restart'); return { ok: true, resumed: true, processIdentity: newProcess } })
+      expect(await run.restart('a1', WORDS)).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: 'a1', launchArgs: WORDS }), expect.any(Function), undefined)
+      expect(order).toEqual(['build', 'restart', 'save'])
+      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', WORDS)
+      // Asked as its own variant of a restart, so another ask with other words is not answered by this launch.
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', JSON.stringify(WORDS))
+    })
+
+    it('clears them with an empty list: built without, and removed from the record once the engine is back', async () => {
+      const run = setup(agent({ launchArgs: ['--old'] } as Partial<RegisteredSession>))
+      expect(await run.restart('a1', [])).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function), undefined)
+      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', [])
+    })
+
+    it('without them, relaunches from the row itself and never writes the record', async () => {
+      const row = agent({ launchArgs: ['--saved'] } as Partial<RegisteredSession>)
+      const run = setup(row)
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(row, row, expect.any(Function), undefined)
+      expect(run.deps.registry.setLaunchArgs).not.toHaveBeenCalled()
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
+    })
+
+    // Every way a restart can end without the engine back saves nothing: the record keeps the flags that last worked.
+    it.each([
+      ['busy', () => setup(agent(), { purgeBusy: () => true })],
+      ['no live process', () => setup(agent({ processIdentity: undefined } as Partial<RegisteredSession>))],
+      ['the agent changed under it', () => setup(agent(), { sameRestartTarget: vi.fn(() => false) })],
+      ['launch preparation refused', () => setup(agent(), { relaunchOverrides: vi.fn(async () => ({ ok: false as const, error: 'GRID_UNAVAILABLE', detail: 'x' })) })],
+      ['the engine did not start', () => {
+        vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, error: 'RESTART_FAILED', detail: 'did not come up' } as never)
+        return setup(agent())
+      }],
+    ])('saves nothing when the restart ends %s', async (_why, make) => {
+      const run = make()
+      expect(await run.restart('a1', WORDS)).toMatchObject({ ok: false })
+      expect(run.deps.registry.setLaunchArgs).not.toHaveBeenCalled()
+    })
+
+    // The coordinator joins asks of the same words and refuses the others, so the record is what the one launch used.
+    it('two overlapping restarts with different words: one launches and is saved, the other is refused and saves nothing', async () => {
+      let release!: () => void
+      vi.mocked(restartAgent).mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => { release = resolve })
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      })
+      const run = setup(agent(), { restartJobs: new AgentRestartCoordinator() })
+      const first = run.restart('a1', ['--first'])
+      await vi.waitFor(() => expect(release).toBeDefined())
+      expect(await run.restart('a1', ['--second'])).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      const joined = run.restart('a1', ['--first'])
+      release()
+      expect(await first).toMatchObject({ ok: true })
+      expect(await joined).toMatchObject({ ok: true })
+      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', ['--first'])
+      expect(restartAgent).toHaveBeenCalledOnce()
+    })
   })
 
   describe('refusals before anything is touched', () => {
@@ -376,10 +447,10 @@ describe('restarting an agent', () => {
     it('keyed by the agent a session id resolves to, or by the id as given when nothing resolves', async () => {
       const run = setup(agent())
       await run.restart('s1')
-      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function))
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
       const missing = setup(null)
       await missing.restart('ghost')
-      expect(missing.deps.restartJobs.run).toHaveBeenCalledWith('ghost', expect.any(Function))
+      expect(missing.deps.restartJobs.run).toHaveBeenCalledWith('ghost', expect.any(Function), 'restart', undefined)
     })
 
     it('so a second restart of the same agent joins the first through the real coordinator', async () => {
@@ -510,6 +581,22 @@ describe('restarting an agent', () => {
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · resumed')
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
+    })
+
+    // Ken, 11-09: a PM brought back with Restart (⌘⇧E) came up in its owner's settings, asking before each tool, and stood
+    // still until a person approved. Since #4215 a Swarm agent restarts in the mode its person chose, or none.
+    it('restarts a Swarm\'s PM in full mode; any other Swarm agent keeps its own mode', async () => {
+      const pm = agent({ swarmSkill: { role: 'coordinator', key: 'p1' } } as Partial<RegisteredSession>)
+      const run = setup(pm)
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      const full = { ...pm, permissionMode: 'full' }
+      expect(bypassPermissionFor).toHaveBeenCalledWith(full, expect.any(Function))
+      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(full, true, 'restart', undefined)
+
+      vi.mocked(bypassPermissionFor).mockClear()
+      const worker = agent({ swarmSkill: { role: 'agent', key: 'p1' } } as Partial<RegisteredSession>)
+      expect(await setup(worker).restart('a1')).toMatchObject({ ok: true })
+      expect(bypassPermissionFor).toHaveBeenCalledWith(worker, expect.any(Function))
     })
 
     it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both', async () => {

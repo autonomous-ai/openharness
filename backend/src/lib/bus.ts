@@ -866,7 +866,9 @@ export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: Devi
 
 // Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
 // on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
-export interface SwarmDeliveriesMsg { tabId: string; agentId: string }
+/** `terminal`: a terminal request waits, not a delivery (lib/swarmDeliveryPushes.ts announceSwarmTerminal). `pushes` is that
+ *  socket's own 4-minute repeat that it pushes, sent through Redis so a silent Redis stops it. */
+export type SwarmDeliveriesMsg = { tabId: string; agentId: string; terminal?: true } | { pushes: true }
 
 const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
 
@@ -1167,6 +1169,8 @@ export async function getAgentClientTotals(machineId: string): Promise<{ ui: num
 export async function getAgentClientState(machineId: string): Promise<{
   totals: { ui: number; commander: number; commanderActive: number }
   commanderJoinGeneration: number | undefined
+  /** The counts could not be read: the zeros stand for "unknown", never for "nobody". */
+  failed?: true
 }> {
   try {
     const res = await pub.pipeline().hgetall(clientsKey(machineId)).get(commanderJoinGenerationKey(machineId)).exec()
@@ -1181,7 +1185,7 @@ export async function getAgentClientState(machineId: string): Promise<{
     }
   } catch (err) {
     logger.error('[bus] getAgentClientState failed', err, { machineId })
-    return { totals: { ui: 0, commander: 0, commanderActive: 0 }, commanderJoinGeneration: undefined }
+    return { totals: { ui: 0, commander: 0, commanderActive: 0 }, commanderJoinGeneration: undefined, failed: true }
   }
 }
 

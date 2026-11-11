@@ -22,15 +22,14 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const owners = new Map<string, number>()
   const renamed = new Map<string, string>()
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
-  /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged. */
-  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null }>()
-  /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
-  const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
+  /** Each installation's accepted permissions, by installation id, as GET /app/installations/{id} answers them. An
+   *  installation listed here refuses a token that asks for more, as GitHub does; one not listed answers 404 and mints any. */
+  const grants = new Map<number, Record<string, 'read' | 'write'>>()
   const calls: FakeCall[] = []
   const issued = new Set<string>()
   const revoked: string[] = []
   let minted = 0
-  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null, actionsStatus: 200, jobsStatus: 200 }
+  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null }
   /** Each token's permissions, as it was minted. */
   const permissions = new Map<string, unknown>()
   const json = (status: number, body?: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status })
@@ -61,17 +60,23 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const id = owners.get(match[1]!.toLowerCase())
       return id === undefined ? json(404, { message: 'Not Found' }) : json(200, { id })
     }
-    if (method === 'GET' && url.pathname === '/app') {
-      if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
-      return json(200, { slug: 'harness-fixture' })
-    }
     if (method === 'GET' && (match = /^\/users\/([^/]+)$/.exec(url.pathname))) {
       const login = decodeURIComponent(match[1]!)
       return control.botId && login.endsWith('[bot]') ? json(200, { login, id: control.botId }) : json(404, { message: 'Not Found' })
     }
+    if (method === 'GET' && (match = /^\/app\/installations\/(\d+)$/.exec(url.pathname))) {
+      if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
+      const granted = grants.get(Number(match[1]))
+      return granted ? json(200, { id: Number(match[1]), permissions: granted }) : json(404, { message: 'Not Found' })
+    }
     if (method === 'POST' && (match = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname))) {
       if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
       if (control.tokenStatus !== 201) return json(control.tokenStatus, { message: control.tokenMessage })
+      const granted = grants.get(Number(match[1]))
+      const asked = ((body as { permissions?: Record<string, string> }).permissions) ?? {}
+      if (granted && Object.entries(asked).some(([name, level]) => !granted[name] || (level === 'write' && granted[name] !== 'write'))) {
+        return json(422, { message: 'The permissions requested are not granted to this installation.' })
+      }
       const token = `ghs_fixture_${++minted}`
       issued.add(token)
       permissions.set(token, (body as { permissions: unknown }).permissions)
@@ -93,29 +98,12 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const branch = known.branch ?? 'main'
       // A renamed repository: GitHub redirects its old name to its id, and fetch follows, so the body names it as it is now.
       if (!repoPath[3]) return json(200, { full_name: renamed.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? `${repoPath[1]}/${repoPath[2]}`, default_branch: branch })
-      const runs = actions.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? []
-      if (repoPath[3] === '/actions/runs') {
-        if (control.actionsStatus !== 200) return json(control.actionsStatus, { message: 'Server Error' })
-        const matching = runs.filter(r => r.status === url.searchParams.get('status'))
-        return json(200, { total_count: matching.length, workflow_runs: matching.slice(0, Number(url.searchParams.get('per_page') ?? 30)).map(r => ({ id: r.id, status: r.status, name: `run ${r.id}`, head_branch: 'secret-branch' })) })
-      }
-      const jobs = /^\/actions\/runs\/(\d+)\/jobs$/.exec(repoPath[3] ?? '')
-      if (jobs) {
-        if (control.jobsStatus !== 200) return json(control.jobsStatus, { message: 'Server Error' })
-        const run = runs.find(r => r.id === Number(jobs[1]))
-        return run ? json(200, { total_count: run.jobs.length, jobs: run.jobs.map((j, i) => ({ id: i, name: `job ${i}`, ...j })) }) : json(404, { message: 'Not Found' })
-      }
-      const pull = /^\/pulls\/(\d+)$/.exec(repoPath[3] ?? '')
-      if (pull) {
-        const known = pulls.get(`${repoPath[1]}/${repoPath[2]}#${pull[1]}`.toLowerCase())
-        return known ? json(200, { number: Number(pull[1]), ...known }) : json(404, { message: 'Not Found' })
-      }
       if (repoPath[3] === `/rules/branches/${encodeURIComponent(branch)}`) return json(200, known.rules ?? [])
       if (repoPath[3] === `/branches/${encodeURIComponent(branch)}`) return json(200, { name: branch, protected: known.protected ?? false })
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, installed, owners, renamed, protection, pulls, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, revoked, issued, control, permissions }
 }
 
 /** A configured app talking to [github]. */

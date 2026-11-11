@@ -188,14 +188,12 @@ pub fn has_sessions(name: Option<&str>) -> bool {
 /// a session of its own (closing this terminal leaves it), holding the sessions until a client
 /// attaches to them. False when it did not come up.
 pub async fn spawn_headless(name: Option<&str>, port: Option<u16>) -> bool {
-    use std::os::unix::process::CommandExt;
     let Ok(me) = std::env::current_exe() else { return false };
     let mut cmd = std::process::Command::new(me);
     if let Some(n) = name { cmd.args(["-L", n]); }
     if let Some(p) = port { cmd.args(["--port", &p.to_string()]); }
     cmd.arg("--headless").env_remove("HN_AS_TMUX").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    // SAFETY: setsid is async-signal-safe, called in the child before exec.
-    unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    crate::sys::detach(&mut cmd);
     if cmd.spawn().is_err() { return false }
     for _ in 0..250 {
         if crate::ipc::alive(None, name) { return true }

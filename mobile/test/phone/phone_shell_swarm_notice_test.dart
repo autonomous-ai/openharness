@@ -5,7 +5,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 
@@ -44,7 +43,7 @@ void main() {
 
   for (final on in [true, false]) {
     for (final start in ['foreground', 'background', 'cold']) {
-      for (final kind in ['project', 'pm', 'group', 'decision', 'work']) {
+      for (final kind in ['project', 'pm', 'group', 'work']) {
         testWidgets('$kind notice Swarm=$on $start', (tester) async {
           experimentalFeaturesStore.value = on ? {PhoneExperiment.swarm} : {};
           final target = (
@@ -57,7 +56,8 @@ void main() {
             messageId: const ['project', 'pm', 'group'].contains(kind)
                 ? 'm7'
                 : null,
-            decisionId: kind == 'decision' ? 'd1' : null,
+            decisionId: null,
+            threadId: null,
           );
           if (start == 'cold') notices().openedSwarm.value = target;
           await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
@@ -83,15 +83,7 @@ void main() {
           }
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 400));
-          if (on && kind == 'decision') {
-            // A decision opens in Activity, at it: no chat shows decisions.
-            final page = tester.widget<SwarmActivityPage>(
-              find.byType(SwarmActivityPage),
-            );
-            expect((page.focus, page.swarmId), ('decision:d1', 'tab-b'));
-            expect(find.byType(SwarmConversationPage), findsNothing);
-            expect(find.byType(SwarmPage, skipOffstage: false), findsOneWidget);
-          } else if (on) {
+          if (on) {
             final page = tester.widget<SwarmConversationPage>(
               find.byType(SwarmConversationPage),
             );
@@ -122,6 +114,7 @@ void main() {
       conversationId: 'g9',
       messageId: null,
       decisionId: null,
+      threadId: null,
     );
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
@@ -158,6 +151,7 @@ void main() {
       conversationId: leadChat,
       messageId: 'm7',
       decisionId: null,
+      threadId: null,
     );
     for (var i = 0; i < 20; i++) {
       await tester.pump(const Duration(milliseconds: 100));
@@ -170,6 +164,53 @@ void main() {
     expect((chat.conversationId, chat.messageId), (leadChat, 'm7'));
   });
 
+  testWidgets("a tap on a thread reply's notice opens its thread at the "
+      'reply', (tester) async {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': 'person-me'},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(),
+      'members': [part('person-me', 1, person('person-me'))],
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/'] = (_) => <String, dynamic>{
+      'messages': <Object>[],
+      'next': null,
+    };
+    (app as _NoticeApp).swarm = fake;
+    await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    notices().openedSwarm.value = (
+      swarmId: tab,
+      conversationId: leadChat,
+      messageId: 'reply-r2',
+      decisionId: null,
+      threadId: 'root-1',
+    );
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    // The thread opens over the project's chat, so look past what covers it.
+    final chat = tester.widget<SwarmConversationPage>(
+      find.byType(SwarmConversationPage, skipOffstage: false),
+    );
+    // The chat at the thread's root, the thread open over it at the reply.
+    expect(
+      (chat.conversationId, chat.messageId, chat.threadId),
+      (leadChat, 'root-1', 'root-1'),
+    );
+    expect(chat.threadFocus?.messageId, 'reply-r2');
+  });
+
   testWidgets('a tap that launched the app opens it too', (tester) async {
     // Read before the shell exists, so no listener sees it change.
     notices().openedSwarm.value = (
@@ -177,6 +218,7 @@ void main() {
       conversationId: 'g9',
       messageId: null,
       decisionId: null,
+      threadId: null,
     );
     await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
     await tester.pump();

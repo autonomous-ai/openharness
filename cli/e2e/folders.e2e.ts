@@ -6,7 +6,7 @@
  * take turns, survive a restart and be closed; one whose folder is gone must not take the daemon or
  * any other agent with it.
  */
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -98,6 +98,57 @@ describe('the folders agents work in', () => {
     }
     await turn(client, other.id, 'the other agent is fine')
     expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  // The owner's other computers read and save this file through the daemon that runs the agent (services/projects.ts):
+  // the id is the one the apps hold, found in the edge host's own copy of the agents, and the folder is the agent's.
+  it('an agent\'s instructions file is read and saved in its folder, and a folder that is gone is not made again', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const folder = join(d.projectsDir, 'rocket 🚀 launch')
+    const agent = await create(client, 'claude', folder)
+    const file = join(folder, 'agents', 'Faye.md')
+    const ask = (type: string, payload: Record<string, unknown>) => client.request(type, { agentId: agent.id, name: 'Faye', ...payload }, 30_000)
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: null, version: '' })
+    const saved = await ask('agent_instructions_write', { text: 'Be brief.\n', version: '' })
+    expect(saved.version).toMatch(/^[0-9a-f]{64}$/)
+    expect(readFileSync(file, 'utf8')).toBe('Be brief.\n')
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: 'Be brief.\n', version: saved.version })
+    // A save over what the writer never read is refused, whether it saw no file or an older one, and nothing changes.
+    expect(await ask('agent_instructions_write', { text: 'Over it.', version: '' })).toMatchObject({ error: 'CHANGED' })
+    writeFileSync(file, 'Edited by hand.\n')
+    expect(await ask('agent_instructions_write', { text: 'Over it.', version: saved.version })).toMatchObject({ error: 'CHANGED' })
+    expect(readFileSync(file, 'utf8')).toBe('Edited by hand.\n')
+    expect(await client.request('agent_instructions_read', { agentId: 'no-such-agent', name: 'Faye' }, 30_000)).toMatchObject({ error: 'AGENT_NOT_FOUND' })
+    expect(await ask('agent_instructions_read', { name: '../Faye' })).toMatchObject({ error: 'BAD_NAME' })
+    // Its folder gone: there is no file to read, and a save does not make the project again.
+    rmSync(folder, { recursive: true, force: true })
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: null, version: '' })
+    expect(await ask('agent_instructions_write', { text: 'Lost.', version: '' })).toMatchObject({ error: 'WRITE_FAILED' })
+    expect(existsSync(folder)).toBe(false)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  // What instructs most agents is the project's AGENTS.md and CLAUDE.md in its folder, with or without a file of its own (a
+  // Product Manager in a repository with no agents folder at all). The read shows them, read only, and no save touches them.
+  it('the files that instruct an agent besides its own are read with it, and no save touches them', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const folder = join(d.projectsDir, 'lampOS')
+    const agent = await create(client, 'claude', folder)
+    const ask = (type: string, payload: Record<string, unknown>) => client.request(type, { agentId: agent.id, name: 'Faye', ...payload }, 30_000)
+    writeFileSync(join(folder, 'AGENTS.md'), 'Ship it.\n')
+    writeFileSync(join(folder, 'CLAUDE.md'), '@AGENTS.md\n')
+    const shared = [{ name: 'AGENTS.md', text: 'Ship it.\n', truncated: false }, { name: 'CLAUDE.md', text: '@AGENTS.md\n', truncated: false }]
+    expect(existsSync(join(folder, 'agents'))).toBe(false)
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: null, version: '', shared })
+    const saved = await ask('agent_instructions_write', { text: 'Be brief.\n', version: '' })
+    expect(saved).not.toHaveProperty('shared')
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: 'Be brief.\n', version: saved.version, shared })
+    expect(readFileSync(join(folder, 'AGENTS.md'), 'utf8')).toBe('Ship it.\n')
+    expect(readFileSync(join(folder, 'CLAUDE.md'), 'utf8')).toBe('@AGENTS.md\n')
     client.close()
   })
 

@@ -76,24 +76,20 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'instructions', 'agent-only', 'idle', 'review-failed', 'work-lost', 'terminal-alert', 'native', 'ship']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'work-lost', 'start-timeout']))
   })
 
   it('classifies every kind it writes, and only those', () => {
     const unclassified = [...written].filter(([kind]) => !Object.hasOwn(NOTICE_READERS, kind)).map(([kind, files]) => `${kind} (${files.join(', ')})`)
     expect(unclassified, 'add each to NOTICE_READERS in model.ts: who reads it?').toEqual([])
-    // A kind no longer written keeps its readers for the rows stored before: the server's idle stop (project instructions,
-    // phase 4) told only the Lead; the coordinator's progress post, now the project's status card (Dee, 2026-10-31), people.
-    const retired = ['idle-stop', 'project-report']
-    expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
-    expect(retired.filter(kind => written.has(kind))).toEqual([])
+    // Only the kinds it still writes: every Swarm from before v4, with the rows of kinds only v1-v3 wrote, was wiped (2026-11-10).
+    expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind))).toEqual([])
   })
 
   it('shows people a notice of theirs, and one for an agent only while it reaches none', () => {
     expect(agentOnly({ kind: 'system' }, ['lead'])).toBe(false)
-    expect(agentOnly({ kind: 'terminal-alert' }, ['lead'])).toBe(false)
     expect(agentOnly({ kind: 'start-timeout' }, ['lead'])).toBe(false)
-    for (const kind of ['idle-stop', 'work-stalled', 'overlap']) {
+    for (const kind of ['work-lost', 'pair-loop']) {
       expect(agentOnly({ kind }, ['lead'])).toBe(true)
       expect(agentOnly({ kind }, [])).toBe(false)
     }

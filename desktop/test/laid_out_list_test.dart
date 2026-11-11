@@ -147,6 +147,49 @@ void main() {
       expect(find.text('row 112'), findsWidgets);
     });
 
+    testWidgets('a separated list leaving as its tooltip opens stays safe', (
+      tester,
+    ) async {
+      final controller = ScrollController(initialScrollOffset: 4000);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        _frame(
+          LaidOutListView.separated(
+            controller: controller,
+            itemCount: 200,
+            itemBuilder: (context, i) => _row(i),
+            separatorBuilder: (context, i) => const SizedBox.shrink(),
+          ),
+        ),
+      );
+      final mouse = await _openTooltipAsRowLeaves(tester, controller);
+      expect(tester.takeException(), isNull);
+      await mouse.moveTo(const Offset(5, 100));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a grid is safe as a plain GridView', (tester) async {
+      final controller = ScrollController(initialScrollOffset: 4000);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        _frame(
+          GridView.builder(
+            controller: controller,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 1,
+              mainAxisExtent: _rowHeight,
+            ),
+            itemCount: 200,
+            itemBuilder: (context, i) => _row(i),
+          ),
+        ),
+      );
+      final mouse = await _openTooltipAsRowLeaves(tester, controller);
+      expect(tester.takeException(), isNull);
+      await mouse.moveTo(const Offset(5, 100));
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('a list with an item extent is safe as a plain ListView', (
       tester,
     ) async {
@@ -169,32 +212,32 @@ void main() {
     });
   });
 
-  test(
-    'Swarm lists use LaidOutListView unless their rows are tightly sized',
-    () {
-      final bare = RegExp(r'(?<![\w.<])(ListView(\.builder)?|SliverList)\(');
-      final offenders = <String>[];
-      for (final dir in ['lib/super_tabs', 'lib/widgets']) {
-        for (final file in Directory(dir).listSync(recursive: true)) {
-          if (file is! File || !file.path.endsWith('.dart')) continue;
-          if (file.path.endsWith('laid_out_list.dart')) continue;
-          final source = file.readAsStringSync();
-          for (final match in bare.allMatches(source)) {
-            var depth = 0;
-            var end = match.end - 1;
-            do {
-              if (source[end] == '(') depth++;
-              if (source[end] == ')') depth--;
-              end++;
-            } while (depth > 0 && end < source.length);
-            final call = source.substring(match.start, end);
-            if (!call.contains('itemExtent')) {
-              offenders.add('${file.path}: ${match.group(0)}');
-            }
+  test('Lists use LaidOutListView unless their rows are tightly sized', () {
+    final bare = RegExp(
+      r'(?<![\w.<])(ListView(\.builder|\.separated|\.custom)?'
+      r'|SliverList(\.builder|\.list|\.separated)?)\(',
+    );
+    final offenders = <String>[];
+    for (final dir in ['lib']) {
+      for (final file in Directory(dir).listSync(recursive: true)) {
+        if (file is! File || !file.path.endsWith('.dart')) continue;
+        if (file.path.endsWith('laid_out_list.dart')) continue;
+        final source = file.readAsStringSync();
+        for (final match in bare.allMatches(source)) {
+          var depth = 0;
+          var end = match.end - 1;
+          do {
+            if (source[end] == '(') depth++;
+            if (source[end] == ')') depth--;
+            end++;
+          } while (depth > 0 && end < source.length);
+          final call = source.substring(match.start, end);
+          if (!call.contains('itemExtent')) {
+            offenders.add('${file.path}: ${match.group(0)}');
           }
         }
       }
-      expect(offenders, isEmpty);
-    },
-  );
+    }
+    expect(offenders, isEmpty);
+  });
 }

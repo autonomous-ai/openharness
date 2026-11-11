@@ -31,9 +31,10 @@ pub fn is_panel(kind: &PickerKind) -> bool {
 /// Whether [kind]'s list reads top-down (↑ toward its first row): fzf's under --layout=reverse,
 /// and the panel's menus; the launcher's lists read bottom-up in the panel too, their query
 /// under them, as fzf's do — except Models, which reads from the top as the desktop's picker does
-/// (its sections in the desktop's order, and no blank space over a short list).
+/// (its sections in the desktop's order, and no blank space over a short list), and the harnesses,
+/// the newest at the very top, its machine and folder over it.
 pub fn top_down(kind: &PickerKind) -> bool {
-    if is_panel(kind) { !crate::modal::is_launcher(kind) || matches!(kind, PickerKind::Models) } else { theme::fzf().reverse }
+    if is_panel(kind) { !crate::modal::is_launcher(kind) || matches!(kind, PickerKind::Models | PickerKind::Open { .. }) } else { theme::fzf().reverse }
 }
 
 /// Step into [section]: its options in the same list, the cursor on the one in use.
@@ -616,7 +617,11 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
             sx += put(buf, sx, qy, right.saturating_sub(sx), &text, style) + 3;
         }
         // Over it: how many rows match of how many (and how many marked), a rule after.
-        CountRule { shown: picker.visible.len(), total: picker.rows.len(), marked: Some(picker.marked.len()), chrome: &c }.render(Rect::new(x, qy - 1, inner_w, 1), buf);
+        // (A `▸ N older` row is not one of them.)
+        let folds = |id: &str| id.starts_with(crate::modal::OLDER_ROW);
+        let shown = picker.visible.iter().filter(|(i, _)| !folds(&picker.rows[*i].id)).count();
+        let total = picker.rows.iter().filter(|r| !folds(&r.id)).count();
+        CountRule { shown, total, marked: Some(picker.marked.len()), chrome: &c }.render(Rect::new(x, qy - 1, inner_w, 1), buf);
         // Over that: this list's keys, `key what` · `key what`, the keys bold (the tab row's own,
         // while it has the keys).
         let tab_keys = [("← →", "switch"), ("↑", "list"), ("type", "to search")];
@@ -722,16 +727,7 @@ fn grouped(picker: &Picker) -> bool {
 
 /// The lines [list] draws for [picker]'s rows, top-down: each row, a heading where the group
 /// changes and a blank line before every heading but the first (at least one: the empty notice).
-pub fn list_lines(picker: &Picker) -> usize {
-    let (grouped, mut lines, mut last) = (grouped(picker), 0, None);
-    for (i, _) in &picker.visible {
-        let group = picker.rows[*i].group.as_deref().filter(|_| grouped);
-        if group.is_some() && group != last { lines += 1 + usize::from(lines > 0) }
-        last = group;
-        lines += 1;
-    }
-    lines.max(1)
-}
+pub fn list_lines(picker: &Picker) -> usize { list_layout(picker, false).0.len().max(1) }
 
 /// The rows, top-down, the cursor's row marked as the New Harness chooser marks its own.
 pub fn list(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, details: bool) { list_from(buf, picker, r, c, details, false) }
@@ -775,7 +771,10 @@ impl StatefulWidget for PanelList<'_> {
             let line = Rect::new(r.x, y, r.width, 1);
             match lines[i] {
                 Some(vi) => { self.row(buf, picker, vi, line); row_at.push((y, vi)) }
-                None => if let Some((_, title)) = titles.iter().find(|(at, _)| *at == i) { put(buf, r.x + 2, y, r.width.saturating_sub(2), title, c.muted.add_modifier(Modifier::BOLD)); },
+                None => if let Some((_, title, kind)) = titles.iter().find(|(at, _, _)| *at == i) {
+                    let style = match kind { TitleKind::Plain => c.muted.add_modifier(Modifier::BOLD), TitleKind::Section => c.base.add_modifier(Modifier::BOLD), TitleKind::Under => c.muted };
+                    put(buf, r.x + 2, y, r.width.saturating_sub(2), title, style);
+                },
             }
         }
         // (No scrollbar: the list follows the cursor, the wheel scrolls it.)
@@ -796,48 +795,81 @@ fn empty_notice(picker: &Picker) -> String {
     empty
 }
 
+/// What a heading in the list heads, for how it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleKind {
+    /// A group with nothing over it.
+    Plain,
+    /// A section (a machine): the strong one, a blank line over it.
+    Section,
+    /// A group under a section (a folder under its machine): quiet, level with it, no blank line.
+    Under,
+}
+
 /// The lines as drawn, first to last (bottom to top when [bottom_up]): each visible row by its
 /// index, and None for a heading (titled, at its line) or the blank line before one.
-fn list_layout(picker: &Picker, bottom_up: bool) -> (Vec<Option<usize>>, Vec<(usize, String)>) {
+fn list_layout(picker: &Picker, bottom_up: bool) -> (Vec<Option<usize>>, Vec<(usize, String, TitleKind)>) {
     // The lines as drawn: each row, and a titled heading (a blank line before it) wherever the
     // group changes — as opencode's palette groups its commands. The scroll counts lines.
     let mut lines: Vec<Option<usize>> = Vec::new();
-    let mut titles: Vec<(usize, String)> = Vec::new();
-    let mut last: Option<&str> = None;
+    let mut titles: Vec<(usize, String, TitleKind)> = Vec::new();
+    let (mut last, mut last_section): (Option<&str>, Option<&str>) = (None, None);
     let grouped = grouped(picker);
     if !bottom_up {
         for vi in 0..picker.visible.len() {
-            let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
-            if group.is_some() && group != last {
-                if !lines.is_empty() { lines.push(None) }
-                titles.push((lines.len(), group.unwrap_or_default().to_string()));
-                lines.push(None);
+            let row = &picker.rows[picker.visible[vi].0];
+            let (group, section) = (row.group.as_deref().filter(|_| grouped), row.section.as_deref().filter(|_| grouped));
+            if let Some(title) = group.filter(|_| group != last || section != last_section) {
+                if section.is_none() || section != last_section {
+                    if !lines.is_empty() { lines.push(None) }
+                    if let Some(s) = section { titles.push((lines.len(), s.to_string(), TitleKind::Section)); lines.push(None) }
+                }
+                // (A folder with old harnesses folded away: its heading is that row, `▸ N older` on it.)
+                if !row.id.starts_with(crate::modal::OLDER_ROW) {
+                    titles.push((lines.len(), title.to_string(), if section.is_some() { TitleKind::Under } else { TitleKind::Plain }));
+                    lines.push(None);
+                }
             }
-            last = group;
+            (last, last_section) = (group, section);
             lines.push(Some(vi));
         }
     } else {
-        // Bottom up: a group's rows, then its heading (drawn over them), then a blank.
-        let mut pending: Option<String> = None;
+        // Bottom up: a group's rows, then its heading (drawn over them), then its section's if the
+        // next rows are not in it, then a blank.
+        let mut pending: Option<(String, Option<String>)> = None;
         for vi in 0..picker.visible.len() {
-            let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
-            if group != last {
-                if let Some(title) = pending.take() { titles.push((lines.len(), title)); lines.push(None); lines.push(None) }
-                pending = group.map(str::to_string);
+            let row = &picker.rows[picker.visible[vi].0];
+            let (group, section) = (row.group.as_deref().filter(|_| grouped), row.section.as_deref().filter(|_| grouped));
+            if group != last || section != last_section {
+                if let Some((title, over)) = pending.take() {
+                    titles.push((lines.len(), title, if over.is_some() { TitleKind::Under } else { TitleKind::Plain }));
+                    lines.push(None);
+                    match over {
+                        Some(s) if Some(s.as_str()) != section => { titles.push((lines.len(), s, TitleKind::Section)); lines.push(None); lines.push(None) }
+                        Some(_) => {}
+                        None => lines.push(None),
+                    }
+                }
+                pending = group.map(|g| (g.to_string(), section.map(str::to_string)));
             }
-            last = group;
+            (last, last_section) = (group, section);
             lines.push(Some(vi));
         }
-        if let Some(title) = pending { titles.push((lines.len(), title)); lines.push(None) }
+        if let Some((title, over)) = pending {
+            titles.push((lines.len(), title, if over.is_some() { TitleKind::Under } else { TitleKind::Plain }));
+            lines.push(None);
+            if let Some(s) = over { titles.push((lines.len(), s, TitleKind::Section)); lines.push(None) }
+        }
     }
     (lines, titles)
 }
 
 /// [picker]'s scroll (the first line shown of [n]) keeping the cursor's row in view — and, top
-/// down, its heading with it — unless the wheel put the list where it is.
-fn scroll_to_cursor(picker: &mut Picker, lines: &[Option<usize>], titles: &[(usize, String)], n: usize, bottom_up: bool) {
+/// down, its headings with it — unless the wheel put the list where it is.
+fn scroll_to_cursor(picker: &mut Picker, lines: &[Option<usize>], titles: &[(usize, String, TitleKind)], n: usize, bottom_up: bool) {
     let at_line = lines.iter().position(|l| *l == Some(picker.cursor)).unwrap_or(0);
-    let top = if !bottom_up && at_line >= 1 && titles.iter().any(|(i, _)| *i + 1 == at_line) { at_line - 1 } else { at_line };
+    let mut top = at_line;
+    while !bottom_up && top >= 1 && titles.iter().any(|(i, _, _)| *i + 1 == top) { top -= 1 }
     if !picker.free_scroll {
         if top < picker.scroll { picker.scroll = top }
         if at_line >= picker.scroll + n { picker.scroll = at_line + 1 - n }
@@ -865,7 +897,9 @@ impl PanelList<'_> {
         // a harness's age, not its project and machine), and never more than a third of the
         // row — so it can not run off the panel or over the name. (Half, in a list that asks: the
         // Models view's size, speed and word, side by side as the desktop's rows have them.)
-        let right_text = row.right_at(r.width as usize);
+        // (A folder's `▸ N older`, opened: what the same key does now.)
+        let opened = row.id.strip_prefix(crate::modal::OLDER_ROW).is_some_and(|k| picker.unfolded.contains(k));
+        let right_text = if opened { "▾ hide older" } else { row.right_at(r.width as usize) };
         let right_w = (right_text.width() as u16).min(if picker.right_half { r.width / 2 } else { r.width / 3 });
         // (The last column is the scroll mark's, with a blank before it.)
         let end = r.right().saturating_sub(if right_w > 0 { right_w + 3 } else { 2 });
@@ -1788,7 +1822,62 @@ mod tests {
         (buf, p.screen_area.get(), cursor)
     }
 
-    /// The launcher's rows from the list's tail to the query, and the styles of its query, count,
+    /// The harness list reads from the top, the first row first, its query still under it.
+    #[test]
+    fn the_harness_list_reads_from_the_top() {
+        let _l = crate::term_out::colours_lock();
+        let (buf, r, _) = launcher_buffer("", false);
+        let row = |y: u16| (r.x..r.right()).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().replace('│', "").trim_end().to_string();
+        let rows: Vec<String> = (r.y + 3..r.y + 6).map(row).collect();
+        assert_eq!(rows, ["  ›•alpha", "    beta", "    alpine"]);
+    }
+
+    /// A folder with old harnesses folded away has its heading as a row: nothing titled over it, and
+    /// it says `▾ hide older` once opened.
+    #[test]
+    fn a_folders_older_button_is_its_heading() {
+        use crate::picker::Row;
+        let mut p = Picker::new("harnesses", "");
+        let mut button = Row::new(format!("{}k", modal::OLDER_ROW), "webapp").group("webapp").right("▸ 2 older");
+        button.section = Some("studio".into());
+        let mut live = Row::new("a", "alpha").group("webapp");
+        live.section = Some("studio".into());
+        let mut old = Row::new("b", "beta").group("webapp");
+        old.section = Some("studio".into());
+        old.older = Some("k".into());
+        p.set_rows(vec![button, live, old]);
+        let (lines, titles) = list_layout(&p, false);
+        assert_eq!(lines, [None, Some(0), Some(1)], "the machine, the button, the row; beta folded");
+        assert_eq!(titles.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["studio"]);
+        p.unfolded.insert("k".into());
+        p.refilter();
+        assert_eq!(list_layout(&p, false).0, [None, Some(0), Some(1), Some(2)], "still the button, then beta");
+    }
+
+    /// A machine's heading, its folders level with it under it, a blank line only between machines:
+    /// no indent, and the cursor's row keeps both headings in view.
+    #[test]
+    fn machines_head_their_folders_with_no_indent() {
+        use crate::picker::Row;
+        let mut p = Picker::new("harnesses", "");
+        let row = |id: &str, s: &str, g: &str| { let mut r = Row::new(id, id).group(g); r.section = Some(s.to_string()); r };
+        p.set_rows(vec![row("a", "studio", "webapp"), row("b", "studio", "api"), row("c", "lab", "webapp")]);
+        let (lines, titles) = list_layout(&p, false);
+        let at = |t: &str, k: TitleKind| titles.iter().filter(|(_, s, kind)| s == t && *kind == k).map(|(i, _, _)| *i).collect::<Vec<_>>();
+        assert_eq!(at("studio", TitleKind::Section), [0]);
+        assert_eq!(at("webapp", TitleKind::Under), [1, 7]);
+        assert_eq!(at("api", TitleKind::Under), [3]);
+        assert_eq!(at("lab", TitleKind::Section), [6]);
+        assert_eq!(lines, [None, None, Some(0), None, Some(1), None, None, None, Some(2)]);
+        assert_eq!(list_lines(&p), 9);
+        // Scrolled past them, coming back to the first row brings its two headings too.
+        p.cursor = 0;
+        p.scroll = 2;
+        scroll_to_cursor(&mut p, &lines, &titles, 4, false);
+        assert_eq!(p.scroll, 0);
+    }
+
+    /// The launcher's keys, count and query at its foot, and the styles of its query, count,
     /// rule and keys: what `draw` drew inline before those lines became shared pieces.
     #[test]
     fn the_launcher_keeps_its_rows_and_styles() {
@@ -1798,11 +1887,11 @@ mod tests {
         let rule = |count: &str| format!("  {count} {}", "─".repeat(86 - count.width() - 1));
         let query = |typed: &str, more: &str| format!("  › {typed}   [harnesses]   > commands   @ machines   # projects   : models{more}");
         let keys = |s: &str| format!("  {s}");
-        let (alpine, beta, alpha) = ("    alpine".to_string(), "    beta".to_string(), "  ›•alpha".to_string());
+        let blank = String::new;
         let cases = [
-            ("", false, [alpine.clone(), beta.clone(), alpha.clone(), String::new(), keys("↑↓ move · enter open"), rule("3/3 (1)"), query("Search harnesses", "")]),
-            ("al", false, [String::new(), alpine.clone(), alpha.clone(), String::new(), keys("↑↓ move · enter open"), rule("2/3 (1)"), query("al", "   * store")]),
-            ("", true, [alpine, beta, alpha, String::new(), keys("← → switch · ↑ list · type to search"), rule("3/3 (1)"), query("Search harnesses", "")]),
+            ("", false, [blank(), blank(), blank(), blank(), keys("↑↓ move · enter open"), rule("3/3 (1)"), query("Search harnesses", "")]),
+            ("al", false, [blank(), blank(), blank(), blank(), keys("↑↓ move · enter open"), rule("2/3 (1)"), query("al", "   * store")]),
+            ("", true, [blank(), blank(), blank(), blank(), keys("← → switch · ↑ list · type to search"), rule("3/3 (1)"), query("Search harnesses", "")]),
         ];
         for (typed, on_tabs, want) in cases {
             let (buf, r, _) = launcher_buffer(typed, on_tabs);

@@ -1,6 +1,5 @@
 import '../notify/alert_sounds.dart';
-import '../super_tabs/decisions.dart';
-import '../super_tabs/notifications.dart';
+import '../super_tabs/my_agents.dart';
 import 'app_state.dart';
 import 'harness_activity.dart';
 import 'harness_sessions.dart';
@@ -195,12 +194,10 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
   }
 }
 
-/// The menu bar's Swarm section: in each open Swarm tab, the decisions asked
-/// of this account, then the tags waiting for it, newest first in each, as its
-/// Notifications page lists them. Only from conversations it can read now,
-/// none from a Swarm it lost, none signed out: the lists are what was read
-/// last, and access can leave before they are read again. Choosing one opens
-/// it there (`SuperTabController.openNotice`).
+/// The menu bar's Swarm section: in each open Swarm tab, the reader's agents that ask them, each one's 1:1 chat with
+/// something new for them by its read marks ([superTabAgentsAsking]), under the agent's name as Your Team shows it, with
+/// its newest unread words there when they are held. None from a Swarm it lost, none signed out. Choosing one opens
+/// that chat there (`SuperTabController.openNotice`).
 List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
   if (app.currentUser == null) return [];
   final needs = nativeActivityPayload(HarnessActivity.needsInput);
@@ -208,61 +205,26 @@ List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
   for (final id in {for (final tab in app.swarms) ?tab.superTabId}) {
     final controller = app.superTabs.peek(id);
     final snapshot = controller?.snapshot;
-    if (controller == null || snapshot == null || controller.accessRevoked) {
-      continue;
-    }
-    Map<String, Object?> row(
-      String kind,
-      String noticeId,
-      String title,
-      String message,
-      String projectName,
-      String conversationTitle,
-      DateTime? createdAt,
-    ) => {
-      'swarmTabId': id,
-      'kind': kind,
-      'id': noticeId,
-      'title': title,
-      'message': statusMenuMessage(message),
-      'unread': true,
-      'activity': needs,
-      'tabName': snapshot.name,
-      'detail': [
-        projectName,
-        conversationTitle,
-      ].where((part) => part.isNotEmpty).join(' · '),
-      'receivedAt': createdAt?.millisecondsSinceEpoch,
-    };
-    bool readable(String conversationId) =>
-        snapshot.conversation(conversationId) != null;
-    for (final d in SuperTabDecisions.of(controller).open) {
-      if (!readable(d.conversationId)) continue;
-      rows.add(
-        row(
-          'decision',
-          d.id,
-          '${d.askerName} asks you',
-          d.question,
-          d.projectName,
-          d.conversationTitle,
-          d.createdAt,
-        ),
-      );
-    }
-    for (final m in SuperTabMentions.of(controller).waiting) {
-      if (!readable(m.conversationId)) continue;
-      rows.add(
-        row(
-          'mention',
-          m.id,
-          '${m.leadName} tagged you',
-          m.text,
-          m.projectName,
-          m.conversationTitle,
-          m.createdAt,
-        ),
-      );
+    if (controller == null || snapshot == null) continue;
+    for (final (agent, chat) in superTabAgentsAsking(controller)) {
+      // Only words not read yet: an older message held here is not what asks.
+      final read = controller.readMark(chat.id);
+      final said = controller
+          .messages(chat.id)
+          .where((m) => m.fromAgent && m.inMainStream && m.sequence > read)
+          .lastOrNull;
+      rows.add({
+        'swarmTabId': id,
+        'kind': 'chat',
+        'id': chat.id,
+        'title': snapshot.agentName(agent.id, fallback: agent.name),
+        'message': statusMenuMessage(said?.text ?? ''),
+        'unread': true,
+        'activity': needs,
+        'tabName': snapshot.name,
+        'detail': '',
+        'receivedAt': said?.createdAt?.millisecondsSinceEpoch,
+      });
     }
   }
   return rows;

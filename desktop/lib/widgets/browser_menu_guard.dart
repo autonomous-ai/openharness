@@ -32,6 +32,12 @@ class BrowserMenuGuard {
 
   static bool get _web => debugWeb ?? kIsWeb;
 
+  /// Whether this runs in a phone's or tablet's browser, where nothing can hover.
+  static bool get onTouchScreen =>
+      _web &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   /// Whether the browser's menu is off now.
   static bool get isOff => _off;
 

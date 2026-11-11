@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseNpmCmdShim, peMachine, WindowsBatchLaunchRefused, WindowsEngineUnavailable, windowsEngineArgv, windowsEngineUnavailable, windowsLaunchRefusal } from './launch.js'
+import { parseNpmCmdShim, peMachine, WindowsBatchLaunchRefused, windowsBlockedReason, WindowsEngineUnavailable, windowsEngineArgv, windowsEngineUnavailable, windowsLaunchRefusal } from './launch.js'
 
 const FIXTURES = join(import.meta.dirname, 'fixtures')
 const CODEX_SHIM = readFileSync(join(FIXTURES, 'npm-codex.cmd'), 'utf8')
@@ -118,6 +118,19 @@ describe('an engine\'s argv on Windows', () => {
     const { environment } = npmCodex()
     expect(windowsEngineArgv('codex', ['codex', 'fix&calc'], { environment, platform: 'darwin' })).toEqual(['codex', 'fix&calc'])
     expect(windowsEngineArgv('codex', [], { environment, platform: 'linux' })).toEqual([])
+  })
+})
+
+describe('a program Windows blocked', () => {
+  it('says so in the person\'s words, by the program\'s name', () => {
+    expect(windowsBlockedReason(['C:\\Users\\a\\.grok\\bin\\grok.exe'], 'An Application Control policy has blocked this file. (os error 4551)'))
+      .toBe('Windows blocked grok: Smart App Control does not trust it. Choose another engine.')
+    expect(windowsBlockedReason(['amp.cmd'], 'status 0xC0E90002')).toContain('Windows blocked amp:')
+    expect(windowsBlockedReason([], 'os error 4551')).toContain('Windows blocked this program:')
+  })
+
+  it('leaves any other failure as the host said it', () => {
+    expect(windowsBlockedReason(['grok.exe'], 'The system cannot find the file specified. (os error 2)')).toBe('The system cannot find the file specified. (os error 2)')
   })
 })
 

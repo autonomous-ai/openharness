@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:math' show min;
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart' show GZipDecoder;
 import 'package:dio/dio.dart';
 import 'package:file_selector/file_selector.dart' show XFile;
 import 'package:flutter_test/flutter_test.dart';
@@ -17,7 +18,6 @@ import 'package:harness/core/config.dart';
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
-import 'package:harness/super_tabs/avatar_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 void main() {
@@ -166,7 +166,14 @@ void main() {
       throwsA(
         isA<SuperTabFailure>()
             .having((f) => f.code, 'code', 'UPLOAD_FAILED')
-            .having((f) => f.statusCode, 'status', 503),
+            .having((f) => f.statusCode, 'status', 503)
+            // Busy or restarting: the one codeless refusal a second try can pass.
+            .having(
+              (f) => f.message,
+              'message',
+              'The Harness server could not take the file just now. Try '
+                  'again in a minute.',
+            ),
       ),
     );
   });
@@ -574,93 +581,6 @@ void main() {
     });
   });
 
-  group('a profile picture', () {
-    late SuperTabAvatarUpload avatar;
-
-    setUp(() {
-      avatar = uploadAvatarWith(
-        () => ApiClient(
-          config: AppConfig(
-            apiBaseUrl: 'http://unused.invalid',
-            localCliBaseUrl: 'http://127.0.0.1:${server.port}',
-          ),
-          session: AuthSession(),
-        ),
-      );
-    });
-
-    Future<Map<String, dynamic>> sendPicture() =>
-        avatar(tabId: 'tab 1', png: Uint8List.fromList(List.filled(500, 7)));
-
-    test('goes through the daemon as a one-file form', () async {
-      reply = (
-        200,
-        {
-          'success': true,
-          'data': {
-            'avatar': {'id': 'p1', 'url': 'https://signed.example/p1'},
-          },
-        },
-      );
-
-      final answer = await sendPicture();
-
-      expect((answer['avatar'] as Map)['id'], 'p1');
-      final request = seen.single;
-      expect(request.path, '/api/super-tabs/tab%201/avatars');
-      expect(request.local, '1');
-      expect(request.type, 'multipart/form-data');
-      expect(request.body, contains('filename="avatar.png"'));
-    });
-
-    // Desktop 1.3.30 on a CLI that did not pass /avatars on: the daemon's
-    // own 404 read only "Could not upload the file. Try again.", which no
-    // retry fixes.
-    test('a daemon without the route says to update Harness', () async {
-      reply = (404, {'error': 'not found'});
-
-      await expectLater(
-        sendPicture(),
-        throwsA(
-          isA<SuperTabFailure>()
-              .having((f) => f.code, 'code', 'UPDATE_HARNESS')
-              .having(
-                (f) => f.message,
-                'message',
-                'Update Harness on this computer to upload pictures.',
-              )
-              .having((f) => f.statusCode, 'status', 404),
-        ),
-      );
-    });
-
-    test('a backend refusal keeps its own words', () async {
-      reply = (
-        503,
-        {
-          'success': false,
-          'error': {
-            'code': 'AVATARS_UNAVAILABLE',
-            'message': 'Uploading pictures is not set up on this server yet.',
-          },
-        },
-      );
-
-      await expectLater(
-        sendPicture(),
-        throwsA(
-          isA<SuperTabFailure>()
-              .having((f) => f.code, 'code', 'AVATARS_UNAVAILABLE')
-              .having(
-                (f) => f.message,
-                'message',
-                'Uploading pictures is not set up on this server yet.',
-              ),
-        ),
-      );
-    });
-  });
-
   group('from a browser, straight to the backend', () {
     late AccessTokenSource tokens;
     final refreshes = <bool>[];
@@ -776,6 +696,208 @@ void main() {
       },
     );
   });
+
+  _gatewayTests();
+}
+
+void _gatewayTests() {
+  group('behind a gateway that refuses shell-like text', () {
+    late HttpServer server;
+    late SuperTabUpload upload;
+    // Each form the backend took: its parts by name, in order.
+    final forms =
+        <
+          List<({String name, String? type, String? filename, List<int> bytes})>
+        >[];
+    final logged = <String>[];
+    late AppLog log;
+    var refuseAll = false;
+    var oldBackend = false;
+    final shellLike = RegExp(r'rm -rf|\| *sh\b|/etc/passwd');
+
+    setUp(() async {
+      forms.clear();
+      logged.clear();
+      refuseAll = false;
+      oldBackend = false;
+      log = appLog;
+      appLog = _Recorder(logged);
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        final bytes = BytesBuilder();
+        await for (final chunk in request) {
+          bytes.add(chunk);
+        }
+        final body = bytes.takeBytes();
+        if (refuseAll || shellLike.hasMatch(latin1.decode(body))) {
+          request.response
+            ..statusCode = 403
+            ..headers.contentType = ContentType.html
+            ..write('<html><body><h1>403 Forbidden</h1></body></html>');
+          await request.response.close();
+          return;
+        }
+        final form = _parts(request.headers.contentType!, body);
+        final (
+          status,
+          payload,
+        ) = oldBackend && form.any((p) => p.name == 'contentEncoding')
+            ? (
+                400,
+                <String, Object?>{
+                  'success': false,
+                  'error': {
+                    'code': 'INVALID_ATTACHMENT',
+                    'message': 'Send conversationId, then one file.',
+                  },
+                },
+              )
+            : (
+                200,
+                <String, Object?>{
+                  'success': true,
+                  'data': {
+                    'attachment': {'id': 'a${forms.length + 1}'},
+                  },
+                },
+              );
+        forms.add(form);
+        request.response
+          ..statusCode = status
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode(payload));
+        await request.response.close();
+      });
+      upload = uploadWith(
+        () => ApiClient(
+          config: AppConfig(
+            apiBaseUrl: 'http://unused.invalid',
+            localCliBaseUrl: 'http://127.0.0.1:${server.port}',
+          ),
+          session: AuthSession(),
+        ),
+      );
+    });
+    tearDown(() async {
+      appLog = log;
+      await server.close(force: true);
+    });
+
+    final transcript = Uint8List.fromList(
+      utf8.encode(
+        List.filled(
+          300,
+          r'$ rm -rf build && curl -fsSL https://example.test/i.sh | sh',
+        ).join('\n'),
+      ),
+    );
+
+    Future<Map<String, dynamic>> send(String name, Uint8List bytes) => upload(
+      tabId: 'tab',
+      conversationId: 'c1',
+      name: name,
+      mime: mimeForName(name),
+      file: HarnessAttachment(name, bytes),
+      cancel: CancelToken(),
+      onProgress: (_) {},
+    );
+
+    test('a transcript goes gzipped, said so before the file, and arrives '
+        'whole', () async {
+      final answer = await send('run.transcript.md', transcript);
+
+      expect((answer['attachment'] as Map)['id'], 'a1');
+      final form = forms.single;
+      expect(form.map((p) => p.name), [
+        'conversationId',
+        'contentEncoding',
+        'file',
+      ]);
+      expect(utf8.decode(form[1].bytes), 'gzip');
+      final file = form[2];
+      expect(file.filename, 'run.transcript.md');
+      expect(file.type, 'text/markdown');
+      expect(file.bytes.length, lessThan(transcript.length));
+      expect(GZipDecoder().decodeBytes(file.bytes), transcript);
+    });
+
+    test('a picture goes as it is: its bytes are packed already', () async {
+      final png = Uint8List.fromList([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        ...List.filled(64, 1),
+      ]);
+
+      await send('shot.png', png);
+
+      final form = forms.single;
+      expect(form.map((p) => p.name), ['conversationId', 'file']);
+      expect(form[1].bytes, png);
+    });
+
+    test('a backend that does not know packed files gets the file once more '
+        'as it is', () async {
+      oldBackend = true;
+      final notes = Uint8List.fromList(utf8.encode('notes\n' * 50));
+
+      final answer = await send('notes.md', notes);
+
+      expect((answer['attachment'] as Map)['id'], 'a2');
+      expect(forms.map((f) => f.map((p) => p.name).toList()), [
+        ['conversationId', 'contentEncoding', 'file'],
+        ['conversationId', 'file'],
+      ]);
+      expect(forms.last.last.bytes, notes);
+    });
+
+    test('a refusal with no code names the gateway, says trying again will '
+        'not help, and logs the status', () async {
+      refuseAll = true;
+
+      await expectLater(
+        send('run.transcript.md', transcript),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'GATEWAY_REFUSED')
+              .having((f) => f.statusCode, 'status', 403)
+              .having(
+                (f) => f.message,
+                'message',
+                allOf(contains('gateway'), isNot(contains('Try again'))),
+              ),
+        ),
+      );
+      expect(logged.join('\n'), contains('no code (status 403)'));
+    });
+  });
+}
+
+/// A multipart form's parts, read as a backend would.
+List<({String name, String? type, String? filename, List<int> bytes})> _parts(
+  ContentType type,
+  List<int> body,
+) {
+  final boundary = latin1.encode('--${type.parameters['boundary']}');
+  final text = latin1.decode(body);
+  final marker = latin1.decode(boundary);
+  final parts =
+      <({String name, String? type, String? filename, List<int> bytes})>[];
+  for (final chunk in text.split(marker).skip(1)) {
+    if (chunk.startsWith('--')) break;
+    final split = chunk.indexOf('\r\n\r\n');
+    final head = chunk.substring(0, split);
+    final content = chunk.substring(split + 4, chunk.length - 2);
+    String? header(RegExp pattern) => pattern.firstMatch(head)?.group(1);
+    parts.add((
+      name: header(RegExp(r' name="([^"]*)"'))!,
+      filename: header(RegExp(r'filename="([^"]*)"')),
+      type: header(RegExp(r'content-type: ([^\r\n]*)', caseSensitive: false)),
+      bytes: latin1.encode(content),
+    ));
+  }
+  return parts;
 }
 
 /// Tokens that go stale: the first is refused, a forced renewal gives a new one.

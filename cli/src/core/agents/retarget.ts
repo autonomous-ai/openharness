@@ -26,6 +26,10 @@ import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { canRestart, restartTargetOf } from '../../lib/terminalBackend.js'
 import { launchContract } from '../../engines/launches.js'
+import { moveCodexConversation } from '../../engines/codex/providerMove.js'
+import { engineBin } from '../../lib/engineBin.js'
+import { sessionCodexHome } from '../../lib/engineHomes.js'
+import { windowsEngineArgv } from '../../lib/windows/launch.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
@@ -64,7 +68,8 @@ export interface RetargetDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   /** OpenCode's store, whose rows a resumed session takes its model from. */
   opencodeDb: string
-  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
+   *  Swarm is off. */
   adoptSwarmSkill?: AdoptSwarmSkill
 }
 
@@ -109,8 +114,8 @@ export function createAgentRetargeter({
     // validate, and respawning over a pane whose occupant we cannot identify is how you replace
     // something that was not ours.
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
-    // An older Swarm session switches with its role, or not at all while the role cannot be read: a switch relaunched an old
-    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). Nothing has touched
+    // An agent its person attached switches with its Swarm role, or not at all while the role cannot be read: a switch
+    // relaunched a Swarm member with no saved role as an ordinary session (security review 1 of #2255). Nothing has touched
     // the pane yet, so a refusal leaves the running engine as it is.
     const looked = await adoptSwarmSkill?.lookup?.(session, current)
     if (looked !== undefined) {
@@ -156,11 +161,14 @@ export function createAgentRetargeter({
       //    "subscription" one and hand it straight back — teaching the bug to itself.
       ? (!session.grid && observed !== grid.model ? observed : (session.subscriptionModel ?? null))
       : (session.subscriptionModel ?? null)
+    // The relaunch reopens the row's own conversation; '' (none bound yet) starts a new one (restartAgent).
+    const onGrid = !!(session.grid || session.gridLaunch)
     // What this machine cannot do at all is said first, before the pane is even looked at.
     const target: LaunchSource = {
       gridLaunch: grid,
       codexHome: session.codexHome,
-      ...(grid ? {} : { subscriptionModel: remembered }),
+      // Home, the model it was launched with too: it outranks the remembered one (lib/launchOverrides.ts, task #3449).
+      ...(grid ? {} : { subscriptionModel: remembered, ...(session.launchModel ? { launchModel: session.launchModel } : {}) }),
     }
     const inspected = await launchOverridesDeps.native?.(session.engine, session, { id: session.agentId, current })
     if (!current()) return changed()
@@ -303,13 +311,22 @@ export function createAgentRetargeter({
       // A Codex conversation is bound to its provider (`providerBoundConversations`): moved between a grid and the
       // own login it goes on in a fork, its whole history with it; grid to grid is one provider and resumes.
       const movesProvider = !!launchContract(session.engine)?.providerBoundConversations
-        && !!session.sessionId && !!(session.gridLaunch || session.grid) !== !!grid
+        && !!session.sessionId && onGrid !== !!grid
       const outcome = await restartAgent(
         { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}),
           ...(movesProvider ? { continueInFork: true as const } : {}) },
         retargetPermission.bypassPermission === true,
         { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
-          retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+          retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent,
+          ...(movesProvider ? { prepareFork: () => {
+            const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: sessionCodexHome(session), ...built.overrides.env, ...built.overrides.native?.environment }
+            if (!grid) for (const name of gridEnvVarNames(session.engine)) delete env[name]
+            return moveCodexConversation({
+              sessionId: session.sessionId, toGrid: !!grid, args: built.overrides.extraArgs ?? [], env,
+              argv: (codexArgs) => windowsEngineArgv(session.engine, [built.overrides.native?.executable?.command ?? engineBin(session.engine), ...codexArgs]),
+              ...(session.cwd ? { cwd: session.cwd } : {}),
+            })
+          } } : {}) },
       )
       replacementStarted = outcome.ok
       if (!current()) return changed()

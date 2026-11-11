@@ -21,3 +21,25 @@ export function withPoolDefaults(url: string, defaults: PoolDefaults): string {
   const hosts = url.indexOf('://') + 3
   return `${url}${url.indexOf('/', hosts) < 0 ? '/' : ''}?${missing.join('&')}`
 }
+
+/** What the second client's reads ask for (task #2970): any secondary no more than 90 s behind (the least MongoDB allows),
+ *  the primary when none is, and a name of its own in Atlas's connection and slow-query views. */
+export const SECONDARY_READS = { readPreference: 'secondaryPreferred', maxStalenessSeconds: '90', appName: 'autonomous-code-prod-secondary' } as const
+
+/** The main connection string with SECONDARY_READS set: each replaces the same option where it stood (MongoDB option names
+ *  are case-insensitive), the rest follow, and every other option stays. A `mongodb+srv` host already lists every member.
+ *  Never parsed as a URL, as withPoolDefaults. */
+export function secondaryReadsUrl(url: string): string {
+  const query = url.indexOf('?')
+  const wanted = new Map(Object.entries(SECONDARY_READS).map(([name, value]) => [name.toLowerCase(), `${name}=${value}`]))
+  const pairs = (query < 0 ? '' : url.slice(query + 1)).split('&').filter(Boolean).flatMap(pair => {
+    const name = pair.split('=')[0]!.toLowerCase(), set = wanted.get(name)
+    if (!set) return [pair]
+    wanted.delete(name)
+    return [set]
+  })
+  const options = [...pairs, ...wanted.values()].join('&')
+  if (query >= 0) return `${url.slice(0, query)}?${options}`
+  const hosts = url.indexOf('://') + 3
+  return `${url}${url.indexOf('/', hosts) < 0 ? '/' : ''}?${options}`
+}

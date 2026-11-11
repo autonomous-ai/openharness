@@ -1,0 +1,40 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   ~/scratch/rename
+
+▎ Your Ultra plan includes $200 a month in API credits to
+▎ power your apps and agents. Claim them at
+▎ https://clau.de/api-credits
+
+❯ /rename my-renamed-buddy
+  ⎿  Session renamed to: my-renamed-buddy
+
+───────────────────────────────────────── my-renamed-buddy ─
+❯ 
+────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

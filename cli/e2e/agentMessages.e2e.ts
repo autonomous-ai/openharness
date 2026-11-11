@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { MESSAGES_OFF_TEXT } from '../src/messages/service.js'
 
 /** Signed in to the fake backend, which answers the account's tabs (`GET /api/agent-messages`). */
 const ME: FakeMachine = { machineId: 'a7'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000a7', name: 'studio', token: 'e2e-token-messages' }
@@ -168,7 +169,7 @@ describe('Agent Messages, end to end', () => {
     await new Promise((settle) => setTimeout(settle, 17_000))
     expect(reads(relay), 'off for the account, the tabs are never read').toBe(0)
     const on = await settings(d, { agentMessages: true })
-    expect(await on.json()).toEqual({ agentsStartAgents: false, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: false, signedIn: true })
+    expect(await on.json()).toMatchObject({ agentsStartAgents: false, pullRequestLine: true, agentMessages: true, signedIn: true })
     expect(relay.experiments).toEqual({ agent_pull_request_line: true, agent_messages: true })
     await until('Agent Messages to wake for the setting turned on', () => reads(relay) >= 1 || null, 30_000, 200)
     const notes = await notesFor(d, 2)
@@ -259,7 +260,8 @@ describe('Agent Messages, end to end', () => {
     expect(await client.request('agent_messages', { action: 'send', pane: '%999', to: [apiName], text: 'x' }, 40_000)).toMatchObject({ error: 'NOT_A_HARNESS' })
     expect((await settings(d, { agentMessages: false })).status).toBe(200)
     await new Promise((settle) => setTimeout(settle, 2_500))
-    expect(await send('still there?')).toMatchObject({ error: 'MESSAGES_OFF', detail: expect.stringContaining('Settings ▸ Experimental') })
+    // An agent refused asks its person, and turns it on only on their yes (#1719).
+    expect(await send('still there?')).toMatchObject({ error: 'MESSAGES_OFF', detail: expect.stringContaining(MESSAGES_OFF_TEXT) })
     client.close()
   })
 })

@@ -31,7 +31,27 @@ class SessionActivityController extends ChangeNotifier {
   bool _disposed = false;
   bool _reading = false;
   bool _scheduled = false;
+  bool _seen = true;
   int _revision = 0;
+
+  /// Whether the rows can be seen, set by the widget that shows them (its `VisibleTick`). While
+  /// they cannot, nothing is read; when they can again, one read at once, then every 5 seconds.
+  set seen(bool seen) {
+    if (seen == _seen || _disposed) return;
+    _seen = seen;
+    _timer?.cancel();
+    _timer = null;
+    if (seen) _poll();
+  }
+
+  /// Reads the external rows now and every 5 seconds, while they can be seen.
+  void _poll() {
+    _timer?.cancel();
+    _timer = null;
+    if (!_seen || !_rows.values.any((row) => row.external != null)) return;
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => refresh());
+    _schedule();
+  }
 
   SessionActivity read(SwarmDestination row) {
     final machine = app.stateOf(row.machineId ?? '');
@@ -74,11 +94,7 @@ class SessionActivityController extends ChangeNotifier {
     _external.removeWhere((id, _) => !next.containsKey(id));
     // A conversation that came back to the index shows again.
     _notHeld.clear();
-    _timer?.cancel();
-    if (next.values.any((row) => row.external != null)) {
-      _timer = Timer.periodic(const Duration(seconds: 5), (_) => refresh());
-      _schedule();
-    }
+    _poll();
   }
 
   void _schedule() {
@@ -86,7 +102,7 @@ class SessionActivityController extends ChangeNotifier {
     _scheduled = true;
     scheduleMicrotask(() {
       _scheduled = false;
-      if (!_disposed) unawaited(refresh());
+      if (!_disposed && _seen) unawaited(refresh());
     });
   }
 

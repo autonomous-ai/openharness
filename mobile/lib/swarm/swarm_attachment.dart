@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
 import 'swarm_attachment_store.dart';
+import 'swarm_file_download.dart';
 import 'swarm_file_links.dart';
 import 'swarm_outgoing_files.dart' show swarmFormAttachmentMaxBytes;
 import 'swarm_style.dart';
@@ -27,11 +28,18 @@ class SwarmAttachment extends StatelessWidget {
     required this.file,
     required this.link,
     required this.chip,
+    this.thumb,
     this.store,
     this.fileRef,
   });
 
   final SuperTabAttachment file;
+
+  /// [file]'s thumbnail link, when it has one that opens now
+  /// ([SwarmFileRef.currentThumb]): the chat draws that, and the original
+  /// only when the picture is opened full screen. Null for a thumbnail whose
+  /// link has ended: a fresh one is asked of [fileRef] first.
+  final Uri? thumb;
 
   /// [file]'s link, when it is on Harness's file storage — the only place a
   /// picture is fetched from, as the chip only opens a link from there.
@@ -57,10 +65,34 @@ class SwarmAttachment extends StatelessWidget {
     return _Preview(
       file: file,
       url: link,
+      thumb: thumb,
       fileRef: ref,
       chip: chip,
       store: store ?? swarmAttachments,
     );
+  }
+}
+
+/// [file] as [store] keeps it: by the link at hand ([at]), else a fresh one
+/// of [ref]; a signed link that fails (it may have ended) is asked for once
+/// more, then the failure stands.
+Future<File> swarmKeptFile(
+  SwarmAttachmentStore store,
+  SuperTabAttachment file, {
+  Uri? at,
+  SwarmFileRef? ref,
+}) async {
+  // A signed link changes every few minutes; the file it reaches does not,
+  // so it is kept by the file's id.
+  String keyOf(Uri url) =>
+      url.host == swarmFilesHost ? 'swarm-file:${file.id}' : url.toString();
+  var url = at ?? await (ref ?? (throw StateError('No link'))).link();
+  try {
+    return await store.file(url, key: keyOf(url));
+  } catch (_) {
+    if (ref == null || url.host != swarmFilesHost) rethrow;
+    url = await ref.link(stale: true);
+    return store.file(url, key: keyOf(url));
   }
 }
 
@@ -76,6 +108,7 @@ class _Preview extends StatefulWidget {
   const _Preview({
     required this.file,
     required this.url,
+    required this.thumb,
     required this.fileRef,
     required this.chip,
     required this.store,
@@ -85,6 +118,9 @@ class _Preview extends StatefulWidget {
 
   /// The link at hand; null when a fresh one is asked of [fileRef] first.
   final Uri? url;
+
+  /// The thumbnail's link at hand, drawn in the chat in place of [url].
+  final Uri? thumb;
   final SwarmFileRef? fileRef;
   final Widget chip;
   final SwarmAttachmentStore store;
@@ -104,6 +140,10 @@ class _PreviewState extends State<_Preview> {
   /// The picture could not be fetched or decoded: the chip, which still opens it.
   bool _failed = false;
 
+  /// What [_local] holds is the thumbnail, not the original: the viewer then
+  /// fetches the original when the picture is opened.
+  bool _thumbShown = false;
+
   @override
   void initState() {
     super.initState();
@@ -115,6 +155,7 @@ class _PreviewState extends State<_Preview> {
   void didUpdateWidget(_Preview old) {
     super.didUpdateWidget(old);
     if (old.url == widget.url &&
+        old.thumb == widget.thumb &&
         identical(old.store, widget.store) &&
         identical(old.fileRef?.reader, widget.fileRef?.reader)) {
       return;
@@ -132,33 +173,47 @@ class _PreviewState extends State<_Preview> {
 
   void _ask() {
     _turn = widget.store.turns.value;
-    _local = _fetch(widget.store, widget.url, widget.fileRef);
+    _thumbShown = false;
+    _local = _thumbnailOrOriginal();
     _failed = false;
   }
 
-  /// The picture's file: by the link at hand, else a fresh one; a signed
-  /// link that fails (it may have ended) is asked for once more, then the
-  /// failure stands.
-  Future<File> _fetch(
-    SwarmAttachmentStore store,
-    Uri? at,
-    SwarmFileRef? ref,
-  ) async {
-    var url = at ?? await (ref ?? (throw StateError('No link'))).link();
+  Future<File> _original() => swarmKeptFile(
+    widget.store,
+    widget.file,
+    at: widget.url,
+    ref: widget.fileRef,
+  );
+
+  /// The thumbnail, kept apart from the original (their addresses and so their
+  /// links differ); the original when the thumbnail cannot be had.
+  ///
+  /// A thumbnail whose link has ended (a chat opened again later) is asked a
+  /// fresh link first, as Desktop does: the read that signs the original again
+  /// signs its thumbnail too (backend fileLinks.ts), so the original, many
+  /// times the size, is not fetched in its place.
+  Future<File> _thumbnailOrOriginal() async {
+    var thumb = widget.thumb;
+    final ref = widget.fileRef;
+    if (thumb == null && ref != null && widget.file.thumb != null) {
+      // The original would ask this same read: one that fails fails the
+      // picture, as it did there.
+      await ref.link();
+      thumb = ref.currentThumb;
+    }
+    if (thumb == null) return _original();
     try {
-      return await store.file(url, key: _keyOf(url));
+      final file = await widget.store.file(
+        thumb,
+        key: 'swarm-file:${widget.file.id}:thumb',
+      );
+      _thumbShown = true;
+      return file;
     } catch (_) {
-      if (ref == null || url.host != swarmFilesHost) rethrow;
-      url = await ref.link(stale: true);
-      return store.file(url, key: _keyOf(url));
+      _thumbShown = false;
+      return _original();
     }
   }
-
-  /// A signed link changes every few minutes; the file it reaches does not,
-  /// so it is kept by the file's id.
-  String _keyOf(Uri url) => url.host == swarmFilesHost
-      ? 'swarm-file:${widget.file.id}'
-      : url.toString();
 
   /// The files kept changed hands: the picture is asked for again, for
   /// whoever they are kept for now.
@@ -255,6 +310,22 @@ class _PreviewState extends State<_Preview> {
   void _open(BuildContext context, File file) {
     final turn = _turn;
     if (turn != widget.store.turns.value) return;
+    if (!_thumbShown) return _push(context, file, turn);
+    unawaited(_openOriginal(context, file, turn));
+  }
+
+  /// The viewer shows the original: fetched now, as the thumbnail in the chat is
+  /// not what a pinch should zoom into. If it cannot be had, the thumbnail opens.
+  Future<void> _openOriginal(BuildContext context, File thumb, int turn) async {
+    File shown = thumb;
+    try {
+      shown = await _original();
+    } catch (_) {}
+    if (!context.mounted || turn != widget.store.turns.value) return;
+    _push(context, shown, turn);
+  }
+
+  void _push(BuildContext context, File file, int turn) {
     final name = widget.file.name;
     final store = widget.store;
     unawaited(
@@ -273,7 +344,8 @@ class _PreviewState extends State<_Preview> {
   }
 }
 
-/// A picture full screen, to pinch and zoom; its name and a close at the top.
+/// A picture full screen, to pinch and zoom; its name, a close and Download
+/// ([SwarmDownloadButton]) at the top.
 ///
 /// It shows a file [store] keeps for one account, so it goes when that
 /// changes ([SwarmAttachmentStore.turns]: another account, sign-out, Swarm
@@ -361,6 +433,11 @@ class _ViewerState extends State<SwarmAttachmentViewer> {
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
               title: _gone ? '' : widget.name,
+              trailing: SwarmDownloadButton(
+                name: widget.name,
+                file: _gone ? null : widget.file,
+                store: widget.store,
+              ),
             ),
             Expanded(
               child: _gone

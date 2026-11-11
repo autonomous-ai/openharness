@@ -301,7 +301,8 @@ export interface ReexecDeps {
   own: string | null
   /** The bundle on disk now. */
   current(): string | null
-  /** What a re-executed master runs: this node, these flags, this bundle. */
+  /** What a re-executed master runs: this node, these flags, this bundle. Each read as it re-executes: a rollback
+   *  puts back the build before, and the Node it ran on (./master.ts `restoreUpdate`). */
   nodePath: string
   execArgv: string[]
   scriptPath: string
@@ -630,7 +631,7 @@ export function createReexec(deps: ReexecDeps): {
             carryOn('kept')
             return
           }
-          // An exec that fails cannot be caught once it has begun: on Node 22.23 a node binary that is not
+          // An exec that fails cannot be caught once it has begun: on Node 22.23 and 24.22.2 a node binary that is not
           // there aborts this process (exit 134), and a bundle that is not there ends it in the new image
           // (MODULE_NOT_FOUND), the marker left behind for the next master to roll the update back. Both
           // were there for the probe a moment ago; they are checked again here, right before.

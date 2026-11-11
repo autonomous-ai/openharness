@@ -1,7 +1,6 @@
 /// The leaderboard read's answer, how the board writes its numbers, and the
-/// reader that keeps one project's board current (the desktop's
-/// `desktop/lib/super_tabs/leaderboard` model, format and reader); the page
-/// is `swarm_leaderboard.dart`.
+/// reader that keeps one project's board current; the page is
+/// `swarm_leaderboard.dart`.
 library;
 
 import 'dart:async';
@@ -23,21 +22,34 @@ Map<String, dynamic> _map(Object? value) =>
 
 /// One project's week as the leaderboard read answers it
 /// (`backend/src/superTabs/leaderboard/contract.ts`): what it shipped, and
-/// each person who reads the project with their points, most first. The
-/// desktop's `SuperTabLeaderboard` (`desktop/lib/super_tabs/leaderboard`),
-/// kept to what the phone shows.
+/// each person who reads the project with their points, most first, kept to
+/// what the phone shows.
 class SwarmLeaderboard {
   SwarmLeaderboard.fromJson(Map<String, dynamic> json)
     : week = _int(json['week']),
+      period = switch (_map(json['period'])['name']) {
+        final String name when name.isNotEmpty => name,
+        _ => null,
+      },
       shipped = _int(_map(_map(json['goal'])['thisWeek'])['shipped']),
       shippedBefore = _int(_map(_map(json['goal'])['lastWeek'])['shipped']),
       people = List.unmodifiable([
         for (final row in json['people'] as List? ?? const [])
-          if (row is Map) SwarmScore.fromJson(_map(row)),
+          if (row is Map)
+            SwarmScore.fromJson(
+              _map(row),
+              period: switch (_map(json['period'])['name']) {
+                final String name when name.isNotEmpty => name,
+                _ => null,
+              },
+            ),
       ]);
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
+
+  /// The rolling period this sums; null from a server that sums weeks.
+  final String? period;
 
   /// What the project shipped in the week.
   final int shipped;
@@ -49,10 +61,35 @@ class SwarmLeaderboard {
   final List<SwarmScore> people;
 }
 
+/// The rolling periods the board offers, the default in the middle (the
+/// desktop's `leaderboardPeriods`).
+const swarmPeriods = ['24h', '7d', '30d'];
+const swarmDefaultPeriod = '7d';
+
+/// "Last 7d": a period in the picker.
+String swarmPeriodLabel(String period) => 'Last $period';
+
+String _periodLength(String period) => switch (period) {
+  '24h' => '24 hours',
+  '30d' => '30 days',
+  _ => '7 days',
+};
+
+/// "in the last 7 days": what a period's numbers cover, in a sentence.
+String swarmPeriodSpan(String period) => 'in the last ${_periodLength(period)}';
+
+/// "the 7 days before"; null for Last 30d, which has no comparison.
+String? swarmPeriodEarlier(String period) =>
+    period == '30d' ? null : 'the ${_periodLength(period)} before';
+
 /// One person's week on the board.
 class SwarmScore {
-  SwarmScore.fromJson(Map<String, dynamic> json)
-    : personId = json['personId'] as String? ?? '',
+  SwarmScore.fromJson(Map<String, dynamic> json, {String? period})
+    : spanName = period == null ? 'this week' : swarmPeriodSpan(period),
+      earlierName = period == null
+          ? 'last week'
+          : 'the ${_periodLength(period)} before',
+      personId = json['personId'] as String? ?? '',
       points = _int(json['points']),
       rank = _int(json['rank']),
       medal = SwarmMedal.values.asNameMap()[json['medal']],
@@ -68,7 +105,35 @@ class SwarmScore {
         final String name when name.isNotEmpty => name,
         _ => null,
       },
-      prevWeekPoints = _optional(json['prevWeekPoints']);
+      prevWeekPoints = _optional(json['prevWeekPoints']),
+      details = json['details'] is Map
+          ? SwarmPersonDetails.fromJson(_map(json['details']))
+          : null,
+      brought = switch (_map(json['details'])['brought']) {
+        final List<Object?> machines => [
+          for (final machine in machines.whereType<Map<String, dynamic>>())
+            if (_text(machine['machineName']) case final name?)
+              (
+                machineName: _withoutLocal(name),
+                shipped: _int(machine['shipped']),
+                busyHours: machine['busyHours'] is num
+                    ? (machine['busyHours'] as num).toDouble()
+                    : 0.0,
+                subscriptions: [
+                  for (final sub
+                      in (machine['subscriptions'] as List? ?? const [])
+                          .whereType<Map<String, dynamic>>())
+                    if (sub['engine'] case final String engine)
+                      (
+                        engine: engine,
+                        usedPercent: _optional(sub['usedPercent']),
+                        resetsAt: _optional(sub['resetsAt']),
+                      ),
+                ],
+              ),
+        ],
+        _ => null,
+      };
 
   final String personId;
 
@@ -85,9 +150,141 @@ class SwarmScore {
   /// The profile name; null from a server before names.
   final String? displayName;
 
-  /// The same scoring for the week before; null from a server before it.
+  /// What the points cover and what [prevWeekPoints] covers, in a sentence.
+  final String spanName, earlierName;
+
+  /// The same scoring for the time before; null from a server before it, and
+  /// for Last 30d, which has no comparison.
   final int? prevWeekPoints;
+
+  /// What the numbers are made of; null from a server before details.
+  final SwarmPersonDetails? details;
+
+  /// Every machine the person brought (contributor view, #2444): the verified
+  /// requests that shipped on it, its hours for others, and each
+  /// subscription's weekly use and reset; named without `.local`. Null from a
+  /// server before it, which shows Lent instead.
+  final List<SwarmBroughtMachine>? brought;
 }
+
+/// One machine a person brought (backend `BroughtMachine`).
+typedef SwarmBroughtMachine = ({
+  String machineName,
+  int shipped,
+  double busyHours,
+  List<({String engine, int? usedPercent, int? resetsAt})> subscriptions,
+});
+
+/// A person's period item by item, each list newest first and only what the
+/// reader can read (the desktop's `SuperTabPersonDetails`). An item without a
+/// title, or a machine without a name, is left out.
+class SwarmPersonDetails {
+  SwarmPersonDetails.fromJson(Map<String, dynamic> json)
+    : shipped = List.unmodifiable([
+        for (final item in _maps(json['shipped']))
+          if (_text(item['title']) case final title?)
+            (title: title, link: _webLink(item['prUrl'])),
+      ]),
+      unblocked = List.unmodifiable([
+        for (final item in _maps(json['unblocked']))
+          if (_text(item['title']) case final title?)
+            (title: title, waitedMinutes: _int(item['waitedMinutes'])),
+      ]),
+      lent = List.unmodifiable([
+        for (final item in _maps(json['lent']))
+          if (_text(item['machineName']) case final name?)
+            (
+              machineName: _withoutLocal(name),
+              busyHours: item['busyHours'] is num
+                  ? (item['busyHours'] as num).toDouble()
+                  : 0.0,
+            ),
+      ]);
+
+  /// Pull requests that merged; [link] only a web page's, as a link from the
+  /// server is data and any other scheme could open a file or an app.
+  final List<({String title, Uri? link})> shipped;
+
+  /// Questions answered, and how long the agent waited.
+  final List<({String title, int waitedMinutes})> unblocked;
+
+  /// Machines whose agents ran, and for how long; named without `.local`.
+  final List<({String machineName, double busyHours})> lent;
+}
+
+List<Map<String, dynamic>> _maps(Object? value) => [
+  if (value is List)
+    for (final item in value)
+      if (item is Map) _map(item),
+];
+
+String? _text(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
+
+Uri? _webLink(Object? value) {
+  final uri = value is String ? Uri.tryParse(value) : null;
+  return uri != null &&
+          (uri.scheme == 'https' || uri.scheme == 'http') &&
+          uri.host.isNotEmpty
+      ? uri
+      : null;
+}
+
+/// A machine's name without its `.local`, as the desktop shows it.
+String _withoutLocal(String name) {
+  const suffix = '.local';
+  return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
+      ? name.substring(0, name.length - suffix.length)
+      : name;
+}
+
+/// How Brought names a subscription's engine, as the Swarm's other lines do.
+const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
+
+/// "31 h", "12.5 h", "0 h".
+String _broughtHours(double hours) {
+  final rounded = (hours * 10).round() / 10;
+  return rounded == rounded.roundToDouble()
+      ? '${rounded.round()} h'
+      : '${rounded.toStringAsFixed(1)} h';
+}
+
+/// "3d", "5h 10m", "20m", "now": until a subscription's week resets.
+String _resetsIn(int at, DateTime now) {
+  final minutes = DateTime.fromMillisecondsSinceEpoch(at)
+      .difference(now)
+      .inMinutes;
+  return minutes <= 0
+      ? 'now'
+      : minutes < 60
+      ? '${minutes}m'
+      : minutes < 1440
+      ? '${minutes ~/ 60}h ${minutes % 60}m'
+      : '${minutes ~/ 1440}d';
+}
+
+/// "5 shipped · 31 h for others": what a machine the person brought did.
+String swarmBroughtSummary(SwarmBroughtMachine machine) =>
+    '${machine.shipped} shipped · ${_broughtHours(machine.busyHours)} for others';
+
+/// Each of a brought machine's subscriptions with its week, as
+/// ("Claude", "38% used · resets in 3d"), in the desktop's words
+/// (`person_row.dart`).
+List<(String, String)> swarmBroughtSubscriptions(
+  SwarmBroughtMachine machine,
+  DateTime now,
+) => [
+  for (final sub in machine.subscriptions)
+    (
+      _engineNames[sub.engine] ?? sub.engine,
+      switch (sub) {
+        (usedPercent: final used?, resetsAt: final at?, engine: _) =>
+          '$used% used · resets in ${_resetsIn(at, now)}',
+        (usedPercent: final used?, resetsAt: null, engine: _) => '$used% used',
+        _ => 'not read yet',
+      },
+    ),
+];
 
 /// "6 min" under an hour, then hours with one decimal unless whole: "3 h",
 /// "3.1 h" (the desktop's `leaderboardDuration`).
@@ -119,7 +316,7 @@ String? swarmTrend(SwarmScore score) {
   final before = score.prevWeekPoints;
   if (before == null || before == score.points) return null;
   final change = score.points - before;
-  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
+  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from ${score.earlierName}';
 }
 
 String _plural(int count, String one) =>
@@ -175,6 +372,13 @@ class SwarmLeaderboardReader extends ChangeNotifier {
   /// The Monday of the week shown; null for this week.
   int? week;
 
+  String _period = swarmDefaultPeriod;
+  bool _weeksOnly = false;
+
+  /// The rolling period shown; null while the server only sums weeks (a server
+  /// before periods), which keeps the week picker. Told once per reader.
+  String? get period => _weeksOnly ? null : _period;
+
   int _read = 0;
   Timer? _timer;
   bool _disposed = false;
@@ -183,10 +387,45 @@ class SwarmLeaderboardReader extends ChangeNotifier {
 
   /// Reads now, and every [every] after while the app is in front.
   void start() {
+    _arm();
+    unawaited(refresh());
+  }
+
+  void _arm() {
+    if (_disposed) return;
     _timer ??= Timer.periodic(every, (_) {
       if (inFront()) unawaited(refresh());
     });
+  }
+
+  bool _paused = false;
+
+  /// The app went into a pocket: no tick until [resume].
+  void pause() {
+    if (_disposed || _timer == null) return;
+    _paused = true;
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  /// Back in front after [pause]: the board missed while away is read at once, and every [every]
+  /// from now. Without a [pause] first — a moment on the app switcher — nothing.
+  void resume() {
+    if (_disposed || !_paused) return;
+    _paused = false;
+    _arm();
     unawaited(refresh());
+  }
+
+  /// Shows another rolling period.
+  Future<void> showPeriod(String period) {
+    if (period == _period) return Future.value();
+    _period = period;
+    // Another period's numbers under this one's name would mislead.
+    board = null;
+    error = null;
+    _notify();
+    return refresh();
   }
 
   /// Shows another week, null for this one.
@@ -203,21 +442,32 @@ class SwarmLeaderboardReader extends ChangeNotifier {
 
   Future<void> refresh() async {
     if (_disposed) return;
-    final read = ++_read, week = this.week;
+    final read = ++_read, week = this.week, period = this.period;
     try {
       final answer = await request(
         'GET',
         '/api/super-tabs/${Uri.encodeComponent(tabId)}/leaderboard'
             '?projectId=${Uri.encodeQueryComponent(projectId)}'
-            '${week == null ? '' : '&week=$week'}',
+            '${period != null
+                ? '&period=$period'
+                : week == null
+                ? ''
+                : '&week=$week'}',
       );
       if (read != _read || _disposed) return;
       if (answer is! Map) throw const FormatException();
       board = SwarmLeaderboard.fromJson(answer.cast<String, dynamic>());
+      if (board!.period == null) _weeksOnly = true;
       error = null;
       unavailable = false;
     } on SuperTabFailure catch (failure) {
       if (read != _read || _disposed) return;
+      // A server before periods refuses the question, and only that one: any
+      // other failure, however early, leaves the periods on for the next read.
+      if (failure.statusCode == 400 && period != null) {
+        _weeksOnly = true;
+        return refresh();
+      }
       if (failure.statusCode == 404) {
         board = null;
         error = null;
@@ -254,8 +504,8 @@ List<(String, String)> swarmPersonWeek(SwarmScore score) {
     (
       'Points',
       score.medal == null
-          ? '${score.points} this week'
-          : '${score.points} this week · place ${score.rank}',
+          ? '${score.points} ${score.spanName}'
+          : '${score.points} ${score.spanName} · place ${score.rank}',
     ),
     (
       'Shipped',
@@ -286,3 +536,18 @@ List<(String, String)> swarmPersonWeek(SwarmScore score) {
     ),
   ];
 }
+
+/// The points first in a person's details, as the desktop's
+/// `LeaderboardPersonWeek` says them, the time before beside them rather than
+/// a difference: "21 points in the last 7 days · 15 the 7 days before".
+String swarmPersonPoints(SwarmScore score) => [
+  '${_plural(score.points, 'point')} ${score.spanName}',
+  if (score.prevWeekPoints case final before?) '$before ${score.earlierName}',
+].join(' · ');
+
+/// "waited 1.6 h": how long an answered question's agent waited.
+String swarmWaited(int minutes) => 'waited ${swarmDuration(minutes * 60000)}';
+
+/// "12.5 h busy": how long a lent machine's agents ran.
+String swarmBusy(double hours) =>
+    '${swarmDuration((hours * 3600000).round())} busy';

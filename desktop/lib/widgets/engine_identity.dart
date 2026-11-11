@@ -116,6 +116,17 @@ const _engines = <String, EngineIdentity>{
     homepage: 'https://pi.dev',
     blurb: "A small, extensible coding agent for the terminal.",
   ),
+  'openclaw': EngineIdentity(
+    id: 'openclaw',
+    label: 'OpenClaw',
+    category: 'Code',
+    tagline: 'Personal AI agent that works through your own Gateway',
+    creator: 'OpenClaw',
+    color: Color(0xffff4d4d),
+    asset: 'assets/engine-icons/openclaw.png',
+    homepage: 'https://openclaw.ai/',
+    blurb: "OpenClaw's agent in the terminal, working in its own workspace.",
+  ),
   'omp': EngineIdentity(
     id: 'omp',
     label: 'Oh My Pi',
@@ -333,8 +344,7 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xfff4f6ef),
     asset: 'assets/engine-icons/ollama.png',
     homepage: 'https://ollama.com',
-    blurb:
-        'Run and benchmark Ollama models on your Mac through natural language.',
+    blurb: 'Run and benchmark Ollama models on your computer through natural language.',
   ),
   // Original creative identities; source vectors ship in each package under brand/.
   'autonomous/voxel-worlds': EngineIdentity(
@@ -662,6 +672,15 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xff36876b),
     asset: 'assets/engine-icons/web-studio.png',
   ),
+  'autonomous/files': EngineIdentity(
+    id: 'autonomous/files',
+    label: "Files",
+    category: "Documents",
+    tagline: "Read, edit and look through a folder's files",
+    creator: "Autonomous",
+    color: Color(0xffc98a2b),
+    asset: 'assets/engine-icons/files.png',
+  ),
   'autonomous/data-studio': EngineIdentity(
     id: 'autonomous/data-studio',
     label: "Data Studio",
@@ -835,6 +854,7 @@ const knownHarnessBase = <String, String>{
   'autonomous/dimos': 'codex',
   'autonomous/bonsai-mcp': 'codex',
   'autonomous/web-studio': 'claude',
+  'autonomous/files': 'opencode',
   'autonomous/data-studio': 'claude',
   'autonomous/quantum-studio': 'claude',
   'autonomous/gis': 'claude',

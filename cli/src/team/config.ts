@@ -1,11 +1,12 @@
 /**
- * What setup made, written root-owned to /Library/Application Support/Harness/team.json (on Linux /etc/harness/team.json)
- * and read by the team daemon (its privacy check) and by the owner's `harness team status`. Nothing in it is secret:
- * names and paths. On Linux `label` and `plist` name the systemd unit and its file.
+ * What setup made, written root-owned to /Library/Application Support/Harness/team.json (on Linux /etc/harness/team.json,
+ * on Windows C:\ProgramData\Harness\team.json). Setup and `harness team` were removed on 2026-11-10; the file stays on
+ * computers set up before, until the person removes the account (Desktop asks), and names what is to go. Nothing in it is
+ * secret: names and paths. On Linux `label` and `plist` name the systemd unit and its file.
  */
 import { readFileSync } from 'node:fs'
-import { TEAM_CONFIG_FILE, carriedBackendEnv, checkPort, checkSid, pathCheck, teamLayout, userCheck } from './layout.js'
-import { userInfo } from 'node:os'
+import { TEAM_CONFIG_FILE, TEAM_CONFIG_FILES, carriedBackendEnv, checkPort, pathCheck, userCheck } from './layout.js'
+import { checkSid } from '../lib/windows/sid.js'
 
 export interface TeamConfig {
   version: 1
@@ -17,7 +18,7 @@ export interface TeamConfig {
   owner: string
   ownerHome: string
   /** Windows: the owner's SID, read by the owner's own process before User Account Control, which may run setup as
-   *  another administrator. It names the owner in the handover folder's and the relay folder's ACLs. */
+   *  another administrator. It names the owner in the handover folder's ACL. */
   ownerSid?: string
   /** The world-readable file in the owner's home that only the home folder's mode protects. */
   sentinel: string
@@ -25,22 +26,18 @@ export interface TeamConfig {
   label: string
   plist: string
   statusFile: string
-  /** The team account's Node and CLI, which `harness team remove` runs as that account to sign it out. */
+  /** The team account's Node and CLI. */
   node: string
   cli: string
   /** The backend settings carried from the owner's environment (./layout.ts `carriedBackendEnv`), which the team
-   *  daemon runs with and `harness team remove` signs it out against. */
+   *  daemon runs with. */
   env: Record<string, string>
   createdAt: string
 }
 
-export function teamConfigJson(config: TeamConfig): string {
-  return `${JSON.stringify(config, null, 2)}\n`
-}
-
-/** Where setup writes the Team config on [platform]: the one place every reader looks (superTabs/teamDaemon.ts too). */
+/** Where setup wrote the Team config on [platform]: the one place every reader looks. */
 export function teamConfigFile(platform: NodeJS.Platform = process.platform): string {
-  return platform === 'darwin' ? TEAM_CONFIG_FILE : teamLayout(platform)?.configFile ?? TEAM_CONFIG_FILE
+  return Object.hasOwn(TEAM_CONFIG_FILES, platform) ? TEAM_CONFIG_FILES[platform as keyof typeof TEAM_CONFIG_FILES] : TEAM_CONFIG_FILE
 }
 
 /** The config at [path] (this platform's, by default), every field checked; null when there is none or it is not one
@@ -82,10 +79,4 @@ export function readTeamConfig(path: string = teamConfigFile(),
   } catch {
     return null
   }
-}
-
-/** Whether this process runs as the Harness Team account its Mac's root-owned config names. An account whose name
- *  cannot be read is not it. */
-export function isTeamAccount(config: () => TeamConfig | null = () => readTeamConfig(), user: () => string = () => userInfo().username): boolean {
-  try { return config()?.user === user() } catch { return false }
 }

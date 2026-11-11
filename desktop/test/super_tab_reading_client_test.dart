@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/reading.dart';
 
 import 'swarm_state_test.dart' show MemoryStore;
@@ -92,14 +93,12 @@ SuperTabClient _client(
   _Backend backend, {
   MemoryStore? storage,
   SuperTabReading? reading,
-  void Function(String tabId, SuperTabMention mention)? onMention,
   void Function(SuperTabController)? onSnapshot,
 }) {
   final client = SuperTabClient(
     transport: backend.call,
     storage: storage ?? MemoryStore(),
     onTabs: (_, _) {},
-    onMention: onMention,
     onSnapshot: onSnapshot,
     discoveryInterval: const Duration(seconds: 15),
   );
@@ -109,6 +108,142 @@ SuperTabClient _client(
 
 void main() {
   _pushGroup();
+
+  // Files are bytes, so only this running app keeps them: a Swarm let go gives them to its next controller.
+  group('pasted files across a Swarm being let go', () {
+    HarnessAttachment file(String name) =>
+        HarnessAttachment(name, Uint8List.fromList([1]));
+    List<String> names(HarnessAttachments files) => [
+      for (final f in files.files) f.name,
+    ];
+    SuperTabController opened(
+      SuperTabClient client,
+      FakeAsync async,
+      String id,
+    ) {
+      late SuperTabController c;
+      client.open(id).then((value) => c = value);
+      async.elapse(const Duration(seconds: 1));
+      return c;
+    }
+
+    SuperTabClient started(_Backend backend) =>
+        _client(backend, reading: SuperTabReading.desktop)..bind('owner');
+
+    test('come back to the chat and the thread they were for', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        final first = opened(client, async, 'tab');
+        first.attachments('lead').add([file('chat.png')]);
+        first.threadAttachments('lead', 'message-1').add([file('thread.png')]);
+        client.release('tab');
+        async.flushMicrotasks();
+        final second = opened(client, async, 'tab');
+        expect(identical(first, second), isFalse);
+        expect(names(second.attachments('lead')), ['chat.png']);
+        expect(names(second.threadAttachments('lead', 'message-1')), [
+          'thread.png',
+        ]);
+        client.dispose();
+      });
+    });
+
+    test(
+      'are given once: a second close and open finds them again, not twice',
+      () {
+        fakeAsync((async) {
+          final client = started(_Backend());
+          opened(client, async, 'tab').attachments('lead').add([file('a.png')]);
+          client.release('tab');
+          async.flushMicrotasks();
+          opened(client, async, 'tab');
+          client.release('tab');
+          async.flushMicrotasks();
+          expect(names(opened(client, async, 'tab').attachments('lead')), [
+            'a.png',
+          ]);
+          client.dispose();
+        });
+      },
+    );
+
+    test('never reach another account', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        opened(client, async, 'tab').attachments('lead').add([file('a.png')]);
+        client.release('tab');
+        async.flushMicrotasks();
+        client.bind('someone-else');
+        async.flushMicrotasks();
+        expect(
+          opened(client, async, 'tab').attachments('lead').isEmpty,
+          isTrue,
+        );
+        client.dispose();
+      });
+    });
+
+    test('are not kept once access has gone', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        final first = opened(client, async, 'tab');
+        first.attachments('lead').add([file('a.png')]);
+        first.revokeAccess('Access went.', keepSaved: true);
+        client.release('tab');
+        async.flushMicrotasks();
+        expect(
+          opened(client, async, 'tab').attachments('lead').isEmpty,
+          isTrue,
+        );
+        client.dispose();
+      });
+    });
+
+    test('go with a conversation that left while the Swarm was closed', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = started(backend);
+        final first = opened(client, async, 'tab');
+        first.attachments('offline').add([file('a.png')]);
+        first.threadAttachments('offline', 'message-1').add([file('b.png')]);
+        client.release('tab');
+        async.flushMicrotasks();
+        (backend.servers['tab']!.state['conversations'] as List).removeWhere(
+          (g) => (g as Map)['id'] == 'offline',
+        );
+        final second = opened(client, async, 'tab');
+        expect(second.attachments('offline').isEmpty, isTrue);
+        expect(
+          second.threadAttachments('offline', 'message-1').isEmpty,
+          isTrue,
+        );
+        client.dispose();
+      });
+    });
+
+    test('the newest eight Swarms keep theirs, so closed ones cannot hold memory for good', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        for (var n = 0; n < 9; n++) {
+          opened(
+            client,
+            async,
+            'tab$n',
+          ).attachments('lead').add([file('$n.png')]);
+          client.release('tab$n');
+          async.flushMicrotasks();
+        }
+        expect(
+          opened(client, async, 'tab0').attachments('lead').isEmpty,
+          isTrue,
+        );
+        expect(names(opened(client, async, 'tab1').attachments('lead')), [
+          '1.png',
+        ]);
+        client.dispose();
+      });
+    });
+  });
   test('only the Swarm tab on screen polls; the others wait until shown', () {
     fakeAsync((async) {
       final backend = _Backend();
@@ -176,92 +311,6 @@ void main() {
     });
   });
 
-  for (final (name, reading) in [('web', _web), ('Desktop', null)]) {
-    test(
-      '$name: a tag in a Swarm opened earlier but not shown is counted and told once',
-      () {
-        fakeAsync((async) {
-          final backend = _Backend();
-          final told = <String>[];
-          final client = _client(
-            backend,
-            reading: reading,
-            onMention: (_, m) => told.add(m.id),
-          )..bind('owner');
-          client.show('tab');
-          client.open('tab');
-          client.open('other');
-          async.elapse(const Duration(seconds: 5));
-          final other = backend.servers['other']!..append('Please confirm.');
-          other.tag(other.messages.last['id'] as String);
-          async.elapse(const Duration(minutes: 2));
-          expect(client.waitingTags('other'), 1);
-          expect(told, ['mention-1']);
-          // Shown again, the Swarm reads its own tags: not told a second time.
-          client.show('other');
-          async.elapse(const Duration(seconds: 10));
-          expect(client.waitingTags('other'), 1);
-          expect(told, ['mention-1']);
-          client.dispose();
-        });
-      },
-    );
-  }
-
-  test('web: a tag that arrives just after the Swarm goes away is told', () {
-    fakeAsync((async) {
-      final backend = _Backend();
-      final told = <String>[];
-      final client = _client(
-        backend,
-        reading: _web,
-        onMention: (_, m) => told.add(m.id),
-      )..bind('owner');
-      final other = backend.servers['other']!..append('First.');
-      other.tag(other.messages.last['id'] as String);
-      client.show('other');
-      client.open('other');
-      client.open('tab');
-      // On screen, the Swarm reads its own tags: the first is not news.
-      async.elapse(const Duration(seconds: 20));
-      expect(client.waitingTags('other'), 1);
-      client.show('tab');
-      async.flushMicrotasks();
-      other.append('Second.');
-      other.tag(other.messages.last['id'] as String);
-      async.elapse(const Duration(seconds: 16));
-      expect(client.waitingTags('other'), 2);
-      expect(told, ['mention-2']);
-      client.dispose();
-    });
-  });
-
-  test('web: a tag marked done while shown does not come back on leaving', () {
-    fakeAsync((async) {
-      final backend = _Backend();
-      final client = _client(backend, reading: _web)..bind('owner');
-      final other = backend.servers['other']!..append('Please confirm.');
-      other.tag(other.messages.last['id'] as String);
-      client.show('tab');
-      client.open('tab');
-      client.open('other');
-      async.elapse(const Duration(seconds: 20));
-      expect(client.waitingTags('other'), 1);
-      client.show('other');
-      async.flushMicrotasks();
-      // Marked done on screen: the Swarm's own read says none wait.
-      other.mentions.single['resolvedAt'] = '2026-10-26T06:00:00Z';
-      other.state['mentionsWaiting'] = 0;
-      other.revision++;
-      async.elapse(const Duration(seconds: 3));
-      expect(client.waitingTags('other'), 0);
-      client.show('tab');
-      async.flushMicrotasks();
-      expect(client.waitingTags('other'), 0);
-      client.dispose();
-    });
-  });
-
   test('Desktop reading: a connect waits for the poll, every tab polls', () {
     fakeAsync((async) {
       final backend = _Backend()..machine = false;
@@ -315,6 +364,53 @@ void main() {
       expect(backend.states('tab'), greaterThan(0));
       expect(snapshots, greaterThan(0));
       client.dispose();
+    });
+  });
+
+  // Task #2169: the saved view of the account signed in draws at once; another account's is never read.
+  test('Desktop: the same account opens to its saved view before any read, and another account never does', () {
+    fakeAsync((async) {
+      final backend = _Backend(), storage = MemoryStore();
+      backend.servers['tab']!.append('For the owner only');
+      final first =
+          _client(backend, storage: storage, reading: SuperTabReading.desktop)
+            ..bind('owner')
+            ..show('tab');
+      first.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
+      async.flushMicrotasks();
+      first.dispose();
+      backend.servers['tab']!.holdReads = Completer<void>();
+
+      final same =
+          _client(backend, storage: storage, reading: SuperTabReading.desktop)
+            ..bind('owner')
+            ..show('tab');
+      SuperTabController? shown;
+      same.open('tab').then((c) => shown = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(shown!.showingSaved, isTrue);
+      expect(shown!.snapshot, isNotNull);
+      same.dispose();
+      async.flushMicrotasks();
+
+      final other = _client(
+        backend,
+        storage: storage,
+        reading: SuperTabReading.desktop,
+      )..bind('someone-else');
+      async.flushMicrotasks();
+      SuperTabController? theirs;
+      other.open('tab').then((c) => theirs = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(theirs!.showingSaved, isFalse);
+      expect(theirs!.snapshot, isNull);
+      expect(theirs!.messages('lead'), isEmpty);
+      other.dispose();
+      backend.servers['tab']!.holdReads!.complete();
+      backend.servers['tab']!.holdReads = null;
+      async.flushMicrotasks();
     });
   });
 

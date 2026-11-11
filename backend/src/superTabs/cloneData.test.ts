@@ -4,6 +4,7 @@ import { cloneData } from './cloneData.js'
 import { reassemble, split } from './parts/index.js'
 import { fullSwarm, NOW, richSwarm, swarm } from './read/fixture.test-support.js'
 import type { SuperTabState } from './model.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null
 
@@ -22,14 +23,14 @@ function sharesNothing(source: unknown, copy: unknown, path = '(root)'): void {
   for (const [key, item] of Object.entries(source)) sharesNothing(item, (copy as Record<string, unknown>)[key], `${path}.${key}`)
 }
 
-/** The bench's default Swarm size (integration/bench/README.md): 200 groups and 20 workers, each working on one. */
+/** A large Swarm: 200 groups and 20 workers, each working on one. */
 function benchSized(): SuperTabState {
   const s = swarm()
   s.add('lead-harness', 'lead', true)
   const groups = Array.from({ length: 200 }, (_, i) => s.group(`Group ${i}`))
   for (let i = 0; i < 20; i++) {
     const worker = s.add(`worker-${i}`, groups[i]!)
-    s.run({ type: 'work.assign', conversationId: groups[i]!, agentId: worker })
+    storedAssignment(s.state, groups[i]!, worker, NOW)
   }
   return s.state
 }

@@ -25,7 +25,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -39,22 +38,43 @@ void main() {
   }
 
   final composer = find.byKey(const ValueKey('super-message-composer'));
+
+  testWidgets('an archived chat says it is read-only in its box', (
+    tester,
+  ) async {
+    final server = ConversationServer.chat()..append('Done here.');
+    final c = await show(tester, server);
+    final id = c.selectedId!;
+    expect(
+      tester.widget<TextField>(composer).decoration!.hintText,
+      isNot('Read-only conversation'),
+    );
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == id)['archived'] =
+        true;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(c.selectedId, id);
+    expect(
+      tester.widget<TextField>(composer).decoration!.hintText,
+      'Read-only conversation',
+    );
+  });
   FocusNode composerFocus(WidgetTester tester) =>
       tester.widget<TextField>(composer).focusNode!;
   String composerText(WidgetTester tester) =>
       tester.widget<TextField>(composer).controller!.text;
 
-  for (final chat in ['a workgroup', 'the Buddy chat']) {
+  for (final chat in ['a workgroup', "an agent's chat"]) {
     testWidgets(
       'Reply in $chat puts the cursor in the composer, reply attached',
       (tester) async {
-        final server = ConversationServer();
-        if (chat == 'the Buddy chat') {
-          // The reader's own Buddy chat, where the PM's private lines land.
+        final server = ConversationServer.chat();
+        if (chat == "an agent's chat") {
+          // The reader's chat with their own agent.
           final pm = (server.state['conversations'] as List)[1] as Map;
-          pm
-            ..['kind'] = 'buddy'
-            ..['buddyOwnerId'] = 'owner';
+          pm['kind'] = 'agent-chat';
           server.append(
             'Which build should I test?',
             conversationId: pm['id'] as String,
@@ -63,7 +83,7 @@ void main() {
           server.append('Which build should I test?');
         }
         final c = await show(tester, server);
-        if (chat == 'the Buddy chat') {
+        if (chat == "an agent's chat") {
           c.select('offline');
           await tester.pumpAndSettle();
           expect(c.selectedId, 'offline');
@@ -119,7 +139,7 @@ void main() {
   }
 
   ConversationServer withBuilder() {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     server.state['agents'] = [
       {
         'id': 'builder',
@@ -220,7 +240,7 @@ void main() {
 
   testWidgets('a send with no answer reads Not sent with Retry, which shows '
       'it once', (tester) async {
-    final server = ConversationServer()..loseReply = true;
+    final server = ConversationServer.chat()..loseReply = true;
     await show(tester, server);
     await send(tester, 'Did this arrive?');
     await tester.pumpAndSettle();
@@ -245,7 +265,7 @@ void main() {
 
   testWidgets('a refused send reads Not sent with its reason; Retry sends '
       'it once, with its reply', (tester) async {
-    final server = ConversationServer()..append('Which build?');
+    final server = ConversationServer.chat()..append('Which build?');
     await show(tester, server);
     await tester.tap(find.byTooltip('Reply'));
     await tester.pumpAndSettle();
@@ -274,7 +294,7 @@ void main() {
 
   testWidgets('another conversation\'s refusal never hides this one\'s '
       'upload error, even with the same words in a row here', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     final c = await show(tester, server);
     // This conversation: a refused message, then its own refused file.
     await c.select('offline');
@@ -304,7 +324,7 @@ void main() {
     testWidgets('Delete removes a $failure message from the chat', (
       tester,
     ) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       await show(tester, server);
       if (failure == 'refused') {
         server.reject = true;
@@ -363,6 +383,8 @@ void main() {
 
 /// A server whose commands wait for [holdPosts] while it is set.
 class _HeldServer extends ConversationServer {
+  _HeldServer() : super.chat();
+
   Completer<void>? holdPosts;
 
   @override

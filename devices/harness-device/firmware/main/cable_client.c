@@ -26,6 +26,7 @@
 #include "ui/ui_screens.h"
 #include "ui/habitat/supertab.h"
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "cable_client";
 
@@ -163,40 +164,7 @@ const char *cable_fw_version(void)
  * arrangement, and an app that knew them would have to be updated in step with a header it cannot see.
  * `round` is the face, not a preference — it tells the app which rows to leave out entirely.
  */
-static cJSON *companion_json(const ui_companion_t *identity)
-{
-    if (!identity->id[0]) return cJSON_CreateNull();
-    cJSON *o=cJSON_CreateObject();
-    if (!o) return NULL;
-    if (!cJSON_AddStringToObject(o,"id",identity->id) || !cJSON_AddStringToObject(o,"uid",identity->uid) ||
-        !cJSON_AddStringToObject(o,"name",identity->name) || !cJSON_AddStringToObject(o,"version",identity->version) ||
-        !cJSON_AddNumberToObject(o,"seed",identity->seed) || !cJSON_AddNumberToObject(o,"colour",identity->colour) ||
-        !cJSON_AddNumberToObject(o,"mark",identity->mark)) { cJSON_Delete(o); return NULL; }
-    return o;
-}
 static const char *str_of(const cJSON *o, const char *key);
-static bool companion_parse(const cJSON *o,ui_companion_t *identity)
-{
-    memset(identity,0,sizeof *identity);
-    const char *keys[]={"id","uid","name","version"};
-    char *values[]={identity->id,identity->uid,identity->name,identity->version};
-    const size_t caps[]={sizeof identity->id,sizeof identity->uid,sizeof identity->name,sizeof identity->version};
-    for (unsigned i=0;i<4;i++) {
-        const cJSON *v=cJSON_GetObjectItemCaseSensitive(o,keys[i]);
-        if (!cJSON_IsString(v) || !v->valuestring || !v->valuestring[0] || strlen(v->valuestring)>=caps[i]) return false;
-        for (const unsigned char *p=(const unsigned char *)v->valuestring;*p;p++) if (*p<32 || *p>126) return false;
-        if (i==1) for (const char *p=v->valuestring;*p;p++)
-            if (!((*p>='A' && *p<='Z') || (*p>='a' && *p<='z') || (*p>='0' && *p<='9') || *p=='_' || *p=='-')) return false;
-        memcpy(values[i],v->valuestring,strlen(v->valuestring)+1);
-    }
-    if (strcmp(identity->version,"0.1") && strcmp(identity->version,"1.0") && strcmp(identity->version,"2.0")) return false;
-    const cJSON *seed=cJSON_GetObjectItemCaseSensitive(o,"seed"),*colour=cJSON_GetObjectItemCaseSensitive(o,"colour"),*mark=cJSON_GetObjectItemCaseSensitive(o,"mark");
-    if (!cJSON_IsNumber(seed) || !isfinite(seed->valuedouble) || seed->valuedouble<0 || seed->valuedouble>4294967295.0 || seed->valuedouble!=(uint32_t)seed->valuedouble ||
-        !cJSON_IsNumber(colour) || colour->valuedouble < -1 || colour->valuedouble>5 || colour->valuedouble!=colour->valueint ||
-        !cJSON_IsNumber(mark) || mark->valuedouble<0 || mark->valuedouble>4 || mark->valuedouble!=mark->valueint) return false;
-    identity->seed=(uint32_t)seed->valuedouble;identity->colour=colour->valueint;identity->mark=mark->valueint;
-    return true;
-}
 static void msg_settings(cJSON **root)
 {
     ui_settings_t now;
@@ -218,13 +186,7 @@ static void msg_settings(cJSON **root)
               cJSON_AddBoolToObject(held, "focusFace", now.focus_face) &&
               cJSON_AddBoolToObject(held, "scrollReversed", now.scroll_reversed) &&
               cJSON_AddBoolToObject(held, "round", now.round) &&
-              cJSON_AddBoolToObject(held, "followCompanion", now.follow_companion) &&
-              (now.companion[0] ? cJSON_AddStringToObject(held, "companion", now.companion)
-                                : cJSON_AddNullToObject(held, "companion")) &&
-              cJSON_AddStringToObject(held, "voiceLang", now.voicelang) &&
-              cJSON_AddNumberToObject(held,"companionProtocol",2);
-    cJSON *identity=companion_json(&now.companion_details);
-    if (!identity || !cJSON_AddItemToObject(held,"companionDetails",identity)) { cJSON_Delete(identity);ok=false; }
+              cJSON_AddStringToObject(held, "voiceLang", now.voicelang);
     msg_check(root, ok);
 }
 void cable_client_report_settings(void)
@@ -251,7 +213,6 @@ static void handle_settings_set(const cJSON *p)
         {"straightTitle", UI_SETTING_STRAIGHT_TITLE, &want.straight_title},
         {"focusFace", UI_SETTING_FOCUS_FACE, &want.focus_face},
         {"scrollReversed", UI_SETTING_SCROLL, &want.scroll_reversed},
-        {"followCompanion", UI_SETTING_FOLLOW_COMPANION, &want.follow_companion},
     };
     for (unsigned i = 0; i < sizeof flags / sizeof flags[0]; i++) {
         item = cJSON_GetObjectItemCaseSensitive(p, flags[i].key);
@@ -284,31 +245,6 @@ static void handle_settings_set(const cJSON *p)
     msg_settings(&root);   // always the values read back, never the ones asked for
     send_json(root);
 }
-static void handle_companion_set(const cJSON *p)
-{
-    const cJSON *id = cJSON_GetObjectItemCaseSensitive(p, "id");
-    bool valid = cJSON_IsNull(id) || (cJSON_IsString(id) && id->valuestring);
-    ui_companion_t identity;
-    const cJSON *details=cJSON_GetObjectItemCaseSensitive(p,"identity");
-    bool ok = details ? valid && !cJSON_IsNull(id) && companion_parse(details,&identity) &&
-        !strcmp(identity.id,id->valuestring) && ui_set_companion_identity(&identity) :
-        valid && ui_set_companion(cJSON_IsNull(id) ? NULL : id->valuestring);
-    cJSON *root = msg("settings.state");
-    if (!root) return;
-    msg_bool(&root, "ok", ok);
-    if (!ok) msg_string(&root, "error", "Unknown companion.");
-    msg_settings(&root);
-    send_json(root);
-}
-static void handle_companion_celebrate(const cJSON *p)
-{
-    ui_companion_t identity;
-    const char *kind=str_of(p,"kind"),*token=str_of(p,"token");
-    bool ok=companion_parse(cJSON_GetObjectItemCaseSensitive(p,"identity"),&identity) &&
-        ui_companion_celebrate(&identity,kind,token);
-    cJSON *root=msg("companion.event");
-    msg_bool(&root,"ok",ok);if (token) msg_string(&root,"token",token);send_json(root);
-}
 static void send_hello(void)
 {
     cJSON *root = msg("hello");
@@ -327,6 +263,12 @@ static void send_hello(void)
     // A PM and a Buddy side per Swarm (spec 2026-10-29-round-dial-pm-buddy): each Lead's `buddies` and the reader's
     // Buddy, a face that may be the Buddy chat, its quiet notice, and `supertab.side` back. Older daemons ignore it.
     msg_string(&root, "swarmBuddy", "v1");
+    // A face in a thread (spec 2026-11-03-dial-thread-face): each Lead's `thread`, `threadTitle`, `threadReplies`, a recap
+    // that names its thread, and `supertab.thread.leave` back. Older daemons ignore it and send none.
+    msg_string(&root, "swarmThread", "v1");
+    // This dial hears only what needs the reader: no Buddy quiet notices, and a decision asked of the reader is a notice (spec
+    // 2026-11-05-dial-lead-pm-buddy-pair). Also the Swarm card's `personal`. Older daemons ignore it.
+    msg_string(&root, "swarmNeedsYou", "v1");
     // No swarmReview: words for a Swarm chat are sent as any harness's are and reviewed only when held (Diego's dial,
     // 2026-10-29), and a daemon that heard it would refuse every word not reviewed (docs/device-voice-swarm-chat.md).
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
@@ -356,11 +298,6 @@ static void send_hello(void)
     send_json(root);
 }
 
-void cable_client_list_machines(void)
-{
-    send_json(msg("machines.list"));
-}
-
 void cable_client_select_machine(const char *machine_id)
 {
     if (!machine_id || !machine_id[0]) return;
@@ -370,8 +307,6 @@ void cable_client_select_machine(const char *machine_id)
     send_json(root);
 }
 
-const char *cable_client_machine_id(void) { return s_machine_id; }
-
 void cable_client_select_swarm(const char *swarm_id)
 {
     if (!swarm_id || !swarm_id[0]) return;
@@ -379,11 +314,6 @@ void cable_client_select_swarm(const char *swarm_id)
     if (!root) return;
     msg_string(&root, "swarmId", swarm_id);
     send_json(root);
-}
-
-void cable_client_list_swarms(void)
-{
-    send_json(msg("swarms.list"));
 }
 
 void cable_client_supertab_send(const char *t, const char *tab, const char *lead)
@@ -398,12 +328,34 @@ void cable_client_supertab_send(const char *t, const char *tab, const char *lead
     send_json(root);
 }
 
+// The dial's face leaves its thread (spec 2026-11-03-dial-thread-face); a daemon without swarmThread ignores it.
+void cable_client_supertab_thread_leave(const char *tab, const char *lead)
+{
+    if (!tab || !tab[0] || strlen(tab) >= ID_MAX || !lead || !lead[0] || strlen(lead) >= ID_MAX) return;
+    cJSON *root = msg("supertab.thread.leave");
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "lead", lead);
+    send_json(root);
+}
+
 void cable_client_supertab_side(const char *tab, bool buddy)
 {
     if (!tab || !tab[0] || strlen(tab) >= ID_MAX) return;
     cJSON *root = msg("supertab.side");
     msg_string(&root, "tab", tab);
     msg_string(&root, "side", buddy ? "buddy" : "pm");
+    send_json(root);
+}
+
+// The Buddy side a restart took off the face, for a daemon that remembers none: `kept` says no finger moved, so the
+// window stays where it is. An older daemon ignores the word, and its window follows.
+void cable_client_supertab_side_kept(const char *tab)
+{
+    if (!tab || !tab[0] || strlen(tab) >= ID_MAX) return;
+    cJSON *root = msg("supertab.side");
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "side", "buddy");
+    msg_bool(&root, "kept", true);
     send_json(root);
 }
 
@@ -803,31 +755,11 @@ void cable_client_fw_error(const char *message)
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
 
-const char *cable_client_machine_name(void) { return s_machine_name; }
-
 // Set by `agents.end`, read by the refresh that applies the list — see ui_fleet_set.
 static int  s_agents_total;
 static bool s_has_window;
 static char s_agents_tab[ID_MAX];
 static uint32_t s_agents_generation;
-
-int cable_client_agent_total(void)
-{
-    if (!s_agents_lock) return 0;
-    xSemaphoreTake(s_agents_lock, portMAX_DELAY);
-    const int n = s_agents_total;
-    xSemaphoreGive(s_agents_lock);
-    return n;
-}
-
-bool cable_client_has_window(void)
-{
-    if (!s_agents_lock) return false;
-    xSemaphoreTake(s_agents_lock, portMAX_DELAY);
-    const bool w = s_has_window;
-    xSemaphoreGive(s_agents_lock);
-    return w;
-}
 
 bool cable_client_request_agents(void)
 {
@@ -844,10 +776,6 @@ uint32_t cable_client_agent_generation(void)
     uint32_t generation = s_agents_generation;
     xSemaphoreGive(s_agents_lock);
     return generation;
-}
-int cable_client_list_agents(project_t *out, int max)
-{
-    return cable_client_list_agents_snapshot(out,max,NULL);
 }
 int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snapshot_t *snapshot)
 {
@@ -921,13 +849,6 @@ static void handle_swarms(const cJSON *p)
     const char *selected = str_of(p, "selected");
     if (selected && strlen(selected) >= ID_MAX) selected = NULL;
     ui_swarms_replace(rows, n, selected);
-
-/* …and the selected tab's shape, which rides the same frame so the two can never be read half
- * updated: a grid drawn against the previous tab's rectangles puts agents where they are not.
- *
- * THE ROUND DIAL IS THE ONLY BUILD THAT SKIPS THIS. A spatial desk needs corners: habitat on the dial
- * shows its panes as a list of rows and has no use for a rectangle, while habitat on the Pro draws the
- * app's own shape and needs every one of them. */
 }
 
 // ── the Swarms ──────────────────────────────────────────────────────────────────────────────────────
@@ -964,12 +885,13 @@ static void handle_supertab(const cJSON *p)
     // The Swarm's side, from a swarmBuddy daemon (review of #2218): the dial follows it. Anything else is none.
     const char *side = str_of(p, "side");
     card.side = !side ? HT_SIDE_NONE : !strcmp(side, "buddy") ? HT_SIDE_BUDDY : !strcmp(side, "pm") ? HT_SIDE_PM : HT_SIDE_NONE;
+    card.personal = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "personal"));
     const cJSON *l = NULL;
     cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(p, "leads")) {
         if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;
         if (!cJSON_IsObject(l)) continue;
         const cJSON *order = cJSON_GetObjectItemCaseSensitive(l, "order"), *since = cJSON_GetObjectItemCaseSensitive(l, "since");
-        const cJSON *buddy = cJSON_GetObjectItemCaseSensitive(l, "buddy");
+        const cJSON *buddy = cJSON_GetObjectItemCaseSensitive(l, "buddy"), *replies = cJSON_GetObjectItemCaseSensitive(l, "threadReplies");
         const cJSON *cells = cJSON_IsObject(buddy) ? cJSON_GetObjectItemCaseSensitive(buddy, "cells") : NULL;
         ht_lead_in_t in = {
             .id = str_of(l, "id"), .project_id = str_of(l, "projectId"), .project = str_of(l, "project"),
@@ -979,6 +901,9 @@ static void handle_supertab(const cJSON *p)
             .since = cJSON_IsNumber(since) && since->valuedouble >= 0 ? (since->valuedouble > 2592000 ? 2592000 : (long)since->valuedouble) : -1,
             // The chat on the face; absent from a daemon without swarmChat, which reads as the Lead chat.
             .chat = str_of(l, "chat"), .chat_id = str_of(l, "chatId"), .chat_name = str_of(l, "chatName"),
+            // The thread on the face, from a swarmThread daemon; absent reads as the main chat, and replies as unknown.
+            .thread = str_of(l, "thread"), .thread_title = str_of(l, "threadTitle"),
+            .thread_replies = cJSON_IsNumber(replies) && replies->valuedouble >= 0 ? (replies->valuedouble > 2147483647.0 ? 2147483647L : (long)replies->valuedouble) : -1,
             // The reader's Buddy, from a swarmBuddy daemon while Buddies are on; supertab.c drops a block it cannot draw.
             .buddies = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(l, "buddies")),
             .buddy = {.present = cJSON_IsObject(buddy), .chat_id = str_of(buddy, "chatId"), .name = str_of(buddy, "name"),
@@ -1001,24 +926,32 @@ static void handle_supertab_recap(const cJSON *p)
     if (!id_fits(tab) || !id_fits(lead)) return;
     // A chat's recap names its chat; one whose chat cannot be held is not one (never shown for another).
     if (chat_id && !id_fits(chat_id)) return;
+    // And a thread's names its root; one whose root cannot be held is not one (never taken for the main chat's).
+    const char *thread = str_of(p, "thread");
+    if (thread && !id_fits(thread)) return;
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
     const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
-    ui_supertab_recap(tab, lead, chat_id ? chat_id : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
+    ui_supertab_recap(tab, lead, chat_id ? chat_id : "", thread ? thread : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
 }
-// `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the Lead's new message in its Lead conversation or Chat with
-// PM, the one thing that alerts with a swarmChat daemon, or the Buddy's in its chat (chat "buddy", a quiet one). The daemon
-// sends each once; the UI decides the beep.
+// `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the one thing that alerts with a swarmChat daemon. From a daemon
+// since #2965 a tag of the person's in the Lead's project, in its Lead conversation ("lead"), Chat with PM ("pm") or a task
+// chat ("group"); from one before, the Lead's new message in the first two. Or the Buddy's in its chat (chat "buddy", a quiet
+// one). The daemon sends each once; the UI decides the beep.
 static void handle_supertab_notice(const cJSON *p)
 {
     const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat = str_of(p, "chat"), *chat_id = str_of(p, "chatId");
     const char *id = str_of(p, "id"), *text = str_of(p, "text");
     if (!id_fits(tab) || !id_fits(lead) || !id_fits(chat_id) || !id_fits(id) || !text || !chat) return;
-    if (strcmp(chat, "lead") && strcmp(chat, "pm") && strcmp(chat, "buddy")) return;   // groups never alert
+    if (strcmp(chat, "lead") && strcmp(chat, "pm") && strcmp(chat, "group") && strcmp(chat, "buddy")) return;   // a kind it does not know
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
-    ht_chat_kind_t kind = !strcmp(chat, "pm") ? HT_CHAT_PM : !strcmp(chat, "buddy") ? HT_CHAT_BUDDY : HT_CHAT_LEAD;
-    if (ui_supertab_notice(tab, lead, kind, chat_id, text,
+    ht_chat_kind_t kind = !strcmp(chat, "pm") ? HT_CHAT_PM : !strcmp(chat, "buddy") ? HT_CHAT_BUDDY
+                        : !strcmp(chat, "group") ? HT_CHAT_GROUP : HT_CHAT_LEAD;
+    // A reply inside a thread names its root (#2463): read on the face only in that thread. A root too long to hold is
+    // passed as it is: no face's root matches it, so it beeps, never read as the main chat's.
+    const char *thread = str_of(p, "thread");
+    if (ui_supertab_notice(tab, lead, kind, chat_id, thread ? thread : "", text,
                            secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
         audio_notify_done();
 }
@@ -1418,8 +1351,6 @@ static void handle_message(const cJSON *root)
         ui_machine_select_error(str_of(p, "machineId"), str_of(p, "code"), str_of(p, "message"));
         return;
     }
-    if (strcmp(t, "companion.set") == 0) { handle_companion_set(p); return; }
-    if (strcmp(t, "companion.celebrate") == 0) { handle_companion_celebrate(p); return; }
     if (strcmp(t, "settings.set") == 0) { handle_settings_set(p); return; }
     if (strcmp(t, "models") == 0) { handle_models(p); return; }
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
@@ -1668,7 +1599,9 @@ bool cable_client_start(void)
     if (s_started) return true;
     TaskHandle_t hello_task = NULL;
     cable_machines_init(&s_machines);
-    s_agents = calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t));
+    // The roster is read a few times per frame at most and never from an ISR: PSRAM, with internal RAM as the fallback.
+    s_agents = heap_caps_calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_agents) s_agents = calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t));
     s_agents_lock = xSemaphoreCreateMutex();
     s_models_sem = xSemaphoreCreateBinary();
     if (!s_agents || !s_agents_lock || !s_models_sem) {
@@ -1698,9 +1631,3 @@ failed:
 }
 
 bool cable_client_is_connected(void) { return s_session; }
-
-void cable_client_counters(uint32_t *bad, uint32_t *unknown)
-{
-    if (bad) *bad = s_bad;
-    if (unknown) *unknown = s_unknown;
-}

@@ -37,10 +37,10 @@ class PackageIdentity(unittest.TestCase):
             self.assertIn('Super+n', (destination / 'usr/share/harness-os/guide.md').read_text())
             settings = json.loads((config / 'opencode.json').read_text())
             self.assertEqual(settings['update'], 'disable')
-            # One free Zen model that answers with tools (upstream's Exo Free default fails every
-            # tool call with "Endpoint is unavailable"); providers and instructions stay upstream's.
-            self.assertEqual(settings['model'], 'opencode/muse-spark-1.3-contributor-free')
-            self.assertFalse(set(settings) & {'provider', 'providers', 'instructions'})
+            # No model of its own (owner, 2026-11-03): OpenCode starts on whatever free model upstream
+            # defaults to. The pinned Muse Spark Free answered "Model is unavailable". Providers and
+            # instructions stay upstream's too.
+            self.assertFalse(set(settings) & {'model', 'small_model', 'provider', 'providers', 'instructions'})
             self.assertEqual(settings['permissions'], [
                 {'action': 'external_directory', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
                 {'action': 'read', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
@@ -53,7 +53,7 @@ class PackageIdentity(unittest.TestCase):
             with tarfile.open(output) as archive:
                 metadata = archive.extractfile('.PKGINFO').read().decode().splitlines()
             depends = {row.removeprefix('depend = ') for row in metadata if row.startswith('depend = ')}
-            self.assertTrue({'gtklock', 'grim', 'slurp', 'foot', 'tmux', 'nodejs-lts-jod'} <= depends)
+            self.assertTrue({'gtklock', 'grim', 'slurp', 'foot', 'tmux', 'nodejs-lts-krypton'} <= depends)
             self.assertNotIn('labwc', depends)
             self.assertTrue(depends <= set((Path(__file__).parents[1] / 'packages.x86_64').read_text().split()))
             spec = importlib.util.spec_from_file_location('runtime_package_check', Path(__file__).parents[1] / 'runtime_update.py')

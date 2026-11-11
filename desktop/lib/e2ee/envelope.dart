@@ -69,6 +69,21 @@ const Set<String> encryptedDownTypes = {
   'agent_update',
   'agent_files',
   'agent_read_file',
+  // An agent's instructions file, read and saved from another of the owner's
+  // computers (CLI services/projects.ts): the text is the person's own, so the
+  // relay sees none of it. `MACHINE_REQUESTS` types in the CLI.
+  'agent_instructions_read',
+  'agent_instructions_write',
+  // An agent's Browser (CLI services/agentBrowser.ts): its settings carry the proxy and its password.
+  'agent_browser_available',
+  'agent_browser_retry',
+  'agent_browser_settings',
+  'agent_browser_settings_save',
+  'agent_browser_proxy_test',
+  // Its stream's control (applicationFrames.ts `AGENT_BROWSER_DOWN_TYPES`).
+  'agent_browser_open',
+  'agent_browser_ack',
+  'agent_browser_close',
   'fs_list_dir',
   'project_preview',
   'git_project_info',

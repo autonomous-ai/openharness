@@ -724,7 +724,12 @@ void main() {
               capabilities();
           rig.app.bootstrap();
           async.flushMicrotasks();
-          rig.app.handleAppPaused();
+          // Only the offline poll reads the list here: the read while no machine is connected is
+          // put off. (Not by pausing the app: in a pocket the offline poll stops too.)
+          rig.app
+            ..deafMachineListInterval = const Duration(days: 1)
+            ..asleepMachineListInterval = const Duration(days: 1)
+            ..asleepMachinesListInterval = const Duration(days: 1);
           rig.app.stateOf('m')!.pendingOfflineAgentId = 'a';
           rig.api.onMachines = () async => [
             remoteMachine('m', status: 'offline'),
@@ -785,7 +790,6 @@ void main() {
         rig.api.onMachines = () async => [remoteMachine('m')];
         rig.app.bootstrap();
         async.flushMicrotasks();
-        rig.app.handleAppPaused();
         rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
         async.flushMicrotasks();
         final lists = rig.conn('m').payloadsOf('agents_list').length;

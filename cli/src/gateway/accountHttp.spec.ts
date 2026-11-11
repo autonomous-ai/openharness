@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GatewayAccount } from '../core/api.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { createAccountHttp, retryAfterMs } from './accountHttp.js'
+import { VERSION } from '../version.js'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -39,7 +40,8 @@ describe('account HTTP in the gateway', () => {
     expect(await api.backend('PATCH', '/api/machines/local', { name: 'Renamed' })).toEqual({ status: 409, body: { error: { code: 'CONFLICT' } } })
     expect(request).toHaveBeenCalledWith('https://backend.invalid/api/machines/local', expect.objectContaining({
       method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }),
-      headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
+      // The CLI and its version, so a refusal the backend logs names its sender (#2675; backend superTabs/refusalLog.ts).
+      headers: { authorization: 'Bearer token', 'x-autonomous-env': 'test', 'x-harness-client': `cli/${VERSION}`, 'content-type': 'application/json' }, signal: expect.any(AbortSignal),
     }))
     await api.backend('GET', '/api/auth/me')
     expect(request.mock.calls[1][1]?.headers).not.toHaveProperty('content-type')
@@ -140,11 +142,12 @@ describe('account HTTP in the gateway', () => {
     const { api, deps, dataDir, request, changed, reachable, listed } = setup()
     expect(await api.machines()).toEqual({ status: 200, body })
     expect(reachable).toHaveBeenLastCalledWith(['remote'])
-    // The body as the backend answered it, for the trust group's team machines (lib/e2ee/machineKinds.ts); null once signed out.
-    expect(listed).toHaveBeenLastCalledWith(body)
+    // The machines the backend's list names, for the relay's pins; nothing from a list that is not the backend's.
+    expect(listed).toHaveBeenLastCalledWith(['remote'])
+    listed.mockClear()
     request.mockResolvedValueOnce(response({}, 401))
     await api.machines()
-    expect(listed).toHaveBeenLastCalledWith(null)
+    expect(listed).not.toHaveBeenCalled()
     request.mockResolvedValueOnce(response(body))
     await api.machines()
     expect(JSON.parse(readFileSync(join(dataDir, 'machines.json'), 'utf8')).bodyOwner).toBe('account-a')
@@ -155,6 +158,33 @@ describe('account HTTP in the gateway', () => {
     expect(await restarted.machines(true)).toMatchObject({ status: 200, body: { data: { ...body.data, stale: true } } })
     request.mockResolvedValueOnce(response({}, 503))
     expect((await restarted.machines()).status).toBe(503)
+  })
+
+  // Task #2598: the relay answers a machine this list shows offline without a dial (lib/remoteRelay.ts).
+  it('tells which machines the backend\'s list shows offline, and nothing on a sign-out', async () => {
+    const offline = vi.fn()
+    const { deps, request } = setup()
+    const api = createAccountHttp({ ...deps, offline })
+    request.mockResolvedValueOnce(response({ success: true, data: { machines: [
+      { machineId: 'off', computerId: 'a', status: 'stopped' }, { machineId: 'gone', computerId: 'b', status: 'offline' },
+      { machineId: 'on', computerId: 'c', status: 'running' }, { machineId: 'new', computerId: 'd', status: 'provisioning' },
+    ] } }))
+    await api.machines()
+    expect(offline).toHaveBeenLastCalledWith(['off', 'gone'])
+    request.mockResolvedValueOnce(response({}, 401))
+    await api.machines()
+    expect(offline).toHaveBeenLastCalledWith(null)
+  })
+
+  it('asks the list again only when it is older than asked, sharing a read in flight', async () => {
+    const { api, request } = setup()
+    await api.machines()
+    expect(request).toHaveBeenCalledTimes(1)
+    await api.recheck(60_000)
+    expect(request).toHaveBeenCalledTimes(1)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await Promise.all([api.recheck(1), api.recheck(1)])
+    expect(request).toHaveBeenCalledTimes(2)
   })
 
   it('does not serve stale rows across accounts or after a real refusal', async () => {

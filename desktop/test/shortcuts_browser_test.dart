@@ -12,15 +12,14 @@ import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/key_cap.dart';
 import 'package:harness/terminal/terminal_text.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 import 'package:xterm/xterm.dart';
 
 import 'keymap_host_test.dart' show key;
 import 'support/real_fonts.dart';
 
 void main() {
-  testWidgets('Swarm conversation shortcut explains its focus scope', (
-    tester,
-  ) async {
+  testWidgets('Swarm chat shortcut explains its focus scope', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -29,13 +28,10 @@ void main() {
     );
     await tester.enterText(
       find.byKey(const ValueKey('shortcuts-search')),
-      'Switch conversation',
+      'Find in chat',
     );
     await tester.pumpAndSettle();
-    expect(
-      find.widgetWithText(TextButton, 'Switch conversation'),
-      findsOneWidget,
-    );
+    expect(find.widgetWithText(TextButton, 'Find in chat'), findsOneWidget);
     expect(find.text('In a Swarm tab, outside a terminal'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
@@ -215,7 +211,7 @@ void main() {
             await key(tester, direction);
             await tester.pumpAndSettle();
             expect(selected, findsOneWidget);
-            final viewport = tester.getRect(find.byType(ListView));
+            final viewport = tester.getRect(find.byType(LaidOutListView));
             expect(viewport.contains(tester.getCenter(selected)), isTrue);
             expect(tester.takeException(), isNull);
           }

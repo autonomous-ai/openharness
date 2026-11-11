@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/harness_file_store.dart';
@@ -10,6 +11,146 @@ import 'color_palette.dart';
 import 'custom_background.dart';
 import 'harness_background.dart';
 import 'prompt_style.dart';
+
+/// How panes sit together: apart as rounded cards, or square and touching.
+enum PaneStyle {
+  comfortable('Comfortable'),
+  compact('Compact');
+
+  const PaneStyle(this.label);
+  final String label;
+}
+
+/// What fades in a pane that isn't active.
+enum PaneFade {
+  off('Off'),
+  surface('Surface'),
+  content('Content'),
+  surfaceAndContent('Surface & Content');
+
+  const PaneFade(this.label);
+  final String label;
+
+  bool get fadesSurface => this == surface || this == surfaceAndContent;
+  bool get fadesContent => this == content || this == surfaceAndContent;
+}
+
+/// How panes look and behave on this computer.
+@immutable
+class PanePrefs {
+  const PanePrefs({
+    this.style = PaneStyle.comfortable,
+    this.fade = PaneFade.off,
+    this.highlightActive = true,
+    this.autobalanceSplits = true,
+    this.focusFollowsMouse = false,
+  });
+
+  final PaneStyle style;
+  final PaneFade fade;
+  final bool highlightActive;
+  final bool autobalanceSplits;
+  final bool focusFollowsMouse;
+
+  PanePrefs copyWith({
+    PaneStyle? style,
+    PaneFade? fade,
+    bool? highlightActive,
+    bool? autobalanceSplits,
+    bool? focusFollowsMouse,
+  }) => PanePrefs(
+    style: style ?? this.style,
+    fade: fade ?? this.fade,
+    highlightActive: highlightActive ?? this.highlightActive,
+    autobalanceSplits: autobalanceSplits ?? this.autobalanceSplits,
+    focusFollowsMouse: focusFollowsMouse ?? this.focusFollowsMouse,
+  );
+
+  Map<String, Object> toJson() => {
+    'style': style.name,
+    'fade': fade.name,
+    'highlightActive': highlightActive,
+    'autobalanceSplits': autobalanceSplits,
+    'focusFollowsMouse': focusFollowsMouse,
+  };
+
+  /// Read tolerantly, each field alone: a value this build doesn't know is that
+  /// field's default. Before this was saved there was only the shade switch, so
+  /// with nothing saved, a [legacyShade] someone set keeps what it drew: the
+  /// Surface fade, or none. Null means they never touched it: the defaults.
+  static PanePrefs read(String? raw, {required bool? legacyShade}) {
+    final legacy = switch (legacyShade) {
+      null => const PanePrefs(),
+      true => const PanePrefs(fade: PaneFade.surface),
+      false => const PanePrefs(fade: PaneFade.off),
+    };
+    if (raw == null) return legacy;
+    try {
+      if (jsonDecode(raw) case final Map<String, dynamic> json) {
+        T named<T extends Enum>(List<T> values, Object? name, T fallback) =>
+            values.where((value) => value.name == name).firstOrNull ?? fallback;
+        bool flag(String key, bool fallback) => switch (json[key]) {
+          final bool saved => saved,
+          _ => fallback,
+        };
+        return PanePrefs(
+          style: named(PaneStyle.values, json['style'], legacy.style),
+          fade: named(PaneFade.values, json['fade'], legacy.fade),
+          highlightActive: flag('highlightActive', legacy.highlightActive),
+          autobalanceSplits: flag(
+            'autobalanceSplits',
+            legacy.autobalanceSplits,
+          ),
+          focusFollowsMouse: flag(
+            'focusFollowsMouse',
+            legacy.focusFollowsMouse,
+          ),
+        );
+      }
+    } on FormatException {
+      // A hand-edited file lands on the defaults, as everything here does.
+    }
+    return legacy;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is PanePrefs &&
+      other.style == style &&
+      other.fade == fade &&
+      other.highlightActive == highlightActive &&
+      other.autobalanceSplits == autobalanceSplits &&
+      other.focusFollowsMouse == focusFollowsMouse;
+
+  @override
+  int get hashCode => Object.hash(
+    style,
+    fade,
+    highlightActive,
+    autobalanceSplits,
+    focusFollowsMouse,
+  );
+}
+
+/// Light, Dark, or whatever the computer's own setting is (task #3006).
+enum AppearanceMode {
+  light('Light'),
+  dark('Dark'),
+  system('Match macOS');
+
+  const AppearanceMode(this.label);
+  final String label;
+
+  /// What the third choice is called on this computer: the Mac's own name for
+  /// it there, the plain one elsewhere.
+  String labelFor(TargetPlatform platform) =>
+      this == system && platform != TargetPlatform.macOS
+      ? 'Match system'
+      : label;
+
+  static AppearanceMode? byId(String? id) =>
+      values.where((mode) => mode.name == id).firstOrNull;
+}
 
 /// Palette, background, and prompt preferences on this computer.
 /// Legacy UI font fields remain readable for older builds; current typography
@@ -20,16 +161,37 @@ class AppearancePrefs {
     this.uiFamily,
     this.uiSize = uiSizeDefault,
     this.palette = HarnessPalette.graphite,
+    this.mode = AppearanceMode.dark,
+    this.lightPalette = defaultLightPalette,
+    this.darkPalette = defaultDarkPalette,
     this.background = HarnessBackground.plain,
     this.custom = const CustomBackground(),
     this.paneOpacity = paneOpacityDefault,
-    this.shadeInactivePanes = false,
+    this.panes = const PanePrefs(),
     this.autoRenameTabs = false,
     this.prompt = const PromptPrefs(),
   });
 
   final PromptPrefs prompt;
+
+  /// The palette the app is wearing now: [lightPalette] or [darkPalette], as
+  /// [mode] and (in Match macOS) the computer's setting decide. Everything
+  /// that colors the app reads this one.
   final HarnessPalette palette;
+  final AppearanceMode mode;
+
+  /// The themes Light and Dark use, each chosen on its own.
+  final HarnessPalette lightPalette, darkPalette;
+  static const defaultLightPalette = HarnessPalette.cloud;
+  static const defaultDarkPalette = HarnessPalette.graphite;
+
+  /// The palette [mode] shows when the computer is [system].
+  HarnessPalette resolve(Brightness system) => switch (mode) {
+    AppearanceMode.light => lightPalette,
+    AppearanceMode.dark => darkPalette,
+    AppearanceMode.system =>
+      system == Brightness.dark ? darkPalette : lightPalette,
+  };
   final HarnessBackground background;
 
   /// Kept while a built-in background is showing, so switching back is one
@@ -41,8 +203,10 @@ class AppearancePrefs {
   static const double paneOpacityDefault = 0.5;
   static const double paneOpacityMin = 0;
 
-  /// Whether panes outside the current focus receive a neutral-gray veil.
-  final bool shadeInactivePanes;
+  final PanePrefs panes;
+
+  /// Whether panes outside the current focus fade at all.
+  bool get shadeInactivePanes => panes.fade != PaneFade.off;
 
   /// Whether a tab without a custom name asks its machine's daemon for one
   /// (`window_name`) and shows it instead of the voted label. Off, no request
@@ -72,10 +236,14 @@ class AppearancePrefs {
     String? uiFamily,
     double? uiSize,
     HarnessPalette? palette,
+    AppearanceMode? mode,
+    HarnessPalette? lightPalette,
+    HarnessPalette? darkPalette,
     HarnessBackground? background,
     CustomBackground? custom,
     double? paneOpacity,
     bool? shadeInactivePanes,
+    PanePrefs? panes,
     bool? autoRenameTabs,
     PromptPrefs? prompt,
     bool clearUiFamily = false,
@@ -83,10 +251,17 @@ class AppearancePrefs {
     uiFamily: clearUiFamily ? null : (uiFamily ?? this.uiFamily),
     uiSize: uiSize ?? this.uiSize,
     palette: palette ?? this.palette,
+    mode: mode ?? this.mode,
+    lightPalette: lightPalette ?? this.lightPalette,
+    darkPalette: darkPalette ?? this.darkPalette,
     background: background ?? this.background,
     custom: custom ?? this.custom,
     paneOpacity: paneOpacity ?? this.paneOpacity,
-    shadeInactivePanes: shadeInactivePanes ?? this.shadeInactivePanes,
+    panes: switch (shadeInactivePanes) {
+      null => panes ?? this.panes,
+      true => (panes ?? this.panes).copyWith(fade: PaneFade.surface),
+      false => (panes ?? this.panes).copyWith(fade: PaneFade.off),
+    },
     autoRenameTabs: autoRenameTabs ?? this.autoRenameTabs,
     prompt: prompt ?? this.prompt,
   );
@@ -97,10 +272,13 @@ class AppearancePrefs {
       other.uiFamily == uiFamily &&
       other.uiSize == uiSize &&
       other.palette == palette &&
+      other.mode == mode &&
+      other.lightPalette == lightPalette &&
+      other.darkPalette == darkPalette &&
       other.background == background &&
       other.custom == custom &&
       other.paneOpacity == paneOpacity &&
-      other.shadeInactivePanes == shadeInactivePanes &&
+      other.panes == panes &&
       other.autoRenameTabs == autoRenameTabs &&
       other.prompt == prompt;
 
@@ -109,10 +287,13 @@ class AppearancePrefs {
     uiFamily,
     uiSize,
     palette,
+    mode,
+    lightPalette,
+    darkPalette,
     background,
     custom,
     paneOpacity,
-    shadeInactivePanes,
+    panes,
     autoRenameTabs,
     prompt,
   );
@@ -125,7 +306,8 @@ class AppearancePrefs {
 /// before the first frame. Not a Riverpod provider — `MaterialApp` is built
 /// above every provider scope in this app, and these values have to resolve
 /// before there is a scope at all.
-class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
+class AppearancePrefsStore extends ValueNotifier<AppearancePrefs>
+    with WidgetsBindingObserver {
   AppearancePrefsStore({
     LocalKeyValueStore? storage,
     this._backgroundsDirectory,
@@ -134,12 +316,19 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
 
   static const _familyKey = 'app_ui_font_family';
   static const _sizeKey = 'app_ui_font_size';
+  // Holds the palette on screen at the last choice, which is all an older
+  // build reads.
   static const _paletteKey = 'app_color_palette';
+  static const _modeKey = 'app_theme_mode';
+  static const _lightPaletteKey = 'app_light_palette';
+  static const _darkPaletteKey = 'app_dark_palette';
   static const _backgroundKey = 'harness_start_background';
   static const _customKey = 'harness_custom_background';
   // Named for the retired on/off choice; it now holds only pane opacity.
   static const _paneOpacityKey = 'harness_background_behind_harnesses';
+  // Still written: an older build reads it for its one shade switch.
   static const _shadeInactivePanesKey = 'harness_shade_inactive_panes';
+  static const _panesKey = 'harness_panes_v1';
   static const _autoRenameTabsKey = 'harness_auto_rename_tabs';
   static const _promptKey = 'workspace_prompt_v1';
   Future<void>? _promptSave;
@@ -147,11 +336,53 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   Future<void>? _backgroundSave;
   Future<void>? _customSave;
   Future<void>? _paneOpacitySave;
-  Future<void>? _shadeInactivePanesSave;
+  Future<void>? _panesSave;
   Future<void>? _autoRenameTabsSave;
 
   final LocalKeyValueStore _storage;
   final Directory? _backgroundsDirectory;
+
+  /// The computer's own light or dark setting, which Match macOS shows.
+  Brightness _system = _platformBrightness();
+  bool _following = false;
+  bool _disposed = false;
+
+  static Brightness _platformBrightness() {
+    try {
+      return WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    } catch (_) {
+      // No binding yet (a plain unit test, or before `ensureInitialized`).
+      return PlatformDispatcher.instance.platformBrightness;
+    }
+  }
+
+  /// Follow the computer's light/dark setting from now on: in Match macOS a
+  /// change there repaints the app at once. The engine reports the system
+  /// setting itself, not the window's appearance the app sets from its
+  /// palette, so the two never chase each other. Call once the binding exists.
+  void followSystemBrightness() {
+    if (_following || _disposed) return;
+    _following = true;
+    WidgetsBinding.instance.addObserver(this);
+    _systemChanged(_platformBrightness());
+  }
+
+  @override
+  void didChangePlatformBrightness() => _systemChanged(_platformBrightness());
+
+  void _systemChanged(Brightness system) {
+    if (_disposed) return;
+    _system = system;
+    final shown = value.resolve(system);
+    if (shown != value.palette) value = value.copyWith(palette: shown);
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    if (_following) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   /// Harness's copies of custom backgrounds, beside `state.json`. Resolved on
   /// first use: the browser build has no such folder and never asks for it.
@@ -176,19 +407,45 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _familyKey,
         _sizeKey,
         _paletteKey,
+        _modeKey,
+        _lightPaletteKey,
+        _darkPaletteKey,
         _backgroundKey,
         _customKey,
         _paneOpacityKey,
         _shadeInactivePanesKey,
+        _panesKey,
         _autoRenameTabsKey,
         _promptKey,
       ]);
       final custom = _customFrom(saved[_customKey]);
       final background = HarnessBackground.fromId(saved[_backgroundKey]);
+      // A save from before the switch has only the palette: its brightness
+      // is the mode, and it fills that slot.
+      final shown = HarnessPalette.fromId(saved[_paletteKey]);
+      HarnessPalette slot(String key, Brightness brightness) {
+        final chosen = HarnessPalette.byId(saved[key]);
+        if (chosen?.brightness == brightness) return chosen!;
+        if (shown.brightness == brightness) return shown;
+        return brightness == Brightness.light
+            ? AppearancePrefs.defaultLightPalette
+            : AppearancePrefs.defaultDarkPalette;
+      }
+
+      final themes = AppearancePrefs(
+        mode:
+            AppearanceMode.byId(saved[_modeKey]) ??
+            (shown.isDark ? AppearanceMode.dark : AppearanceMode.light),
+        lightPalette: slot(_lightPaletteKey, Brightness.light),
+        darkPalette: slot(_darkPaletteKey, Brightness.dark),
+      );
       value = AppearancePrefs(
         uiFamily: _familyFrom(saved[_familyKey]),
         uiSize: _sizeFrom(saved[_sizeKey]),
-        palette: HarnessPalette.fromId(saved[_paletteKey]),
+        palette: themes.resolve(_system),
+        mode: themes.mode,
+        lightPalette: themes.lightPalette,
+        darkPalette: themes.darkPalette,
         // Custom with no image to show is Blank, not an empty selection.
         background:
             background == HarnessBackground.custom && custom.image == null
@@ -196,7 +453,14 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
             : background,
         custom: custom,
         paneOpacity: _paneOpacityFrom(saved[_paneOpacityKey]),
-        shadeInactivePanes: saved[_shadeInactivePanesKey] == 'true',
+        panes: PanePrefs.read(
+          saved[_panesKey],
+          legacyShade: switch (saved[_shadeInactivePanesKey]) {
+            'true' => true,
+            'false' => false,
+            _ => null,
+          },
+        ),
         autoRenameTabs: saved[_autoRenameTabsKey] == 'true',
         prompt: _promptFrom(saved[_promptKey]),
       );
@@ -207,18 +471,49 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
 
   /// Preview now, persist in order. Rapid choices coalesce while storage is
   /// busy so an older write cannot replace the user's final selection.
+  ///
+  /// A palette fills the slot of its own brightness. In Light or Dark, one of
+  /// the other brightness also moves the mode, so the click shows; in Match
+  /// macOS the computer still decides which slot shows.
   Future<void> setPalette(HarnessPalette palette) {
-    if (value.palette == palette) return _paletteSave ?? Future.value();
-    value = value.copyWith(palette: palette);
+    final mode = switch (value.mode) {
+      AppearanceMode.system => AppearanceMode.system,
+      _ => palette.isDark ? AppearanceMode.dark : AppearanceMode.light,
+    };
+    return _setThemes(
+      value.copyWith(
+        mode: mode,
+        lightPalette: palette.isDark ? null : palette,
+        darkPalette: palette.isDark ? palette : null,
+      ),
+    );
+  }
+
+  /// Light, Dark or Match macOS.
+  Future<void> setMode(AppearanceMode mode) =>
+      _setThemes(value.copyWith(mode: mode));
+
+  Future<void> _setThemes(AppearancePrefs next) {
+    next = next.copyWith(palette: next.resolve(_system));
+    if (next == value) return _paletteSave ?? Future.value();
+    value = next;
     return _paletteSave ??= _savePalette();
   }
 
   Future<void> _savePalette() async {
     try {
       while (true) {
-        final id = value.palette.name;
-        await _storage.write(_paletteKey, id);
-        if (value.palette.name == id) break;
+        final saving = value;
+        await _storage.write(_paletteKey, saving.palette.name);
+        await _storage.write(_modeKey, saving.mode.name);
+        await _storage.write(_lightPaletteKey, saving.lightPalette.name);
+        await _storage.write(_darkPaletteKey, saving.darkPalette.name);
+        if (value.palette == saving.palette &&
+            value.mode == saving.mode &&
+            value.lightPalette == saving.lightPalette &&
+            value.darkPalette == saving.darkPalette) {
+          break;
+        }
       }
     } catch (_) {
       // The chosen palette remains usable for this run if storage fails.
@@ -331,23 +626,37 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   /// Apply immediately and serialize writes so the final choice survives.
   Future<void> setShadeInactivePanes(bool enabled) {
     if (value.shadeInactivePanes == enabled) {
-      return _shadeInactivePanesSave ?? Future.value();
+      return _panesSave ?? Future.value();
     }
-    value = value.copyWith(shadeInactivePanes: enabled);
-    return _shadeInactivePanesSave ??= _saveShadeInactivePanes();
+    return setPanes(
+      value.panes.copyWith(
+        fade: enabled ? PaneFade.surfaceAndContent : PaneFade.off,
+      ),
+    );
   }
 
-  Future<void> _saveShadeInactivePanes() async {
+  /// Same ordering as [setShadeInactivePanes].
+  Future<void> setPanes(PanePrefs panes) {
+    if (value.panes == panes) return _panesSave ?? Future.value();
+    value = value.copyWith(panes: panes);
+    return _panesSave ??= _savePanes();
+  }
+
+  Future<void> _savePanes() async {
     try {
       while (true) {
-        final enabled = value.shadeInactivePanes;
-        await _storage.write(_shadeInactivePanesKey, enabled.toString());
-        if (value.shadeInactivePanes == enabled) break;
+        final panes = value.panes;
+        await _storage.write(_panesKey, jsonEncode(panes.toJson()));
+        await _storage.write(
+          _shadeInactivePanesKey,
+          (panes.fade != PaneFade.off).toString(),
+        );
+        if (value.panes == panes) break;
       }
     } catch (_) {
       // Keep the choice for this run if storage is unavailable.
     } finally {
-      _shadeInactivePanesSave = null;
+      _panesSave = null;
     }
   }
 
@@ -462,21 +771,26 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   /// Back to the shipped defaults.
   Future<void> reset() async {
     value = const AppearancePrefs();
+    _systemChanged(_system);
     await _paletteSave;
     await _backgroundSave;
     await _customSave;
     await _paneOpacitySave;
-    await _shadeInactivePanesSave;
+    await _panesSave;
     await _autoRenameTabsSave;
     await _promptSave;
     try {
       await _storage.delete(_familyKey);
       await _storage.delete(_sizeKey);
       await _storage.delete(_paletteKey);
+      await _storage.delete(_modeKey);
+      await _storage.delete(_lightPaletteKey);
+      await _storage.delete(_darkPaletteKey);
       await _storage.delete(_backgroundKey);
       await _storage.delete(_customKey);
       await _storage.delete(_paneOpacityKey);
       await _storage.delete(_shadeInactivePanesKey);
+      await _storage.delete(_panesKey);
       await _storage.delete(_autoRenameTabsKey);
       await _storage.delete(_promptKey);
     } catch (_) {

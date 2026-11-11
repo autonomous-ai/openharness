@@ -8,7 +8,8 @@ String? runtimeModelName(
 
 /// Keep the observed effort with its model and validate both against the same
 /// agent/engine identity. Missing metadata never implies a default effort.
-({String name, String effort})? runtimeModelDetails(
+/// [id] is the model as the engine names it, [name] as people know it.
+({String id, String name, String effort})? runtimeModelDetails(
   Object? value, {
   required String agentId,
   String? engine,
@@ -38,7 +39,11 @@ String? runtimeModelName(
         RegExp(r'[\x00-\x1f\x7f]').hasMatch(model)) {
       return null;
     }
-    return (name: modelDisplayName(model), effort: match[4]!.toLowerCase());
+    return (
+      id: model,
+      name: modelDisplayName(model),
+      effort: match[4]!.toLowerCase(),
+    );
   } on ArgumentError {
     return null;
   } on FormatException {

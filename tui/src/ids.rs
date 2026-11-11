@@ -67,13 +67,7 @@ pub fn leave(lives_on: Option<bool>) {
     });
 }
 
-/// Whether process [pid] is running (kill 0: there, or there and not ours to signal).
-fn running(pid: u64) -> bool {
-    let Ok(pid) = i32::try_from(pid) else { return false };
-    if pid <= 0 { return false }
-    let there = unsafe { libc::kill(pid, 0) } == 0;
-    there || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
+use crate::sys::running;
 
 /// Read the counters' file, do [f] with it, and write it back — all while its lock is held.
 fn with_file<R>(path: &std::path::Path, f: impl FnOnce(&mut Value) -> R) -> R {

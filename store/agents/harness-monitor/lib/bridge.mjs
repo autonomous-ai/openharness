@@ -1,7 +1,7 @@
 /**
  * The daemon, over the loopback bridge Harness already serves.
  *
- * Node's WebSocket talks only to `ws://127.0.0.1:18473/api/local-ws`; Harness owns pairing, encryption
+ * This talks only to the daemon's `/api/local-ws`, over its private socket (localDaemon.mjs); Harness owns pairing, encryption
  * and every remote machine behind it. The handshake is the one the Grid harness uses — `machine_select`,
  * wait for `connected`, then typed request/reply frames whose answer is `<type>_result` carrying the
  * same `requestId`. Nothing here reaches the network. The one credential this file touches is the
@@ -18,6 +18,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { DaemonWebSocket, daemonSocketPath } from './localDaemon.mjs'
 
 const exec = promisify(execFile)
 
@@ -35,21 +36,21 @@ export const DEFAULT_BRIDGE = 'ws://127.0.0.1:18473/api/local-ws'
  * The same function, by the same name, is in every Store package that talks to the daemon.
  */
 export function localCredentialHeaders(env = process.env) {
+  // Where a socket can be, and on Windows, where the daemon's pipe is the way, nothing carries the credential: a holder of the
+  // TCP port would hear it (localDaemon.mjs; on Windows the Team account's daemon can hold it from boot, audit W1).
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return {}
   const dir = env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data')
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
-  // Windows reports every file as 0o666 and every folder as 0o777, so the mode checks below would always refuse
-  // the credential the daemon wrote; there its protection is the profile folder's ACL (cli hookAuth.ts).
-  const posixModes = process.platform !== 'win32'
   const opened = []
   try {
     const folder = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     opened.push(folder)
     const where = fstatSync(folder)
-    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (posixModes && (where.mode & 0o022) !== 0)) return {}
+    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (where.mode & 0o022) !== 0) return {}
     const file = openSync(join(dir, 'hook-credential'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     opened.push(file)
     const stat = fstatSync(file)
-    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (posixModes && (stat.mode & 0o777) !== 0o600)) return {}
+    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (stat.mode & 0o777) !== 0o600) return {}
     const value = readFileSync(file, 'utf8').trim()
     return /^[A-Za-z0-9_-]{43}$/.test(value) ? { 'X-Harness-Local': value } : {}
   } catch {
@@ -63,7 +64,9 @@ const CREDENTIAL_REFUSED = "Harness refused this process's local credential. Run
 
 /** Whether the daemon behind a bridge socket that would not open refused the credential: a WebSocket
  *  cannot report the 401, so the same headers are shown once over plain HTTP, which can. */
-async function credentialRefused(url, headers) {
+async function credentialRefused(url, headers, env = process.env) {
+  // Over the socket or the pipe no credential is shown, and the port may be anyone's: there is nothing to ask it.
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return false
   try {
     const answer = await fetch(url.replace(/^ws:/, 'http:'), { headers, signal: AbortSignal.timeout(2000) })
     await answer.body?.cancel()
@@ -137,7 +140,7 @@ function openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect 
   const byMachine = sessionsFor(WebSocketImpl)
   const url = bridgeUrl(env)
   const headers = localCredentialHeaders(env)
-  const socket = new WebSocketImpl(url, { headers })
+  const socket = new WebSocketImpl(url, { headers, env })
   const pending = new Map()
   let closed = null
   let opened = false
@@ -161,7 +164,7 @@ function openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect 
       clearTimeout(deadline)
       const m = 'Could not open the local Harness bridge. Start Harness and try again.'
       if (opened) { fail(m); reject(new Error(m)); return }
-      refusal = credentialRefused(url, headers).then((refused) => { const why = refused ? CREDENTIAL_REFUSED : m; fail(why); reject(new Error(why)) })
+      refusal = credentialRefused(url, headers, env).then((refused) => { const why = refused ? CREDENTIAL_REFUSED : m; fail(why); reject(new Error(why)) })
     })
     socket.addEventListener('close', (event) => {
       if (refusal) return // the error above answers, once it knows whether the credential was refused
@@ -209,7 +212,7 @@ function openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect 
 }
 
 /** The kept session for `machineId`, opening one if there is none. */
-async function bridgeSession(machineId, { env = process.env, timeoutMs = 20_000, WebSocketImpl = globalThis.WebSocket, forceReconnect = false } = {}) {
+async function bridgeSession(machineId, { env = process.env, timeoutMs = 20_000, WebSocketImpl = DaemonWebSocket, forceReconnect = false } = {}) {
   if (!WebSocketImpl) throw new Error('Node 22 or newer is required to reach the Harness bridge.')
   const existing = sessionsFor(WebSocketImpl).get(machineId)
   const session = existing ?? openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect })
@@ -221,7 +224,7 @@ async function bridgeSession(machineId, { env = process.env, timeoutMs = 20_000,
  * One socket, one machine, however many calls the caller needs, then closed — for a one-off job
  * that must not share the kept session (a script, a test). `fn` receives `rpc(type, payload)`.
  */
-export async function withBridge(machineId, fn, { env = process.env, timeoutMs = 20_000, WebSocketImpl = globalThis.WebSocket } = {}) {
+export async function withBridge(machineId, fn, { env = process.env, timeoutMs = 20_000, WebSocketImpl = DaemonWebSocket } = {}) {
   if (!WebSocketImpl) throw new Error('Node 22 or newer is required to reach the Harness bridge.')
   // Its own world, never the shared map: a fresh key that nothing else will look up.
   const own = class extends WebSocketImpl {}

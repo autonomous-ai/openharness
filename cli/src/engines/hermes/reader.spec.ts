@@ -65,6 +65,16 @@ d('HermesReader (sqlite3 CLI)', () => {
     expect(await readHermesMessages(db, `${acp}-0`)).toEqual([])
   })
 
+  it("reads a Hermes 0.23 unified-runtime session, whose id is local-<sha256>", async () => {
+    const local = `local-${'0123456789abcdef'.repeat(4)}`
+    run(db, `INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (1, '${local}', 'user', 'hi', 1)`)
+    expect((await readHermesMessages(db, local)).map((r) => r.role)).toEqual(['user'])
+    // local_identity() is a lowercase sha256 hexdigest: a shorter, longer or uppercase one is no id.
+    for (const id of [local.slice(0, -1), `${local}0`, local.toUpperCase(), `local-${'g'.repeat(64)}`]) {
+      expect(await readHermesMessages(db, id)).toEqual([])
+    }
+  })
+
   it('hydrates silently, then streams a new turn incrementally', async () => {
     insert(db, { id: 1, role: 'user', content: 'old' })
     insert(db, { id: 2, role: 'assistant', content: 'done', finishReason: 'stop' })

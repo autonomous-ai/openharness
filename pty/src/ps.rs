@@ -37,6 +37,11 @@ pub struct ProcessRowJson {
 
 #[cfg(windows)]
 pub use windows::snapshot;
+#[cfg(windows)]
+pub(crate) use windows::{
+    creation_time as process_started, exited as process_exited, open as open_process,
+    parent as process_parent,
+};
 
 #[cfg(windows)]
 mod windows {
@@ -210,7 +215,7 @@ mod windows {
 
     /// The process opened for queries, and whether the handle can be waited on (`SYNCHRONIZE`,
     /// which a process may refuse while it still allows limited queries).
-    fn open(pid: u32) -> Option<(OwnedHandle, bool)> {
+    pub(crate) fn open(pid: u32) -> Option<(OwnedHandle, bool)> {
         [
             (
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
@@ -232,7 +237,7 @@ mod windows {
 
     /// Whether the process has exited: its handle is signaled; without `SYNCHRONIZE`, it has an
     /// exit code (a live process reports `STILL_ACTIVE`).
-    fn exited(h: HANDLE, synchronize: bool) -> bool {
+    pub(crate) fn exited(h: HANDLE, synchronize: bool) -> bool {
         if synchronize {
             return unsafe { WaitForSingleObject(h, 0) } == WAIT_OBJECT_0;
         }
@@ -241,7 +246,7 @@ mod windows {
     }
 
     /// The parent the kernel recorded for the process.
-    fn parent(h: HANDLE) -> Option<u32> {
+    pub(crate) fn parent(h: HANDLE) -> Option<u32> {
         let mut info: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32;
         let status = unsafe {
@@ -257,7 +262,7 @@ mod windows {
     }
 
     /// The creation `FILETIME` as one number.
-    fn creation_time(h: HANDLE) -> Option<u64> {
+    pub(crate) fn creation_time(h: HANDLE) -> Option<u64> {
         let zero = FILETIME {
             dwLowDateTime: 0,
             dwHighDateTime: 0,

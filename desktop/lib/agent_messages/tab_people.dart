@@ -11,6 +11,7 @@ import 'shared_tab_dialogs.dart';
 import 'shared_tab_people.dart'
     show PeopleRow, PeopleRowAction, toggleLeaderReportingError;
 import 'shared_tab_placement.dart' show shortSharedText;
+import '../widgets/laid_out_list.dart';
 
 /// People in a tab that is not shared: this account's harnesses in it
 /// (engine, computer, whether it works), Make Leader / Remove Leader, and
@@ -84,7 +85,7 @@ class _TabPeopleState extends State<TabPeople> {
       }
       rows.add(_row(pane.machineId, agentId, state));
     }
-    return ListView(
+    return LaidOutListView(
       key: const ValueKey('tab-people'),
       shrinkWrap: true,
       padding: EdgeInsets.zero,

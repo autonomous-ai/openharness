@@ -36,7 +36,7 @@ class FakeDaemon {
   readonly sent: Array<{ type: string; payload: Record<string, unknown> }> = []
   constructor(private readonly answer: (socket: FakeSocket, frame: { type: string; payload: Record<string, unknown> }) => void) {}
   connect = (url: string): LoopbackSocket => {
-    expect(url).toBe('ws://127.0.0.1:18473/api/local-ws')
+    expect(url).toMatch(/^ws\+unix:\/\/.*\/daemon-18473\.sock:\/api\/local-ws$/)
     const socket = new FakeSocket((frame) => { this.sent.push(frame); this.answer(socket, frame) })
     setTimeout(() => socket.emit('open'), 0)
     return socket
@@ -170,7 +170,7 @@ describe('the loopback calls', () => {
 
   it('a daemon that never answers is a TIMEOUT, not a hang', async () => {
     const silent = new FakeDaemon(() => {})
-    const client = new LoopbackClient('ws://127.0.0.1:18473/api/local-ws', silent.connect)
+    const client = new LoopbackClient(18473, silent.connect)
     await expect(client.select('box-1', 30)).rejects.toMatchObject({ code: 'TIMEOUT' })
     client.close()
   })
@@ -230,6 +230,16 @@ describe('remoteCommand', () => {
     expect(await refusedRun).toBe(1)
     expect(refused.errors[0]).toContain('Wrong password')
     expect(daemon.sent).toEqual([])
+  })
+
+  it('works in a Windows tile, named by its pty host pane', async () => {
+    const daemon = workingDaemon()
+    const d = deps({ connect: daemon.connect, tmuxPane: 'p2:%7' })
+    const run = remoteCommand(d)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    d.io.press('enter')
+    expect(await run).toBe(0)
+    expect(daemon.sent.at(-1)).toMatchObject({ type: 'remote_terminal_handoff', payload: { tmuxPane: 'p2:%7' } })
   })
 
   it('picks, opens the terminal there, hands the tile over, and says so', async () => {

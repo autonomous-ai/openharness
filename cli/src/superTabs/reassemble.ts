@@ -1,6 +1,6 @@
 /**
  * The Swarm state in the shape the full read gave it (`SuperTabState` as `visibleState` made it), built from the parts the
- * client holds, so `status`, routing, the host and the Pro cards read what they always read (design
+ * client holds, so `status`, the host and the Pro cards read what they always read (design
  * 2026-10-26-swarm-state-parts sections 5.1 and 6.2; the backend's `parts/shape.ts` is the reference). `derived` carries
  * what changes without a part changing (time and values across parts) and is laid over the parts here.
  */
@@ -24,21 +24,17 @@ function progressOf(stored: Json, projectId: unknown, leadConversationId: unknow
     .map(g => typeof g.lastMessageSequence === 'number' ? g.lastMessageSequence : 0)
   return { since: stored.since, dirtyRevision: Math.max(0, ...reported),
     summarizedRevision: highest(stored.summarizedFloor, stored.summarized), requestedRevision: highest(stored.requestedFloor, stored.requested),
-    ...(typeof stored.requestedAt === 'number' ? { requestedAt: stored.requestedAt } : {}),
-    ...(typeof stored.requestMessageId === 'string' ? { requestMessageId: stored.requestMessageId } : {}) }
+    ...(typeof stored.requestedAt === 'number' ? { requestedAt: stored.requestedAt } : {}) }
 }
 
 /** `visibleState`'s per-agent rules: down since the computed time or not down; a limit while it lasts (a part never holds
- *  one, so one that ran out is simply absent); the stored decision unless one is derived (`awaiting`); on Custom skills the
- *  role it runs (null when its kind has none), else no role. */
-function overlayAgent(agent: Json, derived: Json | undefined, projects: Json[]): Json {
+ *  one, so one that ran out is simply absent); the stored decision unless one is derived (`awaiting`). */
+function overlayAgent(agent: Json, derived: Json | undefined): Json {
   if (!derived) return agent
   if (typeof derived.downSince === 'string') agent.downSince = derived.downSince
   else delete agent.downSince
   if (typeof derived.limitedUntil === 'string') agent.limitedUntil = derived.limitedUntil
   if (typeof derived.workDecision === 'string') agent.workDecision = derived.workDecision
-  if (projects.find(p => p.id === agent.projectId)?.skillSet === 'custom') agent.roleId = typeof derived.roleId === 'string' ? derived.roleId : null
-  else delete agent.roleId
   return agent
 }
 
@@ -50,17 +46,21 @@ export function reassemble(store: PartsStore): Json {
   const projects = Array.isArray(head.projects) ? head.projects.map(object) : null
   const state: Json = { ...head,
     people: dataOf(store, 'member'),
-    agents: dataOf(store, 'agent').map(agent => overlayAgent(agent, object(derived.agents)[String(agent.id)] as Json | undefined, projects ?? [])),
+    agents: dataOf(store, 'agent').map(agent => overlayAgent(agent, object(derived.agents)[String(agent.id)] as Json | undefined)),
     conversations: groups.map(group => Object.fromEntries(Object.entries(group).filter(([key]) => !GROUP_INTERNALS.includes(key)))),
     machines: dataOf(store, 'machine').map(machine => ({ ...machine, ...object(object(derived.machines)[String(machine.machineId)]) })),
     starts: dataOf(store, 'start') }
   if (projects) {
     state.projects = projects.map(project => {
       const stored = progress.get(String(project.id))
-      return stored ? { ...project, progress: progressOf(stored, project.id, project.leadConversationId, groups) } : project
+      // The board's pulse (task #3384): what the PM owes and who works, shown by status on its project.
+      const pulse = derived.pulse?.[String(project.id)]
+      const withPulse = pulse ? { ...project, pulse } : project
+      return stored ? { ...withPulse, progress: progressOf(stored, project.id, project.leadConversationId, groups) } : withPulse
     })
   }
   if (derived.otherProjectsWork !== undefined) state.otherProjectsWork = derived.otherProjectsWork
-  if (derived.mentionsWaiting !== undefined) state.mentionsWaiting = derived.mentionsWaiting
+  if (derived.mentionsDigest !== undefined) state.mentionsDigest = derived.mentionsDigest
+  if (derived.decisionsDigest !== undefined) state.decisionsDigest = derived.decisionsDigest
   return state
 }

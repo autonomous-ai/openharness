@@ -53,6 +53,7 @@ through this daemon's link to it.
 
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
 `agent_update`, `agent_recent`, `agent_handoff_prepare`, `agent_read_file` (media previews, in 128 KiB chunks),
+`agent_instructions_read`, `agent_instructions_write`,
 `fs_list_dir`, `engines_probe`, `codex_profiles_list`, `codex_profile_link`, `models_list`,
 `usage_read`, `question_response`, `message`, `cancel`, and `terminal_open` for a
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
@@ -85,6 +86,52 @@ newest requests and recaps were used instead, or no history was found), `git` (n
 its state was unclear, or the exclude line could not be added), `file` (nothing was written: the
 repository state was unclear, the exclude line or the files could not be written, or `.harness`
 is not a plain folder).
+
+`agent_instructions_read` (`{ agentId, name }`) and `agent_instructions_write` (`{ agentId, name, text, version }`)
+read and save an agent's instructions file, `agents/<name>.md` in the folder the agent works in, on the computer it runs
+on, so the owner can edit it from any of their computers. The file goes through neither GitHub nor our servers: the
+requests are sealed over the relay, never logged, and answered only to a process on this computer or to one of the
+owner's own computers (`OWNER_REQUIRED` for a collaborator, never a guest). `name` is a file name every computer of the
+account can keep: trimmed, 1 to 100 characters and at most 200 bytes with `.md`, no `/`, `\`, `< > : " | ? *` or control
+character, not starting or ending with a dot, and not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`,
+`LPT0`-`LPT9`, in any case, with or without an extension); anything else is `BAD_NAME`. A read answers `{ text, version }`,
+with `text: null` and `version: ''` when there is no file; `version` is the SHA-256 of the file's bytes in lowercase hex.
+It also answers `shared`, only when there is any: `[{ name, path, loadedBy, text, truncated }]` for what instructs the
+agent besides its own file, whether or not it has one, so a person sees what the agent really gets. Those are the files
+its engines load: Claude Code reads `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the agent's folder and in
+every folder above it; Codex reads, in each folder from the project's root (the nearest folder with a `.git`, or the
+agent's own folder where there is none, however far up) down to the agent's, the first of `AGENTS.override.md` and
+`AGENTS.md` that is there as a file or a link, and nothing of that folder when it is empty. The `AGENTS.md` and
+`CLAUDE.md` of the agent's folder come first and are always looked for. Up to five folders above the agent's are looked
+in (the home folder too, when it is one of them), going up from the real path of its folder as the engines see it, and
+never the root of the disk; above the project's root only what Claude Code loads there is read. `name` is the file's
+name, `path` is where it is from the agent's folder (`CLAUDE.md`, `.claude/CLAUDE.md`, `../AGENTS.md`,
+`../../CLAUDE.md`), and `loadedBy` the engines (`claude`, `codex`) that load it, which may be none: an `AGENTS.md` that
+an `AGENTS.override.md` beside it takes Codex from, or an empty one (an empty override leaves that folder nothing). Each
+is a plain file, or a link that, with every link on the way resolved, ends at a plain file inside the project (never a
+place outside it, and no link above the project's root), so `CLAUDE.md` linked to `AGENTS.md` shows the one text under
+both names. They are read only, and a save never touches them. Each is at most 64 KiB, with `truncated: true` when it
+was cut (at a whole character), and one read carries about 256 KiB of them in all (the last one read may take it up to
+320 KiB), with the agent's own file besides: the files after that are in `skipped`. One that is there and is not shown
+never fails the read: it is in `skipped`, only when there is any, `[{ name, path, loadedBy, why }]`, with `why` one of
+`link` (a link that leads out of the project or to nothing), `not_text` (not UTF-8), `unreadable` (this user may not
+open it, or the disk fails on it), `not_a_file` (a folder, a named pipe, or a link to one) or `too_much` (the 256 KiB
+are used); one that is not UTF-8, or that the disk fails on, is also logged by its `path` and a code. Both fields also
+come beside an error of the agent's own file (`BAD_NAME`, `TOO_LARGE`, `NOT_UTF8`, `UNSAFE_PATH`, `READ_FAILED`), so
+that error does not hide what instructs the agent; an error that comes before the folder is known (`OWNER_REQUIRED`,
+`MISSING_AGENT_OR_NAME`, `AGENT_NOT_FOUND`) and a save's never carry them. A reader that predates the fields ignores
+them. A write replaces the file only if `version` is the one the writer read (`''` for no
+file), and answers `{ version }`. It makes `agents/` only once the save goes ahead, and saves of one file take turns in
+the daemon, so of two that read the same version one is saved and the other is `CHANGED`. A file or text over 64 KiB is
+refused, text with an unpaired surrogate is
+`BAD_TEXT`, a file that is not UTF-8 is `NOT_UTF8` to a read and to a save over it (whatever `version` the save names), and
+nothing is read or written through a link: `agents` or the file being one is `UNSAFE_PATH`. Errors: `MISSING_AGENT_OR_NAME`,
+`BAD_NAME`, `AGENT_NOT_FOUND` (no such agent, or it has no folder), `OWNER_REQUIRED`, `TOO_LARGE`, `UNSAFE_PATH`,
+`NOT_UTF8`, and `READ_FAILED` when the disk fails a read or `WRITE_FAILED` when it fails a save; and for a save `CHANGED` and
+`BAD_TEXT`. An older daemon answers `UNSUPPORTED`. A daemon that knows both says
+so in `terminal_capabilities`, as `features.agentInstructions: true` beside the other features (`mediaPreview`, ...), and an
+app asks before it sends: a daemon does not seal a request type it has never heard of, so the text of a save would cross
+the relay in the clear.
 
 `question_response` carries the `requestId` of the `commander_question` it answers, and its
 `question_response_result` comes back under that same id, to that client alone (sealed, over the relay):
@@ -150,6 +197,22 @@ it answers `ROUTER_UNAVAILABLE` (exit 1): nothing was decided, and the caller ac
   (exit 5 while it is off), and never an agent in a pane (`NOT_YOURS`).
 - **Cost and time:** one decision is about $0.00017 and 0.4 to 0.7 s on Harness's key (bounded at 8 s), capped per
   account at 30 a minute and 1,000 a day.
+
+`harness resume [--machine <name>] <name> [--json]` opens a closed harness again for such a program, so the words it
+then sends with `harness reply` reach the session the person named instead of a new one (`reply` refuses a closed one
+with `NOT_RUNNING`, and says so). It sends the machine's `agent_resume`, as Resume Harness does: the same harness id,
+name and folder, and its conversation where its agent can resume one (Claude Code, Codex). `--json` answers
+`{"ok": true, "name", "id", "state", "resumed", "effect", "next"}`; `"resumed": false` means it is open again in a new
+conversation. One still running is left as it is and answered the same way. A name is found as `show` finds it (`ps
+--all` lists those closed in the last week); an id finds any closed one the machine still keeps.
+
+- **Only a resume:** launch flags and a permission mode stay the person's to change in the app.
+- **A receipt:** the request carries a `creationId`. An answer that does not come within two minutes is asked after
+  with `agent_create_status`, never with a second launch. `RESUME_UNCONFIRMED` (exit 1) means the machine has not
+  confirmed the conversation yet: check its terminal, then run it again, which checks the same harness.
+- **The caller policy is `reply`'s:** the person's `programs-reply` switch (exit 5 while it is off), and never an agent
+  (`NOT_YOURS`). Any other refusal is the machine's code in `error` (exit 1), such as `AGENT_NOT_FOUND`,
+  `AGENT_BUSY` or `DELETE_IN_PROGRESS`.
 
 `harness watch <name>` follows one harness for a program that acts on it: a line each time it changes, one JSON
 object a line with `--json`, until it stops or is gone (exit 4) or `--timeout` passes (exit 124; `0`, the default,

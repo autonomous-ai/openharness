@@ -8,6 +8,7 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/state/workspace_chrome.dart';
+import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 
@@ -112,6 +113,53 @@ Future<void> _mountApp(
 }
 
 void main() {
+  group('Desktop: the daemon coming up reads the Swarm at once', () {
+    late SuperTabLaunchFixture f;
+
+    Future<void> opened() async {
+      f = SuperTabLaunchFixture(local: true);
+      f.app.superTabs.reading = SuperTabReading.desktop;
+      f.app.machineStates['m']!.connectionStatus =
+          ConnectionStatus.disconnected;
+      f.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+    }
+
+    test('when this computer connects', () async {
+      await opened();
+      final before = _stateReads(f);
+      f.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before + 1);
+      // Still connected: another status says nothing new.
+      f.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before + 1);
+      f.app.superTabs.dispose();
+    });
+
+    test('and not while it is only connecting', () async {
+      await opened();
+      final before = _stateReads(f);
+      f.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before);
+      f.app.superTabs.dispose();
+    });
+
+    test('when its backend comes back', () async {
+      await opened();
+      f.app.status = AppStatus.authenticated;
+      f.app.noteBackendOnlineForTest(false);
+      final before = _stateReads(f);
+      f.app.noteBackendOnlineForTest(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before + 1);
+      f.app.superTabs.dispose();
+    });
+  });
+
   testWidgets(
     'Desktop: a Swarm tab not shown, or a hidden app, polls every 15 s',
     (tester) async {

@@ -1,6 +1,6 @@
 // Direct ASCII decoding must retain every pixel from the generic Unicode path,
 // including clipping inside a cell, eviction, font/palette changes and fallback.
-#include "../main/ui/habitat/octopus.h"
+#include "../main/ui/habitat/terminal.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,8 +19,7 @@ static void compare(const ht_scene_t *scene, ht_rect_t clip)
 }
 int main(void)
 {
-    const ht_font_t *fonts[] = {&ht_octopus_font_2, &ht_octopus_font_4,
-        &ht_octopus_font_6, &ht_octopus_font_8, &ht_octopus_font_10, &ht_mono_20};
+    const ht_font_t *fonts[] = {&ht_mono_16, &ht_mono_20, &ht_mono_24, &ht_mono_28, &ht_open_20, &ht_mono_20};
     char alphabet[128];
     for (int i = 0; i < 95; i++) alphabet[i] = i + 32;
     memcpy(alphabet + 95, "\xe2\x80\x94\xe2\x80\x9c\xf0\x9f\x90\x99", 11);
@@ -47,30 +46,5 @@ int main(void)
         ht_rect_t clip = {next() % 80, next() % 110, 1 + next() % 380, 1 + next() % 40};
         compare(&scene, clip);
     }
-    ht_tim_face_t face = {.recipient = "Firmware", .status = "Coalescing",
-        .mood = HT_TIM_WORKING, .foreground = 0xffff, .dim = 0x7777, .ink = 0xafe0};
-    for (int layout = 0; layout < 4; layout++) {
-        face.focus = layout == 1;
-        const char *recap = layout == 2 ? "Fixed. All checks pass." : layout == 3 ?
-            "The update is installed. Voice input now sends to the selected agent. The result stays in the center." : NULL;
-        for (int frame = 0; frame < HT_OCTOPUS_FRAMES; frame++) {
-            face.pose = (ht_tim_pose_t){.blink = frame % 7 == 0, .level = frame % 5};
-            face.mood = (frame % 8);
-            face.unread = frame % 3 == 0;
-            ht_scene_clear(&scene, ht_rgb(0x080c08));
-            ht_octopus_face(&scene, &face, frame, ht_rgb(0xc8a9f0), recap);
-            compare(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT});
-            uint32_t builds = ht_glyph_cache_builds();
-            for (int y = 0; y < HT_HEIGHT; y += 24)
-                compare(&scene, (ht_rect_t){0, y, HT_WIDTH, y + 24 > HT_HEIGHT ? HT_HEIGHT - y : 24});
-            assert(ht_glyph_cache_builds() == builds); // full-to-strip reuse, no palette churn
-        }
-    }
-    // The budget follows the widest atlas the face has: 24 slots of 5x10 on the dial, of 8x16 on the Pro.
-#if HT_FACE_PX >= 720
-    assert(ht_glyph_cache_bytes() <= 6400);
-#else
-    assert(ht_glyph_cache_bytes() <= 2600);
-#endif
-    puts("ASCII raster: 6000 clipped mixed scenes + 252 complete poses match the Unicode renderer; guards and warm reuse pass");
+    puts("ASCII raster: 6000 clipped mixed scenes match the Unicode renderer");
 }

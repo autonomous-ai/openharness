@@ -4,6 +4,7 @@ import { outsideCaller } from '../../agentClient/model.js'
 import { WebSocket } from 'ws'
 import { deviceRequest } from '../../devices/client.js'
 import { localCredentialHeaders } from '../localCredential.js'
+import { daemonFetch } from '../localTransport.js'
 
 const USAGE = 'Usage: harness autonomous-device addon state [--device <id>]'
   + ' | addon propose --act <act> --holds-ms <ms> [--why <why>] [--sure <0..1>] [--params <json>] [--note <text>] [--addon <name>] [--key <key>] [--device <id>]'
@@ -17,7 +18,7 @@ export type MachineAsk = (machine: string, op: string, input: Record<string, unk
 
 /** The owner's machine `--machine` names, by id or name (case-blind), as this daemon lists the account's machines. */
 export async function machineIdOf(word: string, dataDir: string, port: number): Promise<string> {
-  const response = await fetch(`http://127.0.0.1:${port}/api/machines`, {
+  const response = await daemonFetch(dataDir, port)(`http://127.0.0.1:${port}/api/machines`, {
     headers: { 'x-adapter-local': '1', ...localCredentialHeaders(dataDir) }, signal: AbortSignal.timeout(8000) })
   if (!response.ok) throw Object.assign(new Error('Could not read the account\'s machines. Sign in and try again.'), { code: 'MACHINES_UNAVAILABLE' })
   const body = await response.json() as { data?: { machines?: Record<string, unknown>[] }; machines?: Record<string, unknown>[] }
@@ -130,7 +131,7 @@ export async function runAddonCommand(argv: string[], dataDir: string, port: num
   const credential = readHookCredential(dataDir)
   if (!credential) { print({ error: { code: 'DAEMON_UNAVAILABLE', message: 'Start Harness with harness start first.' } }); return 1 }
   try {
-    const result = await fetch(`http://127.0.0.1:${port}/api/autonomous-device/${path}`, {
+    const result = await daemonFetch(dataDir, port)(`http://127.0.0.1:${port}/api/autonomous-device/${path}`, {
       method, redirect: 'error', signal: AbortSignal.timeout(15_000),
       headers: { Authorization: `Bearer ${credential}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),

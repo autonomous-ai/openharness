@@ -4,13 +4,17 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/code_block.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/image_cache.dart';
+import 'package:harness/super_tabs/thread_panel.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -28,6 +32,17 @@ Future<Uint8List> _png(WidgetTester tester, int width, int height) async =>
       return data!.buffer.asUint8List();
     }))!;
 
+/// A picture that never arrives: what is shown is its placeholder.
+class _Pending extends ImageProvider<_Pending> {
+  @override
+  Future<_Pending> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(_Pending key, ImageDecoderCallback decode) =>
+      OneFrameImageStreamCompleter(Completer<ImageInfo>().future);
+}
+
 Map<String, dynamic> _file(
   String id,
   String name,
@@ -44,27 +59,40 @@ Map<String, dynamic> _file(
 
 void main() {
   late List<Uri> loaded;
+  late List<AttachmentImage> asked;
   late Map<String, Uint8List> pictures;
-  late ImageProvider Function(Uri) original;
+  late SuperTabImageCache cache;
+  late ImageProvider Function(AttachmentImage) original;
 
   setUp(() {
     loaded = [];
+    asked = [];
     pictures = {};
+    cache = superTabImageCache;
+    superTabImageCache = SuperTabImageCache(MemoryImageShelf());
     original = attachmentImage;
-    attachmentImage = (url) {
+    attachmentImage = (picture) {
+      final url = picture.url;
+      asked.add(picture);
       loaded.add(url);
       return MemoryImage(pictures[url.pathSegments.last]!);
     };
   });
-  tearDown(() => attachmentImage = original);
+  tearDown(() {
+    attachmentImage = original;
+    superTabImageCache = cache;
+  });
 
   /// A conversation whose one message says [text] and carries [files].
   Future<SuperTabController> show(
     WidgetTester tester, {
     String text = 'Here',
     List<Map<String, dynamic>> files = const [],
+    FutureOr<Map<String, dynamic>> Function(String id)? fileLink,
   }) async {
-    final server = ConversationServer()..append(text, attachments: files);
+    final server = ConversationServer()
+      ..append(text, attachments: files)
+      ..fileLink = fileLink;
     final controller = server.controller();
     await controller.refresh();
     await tester.binding.setSurfaceSize(const Size(1100, 800));
@@ -74,7 +102,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Test Mac',
@@ -180,6 +207,7 @@ void main() {
       final failed = Completer<Object>();
       AttachmentImage(
             Uri.parse('https://cdn.harness.autonomous.ai/a1/lies.png'),
+            fileId: 'a1',
           )
           .resolve(ImageConfiguration.empty)
           .addListener(
@@ -211,7 +239,7 @@ void main() {
         find.byKey(const ValueKey('super-attachment-inline:a1')),
       );
       await tester.pumpAndSettle();
-      final viewer = find.byKey(const ValueKey('super-attachment-viewer:a1'));
+      final viewer = find.byKey(const ValueKey('super-attachment-viewer'));
       expect(viewer, findsOneWidget);
       expect(tester.getSize(viewer), const Size(1100, 800));
       expect(
@@ -220,7 +248,7 @@ void main() {
       );
       expect(find.text('Download'), findsOneWidget);
       expect(find.text('Open in browser'), findsOneWidget);
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byKey(const ValueKey('super-image-close')));
       await tester.pumpAndSettle();
       expect(viewer, findsNothing);
       await close(tester, c);
@@ -274,6 +302,295 @@ void main() {
       expect(find.text('shot.png can’t be shown here.'), findsOneWidget);
       await close(tester, c);
     });
+
+    Finder placeholder(String id) =>
+        find.byKey(ValueKey('super-attachment-placeholder:$id'));
+
+    testWidgets('a picture whose shape is known holds its place at that shape', (
+      tester,
+    ) async {
+      await tester.runAsync(
+        () =>
+            superTabImageCache.keep('a1', Uint8List(8), const Size(1600, 900)),
+      );
+      attachmentImage = (_) => _Pending();
+      final c = await show(
+        tester,
+        files: [_file('a1', 'shot.png', 'image/png')],
+      );
+
+      // Fitted in 360×360 as the picture will be: nothing moves when it comes.
+      expect(tester.getSize(placeholder('a1')), const Size(360, 202.5));
+      await close(tester, c);
+    });
+
+    testWidgets('a shape an earlier launch kept is read before it is shown', (
+      tester,
+    ) async {
+      final shelf = MemoryImageShelf();
+      await tester.runAsync(
+        () =>
+            SuperTabImageCache(shelf)
+                .keep('a1', Uint8List(8), const Size(200, 800)),
+      );
+      superTabImageCache = SuperTabImageCache(shelf);
+      attachmentImage = (_) => _Pending();
+      final c = await show(
+        tester,
+        files: [_file('a1', 'shot.png', 'image/png')],
+      );
+
+      expect(tester.getSize(placeholder('a1')), const Size(90, 360));
+      await close(tester, c);
+    });
+
+    testWidgets('an unknown shape keeps the plain placeholder', (tester) async {
+      attachmentImage = (_) => _Pending();
+      final c = await show(
+        tester,
+        files: [_file('a1', 'shot.png', 'image/png')],
+      );
+
+      expect(tester.getSize(placeholder('a1')), const Size(240, 180));
+      await close(tester, c);
+    });
+
+    testWidgets('no link, no picture, even when it is cached', (tester) async {
+      await tester.runAsync(
+        () => superTabImageCache.keep('a1', Uint8List(8), const Size(10, 10)),
+      );
+      final c = await show(
+        tester,
+        files: [
+          {..._file('a1', 'shot.png', 'image/png'), 'unlinked': true},
+        ],
+        // The server's answer for a reader who may no longer read it; an
+        // error of the ask itself is asked again (file_links.dart).
+        fileLink: (_) => throw const SuperTabFailure(
+          'FORBIDDEN',
+          'no longer yours',
+          statusCode: 403,
+        ),
+      );
+
+      expect(find.text('shot.png can’t be shown here.'), findsOneWidget);
+      expect(asked, isEmpty);
+      await close(tester, c);
+    });
+
+    testWidgets(
+      'the chat asks for it at its size, the viewer for the original',
+      (tester) async {
+        pictures['shot.png'] = await _png(tester, 720, 360);
+        final c = await show(
+          tester,
+          files: [_file('a1', 'shot.png', 'image/png')],
+        );
+        expect(asked.map((p) => (p.fileId, p.side)).toSet(), {('a1', 360.0)});
+
+        final before = asked.length;
+        await tester.tap(
+          find.byKey(const ValueKey('super-attachment-inline:a1')),
+        );
+        await tester.pumpAndSettle();
+
+        // The viewer asks for the original; the chat's own copy may be asked
+        // again at its size as the row lays out under it (#4529).
+        expect(
+          asked.skip(before).where((p) => p.fileId == 'a1' && p.side == null),
+          isNotEmpty,
+        );
+        await close(tester, c);
+      },
+    );
+  });
+
+  group('the viewer over the chat', () {
+    /// A chat of two pictures, [a1] in message-1 and [a2] in message-2, and
+    /// a reply to message-1 carrying [a3], in a window [size] wide, with
+    /// message-1's thread open.
+    Future<SuperTabController> chat(
+      WidgetTester tester, {
+      Size size = const Size(1400, 900),
+    }) async {
+      pictures['a1.png'] = await _png(tester, 720, 360);
+      pictures['a2.png'] = await _png(tester, 360, 720);
+      pictures['a3.png'] = await _png(tester, 400, 400);
+      final server = ConversationServer()..threads = true;
+      server
+        ..append('First', attachments: [_file('a1', 'a1.png', 'image/png')])
+        ..append('Second', attachments: [_file('a2', 'a2.png', 'image/png')])
+        ..append(
+          'In the thread',
+          attachments: [_file('a3', 'a3.png', 'image/png')],
+        );
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1';
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-thread-line-message-1')),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
+      return controller;
+    }
+
+    final viewer = find.byKey(const ValueKey('super-attachment-viewer'));
+    final thread = find.byType(SuperTabThreadPanel);
+    Finder picture(String id) =>
+        find.byKey(ValueKey('super-attachment-image:$id'));
+    Finder inline(String id) =>
+        find.byKey(ValueKey('super-attachment-inline:$id'));
+    Finder button(String name) => find.byKey(ValueKey('super-image-$name'));
+
+    Future<void> settle(WidgetTester tester) async {
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('it covers the chat and leaves the open thread beside it', (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      // The chat's a1; the thread shows its root's too.
+      await tester.tap(
+        find
+            .descendant(of: find.byType(SuperTabView), matching: inline('a1'))
+            .first,
+      );
+      await settle(tester);
+      expect(viewer, findsOneWidget);
+      final over = tester.getRect(viewer), beside = tester.getRect(thread);
+      expect(over.left, 0);
+      expect(over.right, lessThanOrEqualTo(beside.left));
+      expect(over.height, 900);
+      expect(thread.hitTestable(), findsOneWidget);
+      // Its sender, when and where.
+      expect(
+        find.descendant(of: viewer, matching: find.text('You')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: viewer,
+          matching: find.textContaining(' ago in # Pilot · a1.png'),
+        ),
+        findsOneWidget,
+      );
+      await close(tester, c);
+    });
+
+    testWidgets("from the chat it pages through the chat's pictures only", (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a1').first);
+      await settle(tester);
+      expect(picture('a1'), findsOneWidget);
+      await tester.tap(button('next'));
+      await settle(tester);
+      expect(picture('a2'), findsOneWidget);
+      // The thread's reply is not in the chat.
+      expect(button('next'), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets("from the thread it pages through the thread's pictures only", (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      await tester.tap(find.descendant(of: thread, matching: inline('a3')));
+      await settle(tester);
+      expect(picture('a3'), findsOneWidget);
+      expect(button('next'), findsNothing);
+      await tester.tap(button('previous'));
+      await settle(tester);
+      // The thread's root, not the chat's other picture.
+      expect(picture('a1'), findsOneWidget);
+      expect(button('previous'), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('Esc closes it and keeps the thread', (tester) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(viewer, findsNothing);
+      expect(thread, findsOneWidget);
+      await close(tester, c);
+    });
+
+    testWidgets("closing the thread closes its picture's viewer", (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      await tester.tap(find.descendant(of: thread, matching: inline('a3')));
+      await settle(tester);
+      expect(viewer, findsOneWidget);
+      c.closeThread();
+      await settle(tester);
+      expect(viewer, findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('Show in chat closes it', (tester) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      await tester.tap(
+        find.descendant(of: viewer, matching: find.byTooltip('More')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Show in chat'));
+      await settle(tester);
+      expect(viewer, findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('another conversation closes it', (tester) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      expect(viewer, findsOneWidget);
+      await c.select('offline');
+      await settle(tester);
+      expect(viewer, findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('with the thread as a drawer it covers the window, and Esc '
+        'closes it, not the drawer', (tester) async {
+      final c = await chat(tester, size: const Size(900, 800));
+      await tester.tap(find.descendant(of: thread, matching: inline('a3')));
+      await settle(tester);
+      expect(tester.getRect(viewer), const Rect.fromLTWH(0, 0, 900, 800));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(viewer, findsNothing);
+      expect(thread, findsOneWidget);
+      await close(tester, c);
+    });
   });
 
   testWidgets('other files are one compact chip each: name · size', (
@@ -301,11 +618,16 @@ void main() {
 
   group('code', () {
     late List<String> copied;
+    var refuse = false;
     setUp(() {
       copied = [];
+      refuse = false;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, (call) async {
             if (call.method == 'Clipboard.setData') {
+              if (refuse) {
+                throw PlatformException(code: 'Clipboard unavailable');
+              }
               copied.add((call.arguments as Map)['text'] as String);
             }
             return null;
@@ -339,6 +661,52 @@ void main() {
       await close(tester, c);
     });
 
+    testWidgets('a clipboard that refuses is said, not taken for a copy', (
+      tester,
+    ) async {
+      refuse = true;
+      final c = await show(tester, text: '```\nls -la\n```');
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(find.text('Code copied'), findsNothing);
+      expect(find.text('Couldn\'t copy it.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await close(tester, c);
+    });
+
+    testWidgets(
+      'a line wider than the column wraps inside the block: nothing scrolls sideways',
+      (tester) async {
+        final wide = 'x' * 400;
+        final c = await show(tester, text: '```\n$wide\n```');
+        final code = find.text(wide);
+        expect(code, findsOneWidget);
+        expect(
+          find
+              .ancestor(of: code, matching: find.byType(Scrollable))
+              .evaluate()
+              .where(
+                (e) =>
+                    (e.widget as Scrollable).axisDirection ==
+                    AxisDirection.right,
+              ),
+          isEmpty,
+        );
+        final block = find.ancestor(
+          of: code,
+          matching: find.byType(SuperTabCodeBlock),
+        );
+        expect(
+          tester.getRect(code).right,
+          lessThanOrEqualTo(tester.getRect(block).right),
+        );
+        // Wrapped: more than one line high.
+        expect(tester.getSize(code).height, greaterThan(60));
+        await close(tester, c);
+      },
+    );
+
     testWidgets('a block with no language still has Copy', (tester) async {
       final c = await show(tester, text: '```\nls -la\n```');
 
@@ -350,35 +718,25 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('a long block folds with Show more, and Copy takes it all', (
-      tester,
-    ) async {
-      final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
-      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
+    testWidgets(
+      'a long block shows every line, with nothing to open, and Copy takes it all',
+      (tester) async {
+        final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
+        final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
 
-      expect(find.text(lines.take(12).join('\n')), findsOneWidget);
-      expect(find.textContaining('line 13'), findsNothing);
-      await tester.tap(find.text('Show more'));
-      await tester.pump();
-      expect(find.text(lines.join('\n')), findsOneWidget);
-      await tester.tap(find.text('Show less'));
-      await tester.pump();
-      expect(find.textContaining('line 13'), findsNothing);
+        expect(find.text(lines.join('\n')), findsOneWidget);
+        expect(find.text('Show more'), findsNothing);
+        expect(find.text('Show less'), findsNothing);
 
-      await tester.tap(find.text('Copy'));
-      await tester.pump();
-      expect(copied, [lines.join('\n')]);
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-      await close(tester, c);
-    });
-
-    testWidgets('a short block has no Show more', (tester) async {
-      final lines = [for (var i = 1; i <= 12; i++) 'line $i'];
-      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
-
-      expect(find.text(lines.join('\n')), findsOneWidget);
-      expect(find.text('Show more'), findsNothing);
-      await close(tester, c);
-    });
+        // The chat shows the block's end; its Copy is above, as a person scrolls to it.
+        await tester.ensureVisible(find.text('Copy'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Copy'));
+        await tester.pump();
+        expect(copied, [lines.join('\n')]);
+        await tester.pumpAndSettle(const Duration(seconds: 3));
+        await close(tester, c);
+      },
+    );
   });
 }

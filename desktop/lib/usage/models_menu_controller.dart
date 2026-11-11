@@ -23,10 +23,24 @@ class ModelsMenuController extends ChangeNotifier {
     Future<List<MachineUsage>> Function()? remote,
     DateTime Function()? now,
     this.interval = const Duration(minutes: 5),
+    ValueListenable<bool>? seen,
   }) : _usage = usage ?? UsageController(remote: remote, autoStart: false),
        _ownsUsage = usage == null,
-       _now = now ?? DateTime.now {
+       _now = now ?? DateTime.now,
+       _seen = seen {
     _usage.addListener(_changed);
+    seen?.addListener(_seenChanged);
+  }
+
+  /// Whether the window is in sight (`AppNotifier.inSight`); null is always. Out of sight [start]'s
+  /// background read asks nothing (task #2953); one that came due meanwhile reads on return.
+  final ValueListenable<bool>? _seen;
+  bool _owed = false;
+
+  void _seenChanged() {
+    if (_seen?.value != true || !_owed) return;
+    _owed = false;
+    unawaited(refresh());
   }
 
   final UsageController _usage;
@@ -79,7 +93,13 @@ class ModelsMenuController extends ChangeNotifier {
   void start() {
     if (_disposed || _timer != null) return;
     unawaited(refresh());
-    _timer = Timer.periodic(interval, (_) => unawaited(refresh()));
+    _timer = Timer.periodic(interval, (_) {
+      if (_seen?.value == false) {
+        _owed = true;
+        return;
+      }
+      unawaited(refresh());
+    });
   }
 
   Future<void> refresh() {
@@ -133,6 +153,7 @@ class ModelsMenuController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    _seen?.removeListener(_seenChanged);
     _usage.removeListener(_changed);
     if (_ownsUsage) _usage.dispose();
     super.dispose();

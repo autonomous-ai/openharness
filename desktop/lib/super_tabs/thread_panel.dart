@@ -4,19 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/swarm_layout.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
-import 'buddy_sessions.dart';
+import 'chat_find.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
+import 'day_pill.dart';
 import 'reply_box.dart';
 import 'controller.dart';
+import 'message_row.dart' show SuperTabMessageHighlight, SuperTabMessageRow;
 import 'jump_to_latest.dart';
 import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
+import 'swarm_type.dart';
+import 'voice_row.dart';
+import 'voice_take.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -27,8 +33,10 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.root,
     required this.row,
     required this.outgoing,
-    this.sessionActivity,
     this.machineName,
+    this.onScroll,
+    this.voice,
+    this.agentsOnly = false,
   });
 
   final SuperTabController controller;
@@ -40,18 +48,25 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// Draws a reply on its way.
   final Widget Function(SuperTabOutgoing sent) outgoing;
 
-  /// What a thread's own Buddy session is doing, as this computer reads it;
-  /// without it, what the Swarm alone says.
-  final SuperTabSessionActivity? sessionActivity;
-
   /// A machine's name, said beside an agent `@` offers.
   final String Function(String machineId)? machineName;
 
+  /// Given the thread's list while the panel lives (null once it is gone),
+  /// so a device scrolling this Swarm scrolls the thread, not the chat.
+  final ValueChanged<ScrollController?>? onScroll;
+
+  /// The composers' voice message (the view's one take); without it, no mic
+  /// shows. Its row takes the reply box's row while it is this thread's.
+  final SuperTabVoiceTake? voice;
+
+  /// A task's thread in a project's channel: agents post, people read (Swarm v4), so it has no composer.
+  final bool agentsOnly;
+
   @override
-  State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
+  State<SuperTabThreadPanel> createState() => SuperTabThreadPanelState();
 }
 
-class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
+class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   late final _composer = TextEditingController(
     text: c.threadDraft(widget.root),
   );
@@ -59,8 +74,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   // Opens at the newest reply and follows it until the reader scrolls up.
   final _scroll = SuperTabThreadScroll();
   bool _alsoSend = false;
-  // The reply starts this thread's own Buddy session (reader's Buddy chat).
-  bool _newSession = false;
   // Whether the list is scrolled away from its newest reply, the replies
   // there were when the thread opened or was last read to its end (set once
   // the thread's replies are known), and the latest replies and rows (replies
@@ -81,6 +94,135 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   SuperTabController get c => widget.controller;
 
+  // The reply the thread was opened at (#2814): its row, and the one lit.
+  final _targetKey = GlobalKey();
+  String? _target, _lit;
+  Timer? _litTimer;
+  int _jumps = 0;
+  // Find in this thread (task #2826): its root and replies, the earlier
+  // replies read as Show earlier replies reads them.
+  SuperTabChatFind? _find;
+  String? _foundMatch;
+  final _findFocus = FocusNode(debugLabel: 'Find in thread');
+
+  /// Whether what has focus is in this thread: Cmd+F finds here then.
+  bool get focused =>
+      FocusManager.instance.primaryFocus?.context
+          ?.findAncestorStateOfType<SuperTabThreadPanelState>() ==
+      this;
+
+  void openFind() {
+    if (_find != null) return _findFocus.requestFocus();
+    final root = widget.root;
+    setState(
+      () => _find = SuperTabChatFind(
+        // The root counts once no earlier replies are left to read: Up
+        // from the oldest loaded reply reads them first.
+        rows: () => [
+          for (final m in c.threadMessages(root))
+            if (m.id != root || !c.hasEarlierReplies(root)) m,
+        ],
+        hasOlder: () => c.hasEarlierReplies(root),
+        readOlder: () async {
+          final loaded = c.threadMessages(root).length;
+          _scroll.holdPlace();
+          await c.loadThread(earlier: true);
+          return c.threadMessages(root).length > loaded ||
+              !c.hasEarlierReplies(root);
+        },
+      )..addListener(_findMoved),
+    );
+  }
+
+  void _closeFind({bool refocus = true}) {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..clear()
+      ..dispose();
+    _find = _foundMatch = null;
+    if (!mounted) return;
+    setState(() {});
+    if (refocus) _focus.requestFocus();
+  }
+
+  /// A new current match is brought into view, as a followed link is.
+  void _findMoved() {
+    final match = _find?.current;
+    if (!mounted) return;
+    setState(() {});
+    if (match == null || match == _foundMatch) return;
+    _foundMatch = match;
+    // Brought into view as the reply a thread opens at is.
+    final messages = c.threadMessages(widget.root);
+    final at = messages.indexWhere((m) => m.id == match);
+    if (at < 0) return;
+    final jump = ++_jumps;
+    setState(() => _target = match);
+    _reveal(jump, at / messages.length, 0);
+  }
+
+  /// [row] with its message's time, for the day pill over the list. Keyed
+  /// by the message, so the list keeps each row's place as replies arrive.
+  Widget _dated(SuperTabMessage message, Widget row) => SuperTabDayMark(
+    key: ValueKey('super-thread-day-${message.id}'),
+    time: message.createdAt,
+    child: KeyedSubtree(
+      key: message.id == _target ? _targetKey : null,
+      // Lit as the reply opened at, or as find's current match; find's
+      // other matches more quietly.
+      child: SuperTabMessageHighlight(
+        on: message.id == _lit || message.id == _find?.current,
+        match: _find?.matching.contains(message.id) ?? false,
+        child: row,
+      ),
+    ),
+  );
+
+  /// The reply the thread was opened at ([SuperTabController.threadTarget]),
+  /// once [messages] hold it: brought into view and lit for two seconds, and
+  /// the list reads on from it rather than following the end.
+  void _takeTarget(List<SuperTabMessage> messages) {
+    final target = c.threadTarget;
+    if (target == null || target.root != widget.root) return;
+    final at = messages.indexWhere((m) => m.id == target.messageId);
+    if (at < 0) return;
+    c.threadTarget = null;
+    final jump = ++_jumps;
+    // After the frame: a panel just opened has no list to hold before it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || jump != _jumps) return;
+      _scroll.holdPlace();
+      _litTimer?.cancel();
+      setState(() => _target = _lit = target.messageId);
+      _litTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _lit = null);
+      });
+      _reveal(jump, at / messages.length, 0);
+    });
+  }
+
+  /// The list is lazy: jump near the target's place ([at], its share of the
+  /// thread) until its row is built, then bring it into view.
+  void _reveal(int jump, double at, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || jump != _jumps || !_scroll.hasClients) return;
+      if (_targetKey.currentContext case final row?) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        return;
+      }
+      if (attempt > 20) return;
+      final position = _scroll.position;
+      _scroll.jumpTo(
+        position.minScrollExtent +
+            at * (position.maxScrollExtent - position.minScrollExtent),
+      );
+      _reveal(jump, at, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
   /// The conversation this thread is in.
   String get _conversationId => c.openedThread?.conversationId ?? c.selectedId;
 
@@ -89,6 +231,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     super.initState();
     _focus.requestFocus();
     _scroll.addListener(_measureAfterFrame);
+    widget.onScroll?.call(_scroll);
   }
 
   @override
@@ -105,14 +248,20 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
       _alsoSend = false;
-      _newSession = false;
       _tagIndex.value = 0;
       _tagDismissed.value = null;
+      _closeFind(refocus: false);
     }
   }
 
   @override
   void dispose() {
+    _litTimer?.cancel();
+    widget.onScroll?.call(null);
+    _find
+      ?..removeListener(_findMoved)
+      ..dispose();
+    _findFocus.dispose();
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
@@ -158,54 +307,25 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _measureAfterFrame();
   }
 
-  /// Where "Also send" also puts the reply, full wording first (Scholes,
-  /// 10-31): the project chat as its sidebar row names it, else the main
-  /// chat. A narrower send row takes the short one, never shorter: it still
-  /// says what the option does and where.
-  List<String> get _alsoSendLabels {
+  /// Where "Also send" also puts the reply, always in full (Scholes, 11-03:
+  /// "Also to chat" did not say where): the project chat as its sidebar row
+  /// names it, else the main chat. "Send", as the phone and Slack say it
+  /// (Huy and Scholes, 11-04).
+  String get _alsoSendLabel {
     final group = c.selected, snapshot = c.snapshot;
     String? channel;
     if (group != null && snapshot != null && snapshot.isProjectLead(group.id)) {
       channel = snapshot.projectFor(group.id)?.name;
     }
     return channel == null
-        ? const ['Also post to the main chat', 'Also to chat']
-        : ['Also post to #$channel', 'Also to #$channel'];
+        ? 'Also send to the main chat'
+        : 'Also send to #$channel';
   }
 
-  /// One line, always the full wording.
-  String get _alsoSendHint => '${_alsoSendLabels.first} as well as this thread';
+  String get _alsoSendHint => '$_alsoSendLabel as well as this thread';
 
-  // An older Buddy chat is kept to read: no thread reply there either (security review 1 of #2437).
   bool get _writable =>
-      c.canWrite &&
-      c.selected?.archived == false &&
-      !c.hasPendingAction &&
-      !c.isEarlierBuddyChat(c.selected);
-
-  /// The thread's last session ended: a reply here must start a new one.
-  bool get _sessionLocked =>
-      c.offersThreadSessions(widget.root) &&
-      c.threadSessionEnded(widget.root) != null;
-
-  /// Whether the composer offers New session: the reader's own Buddy chat,
-  /// with their Buddy running, in a thread no session answers now.
-  bool get _offersSession =>
-      c.offersThreadSessions(widget.root) &&
-      c.threadSession(widget.root) == null;
-
-  /// Whether this reply starts a session.
-  bool get _startsSession =>
-      _offersSession &&
-      (_sessionLocked ||
-          (_newSession &&
-              !c.buddySessionsFull &&
-              c.threadSessionBlocked == null));
-
-  /// A session's thread stays in the thread: Also send is not offered there,
-  /// nor for a reply that starts one.
-  bool get _offersAlsoSend =>
-      !_startsSession && c.threadSession(widget.root) == null;
+      c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
 
   /// The files waiting to go with this thread's next reply.
   HarnessAttachments get _files =>
@@ -230,8 +350,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     tags: c.threadMentions(_conversationId, widget.root).values,
   );
 
-  /// Who `@` offers in this reply: whom the chat's box offers, except agents
-  /// where the thread's own Buddy session alone hears the reply.
+  /// Who `@` offers in this reply: whom the chat's box offers.
   List<SuperTabComposerChoice> get _tagChoices {
     final group = c.selected;
     if (!_writable || group == null) return const [];
@@ -243,7 +362,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       at.query,
       machineName: widget.machineName ?? (_) => '',
       choose: _chooseTag,
-      agents: !_startsSession && c.threadSession(widget.root) == null,
     );
   }
 
@@ -277,38 +395,26 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final root = widget.root;
     c.setThreadDraft(root, _composer.text);
     await c.sendThreadReply(
-      alsoSend: _offersAlsoSend && _alsoSend,
-      newSession: _startsSession,
+      alsoSend: _alsoSend,
       // The reply is on its way (its files have gone up): the box is free for
       // the next one, unless another thread is shown by now.
       onSending: () {
         if (!mounted || widget.root != root) return;
         if (c.threadDraft(root).isEmpty) {
           _composer.clear();
-          setState(() {
-            _alsoSend = false;
-            _newSession = false;
-          });
+          setState(() => _alsoSend = false);
         }
       },
     );
-    // Refused for New session, the reply's text is back as this thread's
-    // draft: it shows in the box, ready to send without it, unless another
-    // thread is shown or something was typed meanwhile.
-    if (!mounted || widget.root != root || _composer.text.isNotEmpty) return;
-    final restored = c.threadDraft(root);
-    if (restored.isEmpty) return;
-    _composer.value = TextEditingValue(
-      text: restored,
-      selection: TextSelection.collapsed(offset: restored.length),
-    );
-    setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final messages = c.threadMessages(widget.root);
+    _takeTarget(messages);
+    // Find matches the rows as they are drawn now.
+    _find?.refresh();
     final root = messages.where((m) => m.id == widget.root).firstOrNull;
     final replies = messages.where((m) => m.id != widget.root).toList();
     final pending = c
@@ -335,20 +441,35 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
+            Container(
+              // As high as the chat's header, so their rules meet.
+              constraints: const BoxConstraints(minHeight: 51),
+              alignment: Alignment.center,
               padding: const EdgeInsets.fromLTRB(
-                grid.AppDesktop.groupGap,
+                SuperTabMessageRow.horizontalInset,
+                0,
                 grid.AppDesktop.controlGap,
-                grid.AppDesktop.controlGap,
-                grid.AppDesktop.controlGap,
+                0,
               ),
               child: Row(
                 children: [
                   Expanded(
                     child: Semantics(
                       header: true,
-                      child: Text('Thread', style: DesktopChrome.heading()),
+                      // A task's thread is named by its number, as its card is (Swarm v4).
+                      child: Text(
+                        RegExp(r'^#\d+').stringMatch(root?.text ?? '') ??
+                            'Thread',
+                        style: SwarmType.name(context),
+                      ),
                     ),
+                  ),
+                  AppIconButton(
+                    key: const ValueKey('super-thread-find-button'),
+                    icon: AppIcons.search,
+                    tooltip: 'Find in thread',
+                    selected: _find != null,
+                    onPressed: openFind,
                   ),
                   AppIconButton(
                     key: const ValueKey('super-thread-close'),
@@ -360,85 +481,101 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
               ),
             ),
             Divider(height: 1, thickness: 1, color: DesktopChrome.rim),
-            SuperTabThreadSessionLine(
-              key: ValueKey('super-thread-session-${widget.root}'),
-              controller: c,
-              root: widget.root,
-              activityOf:
-                  widget.sessionActivity ??
-                  (session) => superTabSessionActivity(c, null, session),
-            ),
+            if (_find case final find?)
+              SuperTabFindBar(
+                key: ValueKey('super-thread-find-${widget.root}'),
+                find: find,
+                focus: _findFocus,
+                onClose: _closeFind,
+              ),
             Expanded(
               child: Stack(
                 children: [
-                  // As in the chat, a message's text can be selected and copied.
-                  SelectionArea(
-                    child: LaidOutListView(
-                      controller: _scroll,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: grid.AppDesktop.controlGap,
-                      ),
-                      children: [
-                        if (root != null) widget.row(root, false),
-                        if (count > 0)
-                          Padding(
-                            key: const ValueKey('super-thread-divider'),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: grid.AppDesktop.groupGap,
-                              vertical: grid.AppDesktop.controlGap,
+                  SuperTabStickyDay(
+                    pillKey: const ValueKey('super-thread-day-pill'),
+                    // As in the chat, a message's text can be selected and
+                    // copied.
+                    child: SelectionArea(
+                      child: LaidOutListView(
+                        controller: _scroll,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: grid.AppDesktop.controlGap,
+                        ),
+                        children: [
+                          if (root != null)
+                            _dated(root, widget.row(root, false)),
+                          if (count > 0)
+                            Padding(
+                              key: const ValueKey('super-thread-divider'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: grid.AppDesktop.groupGap,
+                                vertical: grid.AppDesktop.controlGap,
+                              ),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    count == 1 ? '1 reply' : '$count replies',
+                                    style: DesktopChrome.metadata(),
+                                  ),
+                                  const SizedBox(
+                                    width: grid.AppDesktop.controlGap,
+                                  ),
+                                  Expanded(
+                                    child: Divider(
+                                      height: 1,
+                                      thickness: 1,
+                                      color: DesktopChrome.rim,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            child: Row(
-                              children: [
-                                Text(
-                                  count == 1 ? '1 reply' : '$count replies',
-                                  style: DesktopChrome.metadata(),
+                          if (c.hasEarlierReplies(widget.root))
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: grid.AppDesktop.controlGap,
                                 ),
-                                const SizedBox(
-                                  width: grid.AppDesktop.controlGap,
-                                ),
-                                Expanded(
-                                  child: Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: DesktopChrome.rim,
+                                child: TextButton(
+                                  key: const ValueKey('super-thread-earlier'),
+                                  onPressed: c.readingEarlierReplies
+                                      ? null
+                                      : () {
+                                          // They read on from where they are.
+                                          _scroll.holdPlace();
+                                          unawaited(
+                                            c.loadThread(earlier: true),
+                                          );
+                                        },
+                                  child: Text(
+                                    c.readingEarlierReplies
+                                        ? 'Loading earlier replies…'
+                                        : 'Show earlier replies',
                                   ),
                                 ),
-                              ],
-                            ),
-                          ),
-                        if (c.hasEarlierReplies(widget.root))
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: grid.AppDesktop.controlGap,
-                              ),
-                              child: TextButton(
-                                key: const ValueKey('super-thread-earlier'),
-                                onPressed: c.readingEarlierReplies
-                                    ? null
-                                    : () {
-                                        // They read on from where they are.
-                                        _scroll.holdPlace();
-                                        unawaited(c.loadThread(earlier: true));
-                                      },
-                                child: Text(
-                                  c.readingEarlierReplies
-                                      ? 'Loading earlier replies…'
-                                      : 'Show earlier replies',
-                                ),
                               ),
                             ),
-                          ),
-                        for (final (index, reply) in replies.indexed)
-                          widget.row(
-                            reply,
-                            index > 0 &&
-                                replies[index - 1].authorId == reply.authorId &&
-                                replies[index - 1].fromAgent == reply.fromAgent,
-                          ),
-                        for (final sent in pending) widget.outgoing(sent),
-                      ],
+                          for (final (index, reply) in replies.indexed)
+                            _dated(
+                              reply,
+                              widget.row(
+                                reply,
+                                index > 0 &&
+                                    SuperTabMessageRow.groupsWith(
+                                      reply,
+                                      replies[index - 1],
+                                      inThread: true,
+                                      // A reply to a teammate stands on its own row, its name over its tags, as in the channel.
+                                      tagged: widget.agentsOnly
+                                          ? (m) => m.namesAgents
+                                          : (_) => false,
+                                    ),
+                              ),
+                            ),
+                          for (final sent in pending) widget.outgoing(sent),
+                        ],
+                      ),
                     ),
                   ),
                   if (_away)
@@ -458,64 +595,76 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                grid.AppDesktop.groupGap,
-                0,
-                grid.AppDesktop.groupGap,
-                grid.AppDesktop.groupGap,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ListenableBuilder(
-                    listenable: Listenable.merge([
-                      _composer,
-                      _tagIndex,
-                      _tagDismissed,
-                    ]),
-                    builder: (context, _) {
-                      final choices = _tagChoices;
-                      if (choices.isEmpty) return const SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(
-                          bottom: grid.AppDesktop.controlGap,
-                        ),
-                        child: SuperTabCompletionList(
-                          listKey: const ValueKey('super-thread-completions'),
-                          choices: choices,
-                          index: _tagIndex.value,
-                          rowKeys: _tagRows,
-                        ),
-                      );
-                    },
-                  ),
-                  _composerBox(),
-                  // Its place is kept while New session is offered, so the
-                  // box never moves as the choice is toggled.
-                  if (_offersSession)
-                    Padding(
-                      padding: const EdgeInsets.only(
-                        top: grid.AppDesktop.controlGap,
-                      ),
-                      child: Visibility(
-                        visible: _startsSession,
-                        maintainSize: true,
-                        maintainAnimation: true,
-                        maintainState: true,
-                        child: Text(
-                          'Your reply starts a new Buddy session',
-                          key: const ValueKey('super-thread-session-note'),
-                          style: DesktopChrome.metadata(
-                            color: DesktopChrome.muted,
+            if (widget.agentsOnly)
+              Container(
+                key: const ValueKey('super-thread-agents-only'),
+                margin: const EdgeInsets.fromLTRB(
+                  grid.AppDesktop.groupGap,
+                  0,
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.groupGap,
+                ),
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: grid.AppSurface.recess,
+                  borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
+                ),
+                child: Text(
+                  'Only agents post here.',
+                  style: DesktopChrome.metadata(),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  grid.AppDesktop.groupGap,
+                  0,
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.groupGap,
+                ),
+                child: // The Tab order holds wherever Also send sits (reply_box.dart
+                    // fieldOrder).
+                    FocusTraversalGroup(
+                      policy: OrderedTraversalPolicy(),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListenableBuilder(
+                            listenable: Listenable.merge([
+                              _composer,
+                              _tagIndex,
+                              _tagDismissed,
+                            ]),
+                            builder: (context, _) {
+                              final choices = _tagChoices;
+                              if (choices.isEmpty)
+                                return const SizedBox.shrink();
+                              return Padding(
+                                padding: const EdgeInsets.only(
+                                  bottom: grid.AppDesktop.controlGap,
+                                ),
+                                child: SuperTabCompletionList(
+                                  listKey: const ValueKey(
+                                    'super-thread-completions',
+                                  ),
+                                  choices: choices,
+                                  index: _tagIndex.value,
+                                  rowKeys: _tagRows,
+                                ),
+                              );
+                            },
                           ),
-                        ),
+                          FocusTraversalOrder(
+                            order: SuperTabReplyBox.fieldOrder,
+                            child: _composerBox(),
+                          ),
+                          _underBox(),
+                        ],
                       ),
                     ),
-                ],
               ),
-            ),
           ],
         ),
       ),
@@ -527,19 +676,44 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     text: _composer,
     focus: _focus,
     files: _files,
-    enabled:
-        c.canWrite &&
-        c.selected?.archived == false &&
-        !c.isEarlierBuddyChat(c.selected),
+    enabled: c.canWrite && c.selected?.archived == false,
     writable: _writable,
     busy: _busy,
     error: c.threadComposerError(c.selectedId, widget.root),
-    hint: c.isEarlierBuddyChat(c.selected)
-        ? 'This is an earlier chat, kept to read.'
-        : 'Reply',
+    hint: 'Reply',
     onEdited: _edited,
     onSend: () => unawaited(_send()),
-    options: _choices(_writable),
+    onMic: switch (widget.voice) {
+      final voice? => () => voice.start(
+        conversationId: _conversationId,
+        root: widget.root,
+      ),
+      null => null,
+    },
+    voiceRow: switch (widget.voice) {
+      final voice? when voice.activeIn(_conversationId, widget.root) =>
+        SuperTabVoiceRow(
+          key: const ValueKey('super-thread-voice-row'),
+          take: voice,
+          discardKey: const ValueKey('super-thread-voice-discard'),
+          sendKey: const ValueKey('super-thread-voice-send'),
+        ),
+      _ => null,
+    },
+    voiceNotice: switch (widget.voice) {
+      final voice? => SuperTabVoiceNotice(
+        take: voice,
+        conversationId: _conversationId,
+        root: widget.root,
+        padding: const EdgeInsets.fromLTRB(
+          grid.AppDesktop.composerSide,
+          grid.AppDesktop.controlGap,
+          grid.AppDesktop.composerSide,
+          grid.AppDesktop.controlGap,
+        ),
+      ),
+      null => null,
+    },
     // `@` in the reply: the open completion list takes its keys first.
     onKey: (event) {
       final composing = _composer.value.composing;
@@ -559,79 +733,30 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     inputFormatters: [_tagBackspace],
   );
 
-  /// The send row's options, left of attach and send, on one line at any
-  /// width (Scholes, 10-31): Also send names where it posts in full where
-  /// that fits beside New session, else its short wording; where even that
-  /// has no room (a window too narrow for the thread's default width), the
-  /// labels end in "…", their circles still showing.
-  Widget _choices(bool writable) => LayoutBuilder(
-    builder: (context, constraints) {
-      double width(String label) =>
-          SuperTabComposerToggle.widthOf(context, label);
-      final session = _offersSession ? _sessionLabel : null;
-      final alsos = _offersAlsoSend ? _alsoSendLabels : null;
-      final room =
-          constraints.maxWidth -
-          (session == null
-              ? 0
-              : width(session) + (alsos == null ? 0 : _choiceGap));
-      final also = alsos?.firstWhere(
-        (label) => width(label) <= room,
-        orElse: () => alsos.last,
-      );
-      // Fixed while both fit, Also send taking what is left; sharing the row
-      // otherwise.
-      final fits = room >= (also == null ? 0 : width(also));
-      return Row(
-        children: [
-          if (session != null)
-            fits && also != null
-                ? _sessionChoice(writable)
-                : Flexible(child: _sessionChoice(writable)),
-          if (session != null && also != null)
-            const SizedBox(width: _choiceGap),
-          if (also != null)
-            Flexible(
-              child: SuperTabComposerToggle(
-                key: const ValueKey('super-thread-also-send'),
-                on: _alsoSend,
-                label: also,
-                hint: _alsoSendHint,
-                onChanged: writable
-                    ? (on) => setState(() => _alsoSend = on)
-                    : null,
-              ),
-            ),
-        ],
-      );
-    },
+  /// What sits under the box: Also send, a small checkbox on its own line as
+  /// in Slack (Huy and Scholes, 11-04), its square under the row's first
+  /// button: the box's inset.
+  Widget _underBox() => Padding(
+    key: const ValueKey('super-thread-also-line'),
+    padding: const EdgeInsets.only(
+      top: grid.AppDesktop.controlGap,
+      left: grid.AppDesktop.groupGap,
+    ),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: _alsoSendChoice(_writable),
+    ),
   );
 
-  static const _choiceGap = 4.0;
-  static const _sessionLabel = 'New session';
-
-  /// New session, left of Also send: on and locked once the thread's session
-  /// ended; greyed while it can't start, its hover saying why.
-  Widget _sessionChoice(bool writable) {
-    final locked = _sessionLocked;
-    // What the server would refuse is said before sending: a block (paused,
-    // no Buddy, an older host) before the limit.
-    final blocked = c.threadSessionBlocked;
-    final full = !locked && blocked == null && c.buddySessionsFull;
-    return SuperTabComposerToggle(
-      key: const ValueKey('super-thread-new-session'),
-      on: locked || (_newSession && !full && blocked == null),
-      label: _sessionLabel,
-      hint:
-          blocked ??
-          (locked
-              ? 'This thread\'s session ended. Your reply starts a new one.'
-              : full
-              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
-              : 'Starts a separate Buddy session for this thread'),
-      onChanged: writable && !locked && !full && blocked == null
-          ? (on) => setState(() => _newSession = on)
-          : null,
-    );
-  }
+  /// Also send, on its own line under the box: after send in the Tab order.
+  Widget _alsoSendChoice(bool writable) => FocusTraversalOrder(
+    order: SuperTabReplyBox.underOrder,
+    child: SuperTabComposerToggle(
+      key: const ValueKey('super-thread-also-send'),
+      on: _alsoSend,
+      label: _alsoSendLabel,
+      hint: _alsoSendHint,
+      onChanged: writable ? (on) => setState(() => _alsoSend = on) : null,
+    ),
+  );
 }

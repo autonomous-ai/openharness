@@ -280,6 +280,59 @@ describe('owning-machine token cache', () => {
     expect(query).toHaveBeenCalledTimes(1)
   })
 
+  it('sums an OpenClaw conversation\'s assistant usage from its store, per model', async () => {
+    const { builtinSqlite, closeSqliteHandles } = await import('./sqliteBuiltin.js')
+    const Database = builtinSqlite()!
+    const path = join(dir, 'openclaw-agent.sqlite')
+    const db = new Database(path, { readOnly: false })
+    const fixtures = join(import.meta.dirname, '../engines/openclaw/__fixtures__')
+    db.exec(await readFile(join(fixtures, 'schema.sql'), 'utf8'))
+    db.exec(await readFile(join(fixtures, 'tool.sql'), 'utf8'))
+    db.close()
+    store.dispose()
+    const opened = vi.fn(async () => path)
+    store = new AgentTokenUsageCache(join(dir, 'cache'), { openclawDb: opened, now: () => now })
+    target.engine = 'openclaw'
+    target.sessionId = 'agent:main:tool'
+    target.transcriptPath = null
+    // Two assistant rows: 18615 + 19025 uncached input, 257 + 6 output, no cache.
+    expect(await read()).toMatchObject({ totalTokens: 37_903, inputTokens: 37_640, outputTokens: 263 })
+    expect(opened).toHaveBeenCalledWith('agent:main:tool', null)
+    closeSqliteHandles()
+  })
+
+  it('counts an OpenClaw conversation from its cursor on: only the rows written since the last count are read', async () => {
+    const { builtinSqlite, closeSqliteHandles } = await import('./sqliteBuiltin.js')
+    const Database = builtinSqlite()!
+    const path = join(dir, 'openclaw-agent.sqlite')
+    const db = new Database(path, { readOnly: false })
+    const fixtures = join(import.meta.dirname, '../engines/openclaw/__fixtures__')
+    db.exec(await readFile(join(fixtures, 'schema.sql'), 'utf8'))
+    db.exec(await readFile(join(fixtures, 'tool.sql'), 'utf8'))
+    store.dispose()
+    // A `--profile` TUI's store, named by the folder its TUI held when bound.
+    const opened = vi.fn(async () => path)
+    store = new AgentTokenUsageCache(join(dir, 'cache'), { openclawDb: opened, now: () => now })
+    target = { ...target, engine: 'openclaw', sessionId: 'agent:main:tool', transcriptPath: null, openclawStateDir: '/h/.openclaw-work' } as typeof target
+    expect(await read()).toMatchObject({ totalTokens: 37_903 })
+    expect(opened).toHaveBeenCalledWith('agent:main:tool', '/h/.openclaw-work')
+    // A row already counted that changed in place is not read again (nothing bumped the rewrite generation)...
+    const window = String(db.prepare("SELECT current_session_id AS id FROM session_nodes WHERE session_key = 'agent:main:tool'").all()[0].id)
+    db.exec(`UPDATE transcript_events SET event_json = json_set(event_json, '$.message.usage.input', 9999999)
+      WHERE session_id = '${window}' AND message_role = 'assistant' AND event_json IS NOT NULL`)
+    // ...and a new one is added to the totals.
+    db.exec(`INSERT INTO transcript_events (session_id, seq, event_json, created_at, message_role) VALUES ('${window}', 100,
+      '{"type":"message","id":"a-next","message":{"role":"assistant","model":"m","content":[],"stopReason":"stop","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0}}}', 1, 'assistant')`)
+    now += 20_000
+    expect(await read()).toMatchObject({ totalTokens: 37_918, inputTokens: 37_650, outputTokens: 268 })
+    // A rewrite bumps the generation: counted from the start again, with the row it changed.
+    db.exec(`UPDATE transcript_rewrite_watermarks SET generation = 'g-next' WHERE session_id = '${window}'`)
+    now += 20_000
+    expect((await read())?.totalTokens).toBeGreaterThan(9_999_999)
+    db.close()
+    closeSqliteHandles()
+  })
+
   /**
    * OpenCode 2 keeps a session in `session_v2` and no longer writes `session`: for a session v2 began the v1
    * table has no row, and a fresh store has no such table at all. v1's row is the answer for what 1.x wrote.

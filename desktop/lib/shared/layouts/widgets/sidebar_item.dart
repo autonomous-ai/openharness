@@ -17,10 +17,6 @@ const Duration _selectDuration = AppMotion.swap;
 /// still catching up.
 const Duration _hoverDuration = AppMotion.hover;
 
-/// The accent rail's width, and how far left of its resting place it starts.
-const double _railWidth = 3;
-const double _railTravel = _railWidth * 0.6;
-
 /// How far the icon drifts right under the pointer.
 const double _iconDrift = 2;
 
@@ -228,7 +224,7 @@ class _SidebarRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    const radius = BorderRadius.all(Radius.circular(8));
+    const radius = BorderRadius.all(Radius.circular(AppDesktop.rowRadius));
     // Weight tracks the selection itself, not the transition: it changes the
     // label's metrics, so it wants to happen once, at the start, rather than
     // reflowing the text somewhere in the middle of the fade.
@@ -367,10 +363,6 @@ class _SidebarRow extends StatelessWidget {
             ),
           ),
         ),
-        // Nothing to draw on the rows that aren't selected, which is all but one
-        // of them — and a rail at zero opacity is still a render object to lay
-        // out and a layer to composite.
-        if (select > 0) _SelectionRail(select: select),
       ],
     );
   }
@@ -479,55 +471,13 @@ class _RowIcon extends StatelessWidget {
       AppPalette.textPrimary,
       t,
     )!;
-    final ink = item.enabled
-        ? Color.lerp(plain, AppPalette.accentOnSurface, t)!
-        : plain;
+    final ink = plain;
 
     return Transform.translate(
       // A whisper of drift on hover, so the icon feels alive as the pointer
       // lands — nudged right, never resized.
       offset: Offset(hover * _iconDrift, 0),
-      child: Icon(item.icon, size: 18, color: ink),
-    );
-  }
-}
-
-/// The accent rail: a slim bar hugging the selected row's left edge.
-///
-/// It slides in from the left and fades up, so moving the selection glides
-/// rather than blinks. Drawn outside the fill so it never shifts the label, and
-/// pinned inside the row's 1px vertical margin so it lines up with the rounded
-/// fill. The fade rides the colour's alpha rather than an [Opacity] — wrapping
-/// it in one meant an offscreen buffer every frame of the transition.
-class _SelectionRail extends StatelessWidget {
-  const _SelectionRail({required this.select});
-
-  final double select;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Positioned(
-      left: 0,
-      top: 1,
-      bottom: 1,
-      child: Center(
-        child: Transform.translate(
-          offset: Offset(-_railTravel * (1 - select), 0),
-          child: Container(
-            width: _railWidth,
-            height: 18,
-            decoration: BoxDecoration(
-              // Same reason as the icon — a mark on the row, so it takes the
-              // on-surface accent.
-              color: AppPalette.accentOnSurface.withValues(alpha: select),
-              borderRadius: const BorderRadius.horizontal(
-                right: Radius.circular(3),
-              ),
-            ),
-          ),
-        ),
-      ),
+      child: Icon(item.icon, size: 16, color: ink),
     );
   }
 }

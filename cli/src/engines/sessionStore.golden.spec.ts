@@ -274,7 +274,7 @@ function transcriptCases(): Record<string, unknown> {
   for (const name of ['claudeMoved', 'codexMoved']) {
     cases[`not moved · ${name}`] = [valid('claude', paths[name]!), valid('codex', paths[name]!)]
   }
-  cases['keeps a file'] = Object.fromEntries((['claude', 'codex', 'cursor', 'pi', 'opencode', 'kilo', 'hermes', 'devin', 'terminal'] as const)
+  cases['keeps a file'] = Object.fromEntries((['claude', 'codex', 'cursor', 'pi', 'opencode', 'kilo', 'hermes', 'devin', 'openclaw', 'terminal'] as const)
     .map((engine) => [engine, m.registry.engineKeepsTranscriptFile(engine)]))
   return cases
 }

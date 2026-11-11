@@ -3,7 +3,49 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ViewerLedger, processStartedAt } from './viewerLedger.js'
+import type { ProcessRow } from '../lib/processTable.js'
+import { ViewerLedger, processStartedAt, windowsViewerLeftovers } from './viewerLedger.js'
+
+// Windows has no `ps`, so nothing was ever reaped, and a viewer's parent is gone once it runs (Git Bash's fork): twelve generations
+// of one viewer were running on DESKTOP-0TFH0OJ on 2026-11-04.
+describe('a viewer left over on Windows', () => {
+  const fileTime = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
+  const row = (pid: number, parentPid: number, args: string, startedMs: number): ProcessRow =>
+    ({ pid, parentPid, executable: 'node.exe', startMarker: fileTime(startedMs), args })
+  const entry = { pid: 50, startedAt: 1_000_000, agentId: 'a', dshId: 'acme/thing', viewerDir: 'C:\\Users\\Me\\.harness\\dsh\\acme\\thing' }
+  const VIEWER = '"C:\\Program Files\\nodejs\\node.exe" C:/Users/me/.harness/dsh/acme/thing/toolchain/viewer.mjs'
+
+  it('is the program from its folder whose parent has gone, started since the ledger says', () => {
+    expect(windowsViewerLeftovers(entry, [row(9, 1, 'host', 1), row(60, 999, VIEWER, 1_000_500)])).toEqual([60])
+  })
+
+  it('is also its launcher, when that still runs and started when the ledger says', () => {
+    expect(windowsViewerLeftovers(entry, [row(50, 999, 'bash.exe', 1_000_100)])).toEqual([50])
+    expect(windowsViewerLeftovers(entry, [row(50, 999, 'bash.exe', 5_000_000)])).toEqual([])
+  })
+
+  it.each([
+    ['an agent ran from that folder: its parent is alive', [row(9, 1, 'claude', 1), row(60, 9, VIEWER, 1_000_500)]],
+    ['it started long before this viewer: an old pid or an older run', [row(60, 999, VIEWER, 900_000)]],
+    ['it runs from another folder', [row(60, 999, '"node.exe" C:/Users/me/.harness/dsh/acme/thing2/viewer.mjs', 1_000_500)]],
+  ])('leaves it alone when %s', (_name, rows) => {
+    expect(windowsViewerLeftovers(entry, rows)).toEqual([])
+  })
+
+  it('ends them, and keeps the ledger when the process table could not be read', () => {
+    const file = `${mkdtempSync(join(tmpdir(), 'viewer-ledger-'))}/viewers.json`
+    const killed: number[] = []
+    const table = { rows: null as ProcessRow[] | null }
+    const ledger = new ViewerLedger({ file, platform: 'win32', windowsRows: () => table.rows, kill: pid => { killed.push(pid) } })
+    ledger.add(entry)
+    expect(ledger.reapOrphans()).toEqual([])
+    expect(ledger.read()).toEqual([entry])
+    table.rows = [row(60, 999, VIEWER, 1_000_500)]
+    expect(ledger.reapOrphans()).toEqual([entry])
+    expect(killed).toEqual([60])
+    expect(ledger.read()).toEqual([])
+  })
+})
 
 describe('ViewerLedger', () => {
   let dir: string

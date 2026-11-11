@@ -29,7 +29,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -51,11 +50,12 @@ void main() {
   Finder panel() => find.byKey(const ValueKey('super-thread-panel'));
   Finder inPanel(Finder finder) =>
       find.descendant(of: panel(), matching: finder);
-  ScrollController threadScroll(WidgetTester tester) =>
-      tester.widget<ListView>(inPanel(find.byType(LaidOutListView))).controller!;
+  ScrollController threadScroll(WidgetTester tester) => tester
+      .widget<ListView>(inPanel(find.byType(LaidOutListView)))
+      .controller!;
 
   ConversationServer chat(int count) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= count; i++) {
       server.append('Update $i: checking the offline queue and reconnect.');
     }
@@ -149,7 +149,7 @@ void main() {
   });
 
   ConversationServer threadOf(int replies) {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     (server.state['people'] as List).add({
       'id': 'peer',
       'email': 'peer@example.com',
@@ -243,7 +243,7 @@ void main() {
 
   testWidgets('Jump to latest on replies of mixed heights ends on the real '
       'last reply', (tester) async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     (server.state['people'] as List).add({
       'id': 'peer',
       'email': 'peer@example.com',

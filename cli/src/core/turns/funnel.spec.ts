@@ -7,8 +7,12 @@ import { createShortTurnGuard } from './shortTurnGuard.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
-const text = (value = 'working on it'): Event => ({ type: 'text_delta', payload: { content: value } })
+const text = (value = 'working on it', commentary = false): Event => ({ type: 'text_delta', payload: { content: value, ...(commentary ? { commentary: true as const } : {}) } })
 const ended = (aborted = false): Event => ({ type: 'turn_ended', payload: { aborted } }) as Event
+const tool = (parentToolUseId?: string): Event => ({ type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: {}, ...(parentToolUseId ? { parentToolUseId } : {}) } })
+/** What the turn-end collaborator is told, in the order it is told it. */
+const fakeEnds = () => ({ started: vi.fn(), said: vi.fn(), worked: vi.fn(), ended: vi.fn(), compacted: vi.fn() })
+const compact = (): Event => ({ type: 'context_compact', payload: { message: 'Context was compacted.', trigger: 'auto' } })
 
 /**
  * Every collaborator writes to one log, so a test reads the order the funnel called them in, across all
@@ -66,24 +70,6 @@ describe('the event funnel', () => {
     expect(shortTurns.holding('s1')).toBe(30_000)
   })
 
-  it('offers native observation after client dispatch without letting an observer break the turn', () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {})
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const ingest = vi.fn()
-    const { funnel, calls } = setup('claude', { nativeTurns: { ingest } })
-    const events = [started(), text(), ended()]
-    funnel('s1', events)
-    expect(ingest).toHaveBeenLastCalledWith('a1', events, false)
-    funnel('s1', events, { replay: true })
-    expect(ingest).toHaveBeenLastCalledWith('a1', events, true)
-    funnel('s1', events, { resumed: true })
-    expect(ingest).toHaveBeenLastCalledWith('a1', events, true)
-    calls.length = 0
-    ingest.mockImplementationOnce(() => { expect(calls).toContain('send turn_ended'); throw new Error('Observer failed') })
-    funnel('s1', events)
-    expect(calls.slice(-2)).toEqual(['mirror', 'device stream'])
-  })
-
   it('sends the clients a shell result without its outputTail, and still feeds the commander mirror with it', () => {
     const sent: Array<{ payload: object }> = []
     const { funnel, deps } = setup('claude', { clients: { send: vi.fn((f: { payload: object }) => { sent.push(f) }) } as never })
@@ -126,6 +112,74 @@ describe('the event funnel', () => {
       'device ended', 'deviceInput ended', 'input ended', 'questions stop',
       'mirror', 'device stream',
     ])
+  })
+
+  // The Swarm host posts an agent's answer into its person's 1:1 chat when the turn ends (superTabs/agentReplies.ts): every
+  // real end, a queued follow-up's included, and never one read back from disk. The turn is told as it goes, so that its end says
+  // which turn it was and the answer is what it said, whatever the transcript shows by the time anyone asks.
+  it('tells those that hear turn ends each live end, a boundary before a queued follow-up too, and never a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ends = fakeEnds()
+    const { funnel } = setup('codex', { ends })
+    funnel('s1', [started(), text(), ended()])
+    funnel('s1', [started(), ended(true)])
+    funnel('s1', [ended(), started()])
+    funnel('s1', [started(), ended()], { replay: true })
+    funnel('s1', [started(), ended()], { resumed: true })
+    expect(ends.ended.mock.calls).toEqual([
+      [{ agentId: 'a1', sessionId: 's1', aborted: false }],
+      [{ agentId: 'a1', sessionId: 's1', aborted: true }],
+      [{ agentId: 'a1', sessionId: 's1', aborted: false }],
+    ])
+  })
+
+  it('tells them each live turn as it goes: its prompt, what its agent said, and the tools it called, but not a sub-agent\'s', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ends = fakeEnds()
+    const { funnel } = setup('claude', { ends })
+    // What Codex says on the way is told as commentary, which is no part of an answer.
+    funnel('s1', [started('Ship it.'), text('Let me look.'), tool(), tool('sub-agent-call'), text('On the way.', true), text('Shipped.'), ended()])
+    expect(ends.started.mock.calls).toEqual([['s1', 'Ship it.', false]])
+    expect(ends.said.mock.calls).toEqual([['s1', 'Let me look.', false], ['s1', 'On the way.', true], ['s1', 'Shipped.', false]])
+    expect(ends.worked.mock.calls).toEqual([['s1']])
+    // A turn picked up at attach is told as one whose first part was not seen; nothing else of a re-read is told at all.
+    funnel('s1', [started('Picked up.'), text('Said before the restart.'), tool(), ended()], { resumed: true })
+    funnel('s1', [started('History.'), text('Old.'), tool(), ended()], { replay: true })
+    expect(ends.started.mock.calls).toEqual([['s1', 'Ship it.', false], ['s1', 'Picked up.', true]])
+    expect(ends.said).toHaveBeenCalledTimes(3)
+    expect(ends.worked).toHaveBeenCalledTimes(1)
+    expect(ends.ended).toHaveBeenCalledTimes(1)
+  })
+
+  // Swarm plan, step 1, item 2: the end of a turn its agent's context was compacted in says so (core/turns/ends.ts).
+  it('tells them each live compaction of an agent\'s context, never a re-read one', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ends = fakeEnds()
+    const { funnel } = setup('claude', { ends })
+    funnel('s1', [started('Ship it.'), compact(), text('Shipped.'), ended()])
+    funnel('s1', [started('History.'), compact(), ended()], { replay: true })
+    expect(ends.compacted.mock.calls).toEqual([['s1']])
+  })
+
+  // What an engine says is kept as the funnel hears it only where its texts are whole messages (Claude Code, Codex): another's may be
+  // chunks, which would be joined with paragraphs between, so its answer is read from its transcript when its turn ends.
+  it('tells a turn of an engine whose texts are not whole messages as one whose first part was not seen', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    for (const [engine, partial] of [['claude', false], ['codex', false], ['opencode', true], ['cursor', true]] as const) {
+      const ends = fakeEnds()
+      setup(engine, { ends }).funnel('s1', [started('Ship it.')])
+      expect(ends.started.mock.calls, engine).toEqual([['s1', 'Ship it.', partial]])
+    }  })
+
+  it('tells them after the input has settled the turn, and carries on past one that throws', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { funnel, calls } = setup('claude', { ends: { ...fakeEnds(), ended: vi.fn(() => { calls.push('ends'); throw new Error('listener failed') }) } })
+    funnel('s1', [started(), ended()])
+    expect(calls.slice(calls.indexOf('send turn_ended'))).toEqual([
+      'send turn_ended', 'search', 'device ended', 'deviceInput ended', 'input ended', 'questions stop', 'ends', 'mirror', 'device stream',
+    ])
+    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] turn-ends failed · listener failed'])
   })
 
   it('marks a turn picked up at attach as such, and still streams it to the device', () => {
@@ -227,14 +281,18 @@ describe('the event funnel', () => {
   it('finishes a batch whose session was forgotten while it was being delivered', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     let lookups = 0
+    const ends = fakeEnds()
     const run = setup('codex', {
       // Active when the batch arrives; gone from the next lookup on, as when a collaborator forgets it.
       bySession: () => lookups++ === 0 ? ({ agentId: 'a1', sessionId: 's1', engine: 'codex', active: true } as RegisteredSession) : undefined,
+      ends,
     })
     expect(() => run.funnel('s1', [ended(), started()])).not.toThrow()
     // Without its engine, a native turn boundary is not recognised, so the device hears the turn end.
     expect(run.calls).toContain('device ended')
     expect(String(log.mock.calls[1][0])).toContain('engine=claude')
+    // Nor can its texts be vouched for as whole: its turn's answer is read from its transcript.
+    expect(ends.started.mock.calls).toEqual([['s1', 'go', true]])
   })
 
   it('ignores an empty batch and a session that is not active', () => {

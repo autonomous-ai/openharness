@@ -387,7 +387,9 @@ def update(lock, folder, baseline):
     assert re.findall(r'^\[([^]]+)\]', config, re.M) == ['options', 'core', 'extra']
     policy = run('pacman-conf', 'SigLevel')
     assert 'PackageRequired' in policy and 'PackageTrustedOnly' in policy and 'TrustAll' not in policy
-    assert not re.search(r'^\s*(IgnorePkg|IgnoreGroup|NoUpgrade)\s*=', config, re.M)
+    # OpenCode alone stays the image's (installer.py): every other package is fully upgraded.
+    assert re.findall(r'^\s*IgnorePkg\s*=.*$', config, re.M) == ['IgnorePkg = opencode']
+    assert not re.search(r'^\s*(IgnoreGroup|NoUpgrade)\s*=', config, re.M)
     verify_metadata(lock, folder, fetch=True)
     before_checkpoints = {p.parent.name for p in Path('/.snapshots').glob('*/checkpoint.json')}
     # Use the real API and every normal transaction hook. Never invoke DKMS or

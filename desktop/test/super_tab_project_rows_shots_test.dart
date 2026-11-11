@@ -8,9 +8,9 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
+import 'support/super_tab_fixture.dart';
 
-/// Set to a folder to write the project rows' pictures there: a project
-/// collapsed and expanded, in both themes.
+/// Set to a folder to write the project rows' pictures there, in both themes.
 final shots = Platform.environment['SUPER_TAB_SIDEBAR_SHOTS'];
 
 void main() {
@@ -26,6 +26,19 @@ void main() {
       tester.view.physicalSize = const Size(2000, 1400);
       addTearDown(tester.view.reset);
       final server = humansSwarm();
+      server.state['projects'] = [
+        projectFixture('lead', 'public project', 'lead'),
+        projectFixture(
+          'private',
+          'private project',
+          'private-lead',
+          visibility: 'private',
+        ),
+      ];
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('private-lead', 'Private Lead'),
+        'projectId': 'private',
+      });
       addNumberedWorkgroups(server, 11);
       final controller = server.controller(
         account: 'peer',
@@ -45,7 +58,6 @@ void main() {
             child: Scaffold(
               body: SuperTabView(
                 controller: controller,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Studio',
@@ -64,10 +76,7 @@ void main() {
         );
       }
 
-      controller.expandedProjects.clear();
       await take('collapsed');
-      controller.toggleProject('lead');
-      await take('expanded');
       await tester.pumpWidget(const SizedBox());
       await controller.flush();
       controller.dispose();

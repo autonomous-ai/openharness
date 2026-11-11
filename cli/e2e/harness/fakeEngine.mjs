@@ -7,12 +7,14 @@
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
 //     500 ms deadline and its offline registry writes, and the daemon's pane/process binding is
 //     exercised for real;
-//   - draws a composer, turns on bracketed paste, and treats Enter as submit;
+//   - draws a composer, turns on bracketed paste, and treats Enter as submit; Codex shades its composer as 0.162 does on
+//     a dark pane, or not with `unshadedComposer` in its config, as in a pane that answers no background query;
 //   - writes its conversation to a transcript in the engine's real record shapes, so the daemon's
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
-// `!tool <command>` runs a tool call first, `!grow <MiB>` appends that much compaction history
+// `!tool <command>` runs a tool call first, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
+// `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
 // interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
@@ -35,8 +37,9 @@
 // `!permitnext <command>` keeps its turn open and asks permission to run the command the moment a
 // message is pasted, before its Enter (a request arriving mid-turn), `!latestart` (with `submissionGate` in
 // the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
-// until the test's release file exists, as a CLI does whose hooks or first record are slow, `!exit` ends the
-// process.
+// until the test's release file exists, as a CLI does whose hooks or first record are slow, `!latestop` (Claude
+// Code) has its Stop and the next prompt's hook reach the daemon only after that prompt's turn is on disk (see
+// `lateStop`), `!exit` ends the process.
 // Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
 // picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
 // that follow (see `openModelPicker`).
@@ -99,6 +102,9 @@ const matcherTakes = (matcher, value) => {
 
 /** What the npm wrapper hands its child, the Codex engine itself: this module, run as a script. */
 const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
+/** The shade Codex 0.162 draws its composer in on a dark pane (lib/composerScreen.spec.ts). */
+const CODEX_SHADE = '\x1b[48;2;51;51;51m'
+const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
 
 /**
  * `@openai/codex`'s bin/codex.js (0.160.0): it starts the native binary as its child with the same
@@ -455,11 +461,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
    * environment (Claude Code adds CLAUDE_PROJECT_DIR), the event on stdin, killed once its `timeout`
    * (seconds) is up. Resolves when it exits or is killed: the CLI waits for its hooks before it goes on.
    */
-  const runHookCommand = (event, command, timeoutSeconds, input) => new Promise((done) => {
+  const runHookCommand = (event, command, timeoutSeconds, input, held) => new Promise((done) => {
     const started = Date.now()
     // What a test reads back: the event, why it fired, and the conversation it named.
     const what = `${event}${input.source || input.reason ? `(${input.source || input.reason})` : ''} session=${input.session_id}`
-    const env = engine === 'claude' ? { ...process.env, CLAUDE_PROJECT_DIR: cwd } : process.env
+    // A held hook starts now, which is when notify.mjs says it ran, and is read late (heldHook.mjs). Its own
+    // deadline is not spent waiting for that (notify.mjs HOOK_DEADLINE_MS).
+    const holding = held ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${heldHookUrl}`.trim(), FAKE_HOOK_RELEASE: held.file, HARNESS_HOOK_DEADLINE_MS: '30000' } : {}
+    const env = { ...process.env, ...(engine === 'claude' ? { CLAUDE_PROJECT_DIR: cwd } : {}), ...holding }
     let child
     try {
       // What a PostToolUse hook prints is read, as both CLIs read it: its additionalContext reaches the model.
@@ -476,7 +485,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
     child.stderr.on('data', (chunk) => { if (stderr.length < 2_000) stderr += chunk })
     const limit = (Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : 60) * 1000
     let killed = false
-    const timer = setTimeout(() => {
+    // A held hook is not timed: the CLI ran and waited for it at once, and only the daemon heard it late.
+    const timer = held ? undefined : setTimeout(() => {
       killed = true
       hookLog(`${what} killed at its timeout of ${limit} ms`)
       child.kill('SIGTERM')
@@ -503,7 +513,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     child.stdin.end(JSON.stringify(input))
   })
   /** Every hook the settings carry for this event, at once, each command once, and wait for them all. */
-  const runHooks = async (event, fields = {}) => {
+  const runHooks = async (event, fields = {}, held = null) => {
     if (!HOOK_EVENTS[engine].has(event)) return
     const blocks = Array.isArray(hookSettings[event]) ? hookSettings[event] : []
     const commands = new Map()
@@ -516,7 +526,21 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     if (!commands.size) return
     const input = hookInput(event, fields)
-    await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input)))
+    await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input, held)))
+  }
+  // `!latestop` (Claude Code): its Stop reaches the daemon only after the next turn has been read opening (the
+  // test's `late-stop.release` says when), and that turn's prompt hook only as its answer is written, as a loaded
+  // daemon took them in the same-words end to end run (2026-11-10): the CLI ran the hooks in order, but their
+  // requests were read late.
+  let lateStop = null
+  let latePrompt = null
+  /** Until the test writes `file`, for at most a minute: a test that failed first does not leave this waiting. */
+  const released = async (file) => {
+    for (const end = Date.now() + 60_000; !existsSync(file) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  const hookHeld = () => {
+    const file = join(config.root, `held-hook-${randomUUID()}`)
+    return { file, release: () => writeFileSync(file, '') }
   }
 
   announceProcess()
@@ -667,7 +691,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const input = bottom?.dim ? '\x1b[2m› Ask Codex to do anything\x1b[0m'
       : text ? `\x1b[1m›\x1b[0m ${first}` : '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m'
     const popup = suggestions(text)
-    return [...(popup ? popupRows(popup) : ['']), input, ...rest, '', bottom?.footer ?? statusLine()]
+    const footer = bottom?.footer ?? statusLine()
+    // Codex 0.162 shades its composer, from the row above `›` to the one under the draft, in a shade of the terminal's own
+    // background; a pane that answers no background query (`unshadedComposer`: one no window shows) gets none.
+    if (config.unshadedComposer || bottom?.dim) return [...(popup ? popupRows(popup) : ['']), input, ...rest, '', footer]
+    const shaded = (row) => `${CODEX_SHADE}${row.replace(/\x1b\[0m/g, `\x1b[0m${CODEX_SHADE}`)}\x1b[K`
+    return [...(popup ? popupRows(popup) : ['']), shaded(''), shaded(input), ...rest.map(shaded), shaded(''), `\x1b[0m${footer}`]
   }
   /** Clears the composer and what is drawn under it, leaving the cursor where it began. */
   const eraseComposer = () => {
@@ -1159,6 +1188,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
   }
   const finish = async (text) => {
+    if (latePrompt) {
+      const { release, hooks } = latePrompt
+      latePrompt = null
+      release()
+      await hooks
+    }
     if (engine === 'claude') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
     } else {
@@ -1274,18 +1309,29 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     runningTool = null
     if (open) await finish('(interrupted by a new prompt)')
+    const late = lateStop
+    lateStop = null
+    const promptHeld = late ? hookHeld() : null
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
     // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
     // start-up announcement the daemon missed. The fields beyond the prompt are those each CLI was
     // recorded sending.
-    await runHooks('UserPromptSubmit', engine === 'claude'
+    const promptHooks = runHooks('UserPromptSubmit', engine === 'claude'
       ? { prompt_id: randomUUID(), permission_mode: permissionMode, prompt }
-      : { turn_id: `turn-${turn + 1}`, prompt })
+      : { turn_id: `turn-${turn + 1}`, prompt }, promptHeld)
+    if (!late) await promptHooks
     turn++
     open = `turn-${turn}`
     if (engine === 'claude') {
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
+      if (late) {
+        await released(join(config.root, 'late-stop.release'))
+        late.release()
+        await late.stop
+        // The prompt hook comes in once the turn's answer is written (`finish`), after any Stop grace has run out.
+        latePrompt = { release: promptHeld.release, hooks: promptHooks }
+      }
     } else {
       codex('event_msg', { type: 'task_started', turn_id: open })
       codex('turn_context', { turn_id: open, model: current.model, reasoning_effort: current.effort, collaboration_mode: { mode: 'default' } })
@@ -1313,6 +1359,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
+    }
+    // Codex says what it is about to do in a message of its own, its commentary, ahead of the answer, and its transcript reader leaves
+    // such a message out of what the turn said.
+    if (engine === 'codex' && directive?.[1] === 'commentary') {
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'AgentMessage', content: [{ type: 'Text', text: `About to answer: ${directive[2]}` }], phase: 'commentary' } })
     }
     if (engine === 'claude' && directive?.[1] === 'bgagent') {
       // A background sub-agent that finishes while its parent still works, as Claude Code 2.1.287 records
@@ -1501,6 +1552,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await finish(`goal met: ${condition}`)
       claude({ type: 'attachment', attachment: { type: 'goal_status', met: true, condition, reason: 'all checks pass' } })
       claude({ type: 'system', subtype: 'turn_duration', durationMs: 6_000, messageCount: 8 })
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'latestop') {
+      claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `answer ${turn}: ${prompt}` }], stop_reason: 'end_turn' } })
+      open = null
+      say(`\r\nanswer ${turn}: ${prompt}\r\n\r\n`)
+      const stop = hookHeld()
+      lateStop = { stop: runHooks('Stop', { stop_hook_active: false }, stop), release: stop.release }
       return
     }
     if (directive?.[1] === 'version') { await finish(versionLine); return }

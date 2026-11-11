@@ -1,11 +1,15 @@
 /** A managed YAML hook block and exact-command approvals, applied from eager engine declarations. */
-import { isMap, isScalar, Lexer, parseDocument, visit } from 'yaml'
+import { isMap, isScalar, isSeq, Lexer, parseDocument, visit, type Document } from 'yaml'
 import { basename, join } from 'node:path'
 import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
 import { nativeHookHomes, type NativeHookHomes } from './nativeHookHomes.js'
 import { failure, type HookFileRemoval } from './hookRemoval.js'
+
+/** The most YAML tokens a settings file may have. Hermes's own config of 134 KB, 2,438 lines, was over the 4,096 this was, so its
+ *  hooks never installed and every Hermes agent stayed held (DESKTOP-0TFH0OJ, 2026-11-05). The 1 MiB file limit bounds the parse too. */
+const MAX_YAML_TOKENS = 256 * 1024
 
 export interface NativeYamlHooks {
   home: string
@@ -17,6 +21,107 @@ export interface NativeYamlHooks {
   allowlist: string
   ownership: readonly string[]
   messages: { missing: string; foreign: string; manual: string; current: string; installed: string; collapsed: string; after: string; failed: string }
+  /** Environment names the engine must carry from each client into its sessions, listed in the person's own
+   *  `<section>.<key>` list, beside what is there, and taken out again on uninstall. `unlisted`: said when there is
+   *  no such list to add them to. */
+  passthrough?: { section: string; key: string; names: readonly string[]; unlisted: string }
+}
+
+type Passthrough = NonNullable<NativeYamlHooks['passthrough']>
+
+/** `["A", "B"]`: names as one flow list. */
+const flowList = (names: readonly string[]): string => `[${names.map((name) => JSON.stringify(name)).join(', ')}]`
+
+/** The document without [spec]'s list, to prove an edit changed nothing else. */
+function apartFrom(document: Document, spec: Passthrough): string {
+  const value = document.toJS() as Record<string, unknown> | null
+  const section = value?.[spec.section]
+  if (section && typeof section === 'object' && !Array.isArray(section)) delete (section as Record<string, unknown>)[spec.key]
+  return JSON.stringify(value)
+}
+
+/**
+ * [text] with [names] in (or, `remove`, out of) its `<section>.<key>` list, edited where the parser found it: a flow
+ * list is rewritten in place, a block list gains or loses item lines, a missing key becomes the section's first line.
+ * Everything else, comments and line ends included, stays as written, and the result is parsed again to prove it.
+ * Null: no list to edit (no block `<section>:` mapping, or a value that is not a list of names).
+ */
+export function editPassthrough(text: string, spec: Passthrough, remove = false): string | null {
+  const document = parseDocument(text, { strict: true, uniqueKeys: true, prettyErrors: false })
+  if (document.errors.length || !isMap(document.contents)) return null
+  const sectionPair = document.contents.items.find((pair) => isScalar(pair.key) && pair.key.value === spec.section)
+  const section = sectionPair?.value
+  if (!isMap(section) || section.flow || !section.items.length) return null
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const lineStart = (offset: number): number => text.lastIndexOf('\n', offset - 1) + 1
+  const pair = section.items.find((item) => isScalar(item.key) && item.key.value === spec.key)
+  let next: string
+  let expected: string[]
+  if (!pair) {
+    if (remove) return text
+    const first = section.items[0]!.key
+    if (!isScalar(first) || !first.range) return null
+    const start = lineStart(first.range[0])
+    const indent = text.slice(start, first.range[0])
+    if (!/^ +$/.test(indent)) return null
+    expected = [...spec.names]
+    next = `${text.slice(0, start)}${indent}${spec.key}: ${flowList(expected)}${eol}${text.slice(start)}`
+  } else {
+    const value = pair.value
+    const empty = value === null || (isScalar(value) && (value.value === null || value.value === ''))
+    if (!empty && !isSeq(value)) return null
+    const items = isSeq(value) ? value.items : []
+    const current = items.map((item) => (isScalar(item) && typeof item.value === 'string' ? item.value : null))
+    if (current.some((name) => name === null)) return null
+    const names = current as string[]
+    expected = remove ? names.filter((name) => !spec.names.includes(name)) : [...names, ...spec.names.filter((name) => !names.includes(name))]
+    if (expected.length === names.length && expected.every((name, i) => name === names[i])) return text
+    if (isSeq(value) && !value.flow && value.items.length) {
+      // A block list: its own item lines, at its own indentation.
+      const firstItem = value.items[0]!
+      const lastItem = value.items.at(-1)!
+      if (!isScalar(firstItem) || !isScalar(lastItem) || !firstItem.range || !lastItem.range) return null
+      if (remove) {
+        const kept: string[] = []
+        for (const item of value.items) {
+          const start = lineStart(item.range![0])
+          const end = text.indexOf('\n', item.range![1])
+          const line = text.slice(start, end < 0 ? text.length : end + 1)
+          if (!spec.names.includes((item as { value: string }).value)) kept.push(line)
+        }
+        const start = lineStart(firstItem.range[0])
+        const endNewline = text.indexOf('\n', lastItem.range[1])
+        const end = endNewline < 0 ? text.length : endNewline + 1
+        // Every item was ours: an empty flow list after the key, where the block was.
+        const colon = isScalar(pair.key) && pair.key.range ? text.indexOf(':', pair.key.range[1]) : -1
+        if (!kept.length && colon < 0) return null
+        next = kept.length ? text.slice(0, start) + kept.join('') + text.slice(end)
+          : `${text.slice(0, colon + 1)} []${text.slice(lastItem.range[1])}`
+      } else {
+        const start = lineStart(lastItem.range[0])
+        const dash = text.slice(start, lastItem.range[0])
+        if (!/^ *- *$/.test(dash)) return null
+        const endNewline = text.indexOf('\n', lastItem.range[1])
+        const at = endNewline < 0 ? text.length : endNewline + 1
+        const added = expected.slice(names.length).map((name) => `${dash}${JSON.stringify(name)}${eol}`).join('')
+        next = endNewline < 0 ? `${text}${eol}${added}` : text.slice(0, at) + added + text.slice(at)
+      }
+    } else if (empty) {
+      // `key:` with nothing after it: the list goes after the colon.
+      if (!isScalar(pair.key) || !pair.key.range) return null
+      const colon = text.indexOf(':', pair.key.range[1])
+      if (colon < 0) return null
+      next = `${text.slice(0, colon + 1)} ${flowList(expected)}${text.slice(colon + 1)}`
+    } else if (value && value.range) {
+      next = text.slice(0, value.range[0]) + flowList(expected) + text.slice(value.range[1])
+    } else return null
+  }
+  const edited = parseDocument(next, { strict: true, uniqueKeys: true, prettyErrors: false })
+  const list = edited.getIn([spec.section, spec.key])
+  const now = isSeq(list) ? list.items.map((item) => (isScalar(item) ? item.value : null)) : list === null || list === undefined ? [] : null
+  if (edited.errors.length || !now || JSON.stringify(now) !== JSON.stringify(expected)
+    || apartFrom(edited, spec) !== apartFrom(document, spec)) return null
+  return next
 }
 function message(template: string, values: Record<string, string>): string {
   return template.replace(/\{(file|removed)\}/g, (_, key: string) => values[key])
@@ -51,6 +156,14 @@ function prepareAllowlist(rule: NativeYamlHooks, cmd: string, home: string): (at
   return attempt => observed.replace(next, attempt)
 }
 
+/**
+ * [line] without the carriage return a CRLF file ends it with. Windows engines write their own configuration: Hermes'
+ * `config.yaml` on DESKTOP-0TFH0OJ is CRLF throughout (measured 2026-11-09), and `split('\n')` leaves a `\r` on every
+ * line, so our own managed block read as somebody else's `hooks:` and was reported foreign at every launch — the session
+ * was never registered and the harness waited on "confirm native hooks" forever.
+ */
+const bare = (line: string): string => (line.endsWith('\r') ? line.slice(0, -1) : line)
+
 function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
   const entries = rule.events
     .map((event) => `  ${event}:\n    - command: ${JSON.stringify(cmd)}\n      timeout: ${rule.timeout}`)
@@ -60,14 +173,15 @@ function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
 
 /** True for a top-level `hooks:` mapping that is ours (every command runs our notify.mjs for this engine). */
 function isOwnedHooksBody(rule: NativeYamlHooks, body: string[]): boolean {
-  const commands = body.filter((line) => /^\s*- command:/.test(line))
+  const lines = body.map(bare)
+  const commands = lines.filter((line) => /^\s*- command:/.test(line))
   return commands.length > 0 && commands.every(line => {
     try {
       const cmd: unknown = JSON.parse(line.trim().slice('- command:'.length))
       return isManagedHookCommand(cmd) && rule.ownership.every(fragment => (cmd as string).includes(fragment))
     } catch { return false }
   })
-    && body.every(line => !line.trim() || /^\s+- command:/.test(line) || /^\s+timeout:\s+\d+\s*$/.test(line)
+    && lines.every(line => !line.trim() || /^\s+- command:/.test(line) || /^\s+timeout:\s+\d+\s*$/.test(line)
       || rule.events.some(event => line === `  ${event}:`))
 }
 
@@ -84,13 +198,13 @@ function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: Read
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (line === rule.begin && hookLines.has(i + 1)) {
+    if (bare(line) === rule.begin && hookLines.has(i + 1)) {
       // A truncated marker gives no evidence about where the person's remaining
       // configuration begins. Keep the whole document until it can be verified.
       let j = i + 1
       while (j < lines.length && lines[j].trim() !== rule.end) j++
       if (j === lines.length) throw new HookPreparationHeld('the managed YAML block has no closing marker')
-      if (lines[i + 1] !== 'hooks:' || !isOwnedHooksBody(rule, lines.slice(i + 2, j))) {
+      if (bare(lines[i + 1]!) !== 'hooks:' || !isOwnedHooksBody(rule, lines.slice(i + 2, j))) {
         throw new HookPreparationHeld('the managed YAML block contains unconfirmed configuration')
       }
       i = j
@@ -99,8 +213,8 @@ function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: Read
       if (removal && out.at(-1) === '') out.pop()
       continue
     }
-    if (hookLines.has(i) && !/^hooks:\s*$/.test(line)) foreignHooks = true
-    if (hookLines.has(i) && /^hooks:\s*$/.test(line)) {
+    if (hookLines.has(i) && !/^hooks:\s*$/.test(bare(line))) foreignHooks = true
+    if (hookLines.has(i) && /^hooks:\s*$/.test(bare(line))) {
       let j = i + 1
       while (j < lines.length && (lines[j].startsWith(' ') || lines[j].startsWith('\t') || lines[j].trim() === '')) j++
       const body = lines.slice(i + 1, j)
@@ -206,7 +320,12 @@ export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readon
           if (isMap(original.contents)) for (const pair of original.contents.items) {
             if (isScalar(pair.key) && pair.key.value === 'hooks' && pair.key.range) hookLines.add(text.slice(0, pair.key.range[0]).split('\n').length - 1)
           }
-          const { cleaned, foreignHooks, removed } = stripOwnedBlocks(rule, text, hookLines, true)
+          const stripped = stripOwnedBlocks(rule, text, hookLines, true)
+          const { foreignHooks } = stripped
+          // The names Harness listed for the engine to carry come out too; the person's own stay.
+          const unlisted = rule.passthrough ? editPassthrough(stripped.cleaned, rule.passthrough, true) : null
+          const cleaned = unlisted ?? stripped.cleaned
+          const removed = stripped.removed + (unlisted !== null && unlisted !== stripped.cleaned ? 1 : 0)
           if (foreignHooks && managedHooksIn(rule, cleaned)) kept = YAML_HOOKS_KEPT
           if (removed > 0) {
             const next = cleaned.trim() ? cleaned : ''
@@ -274,8 +393,9 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     const budget = new NativeEvidenceBudget()
     let tokens = 0
     for (const _token of new Lexer().lex(config)) {
-      budget.step()
-      if (++tokens > 4096) throw new HookPreparationHeld('the YAML configuration exceeds its structure limit')
+      // Bounded by the deadline and this count, not the budget's operations: those are fewer than an ordinary file's tokens.
+      budget.remaining()
+      if (++tokens > MAX_YAML_TOKENS) throw new HookPreparationHeld('the YAML configuration exceeds its structure limit')
     }
     // Parse before examining markers: marker-like text inside a quoted scalar
     // is somebody else's configuration. Duplicate managed mappings from older
@@ -300,10 +420,18 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
       error(message(rule.messages.foreign, { file: configPath }))
       error(rule.messages.manual)
       for (const event of rule.events) error(`[hooks]   ${event}: [{ command: ${JSON.stringify(cmd)}, timeout: ${rule.timeout} }]`)
+      if (rule.passthrough) error(`[hooks]   and under ${rule.passthrough.section}: ${rule.passthrough.key}: ${flowList(rule.passthrough.names)}`)
       return false
     }
 
-    const next = `${cleaned.replace(/\s*$/, '')}\n${hooksBlock(rule, cmd)}`
+    // The person's own list gains the names beside what is there; without a list to edit, the hooks still go in.
+    let listed = cleaned
+    if (rule.passthrough) {
+      const edited = editPassthrough(cleaned, rule.passthrough)
+      if (edited === null) log(message(rule.passthrough.unlisted, { file: configPath }))
+      else listed = edited
+    }
+    const next = `${listed.replace(/\s*$/, '')}\n${hooksBlock(rule, cmd)}`
     const combined = parseDocument(next, { strict: true, uniqueKeys: true, prettyErrors: false })
     budget.step()
     if (combined.errors.length || combined.warnings.length) throw new HookPreparationHeld('the managed hooks cannot be appended to this YAML document')

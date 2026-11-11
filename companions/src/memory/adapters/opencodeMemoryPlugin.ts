@@ -1,6 +1,8 @@
+import { pluginFetchSource } from './opencodePluginFetch.js'
+
 /** Standalone source embedded in the existing 1.x plugin; no additional installation artifact. */
-export function opencodeMemoryPluginSource(port: number): string {
-  return `
+export function opencodeMemoryPluginSource(port: number, socket: string | null): string {
+  return `${pluginFetchSource('memoryFetch', socket)}
   const memoryMessages = new Map()
   const memoryMessage = async (input, output) => {
     const message = output.message
@@ -24,7 +26,7 @@ export function opencodeMemoryPluginSource(port: number): string {
   const memoryRequest = async (sessionID, input) => {
     const pane = process.env.TMUX_PANE, token = hookToken()
     if (!pane || !token || !sessionID) return null
-    const response = await fetch("http://127.0.0.1:${port}/api/hook/opencode-memory-runtime", {
+    const response = await memoryFetch("http://127.0.0.1:${port}/api/hook/opencode-memory-runtime", {
       method: "POST", signal: AbortSignal.timeout(400),
       headers: { "content-type": "application/json", "x-harness-hook-token": token },
       body: JSON.stringify({ engine: "opencode", sessionId: sessionID, callerPid: process.pid,

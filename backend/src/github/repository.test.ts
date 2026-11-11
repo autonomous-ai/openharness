@@ -53,15 +53,15 @@ describe('attribution', () => {
   it('names the requester, the agent and the machine in trailers and the pull request line', () => {
     expect(attribution({ requester: { name: 'Ada Lovelace', email: 'ada@example.com' }, agentName: 'Atlas', machineName: 'Studio Mac' })).toEqual({
       requestedBy: { name: 'Ada Lovelace', email: 'ada@example.com' }, agent: 'Atlas', machine: 'Studio Mac',
-      trailers: ['Co-authored-by: Ada Lovelace <ada@example.com>', 'Harness-Agent: Atlas', 'Harness-Machine: Studio Mac'],
+      trailers: ['Co-authored-by: Ada Lovelace <ada@example.com>', 'Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>', 'Harness-Agent: Atlas', 'Harness-Machine: Studio Mac'],
       pullRequestLine: 'Requested by Ada Lovelace (ada@example.com) through Harness.',
     })
   })
 
   it('falls back to the address for a missing name and keeps every value on one line', () => {
     const made = attribution({ requester: { name: '  ', email: 'grace@example.com' }, agentName: 'Builder\nHarness-Agent: forged', machineName: null })
-    expect(made.trailers).toEqual(['Co-authored-by: grace <grace@example.com>', 'Harness-Agent: Builder Harness-Agent: forged'])
+    expect(made.trailers).toEqual(['Co-authored-by: grace <grace@example.com>', 'Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>', 'Harness-Agent: Builder Harness-Agent: forged'])
     expect(attribution({ requester: { name: 'Eve <evil@example.com>', email: 'eve@example.com' }, agentName: '', machineName: '\n' }).trailers)
-      .toEqual(['Co-authored-by: Eve evil@example.com <eve@example.com>', 'Harness-Agent: Agent'])
+      .toEqual(['Co-authored-by: Eve evil@example.com <eve@example.com>', 'Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>', 'Harness-Agent: Agent'])
   })
 })

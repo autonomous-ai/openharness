@@ -13,6 +13,8 @@ import { env } from '../config/env.js'
 import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
+import { windowsLaunchCommand } from './binaryOnPath.js'
+import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
 
 // Keep this historical import surface for callers, but never duplicate the
 // catalog here. `engines/types.ts` is the one iterable source of truth.
@@ -37,6 +39,7 @@ export const ENGINE_CLI_COMMANDS: Readonly<Record<AgentEngine, string>> = {
   grok: 'grok',
   agy: 'agy',
   copilot: 'copilot',
+  openclaw: 'openclaw',
   // A terminal has no command: the pane runs the user's login shell (engineLaunch.ts). The empty
   // string is what keeps every "is this binary installed" probe honest — nothing to look for.
   terminal: '',
@@ -86,6 +89,7 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
   grok: ['grok', 'agent'],
   agy: ['agy'],
   copilot: ['copilot'],
+  openclaw: ['openclaw'],
   terminal: [],
 }
 
@@ -208,6 +212,13 @@ function uniqueIdentities(identities: readonly ExecutableFileIdentity[]): Execut
   })
 }
 
+/** The file key of the boot module Harness runs in place of Hermes' installer [launcher] (`<root>\bin\hermes.exe`), when
+ *  it is that launcher and the module has been written. */
+export function hermesBootFileKey(launcher: string): string | null {
+  const root = hermesRoot(launcher)
+  return root ? executableFileIdentity(hermesBootFile(root))?.fileKey ?? null : null
+}
+
 /** Build once per process-table pass; callers pass the snapshot through every row comparison. */
 export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
   const engineCandidates = new Map<AgentEngine, ExecutableFileIdentity[]>()
@@ -223,6 +234,12 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
     engineCandidates.set(engine, candidates)
     engineFileKeys.set(engine, new Set(candidates.map((candidate) => candidate.fileKey)))
   }
+  // Harness runs Hermes' installer launcher on Windows as `<python> -I <root>\bin\hermes-boot.py`
+  // (lib/windows/hermesLaunch.ts), so the pane's Hermes is that file, as surely as the launcher it stands in for.
+  // Not a candidate: nothing runs it by name. Without it a Hermes pane was never confirmed (DESKTOP-0TFH0OJ, 2026-11-09).
+  // The launcher is found as the launch finds it (lib/windows/launch.ts): `hermes` alone names no file on Windows.
+  const hermesBoot = hermesBootFileKey(windowsLaunchCommand(enginePathOverride('hermes') || 'hermes'))
+  if (hermesBoot) engineFileKeys.get('hermes')?.add(hermesBoot)
 
   const agentCandidates = commandCandidates('agent')
   const cursorAgentCandidates = commandCandidates('cursor-agent')
@@ -453,6 +470,7 @@ export function enginePathOverride(engine: AgentEngine): string | undefined {
     case 'grok': return env.GROK_PATH
     case 'agy': return env.AGY_PATH
     case 'copilot': return env.COPILOT_PATH
+    case 'openclaw': return env.OPENCLAW_PATH
     case 'terminal': return undefined
   }
 }
@@ -478,6 +496,7 @@ export function engineBin(engine: AgentEngine, platform: NodeJS.Platform = proce
     case 'grok': return env.GROK_PATH || ENGINE_CLI_COMMANDS.grok
     case 'agy': return env.AGY_PATH || ENGINE_CLI_COMMANDS.agy
     case 'copilot': return env.COPILOT_PATH || ENGINE_CLI_COMMANDS.copilot
+    case 'openclaw': return env.OPENCLAW_PATH || ENGINE_CLI_COMMANDS.openclaw
     // Never launched by name — `buildEngineLaunchArgv` builds the shell argv itself.
     case 'terminal': return ENGINE_CLI_COMMANDS.terminal
   }

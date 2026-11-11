@@ -33,12 +33,26 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCards).toHaveBeenCalledWith([])
   })
 
-  it('passes a Swarm\'s Buddy side on, and nothing else as a side', () => {
+  it('passes the reader\'s own Personal Swarm on as `personal`, and nothing else as one (round dial Personal | Team)', () => {
     const { cards, swarmCards } = setup()
-    cards.cards([card('t1', [lead('l1')], { side: 'buddy' }), card('t2', [lead('l2')], { side: 'pm' }), card('t3', [lead('l3')], { side: true })])
+    cards.cards([card('t1', [lead('l1')], { personal: true }), card('t2', [lead('l2')]), card('t3', [lead('l3')], { personal: 'yes' })])
     const sent = swarmCards.mock.calls.at(-1)?.[0] as Array<Record<string, unknown>>
-    expect(sent.map((c) => c.side)).toEqual(['buddy', undefined, undefined])
-    expect('side' in sent[1]).toBe(false)
+    // Diego's dial, 2026-11-06: the port rebuilt each card without it, so the dial never saw a Personal Swarm.
+    expect(sent.map((c) => c.personal)).toEqual([true, undefined, undefined])
+    expect('personal' in sent[1]).toBe(false)
+  })
+
+  it('keeps a decision notice\'s mark and the tag notice it covers, so only a swarmNeedsYou dial hears the decision', () => {
+    const { cards, swarmCards } = setup()
+    const tag = { chat: 'lead', chatId: 'c1', id: 'm1', text: 'River: look', at: 1792560000 }
+    const decision = { chat: 'group', chatId: 'g1', id: 'd1', text: 'River asks you: ship?', at: 1792560100, decision: true, tag }
+    cards.cards([card('t1', [lead('l1', { notice: decision }), lead('l2', { notice: { ...decision, tag: { ...tag, chat: 'nope' } } }), lead('l3', { notice: { ...tag, decision: 'yes', tag } })])])
+    const leads = (swarmCards.mock.calls.at(-1)?.[0] as Array<{ leads: Array<{ notice?: Record<string, unknown> }> }>)[0].leads
+    expect(leads[0].notice).toEqual(decision)
+    // An unsound covered tag is left out and the decision kept; a mark that is not `true` is no decision, and carries no tag.
+    expect(leads[1].notice).toEqual({ ...decision, tag: undefined })
+    expect('tag' in leads[1].notice!).toBe(false)
+    expect(leads[2].notice).toEqual(tag)
   })
 
   it('checks ids, counts and strings, and drops a malformed list whole, keeping the last good one', () => {
@@ -108,9 +122,12 @@ describe('the Swarm cards on the devices', () => {
     cards.cards([card('t1', [lead('l1', { chat: { kind: 'lead', id: 'c1', name: 'Lead', working: false }, notice: notice({ chat: 'lead' }) })])])
     expect(swarmCards.mock.calls[1][0][0].leads[0]).toMatchObject({ chat: { kind: 'lead', id: 'c1' }, notice: { chat: 'lead' } })
     expect(swarmCards.mock.calls[1][0][0].leads[0].chat).not.toHaveProperty('since')
+    // A tag in a task chat (#2965), in its thread.
+    cards.cards([card('t1', [lead('l1', { notice: notice({ chat: 'group', chatId: 'g1', thread: 'r1' }) })])])
+    expect(swarmCards.mock.calls[2][0][0].leads[0].notice).toEqual(notice({ chat: 'group', chatId: 'g1', thread: 'r1' }))
     swarmCards.mockClear()
     const badChats = [chat({ kind: 'other' }), chat({ id: 'bad id' }), chat({ name: 5 }), chat({ working: 'yes' }), chat({ since: -1 }), 'chat']
-    const badNotices = [notice({ chat: 'group' }), notice({ chatId: 'bad id' }), notice({ id: '' }), notice({ text: 5 }), notice({ at: -1 }), 7]
+    const badNotices = [notice({ chat: 'other' }), notice({ chatId: 'bad id' }), notice({ id: '' }), notice({ text: 5 }), notice({ at: -1 }), 7]
     for (const bad of badChats) cards.cards([card('t1', [lead('l1', { chat: bad })])])
     for (const bad of badNotices) cards.cards([card('t1', [lead('l1', { notice: bad })])])
     // The Lead stays, without what was not sound.
@@ -126,6 +143,24 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCardRecap).toHaveBeenLastCalledWith(recap({ chatId: 'g1' }))
     cards.recap(recap({ chatId: 'bad id' }))
     expect(swarmCardRecap).toHaveBeenCalledOnce()
+  })
+  // A reply inside a thread (#2463): the notice keeps the thread's root, or the desktop and the dial read it as the chat's.
+  it("keeps a notice's thread, a root too long for the dial still a thread's, and drops one that is not a root", () => {
+    const { cards, swarmCards } = setup()
+    const notice = (over: Record<string, unknown> = {}) => ({ chat: 'pm', chatId: 'pm1', id: 'm2', text: 'Fixed.', at: 1792560000, ...over })
+    const sent = (over: Record<string, unknown>) => {
+      cards.cards([card('t1', [lead('l1', { notice: notice(over), buddyNotice: notice({ chat: 'buddy', ...over }) })])])
+      return swarmCards.mock.lastCall![0][0].leads[0]
+    }
+    expect(sent({ thread: 'm1' })).toMatchObject({ notice: notice({ thread: 'm1' }), buddyNotice: { thread: 'm1' } })
+    // Longer than the dial holds: kept, so no face matches it and the dial beeps; cut to a bound so the frame stays small.
+    expect(sent({ thread: 'r'.repeat(60) }).notice.thread).toBe('r'.repeat(60))
+    expect(sent({ thread: 'r'.repeat(300) }).notice.thread).toBe('r'.repeat(128))
+    for (const bad of ['', 5, null]) {
+      const lead = sent({ thread: bad })
+      expect(lead.notice).toEqual(notice())
+      expect(lead.buddyNotice).not.toHaveProperty('thread')
+    }
   })
   // Round dial PM and Buddy screens (spec 2026-10-29): the swarmBuddy dial's fields, checked as the chat and notice are.
   it('keeps the Buddy\'s session id on its way to the devices service; an unsound one is dropped and the Buddy kept', () => {
@@ -166,6 +201,10 @@ describe('the Swarm cards on the devices', () => {
 })
 
 describe('whether the Swarm cards are wanted, which the core owns', () => {
+  function wantingRecaps() {
+    const request = vi.fn(async (_payload: Record<string, unknown>) => ({ ok: true })), swarmCards = vi.fn(), swarmCardRecap = vi.fn()
+    return { cards: createSuperTabCards({ swarmCards, swarmCardRecap, request, log: vi.fn() }), request, swarmCards, swarmCardRecap }
+  }
   function wanting() {
     const request = vi.fn(async (_payload: Record<string, unknown>) => ({ ok: true }))
     const swarmCards = vi.fn()
@@ -258,10 +297,8 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
       cards.want(true, ['t1'], bad)
       expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
     }
-    // A focus the device's own pick caused says so, as a change of its own; anything but true is not that.
-    cards.want(true, ['t1'], { ...focus, fromDevice: true })
-    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { ...focus, fromDevice: true } })
-    cards.want(true, ['t1'], { ...focus, fromDevice: 1 })
+    // Neither whether a device caused the move nor a thread open beside it is part of the focus any more (task #3908).
+    cards.want(true, ['t1'], { ...focus, fromDevice: true, threadRoot: 'm1' })
     expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
     // The devices gone take the focus with them.
     cards.want(true, ['t1'], focus)
@@ -281,21 +318,34 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true }],
       [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }], [{ action: 'cardRecap', tabId: 't1', leadId: 'l1' }]])
   })
-  it('passes a swarmBuddy dial\'s buddy flag, and its side as cardSide with a sound side only', async () => {
+  it('passes a swarmBuddy dial\'s buddy flag, and refuses its side as it refuses any other action', async () => {
     const { cards, request } = wanting()
     await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })
     await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' })
     await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' })
-    expect(await cards.ask({ action: 'cardSide', tabId: 't1', side: 'buddy', extra: 1 })).toEqual({ ok: true })
-    await cards.ask({ action: 'cardSide', tabId: 't1', side: 'pm' })
     await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'bad id' })
     await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true })
     expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }], [{ action: 'cardSide', tabId: 't1', side: 'buddy' }], [{ action: 'cardSide', tabId: 't1', side: 'pm' }],
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }],
       [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }],
       [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true }]])
     request.mockClear()
-    for (const side of ['up', null, undefined, true]) expect(await cards.ask({ action: 'cardSide', tabId: 't1', side })).toEqual({ error: 'INVALID_REQUEST' })
+    for (const side of ['pm', 'buddy', null, undefined]) expect(await cards.ask({ action: 'cardSide', tabId: 't1', side })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(request).not.toHaveBeenCalled()
+  })
+  it('passes no thread: a face\'s or a recap\'s is dropped, a say\'s options are not passed on, and cardThreadLeave is refused (task #3908)', async () => {
+    const { cards, request, swarmCards, swarmCardRecap } = wantingRecaps()
+    const face = { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false }
+    cards.cards([card('t1', [lead('l1', { chat: { ...face, thread: { root: 'm9', title: 'x', replies: 2 } } })])])
+    const leads = (swarmCards.mock.calls.at(-1)?.[0] as Array<{ leads: Array<{ chat: Record<string, unknown> }> }>)[0].leads
+    expect(leads[0].chat).not.toHaveProperty('thread')
+    cards.recap(recap({ chatId: 'lead-c1', thread: 'm9' }))
+    expect(swarmCardRecap.mock.calls.map((c: Array<{ thread?: string }>) => c[0].thread)).toEqual([undefined])
+    request.mockClear()
+    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'x', chat: true, threaded: true, thread: 'm9' })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'x', chat: true })
+    request.mockClear()
+    expect(await cards.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' })).toEqual({ error: 'INVALID_REQUEST' })
     expect(request).not.toHaveBeenCalled()
   })
   it('on an account change with no device wanting cards only clears the list', () => {

@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { afterEach, expect, it } from 'vitest'
-import { busKind, frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topCalls, topSelfTime } from './selfProfile.js'
+import { readFileSync } from 'node:fs'
+import { BUS_CHANNEL_KINDS, busKind, frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topCalls, topSelfTime } from './selfProfile.js'
 import { enterWork, workKind } from './queryStats.js'
 
 let stop = () => {}
@@ -148,4 +149,43 @@ it('names a Redis message by its subscriber and channel kind, never the id in th
   // Anything that does not look like one of the bus's own names counts as other.
   expect(busKind('main', 'Weird Channel:1')).toBe('bus main other')
   expect(busKind('main', `${'x'.repeat(40)}:1`)).toBe('bus main other')
+})
+
+it('names only the bus\'s own channel kinds; an id sent as a whole channel name, or an unknown kind, counts as other (review of #1880)', () => {
+  // These names are Prometheus labels too (work_busy_seconds_total, db_queries_total), so a bare id must never pass.
+  expect(busKind('main', '6a730145e13f6277cdf98c1a')).toBe('bus main other')
+  expect(busKind('main', 'person-name')).toBe('bus main other')
+  expect(busKind('main', 'newkind:6a730145e13f6277cdf98c1a')).toBe('bus main other')
+  expect(busKind('main', 'swarm-deliveries:m1')).toBe('bus main swarm-deliveries')
+})
+
+it('knows every channel kind the bus subscribes to, so none counts as other by mistake', () => {
+  const source = readFileSync(new URL('./bus.ts', import.meta.url), 'utf8')
+  const prefixes = [...source.matchAll(/`([a-z0-9-]+):\$\{/g)].map(m => m[1]!)
+  // Calls only: `addSub(X, …)`, `addBinarySub(X, …)`, `addSubOn(someSubscriber, X, …)`; a definition's typed parameters (`channel: string`) are not calls.
+  const subscribed = [...source.matchAll(/\b(?:addSub|addBinarySub)\(\s*([^,]+),|\baddSubOn\(\s*\w+Subscriber,\s*([^,]+),/g)]
+    .map(m => (m[1] ?? m[2])!.trim()).filter(channel => !/:\s/.test(channel))
+  // Each subscribed channel is a `kind:${id}` literal, a builder made from one, or SWARM_STAMP.
+  expect(subscribed.length).toBeGreaterThan(20)
+  const builders = new Map([...source.matchAll(/const (\w+) = \([^)]*\): string => `([a-z0-9-]+):/g)].map(m => [m[1]!, m[2]!]))
+  const kinds = new Set<string>()
+  for (const channel of subscribed) {
+    if (channel === 'channel') continue // addSub's own body passes its parameter on
+    if (channel === 'SWARM_STAMP') { kinds.add('swarm-stamp'); continue }
+    const literal = channel.match(/^`([a-z0-9-]+):/)
+    const builder = builders.get(channel.replace(/\(.*$/, ''))
+    const kind = literal?.[1] ?? builder
+    expect(kind, channel).toBeDefined()
+    kinds.add(kind!)
+  }
+  for (const kind of kinds) expect(BUS_CHANNEL_KINDS.has(kind), kind).toBe(true)
+  expect(prefixes.length).toBeGreaterThan(0)
+})
+
+it('hands every kind\'s busy ms of the minute to onWindow, for the counters and the last hour (#2957)', async () => {
+  const windows: Array<Map<string, number>> = []
+  stop = startSelfProfile({ everyMs: 3_600_000, reportMs: 200, log: () => {}, onWindow: busy => { windows.push(new Map(busy)) } })
+  await new Promise<void>(resolve => setImmediate(() => { markCpuKind('http GET /api/y'); spin(30); resolve() }))
+  await reported(windows)
+  expect(windows[0]!.get('http GET /api/y')).toBeGreaterThanOrEqual(25)
 })

@@ -17,6 +17,10 @@ const envSchema = z.object({
   // Same MongoDB (and database) as the agent-manager — backend owns `users` +
   // `machines`; reads `managers`/`machine_nodes` via raw queries when needed.
   DATABASE_URL: z.string().default('mongodb://localhost:27017/harness?replicaSet=rs0'),
+  // The reads that tolerate a few seconds of lag (older history pages, costs, search, usage totals) go to the secondaries
+  // through a second client on DATABASE_URL (lib/prisma.ts prismaSecondary, task #2970). 'off' sends them back to the
+  // primary at the next start, with no code change.
+  DATABASE_SECONDARY_READS: z.enum(['on', 'off']).default('on'),
 
   // Redis for the cross-instance data bus. Behind a load balancer an agent's web socket and its
   // manager socket may land on different backend instances; Redis pub/sub bridges them
@@ -39,10 +43,17 @@ const envSchema = z.object({
   // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
   // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
   SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // The read cache patches what it holds from the parts that changed (superTabs/cache.ts, spec 2026-11-02); off: a bump drops it.
+  SWARM_CACHE_DELTA: z.enum(['on', 'off']).default('on'),
+  // The share of patches checked against a full load in the background: the drift alarm in the `swarm cache` log.
+  SWARM_CACHE_VERIFY_RATE: z.coerce.number().min(0).max(1).default(0.01),
   // A frame an adapter sends for one viewer goes to the process holding that viewer (lib/terminalRoute.ts), found by its
   // record in Redis, instead of to every process with a viewer of the machine. 'off' is the kill switch: such frames go
   // through the machine's channels again; a viewer on the adapter's own process is still served directly.
   TERMINAL_POD_ROUTES: z.enum(['on', 'off']).default('on'),
+  // `__clients` tells each daemon it may hold a machine's live events while no app views it (lib/hub.ts). 'off' is the
+  // kill switch: the frame stops saying so, and daemons send every event again with no release of their own.
+  RELAY_UI_GATE: z.enum(['on', 'off']).default('on'),
   // Its size per process, counted as the JSON size of what it holds.
   SWARM_CACHE_MB: z.string().default('64').transform(Number),
   // The worker's hourly move of finished deliveries older than 14 days into their messages' receipts
@@ -70,6 +81,12 @@ const envSchema = z.object({
   // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
   // Kubernetes sets it, with probes and grace period, as backend/README.md describes.
   DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
+
+  // Prometheus /metrics on an internal listener of its own (lib/metrics.ts), never the public PORT. Always
+  // on; each pm2 worker binds METRICS_PORT_BASE + NODE_APP_INSTANCE. Loopback by default: a pod whose
+  // scraper reads the pod IP sets METRICS_HOST=0.0.0.0 and does NOT list the port on its Service.
+  METRICS_PORT_BASE: z.coerce.number().int().min(1).max(65535).default(9464),
+  METRICS_HOST: z.string().default('127.0.0.1'),
 
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.
@@ -290,6 +307,23 @@ const envSchema = z.object({
   // approves it for a Swarm (github/approvals.ts). Unset, no repository can be approved and the app gives no token.
   GITHUB_APP_CLIENT_ID: z.string().default(''),
   GITHUB_APP_CLIENT_SECRET: z.string().default(''),
+
+  // Phone push (push/keys.ts, task #2905): a thread reply or a tag reaches a phone whose app is closed. APNs for iPhones: the
+  // Production key Apple generated in the developer account (the .p8 file, with its line breaks as \n, or base64 of it), its Key ID and
+  // the Team ID; all three or none. FCM for Android: base64 of the Firebase service account's JSON key. Unset: that platform
+  // gets no push, and each one skipped is counted and logged. A value that cannot be right stops the backend at startup, with
+  // a message that never shows it.
+  APNS_KEY_ID: z.string().default(''),
+  APNS_TEAM_ID: z.string().default(''),
+  APNS_PRIVATE_KEY: z.string().default(''),
+  // Apple's keys are per environment: the three above are the Production key, used on Apple's production host alone. The
+  // Sandbox key, for an Xcode build's tokens, is used on the sandbox host alone; both or neither, and only beside the
+  // production key. Unset: an Xcode build's push is skipped, and logged (Ken, 11-05).
+  APNS_SANDBOX_KEY_ID: z.string().default(''),
+  APNS_SANDBOX_PRIVATE_KEY: z.string().default(''),
+  // The iPhone app's bundle id, which Apple sends to.
+  APNS_TOPIC: z.string().default('ai.autonomous.harness.ios'),
+  FCM_SERVICE_ACCOUNT: z.string().default(''),
 
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.

@@ -44,6 +44,7 @@ class SwarmPost {
     required this.body,
     required this.messageId,
     this.files = const [],
+    this.voice,
     this.held,
   });
 
@@ -56,6 +57,10 @@ class SwarmPost {
 
   /// The files that went with it, already uploaded.
   final List<SwarmOutgoingFile> files;
+
+  /// A voice message's facts, as the backend read its one file: how it shows
+  /// while on its way. Not kept across a restart, when it shows as its file.
+  final SuperTabVoice? voice;
 
   /// What the composer held when it left (draft, mentions, reply): a refusal
   /// puts it back.
@@ -77,6 +82,34 @@ class SwarmPost {
 
   /// [SwarmOutbox.onTaken] was told.
   bool _told = false;
+
+  /// What the phone keeps of it across a restart: what it sends, and the
+  /// message that would show it arrived.
+  Map<String, dynamic> get kept => {'body': body, 'messageId': messageId};
+
+  /// A post kept from before a restart, or none: nobody knows whether it got
+  /// there, so it says Not sent, and Retry goes under its own receipt.
+  static SwarmPost? fromKept(
+    Map<String, dynamic> row,
+    Object? Function(String) held,
+  ) {
+    if (row case {
+      'body': {
+        'operationId': final String _,
+        'command': {'text': final String text},
+      },
+      'messageId': final String messageId,
+    }) {
+      return SwarmPost(
+          body: row['body'] as Map<String, dynamic>,
+          messageId: messageId,
+          held: held(text),
+        )
+        ..state = SwarmPostState.unconfirmed
+        ..error = 'Your message was not sent. Retry to check it.';
+    }
+    return null;
+  }
 
   String get operationId => body['operationId'] as String;
   Map<String, dynamic> get command => body['command'] as Map<String, dynamic>;
@@ -114,8 +147,9 @@ class SwarmOutbox {
     this.timeout = defaultTimeout,
   });
 
-  /// A send through the account's computers can take 30 seconds a computer
-  /// (`AppNotifier.swarmRequest`): past this one, the post says Not sent and
+  /// A send goes straight to the backend; a fallback through the account's
+  /// computers can take 30 seconds a computer (`AppNotifier.swarmRequest`).
+  /// Past this timeout, the post says Not sent and
   /// may be sent again, while its first answer may still land.
   static const defaultTimeout = Duration(seconds: 40);
 
@@ -156,6 +190,19 @@ class SwarmOutbox {
     if (_closed) return Future.value(SwarmPostOutcome.gone);
     _posts.add(post);
     return deliver(post);
+  }
+
+  /// [posts], kept from before a restart, back in the list: sent only by Retry.
+  void restore(Iterable<SwarmPost> posts) {
+    if (_closed) return;
+    _posts.addAll(posts);
+    onChanged();
+  }
+
+  /// [post] goes for good, and an answer still to come changes nothing: Delete.
+  void remove(SwarmPost post) {
+    post._timer?.cancel();
+    if (_posts.remove(post)) onChanged();
   }
 
   /// Sends [post] — again, when it is [SwarmPostState.unconfirmed] — under

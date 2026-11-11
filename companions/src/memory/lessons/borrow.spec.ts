@@ -6,10 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { mangleClaudeProjectDir } from '../../../../cli/src/lib/claudeProject.js'
 import {
-  BORROW_PENDING_MAX, BORROW_PER_PASS, LessonBorrower, borrowSignal, hermesProvenance, parseFrontmatter, readClaudeMemory, readCodexMemories, readHermesSkills,
-} from './borrow.js'
+  BORROW_PENDING_MAX, BORROW_PER_PASS, LessonBorrower, borrowSignal, hermesProvenance, parseFrontmatter, readClaudeMemory, readCodexMemories, readHermesSkills, mangleClaudeProjectDir } from './borrow.js'
 import { LessonStore } from './store.js'
 import { projectHash } from './types.js'
 

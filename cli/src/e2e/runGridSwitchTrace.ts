@@ -82,9 +82,14 @@ const legs: LegOutcome[] = []
 const planned = plannedLegs()
 let pane: string | null = process.env.HARNESS_PANE_ID ?? null
 let workspace: string | null = null
-// A subscription model answers in seconds; a local model on a grid may take a minute. Only the
-// grid leg gets the long budget, so a stuck check on the tool's own login is known in 45s, not 90.
-const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 120_000, grid: 120_000 }
+// A subscription model answers in seconds; a local model on a grid takes about 52 s per turn (codex
+// 0.166 on Qwen, measured 2026-10-30), and a switched session spends turns on tools the grid model
+// does not have (`unsupported call: exec`) before it reaches one that works. The old flat 120 s cut
+// the read of that run off 10 s into its third turn and marked a working model stuck. A step passes
+// on its result with whichever tool gets there (smokeChecks.ts), so the grid leg gets room for
+// eleven such turns. It is still a cap, not "no limit": run.sh has no timeout of its own, and a model
+// that has really stopped would hold up every later run.
+const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 120_000, grid: 600_000 }
 
 async function checks(leg: LegOutcome['leg']): Promise<void> {
   const readLogs = workspace ? (kind: LogKind) => readLog(workspace!, kind) : undefined

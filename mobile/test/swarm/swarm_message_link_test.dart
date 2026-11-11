@@ -33,4 +33,46 @@ void main() {
       expect(SwarmMessageLink.parse(value), isNull, reason: value);
     }
   });
+
+  group('allIn finds the links a message previews, as Desktop does', () {
+    List<String> urls(String text) => [
+      for (final link in SwarmMessageLink.allIn(text)) link.url,
+    ];
+
+    test('each link once, in order', () {
+      expect(
+        urls(
+          'See harness://swarm/t/g1/m1 and harness://swarm/t/g2/m2\n'
+          'again harness://swarm/t/g1/m1',
+        ),
+        ['harness://swarm/t/g1/m1', 'harness://swarm/t/g2/m2'],
+      );
+    });
+
+    test('none in code spans or fenced code', () {
+      expect(
+        urls(
+          'Run `open harness://swarm/t/g1/m1`\n'
+          '```\nharness://swarm/t/g2/m2\n```\n'
+          'but harness://swarm/t/g3/m3',
+        ),
+        ['harness://swarm/t/g3/m3'],
+      );
+    });
+
+    test('at most four', () {
+      expect(
+        urls([for (var i = 0; i < 6; i++) 'harness://swarm/t/g/m$i'].join(' ')),
+        hasLength(SwarmMessageLink.previewLimit),
+      );
+      expect(SwarmMessageLink.previewLimit, 4);
+    });
+
+    test('nothing that is not a message link', () {
+      expect(urls('No links here'), isEmpty);
+      expect(urls('harness://swarm/join/abc#token'), isEmpty);
+      expect(urls('harness://swarm/t/g1'), isEmpty);
+      expect(urls('harness://swarm/t/g1/m1?x=1'), isEmpty);
+    });
+  });
 }

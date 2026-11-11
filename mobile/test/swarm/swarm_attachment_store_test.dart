@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -223,5 +224,168 @@ void main() {
     storage.status = 404;
 
     await expectLater(store.file(picture), throwsA(anything));
+  });
+
+  group('a copy named for the share sheet', () {
+    test('is the kept file under its own name, in the account folder, and '
+        'goes once used', () async {
+      await store.keepOnly('person-a');
+      final kept = await store.file(picture);
+      late String path;
+      late List<int> bytes;
+
+      await store.named(kept, 'plan.md', (copy) async {
+        path = copy.path;
+        bytes = await copy.readAsBytes();
+      });
+
+      expect(path.split(Platform.pathSeparator).last, 'plan.md');
+      expect(path, startsWith(root.path));
+      expect(bytes, pixelPng);
+      expect(File(path).existsSync(), isFalse);
+      expect(File(path).parent.existsSync(), isFalse);
+      expect(kept.existsSync(), isTrue, reason: 'the kept file stays');
+    });
+
+    test('goes when the share fails too, and the failure stands', () async {
+      await store.keepOnly('person-a');
+      final kept = await store.file(picture);
+      String? path;
+
+      await expectLater(
+        store.named(kept, 'plan.md', (copy) async {
+          path = copy.path;
+          throw StateError('No sheet');
+        }),
+        throwsStateError,
+      );
+
+      expect(path, isNotNull);
+      expect(File(path!).existsSync(), isFalse);
+    });
+
+    test('two at once do not share a folder', () async {
+      await store.keepOnly('person-a');
+      final kept = await store.file(picture);
+      final paths = <String>[];
+      final first = Completer<void>();
+
+      final one = store.named(kept, 'a.txt', (copy) async {
+        paths.add(copy.path);
+        await first.future;
+      });
+      await store.named(kept, 'a.txt', (copy) async {
+        paths.add(copy.path);
+        expect(File(paths.first).existsSync(), isTrue);
+      });
+      first.complete();
+      await one;
+
+      expect(paths.toSet(), hasLength(2));
+    });
+
+    test('is refused for a file another account kept, or nobody', () async {
+      await store.keepOnly('person-a');
+      final kept = await store.file(picture);
+      await store.keepOnly('person-b');
+      var used = false;
+
+      await expectLater(
+        store.named(kept, 'a.png', (_) async => used = true),
+        throwsStateError,
+      );
+      await store.keepOnly(null);
+      await expectLater(
+        store.named(kept, 'a.png', (_) async => used = true),
+        throwsStateError,
+      );
+      expect(used, isFalse);
+    });
+
+    test('started just before another account, is made before the emptying '
+        'runs', () async {
+      // The app's folder comes from the platform, a wait of its own: the
+      // copy is held there, and the emptying must wait for it.
+      final reached = Completer<void>(), release = Completer<void>();
+      var holding = false;
+      final store = storeIn(
+        root,
+        storage,
+        reaching: () async {
+          if (!holding) return;
+          holding = false;
+          reached.complete();
+          await release.future;
+        },
+      );
+      await store.keepOnly('person-a');
+      final kept = await store.file(picture);
+      holding = true;
+      List<int>? bytes;
+      late final Future<void> changing;
+
+      final sharing = store.named(kept, 'a.png', (copy) async {
+        bytes = copy.readAsBytesSync();
+        await changing;
+      });
+      changing = store.keepOnly('person-b');
+      await reached.future;
+      final emptied = await Future.any([
+        changing.then((_) => true),
+        Future<bool>.delayed(const Duration(milliseconds: 300), () => false),
+      ]);
+      release.complete();
+      await sharing;
+      await changing;
+
+      expect(emptied, isFalse, reason: 'the emptying waited for the copy');
+      expect(bytes, pixelPng);
+      expect(keptUnder(root), isEmpty);
+    });
+
+    test('goes with the account on sign-out', () async {
+      await store.keepOnly('person-a');
+      final kept = await store.file(picture);
+      final shown = Completer<String>(), held = Completer<void>();
+      final sharing = store.named(kept, 'a.png', (copy) async {
+        shown.complete(copy.path);
+        await held.future;
+      });
+      final path = await shown.future;
+
+      await store.keepOnly(null);
+
+      expect(File(path).existsSync(), isFalse);
+      held.complete();
+      await sharing;
+      expect(keptUnder(root), isEmpty);
+    });
+  });
+
+  group('a file name the phone writes', () {
+    test('keeps an ordinary name as it is', () {
+      expect(swarmFileName('Plan v2 (final).md'), 'Plan v2 (final).md');
+      expect(swarmFileName('.env'), '.env');
+      expect(swarmFileName('Tiếng Việt.txt'), 'Tiếng Việt.txt');
+    });
+
+    test('never holds a folder or a control character', () {
+      expect(swarmFileName('../../etc/passwd'), '.._.._etc_passwd');
+      expect(swarmFileName(r'a\b.txt'), 'a_b.txt');
+      expect(swarmFileName('a\nb\u0000.txt'), 'a_b_.txt');
+    });
+
+    test('is never empty, nor a folder of its own', () {
+      for (final name in ['', '   ', '.', '..']) {
+        expect(swarmFileName(name), 'file', reason: '"$name"');
+      }
+    });
+
+    test('is at most 255 bytes, its extension kept', () {
+      final long = swarmFileName('${'é' * 300}.md');
+      expect(utf8.encode(long).length, lessThanOrEqualTo(255));
+      expect(long, endsWith('.md'));
+      expect(long, startsWith('éé'));
+    });
   });
 }

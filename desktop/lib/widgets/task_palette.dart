@@ -720,7 +720,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
               hintText: "What's up?",
               hintStyle: DesktopChrome.text(
                 size: 17,
-                color: DesktopChrome.muted,
+                color: DesktopChrome.hint,
                 height: 1.35,
               ),
             ),

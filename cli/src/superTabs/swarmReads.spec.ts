@@ -27,15 +27,10 @@ describe('the daemon\'s Swarm reads', () => {
   it('first loads a Swarm once as the agent, then reads only what changed', async () => {
     const { call, reads } = backendOf({ [FIRST]: [ok(readFixture('parts-lead'))], [CHANGES()]: [ok(readFixture('changes-lead'))] })
     const first = await reads.read(T, LEAD)
-    expect(first).toEqual({ state: readFixture<{ state: Json }>('legacy-tab-lead').state, lastChangedAt: 1793010101002, githubApp: true, steps: false, teamAccounts: true,
-      groupChangedAt: new Map([['c00000000000000000000001', 1793010000000], ['c00000000000000000000000', 1793009000000],
-        ['c00000000000000000000002', 1793010101002], ['c00000000000000000000003', 1793009500000]]) })
+    expect(first).toEqual({ state: readFixture<{ state: Json }>('legacy-tab-lead').state, lastChangedAt: 1793010101002 })
     const next = await reads.read(T, LEAD)
     expect(conversations(next.state)).toEqual([FIXTURE.leadGroup, FIXTURE.leadsGroup, FIXTURE.workGroup])
     expect(next.lastChangedAt).toBe(1793010106120)
-    // A group's own change moves its time; one that went dormant is out of the active ones, as out of the state.
-    expect(next.groupChangedAt.get('c00000000000000000000002')).toBe(1793010106120)
-    expect(next.groupChangedAt.has('c00000000000000000000003')).toBe(false)
     expect(paths(call)).toEqual([FIRST, CHANGES()])
   })
 
@@ -81,6 +76,21 @@ describe('the daemon\'s Swarm reads', () => {
     const changed = backendOf({ [FIRST]: [ok(readFixture('parts-lead'))], [CHANGES()]: [ok({ ...readFixture<Json>('changes-lead'), format: 3 })] })
     await changed.reads.read(T, LEAD)
     await expect(changed.reads.read(T, LEAD)).rejects.toMatchObject({ code: 'UPDATE_REQUIRED', status: 426 })
+  })
+
+  it('recovers from a first reply without a format on the next read', async () => {
+    const { reads } = backendOf({ [FIRST]: [ok({}), ok(readFixture('parts-lead'))] })
+    await expect(reads.read(T, LEAD)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE', status: 503 })
+    expect((await reads.read(T, LEAD)).state).toEqual(readFixture<{ state: Json }>('legacy-tab-lead').state)
+  })
+
+  it('keeps its cursor through a malformed changes reply and recovers', async () => {
+    const { reads, call } = backendOf({ [FIRST]: [ok(readFixture('parts-lead'))],
+      [CHANGES()]: [ok({}), ok(readFixture('changes-lead'))] })
+    await reads.read(T, LEAD)
+    await expect(reads.read(T, LEAD)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE', status: 503 })
+    expect(conversations((await reads.read(T, LEAD)).state)).toHaveLength(3)
+    expect(paths(call)).toEqual([FIRST, CHANGES(), CHANGES()])
   })
 
   it('reads as the person without an agent, and keeps each reader\'s view apart', async () => {

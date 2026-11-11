@@ -188,10 +188,11 @@ Agent _agent(
   String name, {
   required String cwd,
   required int minutesAgo,
+  String engine = 'claude',
 }) => Agent(
   id: id,
   name: name,
-  engine: 'claude',
+  engine: engine,
   sessionId: 'session-$id',
   status: 'active',
   project: AgentProject(name: cwd.split('/').last, cwd: cwd, branch: 'main'),
@@ -323,7 +324,11 @@ void main() {
     await tester.pump(const Duration(seconds: 10));
   }
 
-  Future<GlobalKey> pumpScreen(WidgetTester tester, Widget home) async {
+  Future<GlobalKey> pumpScreen(
+    WidgetTester tester,
+    Widget home, {
+    Brightness brightness = Brightness.dark,
+  }) async {
     await tester.runAsync(_loadFonts);
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -339,7 +344,7 @@ void main() {
         key: key,
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          theme: grid.buildAppTheme(brightness: brightness),
           home: home,
         ),
       ),
@@ -534,6 +539,41 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await shoot(tester, key, '1e-focus-prompt');
   });
+
+  // Codex's update prompt, its answers each a band a tap presses: until 2026-11-09 its
+  // `enter continue` footer went unread, and a tap on "1. Update now" pressed nothing.
+  for (final brightness in Brightness.values) {
+    testWidgets('focus, Codex update prompt, ${brightness.name}', skip: skip, (
+      tester,
+    ) async {
+      notifier.machineStates['m']!.agents[0] = _agent(
+        'a',
+        'hn',
+        cwd: '/Users/me/code/autonomous-harness',
+        minutesAgo: 3,
+        engine: 'codex',
+      );
+      final key = await pumpScreen(tester, focus(), brightness: brightness);
+      // Codex asks as it starts, on an empty screen, the prompt at its foot.
+      notifier.panes.first.session!.terminal.write(
+        '\x1b[2J\x1b[H${'\r\n' * 36}'
+        '  \x1b[1mUpdate available\x1b[0m · 0.165.0 → 0.167.0\r\n'
+        '  \x1b[2mRelease notes:\x1b[0m\r\n'
+        '  \x1b[2;4mhttps://github.com/openai/codex/releas\x1b[0m\r\n'
+        '  \x1b[2;4mes/latest\x1b[0m\r\n'
+        '\r\n'
+        '\x1b[36m› 1. Update now (runs `npm install -g\r\n'
+        '     @openai/codex`)\x1b[0m\r\n'
+        '  2. Skip\r\n'
+        '  3. Skip until next version\r\n'
+        '\r\n'
+        '  enter \x1b[2mcontinue ·\x1b[0m esc \x1b[2mskip\x1b[0m',
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      await shoot(tester, key, '1f-focus-codex-update-${brightness.name}');
+    });
+  }
 
   testWidgets('focus, first time', skip: skip, (tester) async {
     final key = await pumpScreen(

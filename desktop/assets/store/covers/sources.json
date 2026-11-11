@@ -396,5 +396,19 @@
     "credit": "OpenHarness example",
     "sha256": "6b9deb00f2c2b0568b0e903b93bd86afc149eef135a81a7a4d0873ce9ca46ad0",
     "harness": "autonomous/trailofbits-skills"
+  },
+  {
+    "asset": "web-studio.jpg",
+    "source": "store/showcase/web-studio/starter.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "2e0d4a939d3d86e3432b8cd925a2a5dbc4b4f57de5902a62fae4eea0d7ee8160",
+    "harness": "autonomous/web-studio"
+  },
+  {
+    "asset": "files.jpg",
+    "source": "store/showcase/files/trip-plan.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "9b8942df4d4700279539bb14c84429058776f2829259c2a2980c630a32c035dc",
+    "harness": "autonomous/files"
   }
 ]

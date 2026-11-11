@@ -74,7 +74,9 @@ jobs:
           - runner: windows-11-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    # Measured on run 42370552362: arm64 takes 6 min to build, 52 min for the Desktop suite and about 25 min for the
+    # installer specs, 90 min in all before the last step ends; x64 takes 64 min. 90 cut arm64 off in its last step.
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh
@@ -123,7 +125,7 @@ jobs:
       # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22.23.2
+          node-version: 24.22.2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -458,7 +460,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22.23.2
+          node-version: 24.22.2
       - uses: actions/download-artifact@v4
         with:
           pattern: harness-desktop-zip-windows-*

@@ -13,6 +13,9 @@ class DesktopChrome extends InheritedWidget {
 
   static Color get foreground => grid.AppPalette.textPrimary;
   static Color get muted => grid.AppPalette.textSecondary;
+
+  /// Every field's placeholder, as the dropdowns' search line draws it.
+  static Color get hint => grid.AppPalette.textFaint;
   static Color get surface => grid.AppDesktop.surface;
   static Color get rim => grid.AppDesktop.rim;
   static Color get field => grid.AppDesktop.field;
@@ -21,7 +24,11 @@ class DesktopChrome extends InheritedWidget {
   static Color get activeSelection => grid.AppDesktop.selection;
   static Color get onSelection => grid.AppDesktop.onSelection;
   static Color get selectionDetail => grid.AppDesktop.selectionDetail;
-  static Color get focusRing => grid.AppDesktop.focus;
+
+  /// A focused control's rim: the ordinary hairline. The app draws no colored
+  /// focus lines (owner, 2026-11-04); focus shows as the control's fill and a
+  /// text field's caret.
+  static Color get focusRing => grid.AppDesktop.rim;
   static const dialogRadius = grid.AppDesktop.dialogRadius;
   static const menuRadius = grid.AppDesktop.menuRadius;
   static const rowRadius = grid.AppDesktop.rowRadius;
@@ -280,6 +287,9 @@ class DesktopPill extends StatelessWidget {
                     label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    strutStyle: monospace
+                        ? null
+                        : grid.AppType.controlStrut(size: textSize),
                     style: monospace ? grid.AppType.mono() : null,
                     semanticsLabel: semanticLabel,
                   ),

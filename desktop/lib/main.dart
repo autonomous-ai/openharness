@@ -4,7 +4,8 @@ import 'package:flutter/widgets.dart';
 
 import 'app_shell.dart';
 import 'core/connected_semantics.dart';
-import 'core/linux_webview_runtime.dart';
+import 'core/native_webview_runtime.dart';
+import 'measurement/speed_marks.dart';
 import 'ws/ws_conn.dart' show rememberAppVersionForSockets;
 import 'update/started_marker.dart';
 import 'desktop_workspace.dart'
@@ -20,12 +21,17 @@ import 'desktop_workspace.dart'
 Future<void> main() async {
   HarnessWidgetsBinding();
   prepareConsole();
-  await LinuxWebViewRuntime.initialize();
+  await NativeWebViewRuntime.initialize();
   unawaited(rememberAppVersionForSockets());
   await startHarness(
     authenticatedScreen: authenticatedWorkspace,
     frame: appFrame,
     transportPlugins: terminalTransportPlugins,
+  );
+  unawaited(
+    WidgetsBinding.instance.waitUntilFirstFrameRasterized.then(
+      (_) => speedMarks.launch('first frame'),
+    ),
   );
   unawaited(
     markStartedAfterFirstFrame(

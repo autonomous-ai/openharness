@@ -641,7 +641,7 @@ def check_first_use(vm, user, folder, installed=False):
     version, _ = vm.command(user('/usr/bin/opencode --version'))
     (folder / 'bundled-opencode-version.txt').write_text(version)
     defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
-    assert defaults.get('model') == 'opencode/muse-spark-1.3-contributor-free', 'The image must start on the pinned free model'
+    assert 'model' not in defaults, 'The image must start on upstream\'s own free model'
     assert not set(defaults) & {'provider', 'providers'}, 'The image must retain upstream provider defaults'
     assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     if installed:
@@ -1329,6 +1329,13 @@ def main():
         # A disposable failure exercises actual root + boot restoration, including
         # an encrypted root in the UEFI row. The project's separate subvolume survives.
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+        # The daytime release check (harness-update.timer, 2 min after login, up to 30 s later) holds the hn-os system
+        # lock while it prepares, and this check reaches its first pacman at about that time: twice on 11-09 the
+        # checkpoint hook refused with "Another hn-os system operation is running". Stopped for this boot only, and
+        # a check already running is waited out; the next boot starts the timer again.
+        vm.command('systemctl --user stop harness-update.timer; '
+                   'for n in $(seq 1 240); do systemctl --user -q is-active harness-update.service || exit 0; sleep 1; done; exit 1',
+                   timeout=250)
         update_script = base64.b64encode(Path(__file__).with_name('updates.sh').read_bytes()).decode()
         vm.command(': > /tmp/hn-os-updates.b64')
         for offset in range(0, len(update_script), 2000):

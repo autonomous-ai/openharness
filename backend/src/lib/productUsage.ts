@@ -119,15 +119,18 @@ async function ingestCounters(report: SetupUsageReport & { revision?: number; co
 
 const writeUsage = createUsageBatch(commitReports)
 
-/** One transaction for a batch: each report's permission, its receipt and the batch's summed totals commit together;
- * a lost HTTP response can be retried with the same id, and a receipt already committed counts once. Write conflicts
- * now come only from another process's batch: the whole batch is retried, permission included, at most four
+/** One transaction for a batch: each report's permission and its receipt commit together; a lost HTTP response can be
+ * retried with the same id, and a receipt already committed counts once. The batch's totals are then added to this
+ * process's in-memory sums (`relayTotals`), which are written once a minute. A conflict with another process's
+ * batch retries the whole batch, permission included, at most four
  * attempts, and only fast conflicts may start another within the first second. */
 async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
   const started = performance.now()
+  let counted: UsageIncrement[] = []
   for (let attempt = 0; ; attempt++) {
+    counted = []
     try {
-      return await prisma.$transaction(async tx => {
+      const committed = await prisma.$transaction(async tx => {
         const choices = await productUsageChoices([...new Set(reports.flatMap(r => r.userId ? [r.userId] : []))], tx)
         const results: IngestResult[] = reports.map(r => {
           const choice = r.userId ? choices.get(r.userId)! : null
@@ -135,6 +138,8 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
             : { accepted: false, reason: 'CHOICE_CHANGED', ...choice }
         })
         const permitted = reports.filter((_, i) => results[i].accepted)
+        // Every report refused: nothing to read, and an empty list would scan all the receipts (`$or: []`, 4.1 s, prod 2026-11-04).
+        if (!permitted.length) return results
         const received = new Set((await tx.productUsageReceipt.findMany({
           where: { id: { in: [...new Set(permitted.map(r => r.id))] } }, select: { id: true } })).map(r => r.id))
         // A report sent again while its first copy is in this same batch counts once too.
@@ -145,10 +150,13 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
           // [life]: once the receipt sweep's rule is installed, a server that does not write it cannot count (productUsageReceiptSweep.ts).
           id: r.id, expiresAt: new Date(Date.parse(r.day) + PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS * DAY), life: PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS })) })
         const apart = await apartPrefixes(tx, fresh)
-        await incrementUsageTotals(tx, summed(fresh.flatMap((r, i) =>
-          apart[i] ? r.increments.map(inc => ({ ...inc, metric: apart[i] + inc.metric })) : r.increments)))
+        counted = fresh.flatMap((r, i) => apart[i] ? r.increments.map(inc => ({ ...inc, metric: apart[i] + inc.metric })) : r.increments)
         return results
       })
+      // Counted after the commit, never inside an attempt that may be rolled back or retried. The receipt is already
+      // stored, so a report sent again counts nothing; a process that dies now loses under a minute of totals.
+      for (const inc of summed(counted)) relayTotals.add(inc.dayUtc, inc.metric, inc.value)
+      return committed
     } catch (error) {
       await pauseForConflict(error, attempt, started)
     }
@@ -231,7 +239,8 @@ async function writeRelayBatch(id: string, increments: UsageIncrement[]): Promis
     try {
       return await prisma.$transaction(async tx => {
         if ((await tx.productUsageReceipt.findMany({ where: { id: { in: [receipt] } }, select: { id: true } })).length) return
-        await tx.productUsageReceipt.createMany({ data: [{ id: receipt, expiresAt: new Date(Date.now() + 2 * DAY) }] })
+        // [life]: the receipt rule (productUsageReceiptSweep.ts) refuses a receipt without one; this one lives 2 days.
+        await tx.productUsageReceipt.createMany({ data: [{ id: receipt, expiresAt: new Date(Date.now() + 2 * DAY), life: 2 }] })
         await incrementUsageTotals(tx, increments)
       })
     } catch (error) {
@@ -240,6 +249,7 @@ async function writeRelayBatch(id: string, increments: UsageIncrement[]): Promis
   }
 }
 
+// Relay connects and report totals share one set of sums, so a counter is written at most once a minute per process.
 const relayTotals = createRelayTotals({ write: writeRelayBatch })
 export const flushRelayUsage = relayTotals.flush
 /** Run in each process that takes connections. The stop it returns flushes what is waiting: call it on shutdown. */
@@ -278,24 +288,24 @@ export function resetActivityMarksForTests(): void { marked.clear(); markedDay =
 let activityWarnedAt = 0
 
 /** Fire-and-forget from the relay touch points; never awaited by a socket, never throws. */
-export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean },
+export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean; hosting?: boolean },
   key: string = env.PRODUCT_USAGE_SUBJECT_KEY): Promise<void> {
-  if (!key || (!mark.surface && !mark.worked)) return
+  if (!key || (!mark.surface && !mark.worked && !mark.hosting)) return
   try {
     const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
     const day = dayUtc.toISOString().slice(0, 10)
     if (day !== markedDay) { marked.clear(); markedDay = day }
     const subject = activitySubject(userId, key)
-    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}`
+    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}|${mark.hosting ? 'h' : ''}`
     if (marked.has(seen)) return
     if (!(await productUsageChoice(userId)).enabled) return
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true, email: true } })
     if (!user) return
     const where = { subject_dayUtc: { subject, dayUtc } }
-    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}) }
+    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}), ...(mark.hosting ? { hosting: true } : {}) }
     try {
       await prisma.productUsageActivity.upsert({ where, update, create: {
-        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true,
+        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true, ...(mark.hosting ? { hosting: true } : {}),
         signupDay: new Date(Math.floor(user.createdAt.getTime() / DAY) * DAY),
         staff: user.email.toLowerCase().endsWith(STAFF_EMAIL),
         expiresAt: new Date(dayUtc.getTime() + ACTIVITY_DAYS * DAY),

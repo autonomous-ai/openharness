@@ -18,6 +18,7 @@ import 'shared_tabs.dart';
 import 'shared_tabs_model.dart';
 import 'tab_activity.dart';
 import 'task_step.dart';
+import '../widgets/laid_out_list.dart';
 
 /// Whether each tab's Tab Activity is open, and its width, on this computer
 /// (`tab_activity.open.<tabId>`, `tab_activity.width.<tabId>`). A tab never
@@ -734,7 +735,7 @@ class _TabActivitySidebarState extends State<TabActivitySidebar> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final width = constraints.maxWidth;
-                      return ListView(
+                      return LaidOutListView(
                         padding: const EdgeInsets.only(bottom: 12),
                         children: [
                           _section(

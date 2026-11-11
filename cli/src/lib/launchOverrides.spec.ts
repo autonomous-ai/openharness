@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { agentTmpLaunch } from './agentTmp.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,10 +9,11 @@ import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSetti
 import { loadEngine } from '../engines/inProcess.js'
 import { buildLaunchOverrides, prepareLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
-import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
+import { GRID_CONFLICTING_ENV_VARS, GRID_KEY_VAR, type GridLaunchOverride } from './gridLaunch.js'
+import { CLAUDE_ALLOW_WEB_TOOLS_ARG, CLAUDE_DISALLOW_WEB_TOOLS_ARG } from './gridWebMcp.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
-import { prepareSwarmSkill } from './swarmSkills.js'
+import { PM_BASICS, SWARM_BASICS, swarmBasics } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
@@ -25,6 +27,8 @@ const GRID: GridLaunchOverride = {
 }
 
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts, the launch golden).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
@@ -41,8 +45,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    // A Buddy here reads its folder alone, whatever this machine is (wide mode reads the person's home: lib/buddyGuard.wide.spec.ts).
-    swarm: { prepare: (workspace, saved) => prepareSwarmSkill(workspace, saved, () => null), github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
+    swarm: { basics: (lead) => swarmBasics(lead).text, github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
     ...overrides,
   }
   return { d, calls }
@@ -216,27 +219,15 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
-  it('in the Harness Team account, spends the owner\'s subscription through the relay on every relaunch', async () => {
-    const relay = { env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }
-    const ownerRelay = vi.fn(async (engine: string) => engine === 'codex' ? relay
-      : engine === 'claude' ? { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, args: [] } : null)
-    // Codex is told the relay's provider in place of its own login's: two `-c model_provider` would leave it to pick.
-    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { subscriptionModel: 'gpt-5-codex' }, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { HARNESS_RELAY_TOKEN: 't' }, extraArgs: ['-c', 'model_provider="harness_owner"', '-m', 'gpt-5-codex'] } })
-    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, extraArgs: [] } })
-    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work', HARNESS_RELAY_TOKEN: 't' }, extraArgs: relay.args } })
-    // The relay readies, and asks about, that home: a Swarm Product Manager's own, whose sign-in and models are its own.
-    expect(ownerRelay).toHaveBeenLastCalledWith('codex', '/home/u/.codex-work')
-    // A relaunch (restart, resume, restore) the relay cannot sign in is held with why, as a launch that waits is: after a
-    // reboot the Team daemon may restore before the owner's relay is there.
-    expect(await buildLaunchOverrides(deps({ ownerRelay: vi.fn(async () => ({ refused: 'No relay here.' })) }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
-      .toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: 'No relay here.' })
-    // A grid is its own provider: the relay is not asked.
-    ownerRelay.mockClear()
-    await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
-    expect(ownerRelay).not.toHaveBeenCalled()
+  // No owner subscription relay (task #4137): a relaunch (restart, resume, restore) of Claude Code or Codex, a Product
+  // Manager's Codex home among them, comes back on its own settings, with nothing of a relay in it.
+  it('relaunches every engine on its own settings: no relay variables or provider', async () => {
+    for (const [engine, source] of [['claude', {}], ['codex', { subscriptionModel: 'gpt-5-codex' }], ['codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }]] as const) {
+      const result = await buildLaunchOverrides(deps().d, engine, source, 'a')
+      expect(result.ok).toBe(true)
+      const text = JSON.stringify(result)
+      for (const marker of ['HARNESS_RELAY_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'harness_owner']) expect(text).not.toContain(marker)
+    }
   })
 
   it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {
@@ -435,12 +426,87 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
-  it('relaunches a Buddy with none of them: it starts no MCP server at all (review 3 of #2092)', async () => {
+  it('relaunch of a browser agent keeps the args', async () => {
+    const claude = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null, browser: true }, 'a')
+    expect(claude).toMatchObject({ ok: true, overrides: { extraArgs: [
+      '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'] } })
+    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null, browser: true }, 'a')
+    expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.browser.command="harness"', 'mcp_servers.browser.args=["browser-mcp"]']))
+    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null }, 'a')
+    expect(JSON.stringify(plain)).not.toContain('browser-mcp')
+  })
+
+  it('relaunches a Swarm agent with them, as its owner\'s own session', async () => {
     writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: [], projects: [] } })
-    const buddy = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
-      { startedBy: null, cwd: mkdtempSync(join(tmpdir(), 'overrides-buddy-')), swarmSkill: { role: 'buddy', key: 'harness-claude-buddy' } }, 'a', () => true)
-    expect(buddy.ok).toBe(true)
-    expect(JSON.stringify(buddy)).not.toContain('lamp-mcp')
+    const agent = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+      { startedBy: null, cwd: mkdtempSync(join(tmpdir(), 'overrides-agent-')), swarmSkill: { role: 'agent', key: 'harness-claude-agent' } }, 'a', () => true)
+    expect(agent.ok).toBe(true)
+    expect(JSON.stringify(agent)).toContain('lamp-mcp')
+  })
+
+  it('hands the owner\'s saved launch flags over in a slot of their own, leaving the other arguments exactly as they were', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-agent-'))
+    const source = { startedBy: null, cwd, swarmSkill: { role: 'agent' as const, key: 'harness-claude-agent' } }
+    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', source, 'a', () => true)
+    const flagged = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...source, launchArgs: ['--chrome'] }, 'a', () => true)
+    if (!plain.ok || !flagged.ok) throw new Error('Fixture launch failed')
+    expect(flagged.overrides.ownerArgs).toEqual(['--chrome'])
+    expect(flagged.overrides.extraArgs).toEqual(plain.overrides.extraArgs)
+    expect(plain.overrides.ownerArgs ?? []).toEqual([])
+  })
+
+  // Each launch checks the saved words again (a row edited by hand, or a flag a later release refuses): none is applied.
+  it('applies none of the saved launch flags when one is now refused, and says so once with the agent and why', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const built = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+      { startedBy: null, cwd: null, launchArgs: ['--chrome', '--settings', 'x'] }, 'agent-12345678-rest', () => true)
+    if (!built.ok) throw new Error('Fixture launch failed')
+    expect(built.overrides.ownerArgs ?? []).toEqual([])
+    expect(built.overrides.extraArgs).not.toContain('--chrome')
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]![0]).toContain('agent-12')
+    expect(warn.mock.calls[0]![0]).toContain('--settings is set by Harness')
+  })
+
+  // A Swarm agent moved onto a grid model keeps the grid's web tools, and its Swarm instructions.
+  it('a Swarm agent moved onto a grid keeps its web MCP and its instructions', async () => {
+    const withMcp: GridLaunchOverride = { ...GRID, mcpUrl: 'https://api-grid.example/v1/grid/web-mcp/' }
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-agent-'))
+    const agent = { startedBy: null, cwd, swarmSkill: { role: 'agent' as const, key: 'harness-claude-agent' } }
+    const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', agent, 'a', () => true)
+    const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...agent, gridLaunch: withMcp }, 'a', () => true)
+    if (!own.ok || !grid.ok) throw new Error('Fixture launch failed')
+    expect(grid.overrides.extraArgs).toEqual(expect.arrayContaining(['--mcp-config', CLAUDE_ALLOW_WEB_TOOLS_ARG]))
+    // Claude Code's own web tools stay off, as on any grid.
+    expect(grid.overrides.extraArgs).toContain(CLAUDE_DISALLOW_WEB_TOOLS_ARG)
+    // What it gets on its own login, it gets on the grid: its Swarm instructions.
+    const told = (args: string[]) => args[args.indexOf('--append-system-prompt') + 1]
+    expect(told(own.overrides.extraArgs)).toContain('Never watch GitHub yourself')
+    expect(told(grid.overrides.extraArgs)).toContain(told(own.overrides.extraArgs))
+  })
+
+  // Every relaunch carries the team's basics byte for byte, the PM's part for the PM alone (lib/swarmSkills.ts, until the
+  // plan's item 7 cuts the text): no skill mode or skill file changes them.
+  it('relaunches a Swarm agent with the team\'s basics, and its PM with the PM\'s part too', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-basics-'))
+    const told = async (role: 'agent' | 'coordinator') => {
+      const built = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd, swarmSkill: { role, key: `harness-claude-${role}` } }, 'a', () => true)
+      if (!built.ok) throw new Error('Fixture launch failed')
+      return built.overrides.extraArgs[built.overrides.extraArgs.indexOf('--append-system-prompt') + 1]
+    }
+    expect(await told('agent')).toBe(SWARM_BASICS)
+    expect(await told('coordinator')).toBe(`${SWARM_BASICS}\n${PM_BASICS}`)
+  })
+
+  // Its own agents/<name>.md comes after the basics at every relaunch (superTabs/inCore/launch.ts): the row's folder and the name
+  // it was started under go to the Swarm, which reads the file again each time.
+  it('hands the Swarm the row\'s folder and the name it was started under, for the agent\'s own instructions', async () => {
+    const basics = vi.fn((_lead: boolean, _own?: { cwd: string | null; name: string | null }) => 'basics')
+    const swarm = { basics, github: () => null, args: () => [] }
+    await buildLaunchOverrides(deps({ readAttribution: () => null, swarm }).d, 'claude', { startedBy: null, cwd: '/work', name: 'Faye',
+      swarmSkill: { role: 'agent', key: 'harness-claude-x' } }, 'a', () => true)
+    await buildLaunchOverrides(deps({ readAttribution: () => null, swarm }).d, 'claude', { startedBy: null, swarmSkill: { role: 'agent', key: 'harness-claude-x' } }, 'a', () => true)
+    expect(basics.mock.calls).toEqual([[false, { cwd: '/work', name: 'Faye' }], [false, { cwd: null, name: null }]])
   })
 })
 
@@ -558,5 +624,66 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
       expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: skill }, 'agent-1', () => true))
         .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
     } finally { rmSync(root, { force: true }) }
+  })
+})
+
+describe('buildLaunchOverrides — the owner\'s private temporary folder (audit M1)', () => {
+  const told = (env: Record<string, string>, args: string[] = []) => vi.mocked(agentTmpLaunch).mockReturnValueOnce({ env, args })
+
+  it('reaches a relaunch, resume, fork and swap, which all pass here', async () => {
+    told({ TMPDIR: '/data/agent-tmp' })
+    expect(await buildLaunchOverrides(deps().d, 'claude', {}, 'a')).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp' } } })
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined)
+  })
+
+  // Task #4395: a relaunch rebuilds the engine's arguments, so the agent's own folder is added again, with its TMPDIR.
+  it('names the saved Swarm skill of an agent, whose key names its folder, and adds its own folder again', async () => {
+    const swarm = { args: () => [], basics: () => 'x' }
+    told({ TMPDIR: '/data/agent-tmp/one' }, ['--add-dir=/data/agent-tmp/one'])
+    const result = await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', { role: 'agent', key: 'k' })
+    expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp/one' } } })
+    expect((result as { overrides: { extraArgs: string[] } }).overrides.extraArgs).toContain('--add-dir=/data/agent-tmp/one')
+  })
+
+  it('gives way to the launch\'s own variables', async () => {
+    told({ TMPDIR: '/data/agent-tmp', CODEX_HOME: '/data/not-this' })
+    const result = await buildLaunchOverrides(deps().d, 'codex', { codexHome: '/home/u/.codex-work' }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp', CODEX_HOME: '/home/u/.codex-work' } } })
+  })
+})
+
+// Task #3395 (anh Dee, 11-05): a Product Manager launched on Opus at xhigh was reopened (the Swarm's keep-alive, a restore)
+// with no flags, so it ran its engine's own default, the machine's last-used Claude Code model (Sonnet medium).
+describe('buildLaunchOverrides — the model the session was launched with', () => {
+  it('launches every relaunch with it again', async () => {
+    const result = await buildLaunchOverrides(deps().d, 'claude', { launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'opus', '--effort', 'xhigh'] } })
+  })
+
+  it('leaves it to a grid launch, and to an engine with no launch flags', async () => {
+    const grid = await buildLaunchOverrides(deps().d, 'claude', { gridLaunch: GRID, launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(grid.ok && grid.overrides.extraArgs).not.toContain('--effort')
+    const codex = await buildLaunchOverrides(deps().d, 'codex', { launchModel: { model: 'gpt-6', effort: 'high' } }, 'a')
+    expect(codex).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"'] } })
+    const codexHome = await buildLaunchOverrides(deps().d, 'codex', { subscriptionModel: 'gpt-5-codex', launchModel: { model: 'gpt-6', effort: 'high' } }, 'a')
+    expect(codexHome).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"', '-m', 'gpt-5-codex'] } })
+  })
+
+  // Task #3449: the model remembered when the session left for a grid is a model alone, and it stays after the move home.
+  // Ranked first, a PM back from a grid relaunched without its xhigh, then and on every relaunch after, and a later pick lost.
+  it('outranks the model remembered off a grid, once back home and on every relaunch after', async () => {
+    for (const subscriptionModel of ['opus', 'sonnet']) {
+      const home = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel, launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+      expect(home).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'opus', '--effort', 'xhigh'] } })
+      expect(home.ok && home.overrides.env).not.toHaveProperty('ANTHROPIC_MODEL')
+    }
+    const picked = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel: 'opus', launchModel: { model: 'sonnet', effort: 'high' } }, 'a')
+    expect(picked).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'sonnet', '--effort', 'high'] } })
+  })
+
+  it('keeps the remembered model beside a launch effort that names no model', async () => {
+    const result = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel: 'opus', launchModel: { model: null, effort: 'xhigh' } }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_MODEL: 'opus' }, extraArgs: ['--effort', 'xhigh'] } })
   })
 })

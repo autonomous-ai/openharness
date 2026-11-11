@@ -245,6 +245,11 @@ class NotYouSignOut extends StatelessWidget {
 ///
 /// A request that fails (offline for a moment) is simply asked again on the next tick — caught
 /// here, where it would otherwise reach the zone as an unhandled error every five seconds.
+///
+/// Only in front of somebody: in a pocket (`hidden`, `paused`) nothing is asked, and back in front
+/// the list is read once at once ([AppNotifier.rereadMachines], which joins the read the app makes
+/// on its own return), then every few seconds again. `inactive` — the share sheet sending the
+/// address — changes nothing.
 class ComputerWatch extends StatefulWidget {
   const ComputerWatch({super.key, required this.notifier, required this.child});
 
@@ -257,20 +262,45 @@ class ComputerWatch extends StatefulWidget {
   State<ComputerWatch> createState() => _ComputerWatchState();
 }
 
-class _ComputerWatchState extends State<ComputerWatch> {
+class _ComputerWatchState extends State<ComputerWatch>
+    with WidgetsBindingObserver {
   Timer? _watch;
+  bool _away = false;
 
   @override
   void initState() {
     super.initState();
-    _watch = Timer.periodic(ComputerWatch.every, (_) {
+    WidgetsBinding.instance.addObserver(this);
+    _arm();
+  }
+
+  void _arm() {
+    _watch ??= Timer.periodic(ComputerWatch.every, (_) {
       if (!mounted) return;
       unawaited(widget.notifier.refreshMachines().catchError((Object _) {}));
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.hidden || AppLifecycleState.paused:
+        _away = true;
+        _watch?.cancel();
+        _watch = null;
+      case AppLifecycleState.resumed:
+        if (!_away) return;
+        _away = false;
+        widget.notifier.rereadMachines();
+        _arm();
+      case AppLifecycleState.inactive || AppLifecycleState.detached:
+        break;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _watch?.cancel();
     super.dispose();
   }

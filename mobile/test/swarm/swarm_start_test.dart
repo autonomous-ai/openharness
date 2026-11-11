@@ -118,7 +118,7 @@ void main() {
   });
 
   test(
-    'a Swarm to show: no start screen, and invitations are not read',
+    'a Swarm to show: no start screen, and the invitation is read for Home',
     () async {
       final fake = backend(
         tabs: ['a'],
@@ -129,7 +129,7 @@ void main() {
       await i.refresh();
 
       expect(swarmStart(i, const [mac]), isNull);
-      expect(fake.paths, isNot(contains('/api/super-tabs/invitations')));
+      expect(i.invitations.single.name, 'Design Lab');
     },
   );
 

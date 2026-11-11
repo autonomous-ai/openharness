@@ -6,52 +6,84 @@
  * never chose (fresh macOS VM, 2026-10-08). With these two answers the box can open on the agent
  * the person already uses.
  *
- * Only presence is read, never a secret: credential files are stat'ed or parsed for the presence of
- * a token, and the macOS Keychain item is looked up without `-w`, which prints its attributes and
- * not its password. What cannot be read from here (a Codex that keeps its tokens in the OS keyring)
- * answers null, unknown, rather than "signed out".
+ * Harness never reads a Claude or ChatGPT login (anh Dee, 2026-11-07; loginReads.spec.ts): the CLI that
+ * owns the login says whether it is signed in, `claude auth status --json` (its `loggedIn`) and `codex
+ * login status` (exit 0 when signed in), under the caller's environment, CLAUDE_CONFIG_DIR and CODEX_HOME
+ * included. A CLI that is not there, does not answer in time or answers what this cannot read answers
+ * null, unknown, rather than "signed out". Their output is never logged: it can name the account.
  *
  * "Last used" is the newest session folder the engine itself made: Claude Code's project folders
  * under `projects/`, and Codex's `sessions/YYYY/MM/DD` day folder. A file the engine rewrites on
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
-import { isCodexRelayAuth } from './subscriptionRelay.js'
-import { createHash } from 'node:crypto'
+import { readApiConnectionStore } from './apiConnectionMetadata.js'
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
+import { resolveBinaryOnPath } from './binaryOnPath.js'
+import { engineBin } from './engineBin.js'
 import { warmLoginShellEnvironment } from './loginShellEnv.js'
+import { windowsEngineArgv } from './windows/launch.js'
 
 export interface EngineAccount {
-  /** True when a credential is there; false when none is; null when this machine cannot say. */
+  /** True when the engine says it is signed in; false when it says it is not; null when this machine cannot say. */
   readonly signedIn: boolean | null
   /** Milliseconds since the epoch of the engine's latest session activity, or null. */
   readonly lastUsedAt: number | null
 }
 
+/** What a status command answered, or null when it could not run (not installed, timed out). */
+type EngineStatus = { code: number; stdout: string } | null
+/** Runs `claude` or `codex` with [args] under [env]; injected by specs. */
+export type EngineStatusRun = (engine: 'claude' | 'codex', args: readonly string[], env: NodeJS.ProcessEnv) => Promise<EngineStatus>
+
 export interface EngineAccountDeps {
   home?: string
   env?: NodeJS.ProcessEnv
-  platform?: NodeJS.Platform
-  /** Whether a macOS Keychain generic-password item with this service exists. */
-  keychainHas?: (service: string) => Promise<boolean>
+  run?: EngineStatusRun
   /** False: whether it is signed in only, without the session folders' scan (`lastUsedAt` null). The gateway's
    *  first-launch count asks this, once per installation (gateway/productUsage.ts). */
   lastUsed?: boolean
 }
 
-const exists = (path: string) => stat(path).then(() => true, () => false)
+const STATUS_TIMEOUT_MS = 5_000
+
 const mtime = (path: string) => stat(path).then(info => info.mtimeMs, () => null)
 const readJson = (path: string) => readFile(path, 'utf8').then(text => JSON.parse(text) as Record<string, unknown>).catch(() => null)
 
-/** `security find-generic-password -s <service>` without `-w`: attributes only, never the secret. */
-function keychainHas(service: string): Promise<boolean> {
-  return new Promise(resolve => {
-    execFile('security', ['find-generic-password', '-s', service], { timeout: 3000 }, error => resolve(!error))
+/** The engine's own CLI, found on [env]'s PATH (or its *_PATH override), run without a window and killed at the timeout. */
+const runEngineStatus: EngineStatusRun = (engine, args, env) => new Promise(resolve => {
+  const file = resolveBinaryOnPath(engineBin(engine), env)
+  if (!file) { resolve(null); return }
+  let argv: string[]
+  // Windows: an npm shim's script under node, never the shim through cmd.exe (lib/windows/launch.ts).
+  try { argv = windowsEngineArgv(engine, [file, ...args], { environment: env }) } catch { resolve(null); return }
+  const child = execFile(argv[0]!, argv.slice(1), {
+    env, encoding: 'utf8', timeout: STATUS_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true,
+  }, (error, stdout) => {
+    if (!error) { resolve({ code: 0, stdout }); return }
+    // A number is the CLI's own exit code; anything else (not found, killed at the timeout) is no answer.
+    resolve(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null)
   })
+  child.stdin?.end()
+})
+
+/** What Claude Code or Codex itself says of its sign-in under [env]: true, false, or null when it cannot say. */
+export async function cliSignedIn(engine: 'claude' | 'codex', env: NodeJS.ProcessEnv, run: EngineStatusRun = runEngineStatus): Promise<boolean | null> {
+  if (engine === 'codex') {
+    const status = await run('codex', ['login', 'status'], env)
+    return status ? status.code === 0 : null
+  }
+  const status = await run('claude', ['auth', 'status', '--json'], env)
+  try {
+    const loggedIn = (JSON.parse(status?.stdout ?? '') as { loggedIn?: unknown }).loggedIn
+    return typeof loggedIn === 'boolean' ? loggedIn : null
+  } catch {
+    return null
+  }
 }
 
 /** The newest mtime among `dir`'s subfolders (one level), or null. Stat'ed together: a heavy
@@ -86,38 +118,26 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // folder exported in ~/.zshrc is seen through the login shell's environment, captured once per
   // process (loginShellEnv.ts), with the daemon's own on top.
   const env = deps.env ?? { ...await warmLoginShellEnvironment(), ...process.env }
-  const platform = deps.platform ?? process.platform
+  // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
+  // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
+  // and the account read "not signed in").
+  const savedApi = (() => {
+    try { return readApiConnectionStore(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data')).connections }
+    catch { return [] }
+  })().some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
   if (engine === 'claude') {
-    const custom = env.CLAUDE_CONFIG_DIR
-    const dir = custom || join(home, '.claude')
+    const dir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
     const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))
     if (CLAUDE_ENV.some(name => Boolean(env[name]))) return { signedIn: true, lastUsedAt }
-    if (await exists(join(dir, '.credentials.json'))) return { signedIn: true, lastUsedAt }
+    if (savedApi) return { signedIn: true, lastUsedAt }
     if (typeof (await readJson(join(dir, 'settings.json')))?.apiKeyHelper === 'string') return { signedIn: true, lastUsedAt }
-    if (platform === 'darwin') {
-      // Claude Code 2.1 keeps its OAuth token in the Keychain, under a service named for a custom
-      // config folder when CLAUDE_CONFIG_DIR is set (`-<sha256(dir)[0..8]>`).
-      const service = 'Claude Code-credentials'
-        + (custom ? `-${createHash('sha256').update(custom).digest('hex').slice(0, 8)}` : '')
-      if (await (deps.keychainHas ?? keychainHas)(service)) return { signedIn: true, lastUsedAt }
-    }
-    return { signedIn: false, lastUsedAt }
+    return { signedIn: await cliSignedIn('claude', env, deps.run), lastUsedAt }
   }
   if (engine === 'codex') {
     const dir = env.CODEX_HOME || join(home, '.codex')
     const lastUsedAt = deps.lastUsed === false ? null : await newestDay(join(dir, 'sessions'))
     if (env.OPENAI_API_KEY) return { signedIn: true, lastUsedAt }
-    const auth = await readJson(join(dir, 'auth.json'))
-    // The owner relay's sign-in (lib/subscriptionRelay.ts codexRelayAuth) is the relay's, not this account's own.
-    if (isCodexRelayAuth(auth)) return { signedIn: false, lastUsedAt }
-    const tokens = auth?.tokens as Record<string, unknown> | null | undefined
-    if (auth && (auth.OPENAI_API_KEY || (tokens && (tokens.access_token || tokens.refresh_token)))) {
-      return { signedIn: true, lastUsedAt }
-    }
-    // Codex can keep its credentials in the OS keyring instead of auth.json; that is not ours to read.
-    const config = await readFile(join(dir, 'config.toml'), 'utf8').catch(() => '')
-    if (/^\s*cli_auth_credentials_store\s*=\s*"(keyring|auto)"/m.test(config)) return { signedIn: null, lastUsedAt }
-    return { signedIn: false, lastUsedAt }
+    return { signedIn: await cliSignedIn('codex', env, deps.run), lastUsedAt }
   }
   return { signedIn: null, lastUsedAt: null }
 }

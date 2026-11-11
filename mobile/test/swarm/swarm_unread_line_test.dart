@@ -27,8 +27,18 @@ void main() {
   SuperTabMessage mine(int sequence, {String? thread}) =>
       message(sequence, author: me, kind: 'person', thread: thread);
 
-  String? first(List<SuperTabMessage> read, int? mark, {bool older = false}) =>
-      swarmFirstUnread(read, mark, accountId: me, hasOlder: older);
+  String? first(
+    List<SuperTabMessage> read,
+    int? mark, {
+    bool older = false,
+    Set<String>? hidden,
+  }) => swarmFirstUnread(
+    read,
+    mark,
+    accountId: me,
+    hasOlder: older,
+    drawn: hidden == null ? null : (m) => !hidden.contains(m.id),
+  );
 
   test('is the first message past the mark', () {
     expect(first([message(1), message(2), message(3)], 1), 'm2');
@@ -80,5 +90,46 @@ void main() {
       'm5',
       reason: 'nothing is older than what was read',
     );
+  });
+
+  test('passes over a message the chat does not draw, such as an answered '
+      "prompt's warning in a task's chat", () {
+    expect(
+      first([message(1), message(2), message(3)], 1, hidden: {'m2'}),
+      'm3',
+    );
+    expect(
+      first([message(1), message(2), message(3)], 1, hidden: {'m2', 'm3'}),
+      isNull,
+      reason: 'nothing unread is drawn',
+    );
+    expect(
+      first([message(1), message(2), message(3)], 1, hidden: {'m1'}),
+      'm2',
+      reason: 'a hidden message already read changes nothing',
+    );
+    expect(
+      first([message(3), message(4)], 2, older: true, hidden: {'m3'}),
+      'm4',
+      reason: 'a hidden message still counts toward reaching the mark',
+    );
+  });
+
+  test("a message the server posted in the person's name reads nothing "
+      'before it (plain chat, #2294)', () {
+    SuperTabMessage posted(int sequence, String kind) =>
+        SuperTabMessage.fromJson({
+          'id': 'm$sequence',
+          'conversationId': 'g1',
+          'text': "Let's build: Offline drafts",
+          'sequence': sequence,
+          'author': {'kind': 'person', 'id': me, 'name': me},
+          'source': {'kind': kind},
+        });
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      expect(first([message(1), message(2), posted(3, kind)], 1), 'm2');
+      expect(posted(3, kind).postedForAuthor, isTrue);
+    }
+    expect(mine(4).postedForAuthor, isFalse);
   });
 }

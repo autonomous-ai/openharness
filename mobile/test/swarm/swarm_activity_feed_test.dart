@@ -92,8 +92,8 @@ void main() {
       fake.paths.where((p) => p.startsWith(activityChatPath)).length;
 
   group('the server list', () {
-    test('Replies and Reactions are the server rows, newest first, and no '
-        'project chat is read for them', () async {
+    test('Replies are the server rows, newest first, no project chat is '
+        'read for them, and a reaction an older server lists is left out', () async {
       final fake = server(
         () => [
           activityRow('r2', minute: 9, text: 'Merged it'),
@@ -110,12 +110,12 @@ void main() {
         'activity:$tab:r2',
         'activity:$tab:r1',
       ]);
-      expect(keys(activity, SwarmActivityFilter.reactions), [
-        'activity:$tab:x1',
-      ]);
+      expect(
+        swarmActivityAll(activity).map((item) => item.key),
+        isNot(contains('activity:$tab:x1')),
+      );
       expect(activity.label(SwarmActivityFilter.threads), 'Replies');
       expect(activity.count(SwarmActivityFilter.threads), 1);
-      expect(activity.count(SwarmActivityFilter.reactions), 1);
       expect(chatReads(fake), 0, reason: 'the server lists them');
       final reply = activity.items(SwarmActivityFilter.threads).first;
       expect(activity.unread(reply), isTrue);
@@ -230,10 +230,10 @@ void main() {
     );
 
     test('a row Activity never had open is not marked read with the others: '
-        'a newer reaction behind another filter stays unread', () async {
+        'a newer reply not shown stays unread', () async {
       final fake = server(
         () => [
-          activityRow('x1', kind: 'reaction', emoji: 'check', minute: 9),
+          activityRow('r3', minute: 9),
           activityRow('r2', minute: 6),
           activityRow('r1', minute: 3),
         ],
@@ -242,34 +242,34 @@ void main() {
       final activity = session.activity..watch();
       await settle();
 
-      // Only Replies was open.
-      activity.showing(activity.items(SwarmActivityFilter.threads));
+      // The newest was never on screen.
+      activity.showing(activity.items(SwarmActivityFilter.threads).skip(1));
       activity.unwatch();
       await settle();
 
       expect(marks(fake), [
         {'through': DateTime.utc(2026, 11, 1, 7, 6).toIso8601String()},
       ]);
-      expect(activity.count(SwarmActivityFilter.reactions), 1);
+      expect(activity.count(SwarmActivityFilter.threads), 1);
     });
 
     test('an unread row older than those open holds them all back', () async {
       final fake = server(
         () => [
           activityRow('r2', minute: 6),
-          activityRow('x1', kind: 'reaction', emoji: 'check', minute: 3),
+          activityRow('r1', minute: 3),
         ],
       );
       final session = await start(fake);
       final activity = session.activity..watch();
       await settle();
 
-      activity.showing(activity.items(SwarmActivityFilter.threads));
+      activity.showing(activity.items(SwarmActivityFilter.threads).take(1));
       activity.unwatch();
       await settle();
 
-      expect(marks(fake), isEmpty, reason: 'through would take x1 with it');
-      expect(activity.count(SwarmActivityFilter.threads), 1);
+      expect(marks(fake), isEmpty, reason: 'through would take r1 with it');
+      expect(activity.count(SwarmActivityFilter.threads), 2);
     });
 
     test('leaving with nothing open marks nothing', () async {
@@ -308,7 +308,7 @@ void main() {
 
   group('a server before Activity', () {
     test(
-      'answering 404, it keeps the phone-built Threads and Reactions',
+      'answering 404, it keeps the phone-built Threads',
       () async {
         final fake = activityBackend(
           page: activityPage,
@@ -324,9 +324,6 @@ void main() {
         expect(keys(activity, SwarmActivityFilter.threads), [
           'thread:$tab:root-1',
           'thread:$tab:root-old',
-        ]);
-        expect(keys(activity, SwarmActivityFilter.reactions), [
-          'reaction:$tab:mine-2',
         ]);
         expect(activity.badge, 2, reason: 'what needs the person, as before');
       },
@@ -502,6 +499,145 @@ void main() {
     });
   });
 
+  group('reply notices', () {
+    /// A reply by Mia in thread root-1 of the lead chat, the one that rang
+    /// the person (backend superTabs/activity.ts writeReplyActivity).
+    Map<String, dynamic> mia(
+      String id, {
+      String kind = 'reply',
+      bool read = false,
+      int minute = 5,
+      bool rings = true,
+    }) => activityRow(
+      id,
+      kind: kind,
+      threadId: 'root-1',
+      messageId: 'reply-$id',
+      actor: const {'kind': 'person', 'id': 'person-mia', 'name': 'Mia'},
+      emoji: kind == 'reaction' ? 'check' : null,
+      text: 'sounds good, ship it',
+      minute: minute,
+      read: read,
+      rings: rings && kind == 'reply',
+    );
+
+    test('the feed tells of each reply new since its first read and still '
+        'unread, once', () async {
+      var rows = [activityRow('r1', minute: 1)];
+      var digest = 'digest-1';
+      final fake = server(() => rows, digest: () => digest);
+      final session = await start(fake);
+      final told = <String>[];
+      final feed = SwarmActivityFeed(session.inbox.reader(tab)!)
+        ..onReply = (entry) => told.add(entry.id);
+      addTearDown(feed.dispose);
+      await settle();
+      expect(feed.loaded, isTrue);
+      expect(told, isEmpty, reason: 'what the first read lists is not news');
+
+      rows = [mia('r2', minute: 2), ...rows];
+      digest = 'digest-2';
+      await swarmMoves(session, fake, () => digest);
+      expect(told, ['r2']);
+
+      rows = [
+        mia('r4', read: true, minute: 4),
+        mia('x1', kind: 'reaction', minute: 3),
+        ...rows,
+      ];
+      digest = 'digest-3';
+      await swarmMoves(session, fake, () => digest);
+      expect(
+        told,
+        ['r2'],
+        reason: 'the same row again, a read reply and a reaction an older '
+            'server lists tell nothing',
+      );
+    });
+
+    /// A session whose Activity no screen has asked for, its notices kept.
+    Future<(SwarmSession, _Notices)> unopened(FakeSwarm fake) async {
+      final notices = _Notices();
+      final session = SwarmSession(
+        accountId: me,
+        request: fake.request,
+        notices: notices,
+        readMarks: MemoryKeyValueStore(),
+      );
+      addTearDown(session.dispose);
+      await session.inbox.refresh();
+      await settle();
+      return (session, notices);
+    }
+
+    test('a new unread reply posts one notice with Activity never opened, '
+        'reading once per digest move; taken down once it is read', () async {
+      var rows = [activityRow('r1', minute: 1)];
+      var digest = 'digest-1';
+      final fake = server(() => rows, digest: () => digest);
+      final (session, notices) = await unopened(fake);
+      expect(lists(fake), 1, reason: 'read from the session start');
+      expect(notices.replies, isEmpty, reason: 'the first read is not news');
+
+      rows = [mia('r2', minute: 2), ...rows];
+      digest = 'digest-2';
+      await swarmMoves(session, fake, () => digest);
+      expect(lists(fake), 2);
+      final notice = notices.replies.single;
+      expect(notice.title, 'Mia replied in a thread');
+      expect(notice.subtitle, 'Mobile');
+      expect(notice.body, 'Open Harness to read it.');
+      expect(notice.target, (
+        swarmId: tab,
+        conversationId: leadChat,
+        messageId: 'reply-r2',
+        decisionId: null,
+        threadId: 'root-1',
+      ));
+
+      await swarmMoves(session, fake, () => digest);
+      expect(lists(fake), 2, reason: 'the same digest reads nothing');
+      digest = 'digest-3';
+      await swarmMoves(session, fake, () => digest);
+      expect(lists(fake), 3);
+      expect(notices.replies, hasLength(1), reason: 'the same row again');
+      expect(notices.cancelled, isEmpty);
+
+      // Read in the thread, on this phone or another device.
+      rows = [mia('r2', minute: 2, read: true), activityRow('r1', minute: 1)];
+      digest = 'digest-4';
+      await swarmMoves(session, fake, () => digest);
+      expect(notices.cancelled, [notice.key]);
+    });
+
+    test('a reply the server did not ring for posts nothing: Activity and '
+        'the badge tell of it (Tony\'s rule, 2026-11-09)', () async {
+      var rows = [activityRow('r1', minute: 1)];
+      var digest = 'digest-1';
+      final fake = server(() => rows, digest: () => digest);
+      final (session, notices) = await unopened(fake);
+
+      rows = [mia('r2', minute: 2, rings: false), ...rows];
+      digest = 'digest-2';
+      await swarmMoves(session, fake, () => digest);
+      expect(lists(fake), 2, reason: 'read when its digest moved');
+      expect(notices.replies, isEmpty);
+    });
+
+    test('nothing is posted while a Swarm screen is up', () async {
+      var rows = [activityRow('r1', minute: 1)];
+      var digest = 'digest-1';
+      final fake = server(() => rows, digest: () => digest);
+      final (session, notices) = await unopened(fake);
+      session.enter();
+
+      rows = [mia('r2', minute: 2), ...rows];
+      digest = 'digest-2';
+      await swarmMoves(session, fake, () => digest);
+      expect(notices.replies, isEmpty);
+    });
+  });
+
   group('a failed read', () {
     test('says so with no stuck loading, is not read again at every Swarm '
         'read, and Try again brings the feature back', () async {
@@ -580,4 +716,23 @@ extension on SwarmActivity {
     unwatch();
     await settle();
   }
+}
+
+/// Records the Swarm notices posted and taken down.
+class _Notices extends SilentSystemNotices {
+  final shown = <SwarmNoticeMessage>[];
+  final cancelled = <String>[];
+
+  /// The reply notices: not the decision and tag the fixture has waiting.
+  List<SwarmNoticeMessage> get replies => [
+    for (final n in shown)
+      if (n.title.endsWith('replied in a thread')) n,
+  ];
+
+  @override
+  Future<void> showSwarm(SwarmNoticeMessage message) async =>
+      shown.add(message);
+
+  @override
+  Future<void> cancelSwarm(String key) async => cancelled.add(key);
 }

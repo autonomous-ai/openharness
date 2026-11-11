@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:ui' show Brightness;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 
@@ -199,6 +201,204 @@ void main() {
     });
   });
 
+  group('theme (System | Dark | Light, Swarm\'s Settings)', () {
+    tearDown(() {
+      AppTheme.palette.value = HarnessPalette.graphite;
+      AppTheme.terminalPaletteOverride.value = null;
+    });
+
+    test('unset, the palette decides, as before Theme existed', () {
+      for (final palette in HarnessPalette.values) {
+        final prefs = AppearancePrefs(palette: palette);
+        for (final phone in Brightness.values) {
+          expect(prefs.paletteFor(phone), palette, reason: palette.name);
+        }
+        expect(prefs.terminalPalette, palette, reason: 'App colors dresses it');
+        expect(
+          prefs.shownThemeMode,
+          palette.isDark ? AppThemeMode.dark : AppThemeMode.light,
+        );
+      }
+    });
+
+    test('Dark and Light keep a palette on their side, else the shipped one '
+        'of that side', () {
+      const midnight = AppearancePrefs(
+        palette: HarnessPalette.midnight,
+        themeMode: AppThemeMode.dark,
+      );
+      expect(midnight.paletteFor(Brightness.light), HarnessPalette.midnight);
+      expect(
+        midnight.copyWith(themeMode: AppThemeMode.light).paletteFor(
+          Brightness.dark,
+        ),
+        HarnessPalette.paper,
+      );
+      const mist = AppearancePrefs(
+        palette: HarnessPalette.mist,
+        themeMode: AppThemeMode.light,
+      );
+      expect(mist.paletteFor(Brightness.dark), HarnessPalette.mist);
+      expect(
+        mist.copyWith(themeMode: AppThemeMode.dark).paletteFor(Brightness.light),
+        HarnessPalette.graphite,
+      );
+    });
+
+    test('System follows the phone', () {
+      const prefs = AppearancePrefs(themeMode: AppThemeMode.system);
+      expect(prefs.paletteFor(Brightness.dark), HarnessPalette.graphite);
+      expect(prefs.paletteFor(Brightness.light), HarnessPalette.paper);
+      expect(prefs.shownThemeMode, AppThemeMode.system);
+    });
+
+    test("once Theme is chosen the terminal keeps the dark side, whatever "
+        'the app wears', () {
+      for (final mode in AppThemeMode.values) {
+        expect(
+          AppearancePrefs(themeMode: mode).terminalPalette,
+          HarnessPalette.graphite,
+          reason: mode.name,
+        );
+        expect(
+          AppearancePrefs(
+            palette: HarnessPalette.forest,
+            themeMode: mode,
+          ).terminalPalette,
+          HarnessPalette.forest,
+          reason: 'a dark palette chosen in App colors stays: ${mode.name}',
+        );
+        expect(
+          AppearancePrefs(
+            palette: HarnessPalette.paper,
+            themeMode: mode,
+          ).terminalPalette,
+          HarnessPalette.graphite,
+          reason: 'never light: ${mode.name}',
+        );
+      }
+    });
+
+    test('is written beside the palette and read back', () async {
+      final storage = _Memory();
+      final store = AppearancePrefsStore(storage: storage);
+      var repaints = 0;
+      store.addListener(() => repaints++);
+
+      await store.setThemeMode(AppThemeMode.light);
+      expect(repaints, 1);
+      expect(storage.values['app_theme_mode'], 'light');
+      expect(store.value.palette, HarnessPalette.graphite, reason: 'kept');
+
+      final again = AppearancePrefsStore(storage: storage);
+      await again.load();
+      expect(again.value.themeMode, AppThemeMode.light);
+    });
+
+    test('the mode already on is no write', () async {
+      final storage = _Memory();
+      final store = AppearancePrefsStore(storage: storage);
+      await store.setThemeMode(AppThemeMode.dark);
+      final writes = storage.writes.length;
+      await store.setThemeMode(AppThemeMode.dark);
+      expect(storage.writes, hasLength(writes));
+    });
+
+    test('a mode from another build is no mode: the palette decides', () async {
+      final store = AppearancePrefsStore(
+        storage: _Memory({'app_theme_mode': 'sepia'}),
+      );
+      await store.load();
+      expect(store.value.themeMode, isNull);
+      expect(AppThemeMode.fromId(null), isNull);
+      for (final mode in AppThemeMode.values) {
+        expect(AppThemeMode.fromId(mode.name), mode);
+      }
+    });
+
+    test('taps faster than the disk end on the LAST one', () async {
+      final storage = _Memory()..gate = Completer<void>();
+      final store = AppearancePrefsStore(storage: storage);
+
+      final first = store.setThemeMode(AppThemeMode.light);
+      final second = store.setThemeMode(AppThemeMode.system);
+      final third = store.setPalette(HarnessPalette.ember);
+      final fourth = store.setThemeMode(AppThemeMode.dark);
+      expect(
+        identical(first, second) &&
+            identical(second, third) &&
+            identical(third, fourth),
+        isTrue,
+        reason: 'one save in flight, which the later taps ride on',
+      );
+
+      storage.gate!.complete();
+      await fourth;
+      expect(storage.values['app_theme_mode'], 'dark');
+      expect(storage.values['app_color_palette'], 'ember');
+      expect(store.value.themeMode, AppThemeMode.dark);
+    });
+
+    test('App colors hands light and dark back to the palette — even the '
+        'palette that was already on', () async {
+      final storage = _Memory();
+      final store = AppearancePrefsStore(storage: storage);
+      await store.setThemeMode(AppThemeMode.light);
+      expect(store.value.paletteFor(Brightness.dark), HarnessPalette.paper);
+
+      // Graphite is the stored palette already; Light had it drawn as Paper.
+      await store.setPalette(HarnessPalette.graphite);
+      expect(store.value.themeMode, isNull);
+      expect(store.value.paletteFor(Brightness.light), HarnessPalette.graphite);
+      expect(storage.values.containsKey('app_theme_mode'), isFalse);
+    });
+
+    test('reset forgets it', () async {
+      final storage = _Memory();
+      final store = AppearancePrefsStore(storage: storage);
+      await store.setThemeMode(AppThemeMode.system);
+      await store.reset();
+      expect(store.value.themeMode, isNull);
+      expect(storage.values.containsKey('app_theme_mode'), isFalse);
+    });
+
+    test('a disk that fails keeps the mode for this run', () async {
+      final store = AppearancePrefsStore(storage: _Memory()..failing = true);
+      await store.setThemeMode(AppThemeMode.light);
+      expect(store.value.themeMode, AppThemeMode.light);
+    });
+
+    test("applyAppearance puts the app's palette and the terminal's on "
+        'AppTheme', () {
+      expect(
+        applyAppearance(
+          const AppearancePrefs(themeMode: AppThemeMode.light),
+          platform: Brightness.dark,
+        ),
+        HarnessPalette.paper,
+      );
+      expect(AppTheme.palette.value, HarnessPalette.paper);
+      expect(AppTheme.terminalPaletteOverride.value, HarnessPalette.graphite);
+      expect(AppTheme.terminalPalette, HarnessPalette.graphite);
+
+      // Dark: the two agree, so there is no override to carry.
+      applyAppearance(
+        const AppearancePrefs(themeMode: AppThemeMode.dark),
+        platform: Brightness.light,
+      );
+      expect(AppTheme.palette.value, HarnessPalette.graphite);
+      expect(AppTheme.terminalPaletteOverride.value, isNull);
+
+      // App colors' Paper: the terminal is light with the app, as before.
+      applyAppearance(
+        const AppearancePrefs(palette: HarnessPalette.paper),
+        platform: Brightness.dark,
+      );
+      expect(AppTheme.palette.value, HarnessPalette.paper);
+      expect(AppTheme.terminalPalette, HarnessPalette.paper);
+    });
+  });
+
   test('prefs compare by value, so an unchanged load repaints nothing', () {
     const a = AppearancePrefs(uiFamily: 'Inter', uiSize: 15);
     expect(a, const AppearancePrefs(uiFamily: 'Inter', uiSize: 15));
@@ -209,5 +409,10 @@ void main() {
     expect(a == const AppearancePrefs(uiSize: 15), isFalse);
     expect(a.copyWith(clearUiFamily: true).uiFamily, isNull);
     expect(a.copyWith(palette: HarnessPalette.dusk).uiFamily, 'Inter');
+
+    final light = a.copyWith(themeMode: AppThemeMode.light);
+    expect(light == a, isFalse, reason: 'the mode is part of the value');
+    expect(light.copyWith(uiSize: 16).themeMode, AppThemeMode.light);
+    expect(light.copyWith(clearThemeMode: true), a);
   });
 }

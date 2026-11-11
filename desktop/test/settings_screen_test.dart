@@ -90,7 +90,7 @@ void main() {
       await openSettings(tester);
       // Settings opens on Account, alone at the top with no caption over it.
       expect(find.text('Account'), findsNWidgets(2));
-      for (final caption in ['GENERAL', 'AGENTS', 'LABS', 'HELP']) {
+      for (final caption in ['General', 'Agents', 'Labs', 'Help']) {
         expect(find.text(caption), findsOneWidget, reason: caption);
       }
       expect(find.text('PREFERENCES'), findsNothing);
@@ -119,13 +119,14 @@ void main() {
       ];
       expect(tops, [...tops]..sort(), reason: 'in this order');
       // What moved out: robots to the Devices tab, devices and profiles to Machines, and what
-      // agents may do to Experimental (the account's, owner 2026-10-12).
+      // agents may do to Experimental (the account's, owner 2026-10-12). The one
+      // "Agents" left is the caption, not a row.
       expect(
         find.descendant(
           of: find.byType(SettingsNav),
           matching: find.text('Agents'),
         ),
-        findsNothing,
+        findsOneWidget,
       );
       for (final gone in [
         'Customize',
@@ -402,8 +403,8 @@ void main() {
     expect(find.text('Account'), findsOneWidget);
     expect(find.text('Terminal'), findsNothing);
     // Its run's caption stays over it; the runs with no match go.
-    expect(find.text('GENERAL'), findsOneWidget);
-    expect(find.text('AGENTS'), findsNothing);
+    expect(find.text('General'), findsOneWidget);
+    expect(find.text('Agents'), findsNothing);
 
     // Appearance by what its panel holds, and by its old name.
     for (final query in ['wallpaper', 'customize']) {

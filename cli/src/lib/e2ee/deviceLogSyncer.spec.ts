@@ -1670,6 +1670,32 @@ describe('DeviceLogSyncer — departed keys, sign-ins and kept accounts', () => 
       expect(t.store.read().state?.acct).toBe(ACCT)
     })
 
+    for (const review of [false, true]) {
+      it(`a switch ${review ? 'by confirmed review' : 'by refresh'} archives the departing device log`, async () => {
+        const who = { epoch: 'u1', acct: ACCT }
+        const s = setup({ signIn: () => who.epoch, signInAcct: () => who.acct })
+        s.backend.add(box2, 'machine', MID2, 'previous owner private device')
+        await s.syncer.register()
+        const old = { ...s.store.read(), suspended: [phone.pub], preLog: [box2.pub] }
+        s.store.write(old)
+        // A copy from an older build gives way to the departing live log.
+        s.store.archive(old)
+        who.epoch = 'u2'
+        who.acct = review ? 'unmatched' : 'acct-2'
+        const other = FakeBackend.of('acct-2')
+        other.add(phone, 'viewer', '', 'new owner phone')
+        s.backend.fetch.mockImplementation(other.fetch)
+        await s.syncer.refresh()
+        if (review) {
+          expect(s.store.read().frozen?.reason).toBe('invalid')
+          await s.syncer.rebaseline(true)
+        }
+        expect(s.store.read().state?.acct).toBe('acct-2')
+        expect(s.store.archivedFile(ACCT)?.state?.active[box2.pub]?.label).toBe('previous owner private device')
+        expect(s.store.archivedSuspended()).toContain(phone.pub)
+      })
+    }
+
     it('a review of another account\'s list swaps them too', async () => {
       const switchAccount = vi.fn()
       const s = await signedInAgain(null, { switchAccount })

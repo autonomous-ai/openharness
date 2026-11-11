@@ -2,21 +2,23 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import 'chat/send_button.dart';
+import 'composer_actions.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
+import 'swarm_type.dart';
 
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
-/// ⇧Enter breaks the line, attach and the arrow at its right end. [options]
-/// sits left of them, such as the pane's Also send and New session.
+/// ⇧Enter breaks the line. Under the text, one row (Huy and Scholes, 11-04):
+/// the paperclip, and the mic (with [onMic]) and the round send at its right
+/// end, drawn as Cmd-N's field (anh Dee, 11-07, #4467). An @ typed tags; there is no @ button (River, 11-07).
 class SuperTabReplyBox extends StatelessWidget {
   const SuperTabReplyBox({
     super.key,
@@ -30,12 +32,15 @@ class SuperTabReplyBox extends StatelessWidget {
     required this.error,
     required this.onEdited,
     required this.onSend,
-    this.options,
+    this.onMic,
+    this.voiceRow,
+    this.voiceNotice,
     this.onKey,
     this.inputFormatters = const [],
     this.surfaceKey = const ValueKey('super-thread-composer-surface'),
     this.fieldKey = const ValueKey('super-thread-composer'),
     this.sendKey = const ValueKey('super-thread-send'),
+    this.micKey = const ValueKey('super-thread-mic'),
     this.hint = 'Reply',
   });
 
@@ -52,16 +57,35 @@ class SuperTabReplyBox extends StatelessWidget {
   final String? error;
   final ValueChanged<String> onEdited;
   final VoidCallback onSend;
-  final Widget? options;
+
+  /// The mic's press: no mic without one.
+  final VoidCallback? onMic;
+
+  /// A voice message under way in this thread: drawn in the row's place.
+  final Widget? voiceRow;
+
+  /// The line about its voice message under the row (voice_row.dart), with
+  /// its own padding: it takes no room when it has nothing to say.
+  final Widget? voiceNotice;
 
   /// Sees each key first, such as an open @ completion list's arrows and
   /// Enter; a non-null answer is the key's.
   final KeyEventResult? Function(KeyEvent event)? onKey;
   final List<TextInputFormatter> inputFormatters;
-  final Key surfaceKey, fieldKey, sendKey;
+  final Key surfaceKey, fieldKey, sendKey, micKey;
 
   /// The field's hint: what an empty box says it is for.
   final String hint;
+
+  /// The Tab order inside an [OrderedTraversalPolicy] group around the box,
+  /// the row's own: the field (and its files) first, then the paperclip, the
+  /// mic and send, and last what the owner puts under the box ([underOrder], such as
+  /// the pane's Also send). Outside such a group it has no effect, and the
+  /// reading order applies.
+  static const fieldOrder = NumericFocusOrder(1),
+      toolsOrder = NumericFocusOrder(1.5),
+      sendOrder = NumericFocusOrder(3),
+      underOrder = NumericFocusOrder(4);
 
   @override
   Widget build(BuildContext context) => NewHarnessDropZone(
@@ -79,22 +103,17 @@ class SuperTabReplyBox extends StatelessWidget {
       key: surfaceKey,
       decoration: BoxDecoration(
         color: DesktopChrome.field,
-        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        borderRadius: BorderRadius.circular(grid.AppDesktop.composerRadius),
         border: Border.all(color: DesktopChrome.rim),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          grid.AppDesktop.groupGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SuperTabComposerChips(controller: controller, files: files),
-            Focus(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SuperTabComposerChips(controller: controller, files: files),
+          Padding(
+            padding: composerFieldInsets(target: grid.AppControl.height),
+            child: Focus(
               onKeyEvent: (_, event) {
                 if (onKey?.call(event) case final handled?) return handled;
                 switch (composerEnter(
@@ -126,12 +145,15 @@ class SuperTabReplyBox extends StatelessWidget {
                   maxLength: kComposerMaxLength,
                   inputFormatters: inputFormatters,
                   keyboardType: TextInputType.multiline,
-                  style: DesktopChrome.text(),
+                  style: SwarmType.composer(context),
                   decoration: InputDecoration(
                     isCollapsed: true,
                     constraints: const BoxConstraints(),
                     hintText: hint,
-                    hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                    hintStyle: SwarmType.composer(
+                      context,
+                      color: DesktopChrome.hint,
+                    ),
                     contentPadding: EdgeInsets.zero,
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
@@ -144,42 +166,66 @@ class SuperTabReplyBox extends StatelessWidget {
                 ),
               ),
             ),
-            if (error case final error?)
-              Padding(
-                padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-                child: Text(
-                  error,
-                  key: const ValueKey('super-thread-error'),
-                  style: DesktopChrome.control(),
-                ),
+          ),
+          if (error case final error?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.composerSide,
+                0,
+                grid.AppDesktop.composerSide,
+                grid.AppDesktop.controlGap,
               ),
-            const SizedBox(height: grid.AppDesktop.controlGap),
-            Row(
-              children: [
-                Expanded(child: options ?? const SizedBox.shrink()),
-                NewHarnessAttachButton(
-                  attachments: files,
-                  enabled: writable && !busy,
-                ),
-                ListenableBuilder(
-                  listenable: Listenable.merge([files, text]),
-                  builder: (context, _) => AppIconButton(
-                    key: sendKey,
-                    icon: AppIcons.arrowUp,
-                    tooltip: 'Send reply',
-                    color: DesktopChrome.accent,
-                    onPressed:
-                        writable &&
-                            !busy &&
-                            (text.text.trim().isNotEmpty || !files.isEmpty)
-                        ? onSend
-                        : null,
-                  ),
-                ),
-              ],
+              child: Text(
+                error,
+                key: const ValueKey('super-thread-error'),
+                style: DesktopChrome.control(),
+              ),
             ),
-          ],
-        ),
+          Padding(
+            padding: composerRowInsets(target: grid.AppControl.height),
+            // A voice message under way takes the row's place (#2665).
+            child: voiceRow != null
+                ? FocusTraversalOrder(order: sendOrder, child: voiceRow!)
+                : Row(
+                    children: [
+                      FocusTraversalOrder(
+                        order: toolsOrder,
+                        child: NewHarnessAttachButton(
+                          attachments: files,
+                          enabled: writable && !busy,
+                        ),
+                      ),
+                      const Spacer(),
+                      if (onMic case final onMic?)
+                        FocusTraversalOrder(
+                          order: sendOrder,
+                          child: SuperTabComposerMic(
+                            key: micKey,
+                            onPressed: writable ? onMic : null,
+                          ),
+                        ),
+                      FocusTraversalOrder(
+                        order: sendOrder,
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([files, text]),
+                          builder: (context, _) => SwarmSendButton(
+                            key: sendKey,
+                            tooltip: 'Send reply',
+                            onPressed:
+                                writable &&
+                                    !busy &&
+                                    (text.text.trim().isNotEmpty ||
+                                        !files.isEmpty)
+                                ? onSend
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          ?voiceNotice,
+        ],
       ),
     ),
   );

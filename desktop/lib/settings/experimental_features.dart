@@ -108,7 +108,21 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
   ExperimentalFeaturesStore({
     this.pollInterval = safetyNet,
     this.retryInterval = const Duration(seconds: 30),
-  });
+    ValueListenable<bool>? seen,
+  }) : _seen = seen {
+    seen?.addListener(_seenChanged);
+  }
+
+  /// Whether the window is in sight (`AppNotifier.inSight`); null is always. Out of sight the
+  /// safety net reads nothing (task #2953): a read that comes due waits for the return.
+  final ValueListenable<bool>? _seen;
+  bool _owed = false;
+
+  void _seenChanged() {
+    if (_seen?.value != true || !_owed) return;
+    _owed = false;
+    unawaited(refresh());
+  }
 
   /// The read with no push: a missed one. Every write is pushed
   /// (`desk_changed`, backend routes/experimentalSettings.ts), so the 30 s poll
@@ -171,7 +185,12 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
   void _look(Duration every) {
     final quiet =
         loaded && error == null && every * ++_quietLooks < pollInterval;
-    if (!quiet) unawaited(refresh());
+    if (quiet) return;
+    if (_seen?.value == false) {
+      _owed = true;
+      return;
+    }
+    unawaited(refresh());
   }
 
   void _notify() {
@@ -296,6 +315,7 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _seen?.removeListener(_seenChanged);
     super.dispose();
   }
 }

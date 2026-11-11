@@ -8,7 +8,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
@@ -20,7 +19,6 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 
 import '../voice_fakes.dart';
-import '../swarm/swarm_chat_dictation_test.dart' show FakeDictation;
 import '../swarm/swarm_fixture.dart';
 
 /// Renders a phone Swarm chat's composer in the states Tony's composer brief
@@ -165,8 +163,6 @@ void main() {
     Future<GlobalKey> chat(
       WidgetTester tester, {
       _MeteredRecorder? recorder,
-      FakeTranscriber? stt,
-      FakeDictation? dictation,
     }) async {
       await tester.runAsync(_loadFonts);
       final photos = (await tester.runAsync(
@@ -213,12 +209,7 @@ void main() {
         upload: stuck,
         notices: SilentSystemNotices(),
         features: features,
-        voice: () => VoiceInputController(
-          transcriber: (stt ?? FakeTranscriber()).call,
-          recorder: recorder ?? _MeteredRecorder(),
-          language: ValueNotifier('en'),
-        ),
-        dictation: dictation,
+        voice: () => recorder ?? _MeteredRecorder(),
       )..foreground = false;
       addTearDown(host.dispose);
       final key = GlobalKey();
@@ -309,7 +300,9 @@ void main() {
       await shoot(tester, key, 'composer-files-$look');
     });
 
-    testWidgets('listening ($look)', skip: skip, (tester) async {
+    // A voice message recording (task #2584): X, the red dot and its time,
+    // the wave and Send; what was typed stays in the box behind it.
+    testWidgets('recording ($look)', skip: skip, (tester) async {
       final recorder = _MeteredRecorder();
       final key = await chat(tester, recorder: recorder);
       await type(tester, 'Check whether PR #2466');
@@ -322,38 +315,15 @@ void main() {
         recorder.meter.value = level;
         await tester.pump(const Duration(milliseconds: 120));
       }
-      await shoot(tester, key, 'composer-listening-$look');
+      await shoot(tester, key, 'composer-recording-$look');
     });
-
-    // Tony, 11-01: the voice row's Send, right of stop: off on an empty box
-    // with the phone's recognizer, live once it has words.
-    for (final words in ['', 'Check whether PR #2466 has merged']) {
-      final name = words.isEmpty ? 'off' : 'live';
-      testWidgets('voice row Send $name, dictation ($look)', skip: skip, (
-        tester,
-      ) async {
-        final dictation = FakeDictation();
-        final key = await chat(tester, dictation: dictation);
-        await tester.showKeyboard(find.byType(TextField));
-        await tester.tap(find.byKey(const ValueKey('swarm-mic')));
-        for (var i = 0; i < 5; i++) {
-          await tester.pump();
-        }
-        if (words.isNotEmpty) dictation.say(words);
-        for (var i = 0; i < 24; i++) {
-          dictation.loud(const [0.3, 0.7, 0.5, 0.9][i % 4]);
-          await tester.pump(const Duration(milliseconds: 120));
-        }
-        await shoot(tester, key, 'composer-voice-send-$name-$look');
-      });
-    }
 
     testWidgets('voice row Send while sending ($look)', skip: skip, (
       tester,
     ) async {
       final recorder = _MeteredRecorder();
-      final stt = FakeTranscriber()..pending = Completer<String>();
-      final key = await chat(tester, recorder: recorder, stt: stt);
+      // Its clip's upload never answers: Send's spinner stays.
+      final key = await chat(tester, recorder: recorder);
       await type(tester, 'Check whether PR #2466');
       await tester.tap(find.byKey(const ValueKey('swarm-mic')));
       for (var i = 0; i < 24; i++) {

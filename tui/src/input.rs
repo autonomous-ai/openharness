@@ -816,7 +816,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 let mut recency: std::collections::HashMap<String,u64> = app.fleet.agents.values()
                     .map(|a| (format!("{}:{}",a.machine_id,a.id),a.recency())).collect();
                 // (One list by last activity: its harnesses not headed by where they work.)
-                for r in rows.iter_mut().filter(|r| recency.contains_key(&r.id)) { r.group = None }
+                rows.retain(|r| !r.id.starts_with(modal::OLDER_ROW));
+                for r in rows.iter_mut().filter(|r| recency.contains_key(&r.id)) { r.group = None; r.section = None; r.older = None }
                 for x in app.said.iter().chain(app.shell_context.catalog.iter()).filter_map(|s| s.external.as_ref()) {
                     let at = recency.entry(format!("external:{}:{}",x.machine,x.session_id)).or_default();
                     *at = (*at).max(x.last_at);
@@ -850,7 +851,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.catalog_ids = app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some()).map(|h| format!("external:{}:{}", h.machine, h.session_id)).collect();
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "add pane"), ("C-t", "new window"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
+            // (The main keys; `?` lists the rest, which all still work: modal::mode_rows.)
+            picker.hints = vec![("enter", "add pane"), ("C-t", "new window"), ("tab", "mark"), ("?", "all keys")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
             if app.shell_context.sessions_machine.is_some() {
                 picker.hints = vec![("enter", "open"), ("C-t", "new window"), ("C-/", "preview"), ("esc", "cancel")];
@@ -988,6 +990,10 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
 }
 
 /// The local timezone's offset, in hours (for message times), without a date crate.
+#[cfg(windows)]
+fn local_offset_hours() -> u64 { (24 + crate::sys::utc_offset() / 3600).rem_euclid(24) as u64 }
+/// The local timezone's offset, in hours (for message times), without a date crate.
+#[cfg(unix)]
 fn local_offset_hours() -> u64 {
     let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     let sign = if out.starts_with('-') { -1 } else { 1 };
@@ -1375,7 +1381,7 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
 /// machine in a window of its own, the most urgent first — made, or gone to and given the ones it
 /// lacks.
 pub fn project_session(app: &mut App, machine: &str, root: &str) {
-    let name = crate::app::session_check_name(root.rsplit('/').next().unwrap_or(root)).unwrap_or_else(|| "project".into());
+    let name = crate::app::session_check_name(crate::sys::path_name(root)).unwrap_or_else(|| "project".into());
     let keys: Vec<(String, String)> = app.fleet.ranked().into_iter().filter(|a| a.machine_id == machine && a.project_root == root && a.status != "stopped").map(|a| a.key()).collect();
     if keys.is_empty() { return app.say(format!("{name} has no harnesses running"), theme::WARN) }
     match app.find_session(&format!("={name}")) {
@@ -1436,7 +1442,7 @@ pub(crate) fn configure_local_shell(app: &App, machine: &str, payload: &mut serd
     if crate::local::is_local(machine) {
         payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
         let shell = app.options.session.get("default-shell").or_else(|| app.options.global_session.get("default-shell")).cloned()
-            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+            .or_else(|| std::env::var("SHELL").ok()).filter(|s| !s.is_empty()).unwrap_or_else(crate::sys::sh);
         payload["shell"] = json!(shell);
         payload["term"] = json!(app.options.get("default-terminal", "", None).unwrap_or_else(|| "tmux-256color".into()));
         let mut env: serde_json::Map<String, serde_json::Value> = app.global_env.iter().map(|(k,v)| (k.clone(), if v.hidden { serde_json::Value::Null } else { json!(v.value) })).collect();
@@ -1486,7 +1492,7 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     // flashed there first, as if the shortcut had opened that instead.
     if let Some(command) = &command {
         if let Some(window) = app.tabs.iter_mut().find(|t| t.id == tab && t.root.is_none() && !t.home) {
-            let program = command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+            let program = crate::sys::shell_label(command.split_whitespace().next().unwrap_or("")).to_string();
             window.opening = Some(if window.name.is_empty() || window.name == "New Tab" { program } else { window.name.clone() });
         }
     }
@@ -2653,7 +2659,7 @@ pub fn mode_key(app: &mut App, pane: u64, chord: &keys::Chord) -> bool {
 /// A copied text to a shell command's stdin (copy-pipe, copy-command), not waited for.
 pub fn pipe_to(cmd: &str, text: &str) {
     use std::io::Write;
-    let mut c = std::process::Command::new("/bin/sh");
+    let mut c = std::process::Command::new(crate::sys::sh());
     c.arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     c.envs(crate::ipc::job_env());
     if let Ok(mut child) = c.spawn() {
@@ -3079,6 +3085,17 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let (knob, value) = id.as_deref().map(|id| id.split_once(':').unwrap_or((id, ""))).unwrap_or_default();
             if let Some(msg) = crate::settings::set_key(app, knob, value) { picker.say(msg) }
             return keep(app, kind, picker);
+        }
+        // A folder's `▸ N older`: Enter or a click shows them, and hides them again; no other key
+        // means anything on it.
+        PickerKind::Open { .. } if id.as_deref().is_some_and(|i| i.starts_with(modal::OLDER_ROW)) => {
+            if choice == Choice::Enter {
+                if let Some(key) = id.as_deref().and_then(|i| i.strip_prefix(modal::OLDER_ROW)) {
+                    if !picker.unfolded.remove(key) { picker.unfolded.insert(key.to_string()); }
+                }
+                picker.refilter();
+            }
+            keep(app, kind, picker)
         }
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
@@ -3784,22 +3801,40 @@ mod tests {
         app.fleet.local_id = "local".into();
         app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
         let folder = |name: &str| json!({"name": name, "cwd": format!("/src/{name}")});
+        // Minutes ago, as the daemon writes it (UTC): the list folds work over a week old, so fixed dates changed what it
+        // showed once a week had passed (2026-11-06, a week after 2026-10-30 09:40–09:55 UTC). Civil from days (Howard
+        // Hinnant), the inverse of fleet::parse_iso.
+        let ago = |minutes: i64| {
+            let t = crate::format::now_secs() - minutes * 60;
+            let (days, secs) = (t.div_euclid(86400), t.rem_euclid(86400));
+            let z = days + 719468;
+            let era = z.div_euclid(146097);
+            let doe = z - era * 146097;
+            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+            let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+            format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", secs / 3600, secs % 3600 / 60, secs % 60)
+        };
         app.fleet.merge_roster("local", &[
-            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:50:00.000Z"}),
-            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": "2026-10-30T09:40:00.000Z"}),
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": ago(10)}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": ago(20)}),
         ]);
         let kind = PickerKind::Open { filter: crate::modal::Filter::All, machine: None, project: None };
         let mut picker = Picker::new("", "");
         fill(&app, &kind, &mut picker);
         app.fleet.merge_roster("local", &[
-            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:50:00.000Z"}),
-            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": "2026-10-30T09:40:00.000Z"}),
-            json!({"id": "a3", "name": "release notes", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:55:00.000Z"}),
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": ago(10)}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": ago(20)}),
+            json!({"id": "a3", "name": "release notes", "engine": "claude", "project": folder("webapp"), "updatedAt": ago(5)}),
         ]);
         fill(&app, &kind, &mut picker);
         // (Its harnesses: other tests' sessions can be listed after them.)
         let shown: Vec<(&str, &str)> = picker.rows.iter().filter(|r| !r.id.starts_with("session:")).map(|r| (r.group.as_deref().unwrap_or(""), r.label.as_str())).collect();
-        assert_eq!(shown, [("studio · webapp", "fix login"), ("studio · webapp", "release notes"), ("studio · api", "rate limit")]);
+        // (A folder's `▸ N older`, for work over a week old, is no harness of its own.)
+        let shown: Vec<_> = shown.into_iter().filter(|(_, label)| !label.contains("older")).collect();
+        assert_eq!(shown, [("webapp", "fix login"), ("webapp", "release notes"), ("api", "rate limit")]);
     }
 
     /// What the person typed into hn's own box is marked as theirs, as the desktop's composer marks

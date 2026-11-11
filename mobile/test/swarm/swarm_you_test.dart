@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,31 +7,46 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_devices_page.dart';
 import 'package:harness_mobile/swarm/swarm_models_page.dart';
-import 'package:harness_mobile/swarm/swarm_profile_sheet.dart';
+import 'package:harness_mobile/swarm/swarm_person_sheet.dart';
+import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
 
+/// The phone's notice centre, counting each time it is asked to notify.
+class _AskedNotices extends SilentSystemNotices {
+  var asked = 0;
+
+  @override
+  Future<bool?> requestPermission() async {
+    asked++;
+    return null;
+  }
+}
+
 /// You, as Tony's prototype C4 draws it (2026-10-30): who the person is in
-/// the Swarm Home shows, their status and the way to change it, Your models
-/// and Your devices with what is ready, and Settings.
+/// the Swarm Home shows; Your models and Your devices with what is ready; and
+/// Notifications, Theme and Settings.
 void main() {
-  /// The Swarms [swarms], each with the person as tony@example.com, [status]
-  /// set when given, its models on, and [models] served by the person's
+  /// The Swarms [swarms], each with the person as tony@example.com, [name]
+  /// set when given, and [status], which an older server still sends, its models on, and [models] served by the person's
   /// machine Studio, read just now; and [others], more machines read just
   /// now, as given.
   FakeSwarm backend({
     List<Map<String, dynamic>> models = const [],
     List<Map<String, dynamic>> others = const [],
     Map<String, dynamic>? status,
+    String? name,
     List<({String id, String name})> swarms = const [
       (id: tab, name: 'Autonomous'),
     ],
@@ -55,6 +69,7 @@ void main() {
           part(me, 1, {
             ...person(me),
             'email': 'tony@example.com',
+            'name': ?name,
             'status': ?status,
           }),
         ];
@@ -98,13 +113,16 @@ void main() {
 
   late SwarmHost host;
   late List<String> settingsOpened;
+  late AppearancePrefsStore appearance;
 
-  /// You under a Swarm that is on, on an iPhone's screen.
+  /// You under a Swarm that is on, on an iPhone's screen; its Notifications
+  /// on [notices] when given, its Theme on a store of its own.
   Future<void> pump(
     WidgetTester tester,
     FakeSwarm fake, {
     SwarmComputers? computers,
     ValueListenable<bool>? hidden,
+    SystemNotices? notices,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -122,6 +140,7 @@ void main() {
     )..foreground = false;
     addTearDown(host.dispose);
     settingsOpened = [];
+    appearance = AppearancePrefsStore(storage: MemoryKeyValueStore());
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
@@ -129,6 +148,8 @@ void main() {
           builder: (_) {
             final page = SwarmYouPage(
               onSettings: (_) => settingsOpened.add('settings'),
+              notices: notices,
+              appearance: appearance,
             );
             if (hidden == null) return page;
             return ValueListenableBuilder(
@@ -164,8 +185,8 @@ void main() {
     {'model': 'llama-4', 'name': 'Llama 4', 'kind': 'shared'},
   ];
 
-  testWidgets('who you are: your face, your name and your Swarm, Active '
-      'with no status set, and Change opens your profile', (tester) async {
+  testWidgets('who you are: your face, your name and your Swarm, and a tap '
+      'there opens nothing', (tester) async {
     await pump(tester, backend());
 
     expect(
@@ -175,51 +196,157 @@ void main() {
     expect(inside('swarm-you-me', find.text('tony')), findsOneWidget);
     expect(inside('swarm-you-me', find.text('Autonomous')), findsOneWidget);
     expect(inside('swarm-you-me', find.byType(SwarmAvatar)), findsOneWidget);
-    expect(inside('swarm-you-status', find.text('Active')), findsOneWidget);
-    expect(inside('swarm-you-status', find.text('Change')), findsOneWidget);
+    expect(
+      inside('swarm-you-me', find.byIcon(LucideIcons.chevronRight300)),
+      findsNothing,
+      reason: 'there is nothing to open',
+    );
+    expect(
+      inside('swarm-you-me', find.byType(InkWell)),
+      findsNothing,
+      reason: 'it is no button',
+    );
 
-    await tester.tap(key('swarm-you-status'));
+    await tester.tap(key('swarm-you-me'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(SwarmProfileSheet), findsOneWidget);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byType(SwarmPersonSheet), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
+      'You',
+      reason: 'still on You',
+    );
   });
 
-  testWidgets('a status set shows in place of Active', (tester) async {
+  testWidgets('nothing under the header sets a name, a username or a status: '
+      'no Profile, no Username, no status line, no Change', (tester) async {
+    // An older server still sends the status Minh set: none of it is drawn.
+    await pump(
+      tester,
+      backend(
+        name: 'Minh Nguyen',
+        status: {'text': 'Focusing', 'emoji': '🎯'},
+      ),
+    );
+
+    expect(inside('swarm-you-me', find.text('Minh Nguyen')), findsOne);
+    expect(find.byType(SwarmCaption), findsNothing);
+    for (final gone in ['profile', 'username', 'status', 'name']) {
+      expect(key('swarm-you-$gone'), findsNothing, reason: gone);
+    }
+    expect(find.byIcon(LucideIcons.atSign300), findsNothing);
+    expect(find.text('Change'), findsNothing);
+    expect(find.text('🎯 Focusing'), findsNothing);
+    expect(find.text('🎯'), findsNothing, reason: 'nor a badge on the face');
+  });
+
+  testWidgets('under the header: Your models and Your devices, then '
+      'Notifications, Theme and Settings in one card', (tester) async {
+    await pump(tester, backend(), notices: _AskedNotices());
+
+    double top(String row) => tester.getTopLeft(key('swarm-you-$row')).dy;
+    final order = ['me', 'models', 'devices', 'notifications', 'theme'];
+    for (final (i, row) in order.indexed) {
+      expect(
+        top(row),
+        lessThan(top(i + 1 < order.length ? order[i + 1] : 'settings')),
+        reason: row,
+      );
+    }
+    SwarmGroup cardOf(String row) => tester.widget<SwarmGroup>(
+      find.ancestor(of: key('swarm-you-$row'), matching: find.byType(SwarmGroup)),
+    );
+    expect(cardOf('notifications'), same(cardOf('settings')));
+    expect(cardOf('theme'), same(cardOf('settings')));
+    expect(cardOf('models'), same(cardOf('devices')));
+    expect(cardOf('models'), isNot(same(cardOf('settings'))));
+    // Drawn as You's own rows, each led by its glyph.
+    for (final (row, glyph) in [
+      ('notifications', LucideIcons.bell300),
+      ('theme', LucideIcons.sunMoon300),
+    ]) {
+      expect(inside('swarm-you-$row', find.byType(SwarmRow)), findsOne);
+      expect(inside('swarm-you-$row', find.byIcon(glyph)), findsOne);
+    }
+  });
+
+  testWidgets('Notifications asks the phone, with no line under it', (
+    tester,
+  ) async {
+    final notices = _AskedNotices();
+    await pump(tester, backend(), notices: notices);
+
+    expect(
+      inside('swarm-you-notifications', find.text('Notifications')),
+      findsOne,
+    );
+    expect(
+      inside('swarm-you-notifications', find.textContaining('needs you')),
+      findsNothing,
+    );
+    await tester.tap(key('swarm-you-notifications'));
+    await tester.pumpAndSettle();
+    expect(notices.asked, 1);
+  });
+
+  testWidgets('with no notice centre to ask, as in the sample, Notifications '
+      'is no row', (tester) async {
+    await pump(tester, backend());
+
+    expect(key('swarm-you-notifications'), findsNothing);
+    expect(find.text('Notifications'), findsNothing);
+    expect(key('swarm-you-theme'), findsOne);
+  });
+
+  testWidgets('Theme: System, Dark and Light, and a tap keeps the choice', (
+    tester,
+  ) async {
+    await pump(tester, backend());
+
+    for (final label in ['System', 'Dark', 'Light']) {
+      expect(inside('swarm-you-theme', find.text(label)), findsOne);
+    }
+    await tester.tap(inside('swarm-you-theme', find.text('Light')));
+    await tester.pumpAndSettle();
+    expect(appearance.value.themeMode, AppThemeMode.light);
+  });
+
+  testWidgets('a long name and Swarm stay on one line each, Theme on screen, '
+      'on a small phone at large text', (tester) async {
+    const name = 'Maximilian Alexander Featherstonehaugh-Wolfeschlegel';
+    const swarm = 'The Autonomous Research and Design Laboratory';
+    await pump(
+      tester,
+      backend(name: name, swarms: const [(id: tab, name: swarm)]),
+    );
+    tester.view.physicalSize = const Size(960, 1704);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final header = tester.getRect(key('swarm-you-me'));
+    expect(header.right, lessThanOrEqualTo(320));
+    for (final line in [name, swarm]) {
+      expect(
+        tester.widget<Text>(inside('swarm-you-me', find.text(line))).maxLines,
+        1,
+        reason: line,
+      );
+    }
+    expect(tester.getRect(key('swarm-you-theme')).right, lessThanOrEqualTo(320));
+  });
+
+  testWidgets('a status an older server still sends is drawn nowhere: not a '
+      'line on You, not a badge on a face', (tester) async {
     await pump(
       tester,
       backend(status: {'text': 'In a meeting', 'emoji': '📅'}),
     );
-
-    expect(
-      inside('swarm-you-status', find.text('📅 In a meeting')),
-      findsOneWidget,
-    );
-    expect(inside('swarm-you-status', find.text('Active')), findsNothing);
-  });
-
-  testWidgets('a status that ends goes back to Active when it ends', (
-    tester,
-  ) async {
-    final until = clock.now().add(const Duration(minutes: 30));
-    await pump(
-      tester,
-      backend(
-        status: {
-          'text': 'In a meeting',
-          'emoji': '📅',
-          'until': until.toUtc().toIso8601String(),
-        },
-      ),
-    );
-    expect(
-      inside('swarm-you-status', find.text('📅 In a meeting')),
-      findsOneWidget,
-    );
-
-    await tester.pump(const Duration(minutes: 31));
-
-    expect(inside('swarm-you-status', find.text('Active')), findsOneWidget);
     expect(find.text('📅 In a meeting'), findsNothing);
+    expect(find.text('Active'), findsNothing);
+    expect(find.text('📅'), findsNothing);
   });
 
   testWidgets('Your models counts what every Swarm can use now, and opens '
@@ -419,6 +546,11 @@ void main() {
     expect(find.text('tony'), findsNothing);
     expect(inside('swarm-you-me', find.text('You')), findsOneWidget);
     expect(find.textContaining('ready now'), findsNothing);
+    expect(
+      inside('swarm-you-me', find.byIcon(LucideIcons.chevronRight300)),
+      findsNothing,
+      reason: 'no way in',
+    );
   });
 
   testWidgets('a read that fails shows You with no rows on their way', (
@@ -432,9 +564,13 @@ void main() {
     expect(inside('swarm-you-me', find.text('You')), findsOneWidget);
     expect(find.byType(SwarmSkeletonRows), findsNothing);
     expect(find.textContaining('ready now'), findsNothing);
-    for (final row in ['status', 'models', 'devices', 'settings']) {
+    for (final row in ['models', 'devices', 'theme', 'settings']) {
       expect(key('swarm-you-$row'), findsOneWidget, reason: row);
     }
+    expect(
+      inside('swarm-you-me', find.byIcon(LucideIcons.chevronRight300)),
+      findsNothing,
+    );
   });
 
   testWidgets('every row takes a thumb', (tester) async {
@@ -442,9 +578,17 @@ void main() {
       tester,
       backend(models: threeModels),
       computers: FakeComputers(const [studio])..own = [own(studio)],
+      notices: _AskedNotices(),
     );
 
-    for (final row in ['status', 'models', 'devices', 'settings']) {
+    for (final row in [
+      'me',
+      'models',
+      'devices',
+      'notifications',
+      'theme',
+      'settings',
+    ]) {
       final size = tester.getSize(key('swarm-you-$row'));
       expect(size.height, greaterThanOrEqualTo(44), reason: row);
       expect(size.width, greaterThanOrEqualTo(44), reason: row);

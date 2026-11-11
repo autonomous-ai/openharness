@@ -20,6 +20,13 @@ const PUBLIC_EMAIL_DOMAINS = new Set([
   'zoho.com', 'zohomail.com', 'yandex.com', 'yandex.ru', 'mail.ru', 'inbox.ru', 'list.ru', 'bk.ru',
   'tutanota.com', 'tuta.io', 'fastmail.com', 'hey.com', 'duck.com',
   'qq.com', '163.com', '126.com', 'yeah.net', 'sina.com', 'naver.com', 'daum.net', 'hanmail.net',
+  // Free and ISP mail common in Vietnam and Asia (Swarm auto-join lets in anyone at a domain: spec 2026-11-03, Trust 5).
+  // Only consumer domains: a company's own (fpt.com.vn, viettel.com.vn) stays a company's.
+  'zing.vn', 'vnn.vn', 'hn.vnn.vn', 'hcm.vnn.vn', 'fpt.vn',
+  'rediffmail.com', 'yahoo.co.in', 'yahoo.in', 'yahoo.com.sg', 'yahoo.com.my', 'yahoo.co.id', 'yahoo.com.ph', 'yahoo.co.th',
+  'yahoo.com.hk', 'yahoo.com.tw', 'yahoo.com.au', 'yahoo.co.kr', 'hotmail.co.jp', 'outlook.jp', 'live.jp',
+  'foxmail.com', 'sohu.com', 'sina.cn', 'aliyun.com', '139.com', '189.cn', '21cn.com', 'tom.com', 'vip.qq.com', 'vip.163.com',
+  'nate.com', 'kakao.com', 'nifty.com', 'excite.co.jp', 'docomo.ne.jp', 'ezweb.ne.jp', 'au.com', 'softbank.ne.jp', 'i.softbank.jp',
   'pending.harness.invalid',
 ])
 

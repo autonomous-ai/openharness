@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -74,39 +72,23 @@ void main() {
       });
     });
 
-    test('still shows a reaction that was made since the last poll', () {
+    test('still shows an edit that was made since the last poll', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');
         final reads = _Reads(server);
         final c = _controller(reads)..start();
         async.flushMicrotasks();
-        final id = c.messages('lead').single.id;
-        // Another reader's reaction, as the backend keeps it.
-        unawaited(
-          server.request(
-            'POST',
-            '/api/super-tabs/tab/commands',
-            body: {
-              'operationId': 'react-1',
-              'command': {
-                'type': 'message.react',
-                'conversationId': 'lead',
-                'messageId': id,
-                'emoji': 'rocket',
-                'on': true,
-              },
-            },
-          ),
-        );
-        async.flushMicrotasks();
+        server.editMessage(c.messages('lead').single.id, 'Hello again');
         async.elapse(_poll);
-        expect(c.messages('lead').single.reactions, isNotEmpty);
+        expect(c.messages('lead').single.text, 'Hello again');
         c.dispose();
       });
     });
 
+    // Spec 2026-11-02-poll-cost, Part 2: its row alone, every 30 s, not the
+    // page every poll.
     test(
-      'keeps reading the messages while the own message awaits a receipt',
+      'reads only the own message, every 30 s, while it awaits a receipt',
       () {
         fakeAsync((async) {
           final server = ConversationServer()..append('Hi');
@@ -121,13 +103,15 @@ void main() {
           final c = _controller(reads)..start();
           async.flushMicrotasks();
           server.messages.last['deliveries'] = [delivery('answered')];
-          async.elapse(_poll);
+          reads.clear();
+          async.elapse(const Duration(seconds: 30));
           expect(
             c.messages('lead').single.deliveries.single['status'],
             'answered',
           );
+          expect(reads.messageReads, 1);
           reads.clear();
-          async.elapse(_poll);
+          async.elapse(const Duration(seconds: 30));
           expect(reads.messageReads, 0);
           c.dispose();
         });
@@ -201,9 +185,9 @@ void main() {
       });
     });
 
-    // A tag is news for the badge and a notice: a push for an away Swarm is
-    // read at the old pace (the 3 s gap), not held for the idle 15 s.
-    test('shows a tag the server pushes within the old 3 s gap', () {
+    // A message is news for the count and a notice: a push for an away Swarm
+    // is read at the old pace (the 3 s gap), not held for the idle 15 s.
+    test('shows a message the server pushes within the old 3 s gap', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');
         final reads = _Reads(server);
@@ -212,11 +196,11 @@ void main() {
         c.pushUntil = clock.now().add(kSwarmPushLease);
         c.away = true;
         async.elapse(const Duration(seconds: 1));
-        expect(c.snapshot!.mentionsWaiting, 0);
-        server.tag('message-2');
+        expect(c.snapshot!.conversation('lead')!.lastMessageSequence, 1);
+        server.append('Which build?');
         c.told(main: true);
         async.elapse(const Duration(seconds: 2));
-        expect(c.snapshot!.mentionsWaiting, 1);
+        expect(c.snapshot!.conversation('lead')!.lastMessageSequence, 2);
         c.dispose();
       });
     });

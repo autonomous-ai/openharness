@@ -219,6 +219,75 @@ void main() {
     expect(await git(['branch', '--show-current']), 'main');
   });
 
+  test('many concurrent starts on one repository all start, one checkout at a time', () async {
+    // Git reads every worktree's files while it adds one, and fails on one
+    // another add has half written ("failed to read .git/worktrees/…").
+    // A checkout as long as a real project's, so two would overlap.
+    await git(['switch', 'feature']);
+    Directory(p.join(repo, 'many')).createSync();
+    for (var i = 0; i < 1000; i++) {
+      File(p.join(repo, 'many', '$i')).writeAsStringSync('$i');
+    }
+    await git(['add', '.']);
+    await git(['commit', '-qm', 'many files']);
+    await git(['switch', 'main']);
+    var adding = 0, mostAtOnce = 0;
+    Future<Process> start(List<String> argv, Map<String, String> env) async {
+      final add = argv.contains('worktree') && argv.contains('add');
+      final process = await Process.start(
+        'git',
+        argv,
+        environment: env,
+        includeParentEnvironment: false,
+      );
+      if (add) {
+        mostAtOnce = max(mostAtOnce, ++adding);
+        unawaited(process.exitCode.whenComplete(() => adding--));
+      }
+      return process;
+    }
+
+    final paths = await Future.wait([
+      for (var i = 0; i < 6; i++)
+        prepareGitProject(
+          repo,
+          p.join(root.path, 'harnesses'),
+          worktree: true,
+          branchRef: 'refs/heads/feature',
+          startProcess: start,
+        ),
+    ]);
+    expect(paths.toSet(), hasLength(6));
+    for (final path in paths) {
+      expect(
+        await File(p.join(path, 'src', 'value')).readAsString(),
+        'feature',
+      );
+    }
+    expect(mostAtOnce, 1);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('concurrent starts that draw the same name both start, each marked as Harness made it', () async {
+    Future<String> start() => prepareGitProject(
+      repo,
+      p.join(root.path, 'harnesses'),
+      worktree: true,
+      branchRef: 'refs/heads/feature',
+      random: _First(),
+    );
+    final paths = await Future.wait([start(), start()]);
+    final branches = [
+      for (final path in paths) await git(['branch', '--show-current'], path),
+    ];
+    expect(branches.toSet(), {'amber-badger', 'amber-badger-2'});
+    for (final branch in branches) {
+      expect(
+        await git(['config', '--get', 'branch.$branch.harness']),
+        'placeholder',
+      );
+    }
+  });
+
   test(
     'a subfolder follows the selected branch into its new worktree',
     () async {
@@ -416,6 +485,27 @@ void main() {
       expect(mark.exitCode, isNot(0));
       // The name is free again for the next press.
       expect(await placeholder(), p.join(worktrees(), 'witty-finch'));
+    });
+
+    // Windows refuses to delete a folder a process stands in: run inside the
+    // worktree, git emptied it and left the folder, and Cancel kept it.
+    test('git removes it from outside the folder', () async {
+      final path = await placeholder();
+      final from = <String>[];
+      Future<Process> start(List<String> argv, Map<String, String> env) {
+        if (argv.contains('remove')) from.add(argv[argv.indexOf('-C') + 1]);
+        return Process.start(
+          'git',
+          argv,
+          environment: env,
+          includeParentEnvironment: false,
+        );
+      }
+
+      expect(await discardPreparedWorktree(path, startProcess: start), isTrue);
+      expect(from, hasLength(1));
+      expect(p.equals(from.single, path), isFalse);
+      expect(p.isWithin(path, from.single), isFalse);
     });
 
     test('a subfolder project removes the whole worktree', () async {

@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
-// stores, as routes/control.test.ts does, so the real authentication and team gate run.
+// stores, as routes/control.test.ts does, so the real authentication runs.
 const fakes = vi.hoisted(() => {
   const redis = new Map<string, string>()
   const sessions: Array<Record<string, unknown> & { id: string }> = []
@@ -12,6 +12,7 @@ const fakes = vi.hoisted(() => {
     pub: {
       set: vi.fn(async (key: string, value: string) => { redis.set(key, value); return 'OK' }),
       get: vi.fn(async (key: string) => redis.get(key) ?? null),
+      mget: vi.fn(async (...keys: string[]) => keys.map((key) => redis.get(key) ?? null)),
       multi: vi.fn(() => {
         const ops: Array<() => unknown> = []
         const chain = {
@@ -28,10 +29,6 @@ const fakes = vi.hoisted(() => {
           const row = { id: `s${sessions.length + 1}`, ...data }; sessions.push(row); return row
         }),
         findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
-      },
-      machine: {
-        findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
       },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
@@ -53,7 +50,6 @@ import { SuperTabError } from '../superTabs/model.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
-import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
 describe('Super Tab route failures', () => {
   let app: FastifyInstance
@@ -62,7 +58,7 @@ describe('Super Tab route failures', () => {
     app = Fastify()
     app.setErrorHandler(errorHandler)
     app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    const store = { hostGrids: async () => { throw thrown }, native: { append: async () => { throw thrown } } }
+    const store = { hostGrids: async () => { throw thrown } }
     await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
     await app.ready()
   })
@@ -89,15 +85,118 @@ describe('Super Tab route failures', () => {
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
   })
+})
 
-  it('answers a terminal recording\'s duplicate key as busy, so the host keeps recording and retries', async () => {
-    // The host stops a recording for good on a 409 (cli superTabs/native.ts); a duplicate that outlived every retry is
-    // not the recording's fault.
-    thrown = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' })
-    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload: { turnId: 'turn-1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false } })
-    expect(res.statusCode).toBe(503)
-    expect(res.headers['retry-after']).toBe('2')
-    expect(res.json().error.code).toBe('SWARM_BUSY')
+// Swarm v4 is built from scratch (anh Dee, 2026-11-10): what v1-v3 had is gone, with no answer kept for their clients. An old
+// command is refused as one no version had, before the store is reached, and an old read or write is no route at all.
+describe('what Swarm v1-v3 had, over HTTP', () => {
+  let app: FastifyInstance
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    // A store, reads and host reads that fail on any call: the answers must not touch them.
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('refuses its commands as unknown, an agent\'s too', async () => {
+    for (const command of [{ type: 'work.assign', conversationId: 'task-1', agentId: 'agent-2' }, { type: 'decision.answer', decisionId: 'd1', choice: 1 },
+      { type: 'proposal.create', projectId: 'lead', title: 'Sync' }, { type: 'message.react', conversationId: 'c', messageId: 'm', emoji: 'eyes', on: true },
+      { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: 'task-1', checks: [] },
+      { type: 'conversation.create', title: 'Fix', brief: 'Fix it.', checks: [], requestMessageId: 'm1' },
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], handoff: 'm1' },
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], mentionsIfNoWorker: true },
+      { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: '# Mine', summary: 'Mine' },
+      { type: 'note.add', projectId: 'lead', text: 'Ship on Fridays', askedBy: 'u1' }, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
+      { type: 'project.skills', projectId: 'lead', mode: 'default' }, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' },
+      { type: 'project.coordinatorName', projectId: 'lead', name: 'Boss' }, { type: 'tab.routingPolicy', policy: null }, { type: 'tab.tidy', enabled: true },
+      { type: 'route.record', conversationId: 'task-1', decision: { assessment: { difficulty: 'low', risk: 'low', why: 'Small' },
+        candidates: [{ id: 'c1', kind: 'new', machineId: 'm1', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'Opus', label: 'Opus high' }],
+        excluded: [], floor: 1, notes: false, via: 'instructions', p: null, belowFloor: false, why: 'Small' } },
+      { type: 'route.override', decisionId: 'd1', candidateId: 'c1', reason: 'Faster' },
+      { type: 'route.modelResult', decisionId: 'd1', startId: 's1', model: 'opus', effort: 'high' },
+      { type: 'rules.set', projectId: 'lead', baseRevision: 0, summary: 'Pace', rules: { releaseWindow: { start: '09:00', end: '18:00', timeZone: 'UTC' },
+        releasePace: { backendEveryMinutes: 120, appsAfterVisibleBatch: true, backendPause: null }, reviews: { defaultReads: 1, rows: [], test: [], untested: [] },
+        mergeTrain: { enabled: false, everyMinutes: 10 }, caps: [], paths: [], crew: [], lanes: [],
+        dispatch: { everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 } } },
+      ...[{ routeDecisionId: 'd1' }, { overrideReason: 'Faster' }].map(route => ({ type: 'agent.start', ...route, request: { conversationId: 'task-1',
+        machineId: 'm1', engine: 'claude', name: 'Builder', cwd: '/work', worktree: false,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 50, tools: [], devices: [], quotaRequired: false } } })),
+      // Swarm v4 keeps no custom role sets or role names, no conversations but its project channels and agents' chats, and no
+      // report watermarks (slice S18).
+      { type: 'conversation.create', title: 'Fix', brief: 'Fix it.', checks: [] },
+      { type: 'conversation.create', projectId: 'lead', title: 'Fix', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src'] }, priority: 'P2' },
+      ...[{ roleId: 'dev' }, { roleName: 'Tester' }].map(role => ({ type: 'agent.add', conversationId: 'c', machineId: 'm1', harnessId: 'h1', name: 'Builder',
+        lead: false, configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }, ...role })),
+      ...[{ roleId: 'dev' }, { roleName: 'Tester' }].map(role => ({ type: 'agent.start', request: { conversationId: 'task-1', machineId: 'm1',
+        engine: 'claude', name: 'Builder', cwd: '/work', worktree: false, ...role,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 50, tools: [], devices: [], quotaRequired: false } } })),
+      { type: 'project.report', projectId: 'lead', through: { 'task-1': 3 }, text: 'Status' },
+      { type: 'project.report', projectId: 'lead', throughRevision: 3, text: null }]) {
+      for (const asAgentId of [undefined, 'agent-1']) {
+        const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
+        expect(res.statusCode, JSON.stringify(command)).toBe(400)
+      }
+    }
+  })
+
+  it('serves none of its reads and writes', () => {
+    const gone: Array<['GET' | 'POST', string]> = [
+      ['GET', '/api/super-tabs'], ['GET', '/api/super-tabs/:tabId'], ['GET', '/api/super-tabs/hosts/:machineId'],
+      ['GET', '/api/super-tabs/hosts/:machineId/pools'], ['GET', '/api/super-tabs/hosts/:machineId/assignments'],
+      ['POST', '/api/super-tabs/:tabId/native'], ['GET', '/api/super-tabs/:tabId/native/:contextId'], ['POST', '/api/super-tabs/:tabId/native/:contextId'],
+      ['GET', '/api/super-tabs/:tabId/scorecard'], ['GET', '/api/super-tabs/:tabId/decisions'], ['GET', '/api/super-tabs/:tabId/mentions'],
+      ['GET', '/api/super-tabs/:tabId/activity'], ['GET', '/api/super-tabs/:tabId/reminders'], ['GET', '/api/super-tabs/:tabId/threads'],
+      ['GET', '/api/super-tabs/:tabId/inbox'], ['GET', '/api/super-tabs/:tabId/personal-tasks'], ['GET', '/api/super-tabs/:tabId/proposals'],
+      ['GET', '/api/super-tabs/:tabId/conversations/:conversationId/catch-up'], ['POST', '/api/super-tabs/:tabId/activity/read'],
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow'],
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder'], ['POST', '/api/super-tabs/:tabId/avatars'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/roles/:roleId'],
+      ['GET', '/api/super-tabs/routing-policy'], ['POST', '/api/super-tabs/routing-policy'], ['GET', '/api/super-tabs/:tabId/costs'],
+      ['GET', '/api/super-tabs/:tabId/route-decisions'], ['GET', '/api/super-tabs/:tabId/route-decisions/:decisionId'],
+      ['GET', '/api/super-tabs/:tabId/conversations/:conversationId/attempts'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/rules'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/machine-rules']]
+    for (const [method, url] of gone) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
+  })
+})
+
+// Workspaces, the level above Swarms, are gone with Swarm v4: a Swarm is the org already, and no client calls their routes, so none
+// is registered. A new Swarm names no Workspace to be in. integration/superTabNotAvailable.test.ts runs the real store.
+describe('the Workspace routes Swarm v4 removed', () => {
+  let app: FastifyInstance
+  let created: unknown[][]
+  beforeEach(async () => {
+    created = []
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { create: async (...args: unknown[]) => { created.push(args.slice(1)); return { id: 'tab-1', revision: 0 } } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('registers none of the thirteen', () => {
+    const retired: Array<['GET' | 'POST', string]> = [
+      ['GET', '/api/super-tabs/workspaces'], ['POST', '/api/super-tabs/workspaces'], ['GET', '/api/super-tabs/workspace-invitations'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId'], ['GET', '/api/super-tabs/workspaces/:workspaceId/members'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/invitations'], ['POST', '/api/super-tabs/workspaces/:workspaceId/invitations/revoke'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/accept'], ['POST', '/api/super-tabs/workspaces/:workspaceId/members/:userId'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/members/:userId/remove'], ['POST', '/api/super-tabs/workspaces/:workspaceId/transfer'],
+      ['POST', '/api/super-tabs/:tabId/workspace-visibility'], ['POST', '/api/super-tabs/:tabId/workspace-join']]
+    for (const [method, url] of retired) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
+  })
+
+  it('makes a Swarm without naming a Workspace, and refuses a body that still names one', async () => {
+    const made = await app.inject({ method: 'POST', url: '/api/super-tabs', payload: { operationId: 'op-1', name: 'Acme' } })
+    expect(made.statusCode).toBe(200)
+    expect(created).toEqual([['op-1', 'Acme', undefined]])
+    const named = await app.inject({ method: 'POST', url: '/api/super-tabs', payload: { operationId: 'op-2', name: 'Acme', workspaceId: 'w1' } })
+    expect(named.statusCode).toBe(400)
+    expect(created).toHaveLength(1)
   })
 })
 
@@ -120,11 +219,10 @@ describe('the person routes\' one not-available answer', () => {
   const ask = (url: string, method: 'GET' | 'POST' = 'GET') => app.inject({ method, url,
     payload: method === 'POST' ? { operationId: 'op-1', command: { type: 'message.send', conversationId: 'c1', text: 'hi', replyTo: null, recipientIds: [] } } : undefined })
 
-  it('answers missing, not a member, out of the Workspace and a refused link alike, and logs which it was', async () => {
+  it('answers missing, not a member and a refused link alike, and logs which it was', async () => {
     const warn = vi.spyOn(logger, 'warn')
     const refusals = [new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404),
       new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true),
-      new SuperTabError(WORKSPACE_ACCESS_REVOKED, 'You are no longer in this Swarm\'s Workspace.', 403),
       new SuperTabError('JOIN_UNAVAILABLE', 'This Swarm link is unavailable for this account.', 404),
       new SuperTabError('NOT_FOUND', 'This conversation is unavailable.', 404)]
     for (const refusal of refusals) {
@@ -164,7 +262,7 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
     app.setErrorHandler(errorHandler)
     app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
     const handled = (name: string) => async () => { reached.push(name); return {} }
-    const store = { native: { append: handled('native'), open: handled('open') }, delivery: handled('delivery'), stopped: handled('stopped') }
+    const store = { delivery: handled('delivery'), stopped: handled('stopped') }
     await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: { changes: handled('changes') } as never })
     await app.ready()
   })
@@ -177,8 +275,6 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
   const largest = {
     changes: { url: '/api/super-tabs/hosts/m1/changes', name: 'changes',
       body: { cursor: 'c'.repeat(512), full: false, held: Object.fromEntries(Array.from({ length: 500 }, (_, n) => [id(n), 'e'.repeat(64)])) } },
-    native: { url: '/api/super-tabs/tab-1/native/ctx-1', name: 'native',
-      body: { turnId: id(3), kind: 'answer', previousEventId: id(4), text: text(16_000), truncated: false, interrupted: false } },
     delivery: { url: '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', name: 'delivery',
       body: { type: 'ack', claimId: id(4), receipt: text(2000), uncertain: false } },
     stopped: { url: '/api/super-tabs/tab-1/stopped', name: 'stopped', body: { assignmentId: id(2), receipt: text(2000) } },
@@ -204,15 +300,13 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
 })
 
 // The web calls Swarm routes straight from the browser with the person's own sign-in (docs/specs/2026-10-30-web-swarm-
-// direct.md): a viewer session reaches them as the person, through the real authentication; a team sign-in is still
-// refused as the person (the store refuses it on the routes the team gate admits for its agents, superTabBuddies).
+// direct.md): a viewer session reaches them as the person, through the real authentication.
 describe('the browser\'s own sign-in on Swarm routes', () => {
   let app: FastifyInstance
-  let viewer: string, team: string
+  let viewer: string
   const seen: Array<{ route: string; user: AuthUser }> = []
   beforeAll(async () => {
-    viewer = (await redeemHandoff((await startHandoff(fakes.user.id, 'viewer')).code, 'Safari on iPhone'))!.token
-    team = (await redeemHandoff((await startHandoff(fakes.user.id, 'team')).code, 'MacBook Pro · Team', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))!.token
+    viewer = (await redeemHandoff((await startHandoff(fakes.user.id)).code, 'Safari on iPhone'))!.token
     app = Fastify()
     app.setErrorHandler(errorHandler)
     registerAuthMiddleware(app)
@@ -238,16 +332,6 @@ describe('the browser\'s own sign-in on Swarm routes', () => {
     expect(post.statusCode).toBe(200)
     expect(seen.map(s => s.route)).toEqual(['parts', 'commands'])
     for (const { user } of seen) expect(user).toMatchObject({ sub: 'owner', harnessSessionKind: 'viewer' })
-  })
-
-  it('refuses a team sign-in as the person, before any Swarm is read', async () => {
-    const auth = { authorization: `Bearer ${team}` }
-    for (const url of ['/api/super-tabs/tab-1/parts', '/api/super-tabs/list']) {
-      const res = await app.inject({ method: 'GET', url, headers: auth })
-      expect(res.statusCode, url).toBe(403)
-      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    }
-    expect(seen).toEqual([])
   })
 
   it('refuses no sign-in at all', async () => {
@@ -306,3 +390,54 @@ describe('a machine\'s readings for all its Swarms in one call (DB 2.5)', () => 
     expect(calls).toHaveLength(1)
   })
 })
+
+// A client that asks takes a machine's reading as one line (read/changes.ts); no other client's reply changes.
+describe('the machine lines of a change read', () => {
+  let app: FastifyInstance
+  const changes = vi.fn(async (..._args: unknown[]) => ({ reload: true })), machineReadings = vi.fn(async (..._args: unknown[]) => ({ machines: [] }))
+  beforeEach(async () => {
+    changes.mockClear(); machineReadings.mockClear()
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: { changes, machineReadings } as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+  const get = (url: string) => app.inject({ method: 'GET', url })
+
+  it('asks for lines only when the client does', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc')).statusCode).toBe(200)
+    expect(changes.mock.calls[0]!.slice(2)).toEqual(['abc', undefined, {}])
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=light')).statusCode).toBe(200)
+    expect(changes.mock.calls[1]!.slice(2)).toEqual(['abc', undefined, { lightMachines: true }])
+  })
+
+  it('refuses any other value', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=all')).statusCode).toBe(400)
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  // Task #2906: a client that holds the summary echoes its etag; a released client sends none and is asked nothing new.
+  it('passes the summary etag a client echoes, with lines or without', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&derivedEtag=e1_-Z')).statusCode).toBe(200)
+    expect(changes.mock.calls[0]!.slice(2)).toEqual(['abc', undefined, { derivedEtag: 'e1_-Z' }])
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=light&derivedEtag=e2')).statusCode).toBe(200)
+    expect(changes.mock.calls[1]!.slice(2)).toEqual(['abc', undefined, { lightMachines: true, derivedEtag: 'e2' }])
+  })
+
+  it('refuses a malformed summary etag', async () => {
+    for (const etag of ['bad!', '', 'x'.repeat(65)]) {
+      const res = await get(`/api/super-tabs/tab1/changes?cursor=abc&derivedEtag=${etag}`)
+      expect(res.statusCode, etag).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+    }
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('serves the whole readings on demand, for an agent too', async () => {
+    expect((await get('/api/super-tabs/tab1/machine-readings?asAgentId=agent1')).statusCode).toBe(200)
+    expect(machineReadings.mock.calls[0]!.slice(1)).toEqual(['tab1', 'agent1'])
+  })
+})
+

@@ -16,6 +16,10 @@ pub struct Row {
     /// Everything else typing should match (label is included automatically).
     pub extra: String,
     pub group: Option<String>,
+    /// A heading over its groups (a machine, over its folders).
+    pub section: Option<String>,
+    /// Folded under the `▸ N older` row with this key until that row is opened; a search finds it.
+    pub older: Option<String>,
     /// Drawn before the label (state dot, engine mark).
     pub lead: Vec<Span<'static>>,
     /// Drawn after the label, dim.
@@ -60,7 +64,7 @@ impl Row {
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false, tier: 0 }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, section: None, older: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false, tier: 0 }
     }
     pub fn tier(mut self, tier: u8) -> Row { self.tier = tier; self }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
@@ -217,6 +221,8 @@ pub struct Picker {
     pub landed: Option<Instant>,
     /// C-b s: the order its rows had when it opened, which they keep while it is open.
     pub hold: Option<Vec<String>>,
+    /// C-b s: the `▸ N older` rows opened (their keys), for as long as it is open.
+    pub unfolded: std::collections::HashSet<String>,
     /// C-b s: the rows its query found by what was said in them (best first), and that query.
     pub said: Vec<String>,
     pub said_query: String,
@@ -317,6 +323,7 @@ impl Picker {
             defer_filter: false,
             header_text: None,
             hold: None,
+            unfolded: Default::default(),
             q_seen: HashMap::new(),
             landed: None,
             said: Vec::new(),
@@ -385,7 +392,12 @@ impl Picker {
         // the machines answer the new one (no row blinking out on every key).
         let found_now = !self.said_query.is_empty() && !query.trim().is_empty()
             && (self.said_query == query || query.starts_with(&self.said_query) || self.said_query.starts_with(query));
-        let offered = |r: &Row| !r.id.starts_with("external:") || self.catalog_ids.contains(&r.id) || (found_now && self.said.contains(&r.id));
+        // Old harnesses fold behind their folder's `▸ N older` while browsing; a search goes through
+        // all of them, with no such row in its results.
+        let browsing = query.trim().is_empty();
+        let folded = |r: &Row| browsing && r.older.as_ref().is_some_and(|k| !self.unfolded.contains(k));
+        let spent = |r: &Row| !browsing && r.id.starts_with(crate::modal::OLDER_ROW);
+        let offered = |r: &Row| !folded(r) && !spent(r) && (!r.id.starts_with("external:") || self.catalog_ids.contains(&r.id) || (found_now && self.said.contains(&r.id)));
         if query.trim().is_empty() {
             self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();
         } else {
@@ -717,6 +729,8 @@ impl Picker {
     /// The current row marked or not, the other way: false when nothing changed (--multi=N full).
     pub fn toggle_mark(&mut self) -> bool {
         let Some(id) = self.current_id() else { return false };
+        // (`▸ N older` is not a harness: nothing to mark.)
+        if id.starts_with(crate::modal::OLDER_ROW) { return false }
         if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); return true }
         if !self.room_to_mark() { return false }
         self.marked.push(id);

@@ -718,79 +718,79 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Retry'), findsOneWidget);
+    // Audit finding 13 (#4442): a link that can't work offers only Close.
+    expect(find.text('Retry'), findsNothing);
+    expect(
+      tester.widget<FilledButton>(find.byKey(const Key('swarm-join-confirm'))),
+      isA<FilledButton>().having(
+        (b) => (b.child as Text).data,
+        'label',
+        'Close',
+      ),
+    );
     expect(find.text('private server text'), findsNothing);
     expect(opened, false);
   });
 
-  // Scholes, 2026-10-29: joining adds this computer, so only a join that made
-  // the person a member says so, with the role; someone already in it, never.
-  testWidgets('tells only a new member\'s join, with its role', (tester) async {
-    Future<List<String>> join(
-      Map<String, dynamic> preview, {
-      Map<String, dynamic>? joined,
-    }) async {
-      final told = <String>[];
+  testWidgets(
+    'while the invitation loads the button reads Join Swarm, greyed',
+    (tester) async {
+      final answer = Completer<Map<String, dynamic>>();
       await tester.pumpWidget(
         MaterialApp(
-          home: Builder(
-            builder: (context) => Scaffold(
-              body: TextButton(
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => SwarmJoinDialog(
-                    link: _link,
-                    accountEmail: 'leo@example.com',
-                    isCurrent: () => true,
-                    onJoined: (_, _) {},
-                    onNewMember: (id, role) => told.add('$id:$role'),
-                    request: (_, path, {body}) async =>
-                        path.endsWith('/preview')
-                        ? {'id': _link.tabId, 'name': 'Pilot', ...preview}
-                        : {'id': _link.tabId, ...?joined},
-                  ),
-                ),
-                child: const Text('open'),
-              ),
+          home: Scaffold(
+            body: SwarmJoinDialog(
+              link: _link,
+              accountEmail: 'leo@example.com',
+              isCurrent: () => true,
+              onJoined: (_, _) {},
+              request: (_, _, {body}) => answer.future,
             ),
           ),
         ),
       );
-      await tester.tap(find.text('open'));
+      await tester.pump();
+      final button = tester.widget<FilledButton>(
+        find.byKey(const Key('swarm-join-confirm')),
+      );
+      expect((button.child as Text).data, 'Join Swarm');
+      expect(button.onPressed, isNull);
+      expect(find.text('Retry'), findsNothing);
+      answer.complete({'id': _link.tabId, 'name': 'Pilot', 'role': 'viewer'});
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('swarm-join-confirm')));
-      await tester.pumpAndSettle();
-      return told;
-    }
+    },
+  );
 
-    expect(
-      await join(
-        {'role': 'collaborator'},
-        joined: {'role': 'collaborator', 'alreadyMember': false},
+  testWidgets('a lost connection keeps Retry, which loads again', (
+    tester,
+  ) async {
+    var asks = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SwarmJoinDialog(
+            link: _link,
+            accountEmail: 'leo@example.com',
+            isCurrent: () => true,
+            onJoined: (_, _) {},
+            request: (_, _, {body}) async {
+              if (asks++ == 0) throw const SocketException('offline');
+              return {'id': _link.tabId, 'name': 'Pilot', 'role': 'viewer'};
+            },
+          ),
+        ),
       ),
-      ['${_link.tabId}:collaborator'],
     );
+    await tester.pumpAndSettle();
     expect(
-      await join(
-        {'role': 'viewer'},
-        joined: {'role': 'viewer', 'alreadyMember': false},
+      find.text(
+        'Could not open this Swarm. Check your connection and try again.',
       ),
-      ['${_link.tabId}:viewer'],
+      findsOneWidget,
     );
-    expect(
-      await join({'role': 'collaborator', 'alreadyMember': true}),
-      isEmpty,
-    );
-    // Review of #2188: the preview said not a member, but the person joined on
-    // another device while it was open. The join's own answer decides.
-    expect(
-      await join(
-        {'role': 'collaborator'},
-        joined: {'role': 'collaborator', 'alreadyMember': true},
-      ),
-      isEmpty,
-    );
-    // A server that does not say: nothing is added.
-    expect(await join({'role': 'collaborator'}), isEmpty);
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pilot'), findsOneWidget);
+    expect(find.text('Join Swarm'), findsWidgets);
   });
 }

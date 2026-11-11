@@ -53,18 +53,42 @@ const BUDGET_MS_RANGE = { min: 3_000, max: 20_000, fallback: 10_000 } as const
 const RATE_LIMIT_WINDOW_MS = 60_000
 const RATE_LIMIT_MAX = 60
 
+/**
+ * Per day, counted only for calls that reach the model. The minute cap alone let one account spend all
+ * day: 60 a minute is 86,400 calls. A person routing all day presses it a few hundred times; a loop does
+ * not get far. The all-accounts ceiling bounds what Harness pays here in a day, under the same budget as
+ * ⌘B routing and Hub translation. Past either, the CLI falls through to its own ladder (cli/src/lib/routeApi.ts,
+ * ending in pickAgentHeuristic), so routing degrades rather than stops. Both count in a UTC-day window shared through Redis (lib/rateLimit.ts).
+ */
+const DAY_MS = 24 * 60 * 60_000
+const PER_ACCOUNT_PER_DAY = 1_000
+const ALL_ACCOUNTS_PER_DAY = 100_000
+
+/**
+ * Bytes, enforced before the body is parsed: a request at what the CLI sends (15 agents, three questions
+ * stored at 1,000 characters, in a three-byte script such as Vietnamese: ~150 KB) passes with room to
+ * spare; a request packed to every field's own limit in such a script (~540 KB) does not, and needs not.
+ */
+const MAX_BODY_BYTES = 256 * 1024
+
 const rateLimiter = createRateLimiter('agent-route', RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)
+const perAccountDay = createRateLimiter('agent-route-day', DAY_MS, PER_ACCOUNT_PER_DAY)
+const allAccountsDay = createRateLimiter('agent-route-all', DAY_MS, ALL_ACCOUNTS_PER_DAY)
 
 export const routeRateLimitAllows = (userId: string, now = Date.now()): Promise<boolean> => rateLimiter.allows(userId, now)
 
 /** Test seam: forgets this process' counts (lib/rateLimit.ts). */
-export const resetRouteRateLimits = (): void => rateLimiter.reset()
+export const resetRouteRateLimits = (): void => {
+  rateLimiter.reset()
+  perAccountDay.reset()
+  allAccountsDay.reset()
+}
 
 const agentSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string().max(200).default(''),
   /** The person's own last questions to this agent, newest first. Absent for a fresh agent. */
-  prompts: z.array(z.string()).max(MAX_PROMPTS_PER_AGENT).default([]),
+  prompts: z.array(z.string().max(MAX_PROMPT_CHARS)).max(MAX_PROMPTS_PER_AGENT).default([]),
 })
 
 const routeBodySchema = z.object({
@@ -212,7 +236,7 @@ export function parseRanking(raw: string, offered: Set<string>): RankedRow[] | n
 export async function agentRouteRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: RouteBody }>(
     AGENT_ROUTE_PATH,
-    { preHandler: [validateBody(routeBodySchema)] },
+    { bodyLimit: MAX_BODY_BYTES, preHandler: [validateBody(routeBodySchema)] },
     async (req, reply) => {
       // Fail CLOSED on an unconfigured model, like the Cursor routes: an absent credential must never
       // read as "answer some other way" on a path that spends credit.
@@ -236,12 +260,24 @@ export async function agentRouteRoutes(app: FastifyInstance): Promise<void> {
         return
       }
 
+      // The account's own count first, so calls refused for one account never spend everyone's ceiling.
+      if (!(await perAccountDay.allows(userId))) {
+        sendError(reply, "You've used today's routing limit. It resets at midnight UTC.", 'RATE_LIMITED', 429)
+        return
+      }
+      if (!(await allAccountsDay.allows('all'))) {
+        logger.error('agent-route: daily ceiling reached', { ceiling: ALL_ACCOUNTS_PER_DAY })
+        sendError(reply, "Harness's routing budget for today has run out. It resets at midnight UTC.", 'ROUTE_BUDGET', 503)
+        return
+      }
+
       const budgetMs = resolveBudgetMs(body.budgetMs)
       const offered = new Set(body.agents.map((a) => a.id))
       const started = Date.now()
+      const prompt = buildRankPrompt(body)
 
       try {
-        const { text, model } = await callHarnessLlm(buildRankPrompt(body), budgetMs)
+        const { text, model } = await callHarnessLlm(prompt, budgetMs)
         const ranking = parseRanking(text, offered)
         if (!ranking) {
           logger.error('agent-route: unusable answer', { model, userId, sample: text.slice(0, 200) })
@@ -255,6 +291,8 @@ export async function agentRouteRoutes(app: FastifyInstance): Promise<void> {
           // state is the first thing to look at when a route reads wrong.
           bare: body.agents.filter((a) => a.prompts.length === 0).length,
           chars: body.task.length,
+          // What was paid for: the whole prompt, questions included, not only the task.
+          promptChars: prompt.length,
           model,
           ms: Date.now() - started,
           top: ranking[0].score,

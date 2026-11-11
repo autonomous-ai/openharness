@@ -168,6 +168,22 @@ describe('TerminalBackendCoordinator', () => {
     expect(captures).toHaveBeenCalledTimes(3)
   })
 
+  it('routes a host added later (a guest\'s), and keeps it when the configured hosts are listed again', () => {
+    const owner = backend('tmux:default', vi.fn())
+    const guest = backend('ptyhost:p3-0.5.55-gu0123456789ab', vi.fn())
+    const coordinator = new TerminalBackendCoordinator([owner], ['tmux'])
+    const guestRuntime: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p3-0.5.55-gu0123456789ab', paneId: '%1' }
+    coordinator.addBackend(guest)
+    expect(coordinator.backendFor(guestRuntime)).toBe(guest)
+    // The configured hosts re-listed (a tmux recovery) must not drop the guest's host.
+    coordinator.replaceBackends([owner])
+    expect(coordinator.backendFor(guestRuntime)).toBe(guest)
+    expect(coordinator.instances()).toEqual([owner, guest])
+    // A guest removed: its host is no longer this daemon's to route.
+    coordinator.removeBackend(guest)
+    expect(coordinator.backendFor(guestRuntime)).toBeUndefined()
+  })
+
   it('uses lease-aware pre-dispatch fallback but never retries ambiguous completion', async () => {
     const tmuxBackend = backend('tmux:default', submitBy({ state: 'failed', dispatch: 'rejected', reason: 'rejected' }))
     const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'])

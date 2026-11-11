@@ -108,48 +108,50 @@ void main() {
       ),
     ]);
 
-    test('each Swarm sends its chats\' files with the upload handed in',
-        () async {
-      await features.set(PhoneExperiment.swarm, true);
-      final sent = <String>[];
-      final h = SwarmHost(
-        accountId: () => account.value,
-        account: account,
-        request: backend().request,
-        upload:
-            ({
-              required tabId,
-              required conversationId,
-              required name,
-              required mime,
-              required file,
-              required cancel,
-              required onProgress,
-            }) async {
-              sent.add('$tabId/$conversationId/$name');
-              return {'attachment': <String, dynamic>{}};
-            },
-        notices: notices,
-        features: features,
-        homeCache: home,
-      );
-      addTearDown(h.dispose);
-      final inbox = h.session!.inbox..shown = true;
-      await until(() => inbox.reader('a') != null);
+    test(
+      'each Swarm sends its chats\' files with the upload handed in',
+      () async {
+        await features.set(PhoneExperiment.swarm, true);
+        final sent = <String>[];
+        final h = SwarmHost(
+          accountId: () => account.value,
+          account: account,
+          request: backend().request,
+          upload:
+              ({
+                required tabId,
+                required conversationId,
+                required name,
+                required mime,
+                required file,
+                required cancel,
+                required onProgress,
+              }) async {
+                sent.add('$tabId/$conversationId/$name');
+                return {'attachment': <String, dynamic>{}};
+              },
+          notices: notices,
+          features: features,
+          homeCache: home,
+        );
+        addTearDown(h.dispose);
+        final inbox = h.session!.inbox..shown = true;
+        await until(() => inbox.reader('a') != null);
 
-      final reader = inbox.reader('a')!;
-      await reader.upload(
-        tabId: reader.tabId,
-        conversationId: 'g9',
-        name: 'shot.jpg',
-        mime: 'image/jpeg',
-        file: SwarmOutgoingFile('shot.jpg', Uint8List(1)),
-        cancel: CancelToken(),
-        onProgress: (_) {},
-      );
+        final reader = inbox.reader('a')!;
+        await reader.upload(
+          tabId: reader.tabId,
+          conversationId: 'g9',
+          name: 'shot.jpg',
+          mime: 'image/jpeg',
+          file: SwarmOutgoingFile('shot.jpg', Uint8List(1)),
+          cancel: CancelToken(),
+          onProgress: (_) {},
+        );
 
-      expect(sent, ['a/g9/shot.jpg']);
-    });
+        expect(sent, ['a/g9/shot.jpg']);
+      },
+    );
 
     group('the photos drawn', () {
       setUp(() => features.set(PhoneExperiment.swarm, true));
@@ -351,6 +353,77 @@ void main() {
 
         expect(notices.badges.last, 0);
       });
+    });
+  });
+
+  group('a tag in a chat the person muted (anh Dee, 2026-11-09)', () {
+    /// Swarm `a` with one tag by Ann waiting in [chat], its project's channel
+    /// unless named, which the reader set to [notify].
+    Future<(SwarmSession, _Notices)> tagged(
+      String notify, {
+      String chat = leadChat,
+    }) async {
+      final fake = backend();
+      final derived = {
+        'decisionsWaiting': 0,
+        'mentionsWaiting': 1,
+        'chatSettings': {chat: notify},
+      };
+      fake.routes['/api/super-tabs/a/parts'] = (_) => firstLoad(
+        tabId: 'a',
+        groups: [groupData('g1', title: 'Fix login')],
+        derived: derived,
+      );
+      fake.routes['/api/super-tabs/a/changes'] = (_) =>
+          changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
+        'mentions': [
+          {
+            'id': 'm1',
+            'projectName': 'Mobile',
+            'conversationId': chat,
+            'conversationTitle': 'Mobile',
+            'messageId': 'msg-1',
+            'leadName': 'Ann',
+            'leadKind': 'person',
+            'text': 'Can you check the copy?',
+          },
+        ],
+      };
+      final notices = _Notices();
+      final s = session(fake, notices: notices)..foreground = false;
+      await s.inbox.refresh();
+      await settle();
+      return (s, notices);
+    }
+
+    test('posts nothing, as its push, yet counts on the badge', () async {
+      final (s, notices) = await tagged('muted', chat: 'g1');
+      s.announce(s.inbox.needs.single);
+
+      expect(notices.shown, isEmpty);
+      expect(notices.badges.last, 1);
+    });
+
+    // Swarm v4 has no way to unmute a project's channel, so a mute kept from
+    // before is read as Mentions only, as the server now pushes its tags
+    // (lead, 2026-11-10).
+    test("rings in a project's channel muted before", () async {
+      final (s, notices) = await tagged('muted');
+      s.announce(s.inbox.needs.single);
+
+      expect(notices.shown.single.title, 'Ann tagged you');
+      expect(s.inbox.reader('a')!.snapshot!.chatSettings[leadChat], 'muted');
+    });
+
+    test('rings in a chat that is not muted', () async {
+      final (s, notices) = await tagged('mentions');
+      s.announce(s.inbox.needs.single);
+
+      expect(notices.shown.single.title, 'Ann tagged you');
     });
   });
 

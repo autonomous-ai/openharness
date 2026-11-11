@@ -1,6 +1,6 @@
 // The ASCII shortcut must produce exactly the original damage rectangles,
 // including UTF-8 aliases, malformed bytes and missing trailing space cells.
-#include "../main/ui/habitat/octopus.h"
+#include "../main/ui/habitat/terminal.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,8 +33,7 @@ int main(void)
     static const uint8_t block_pixels[] = {255,255,255,255};
     const ht_font_t blocks = {0x2588,0x2588,4,4,block_pixels};
     const ht_font_t *fonts[] = {&ht_mono_16, &ht_mono_20, &ht_mono_24, &ht_mono_28,
-        &ht_octopus_font_2, &ht_octopus_font_4, &ht_octopus_font_6, &ht_octopus_font_8,
-        &ht_octopus_font_10, &ht_open_20, &blocks};
+        &ht_open_20, &blocks};
     ht_scene_t a, b;
     for (unsigned trial = 0; trial < 100000; trial++) {
         uint16_t bg = next();
@@ -55,20 +54,5 @@ int main(void)
         compare(&a, &b); compare(&b, &a);
         compare(NULL, &b); compare(&a, &a);
     }
-    ht_tim_face_t face = {.recipient = "Firmware", .status = "Coalescing",
-        .mood = HT_TIM_WORKING, .foreground = 0xffff, .dim = 0x7777, .ink = 0xafe0};
-    for (int layout = 0; layout < 4; layout++) {
-        face.focus = layout == 1;
-        const char *recap = layout == 2 ? "Fixed. All checks pass." : layout == 3 ?
-            "The update is installed. Voice input now sends to the selected agent. The result stays in the center." : NULL;
-        ht_scene_clear(&a, 0);
-        for (int frame = 0; frame < HT_OCTOPUS_FRAMES; frame++) {
-            face.pose = (ht_tim_pose_t){.blink = frame % 7 == 0, .level = frame % 5};
-            face.mood = frame % 8; face.unread = frame % 3 == 0;
-            ht_scene_clear(&b, 0);
-            ht_octopus_face(&b, &face, frame, ht_rgb(0xc8a9f0), recap);
-            compare(&a, &b); a = b;
-        }
-    }
-    puts("ASCII damage: 400000 original/fast comparisons + 252 creature transitions; exact rectangles, Unicode aliases and malformed bytes PASS");
+    puts("ASCII damage: 400000 original/fast comparisons; exact rectangles, Unicode aliases and malformed bytes PASS");
 }

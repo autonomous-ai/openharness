@@ -23,10 +23,9 @@ const SCHEMA = join(process.cwd(), 'prisma/schema.prisma')
 
 /** Every index Prisma cannot describe, as the worker has always made it: collection, name, key, seconds to expiry. */
 const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
-  ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
-  ...['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval'].map(c => [c, 'workspace_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
-  ['SwarmWorkspaceInvitation', 'workspace_invitation_expiry', { expiresAt: 1 }, 0],
-  ['SuperTabMention', 'mention_expiry', { createdAt: 1 }, 30 * DAY],
+  ...['SwarmHead', 'SwarmGroup', 'SwarmStart'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
+  ['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY],
+  ['SuperTabGithubComment', 'github_comment_expiry', { createdAt: 1 }, 90 * DAY],
   ['SuperTabTerminalRequest', 'terminal_request_expiry', { createdAt: 1 }, 120],
   ['product_usage_receipts', 'product_usage_expiry', { expiresAt: 1 }, 0],
   ['product_usage_totals', 'product_usage_expiry', { dayUtc: 1 }, 396 * DAY],
@@ -34,6 +33,7 @@ const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
     'agent_daily_presence', 'analytics_daily_buckets', 'analytics_daily_machines'].map(c => [c, 'product_usage_expiry', { dayUtc: 1 }, 35 * DAY] as [string, string, Record<string, number>, number]),
   ['product_usage_activity', 'product_usage_expiry', { expiresAt: 1 }, 0],
   ['harness_sessions', 'harness_session_expiry', { expiresAt: 1 }, 30 * DAY],
+  ['push_devices', 'push_device_expiry', { seenAt: 1 }, 90 * DAY],
 ]
 
 type Profiled = { ts: Date; ns: string; errCode?: number; command?: Record<string, unknown>; locks?: Record<string, { acquireCount?: Record<string, number> }> }
@@ -88,7 +88,7 @@ async function schemaWith(edit: (schema: string) => string): Promise<string> {
   await writeFile(path, edited)
   return path
 }
-const groupIndex = (line: string) => (schema: string) => schema.replace('  @@index([workFinished, archived, lastActivityAt])\n', `  @@index([workFinished, archived, lastActivityAt])\n  ${line}\n`)
+const groupIndex = (line: string) => (schema: string) => schema.replace('  @@index([dormant, lastActivityAt])\n', `  @@index([dormant, lastActivityAt])\n  ${line}\n`)
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
@@ -134,10 +134,30 @@ describe('a release\'s schema step', () => {
   it('gives an expiry index whose time changed its new time, without a rebuild', async () => {
     const { db, target } = await database()
     await releaseSchema(db, target)
-    await db.$runCommandRaw({ collMod: 'SuperTabMention', index: { name: 'mention_expiry', expireAfterSeconds: 7 * DAY } })
+    await db.$runCommandRaw({ collMod: 'SuperTabTerminalRequest', index: { name: 'terminal_request_expiry', expireAfterSeconds: 7 * DAY } })
     const since = new Date()
     await releaseSchema(db, target)
-    expect(await indexChanges(db, since)).toEqual(['collMod SuperTabMention mention_expiry'])
+    expect(await indexChanges(db, since)).toEqual(['collMod SuperTabTerminalRequest terminal_request_expiry'])
+    expect(await expiryIndexes(db)).toEqual(EXPIRY)
+    await db.$disconnect()
+  }, 240_000)
+
+  it('gives an existing collection its new expiry index when the database user may not run collMod (prod 10-29)', async () => {
+    const { db, target } = await database()
+    // Production before this release: the operations collection, with receipts, and no expiry index.
+    const before = await schemaWith(schema => schema.replace(/\n *\/\/\/[^\n]*\n *@@index\(\[createdAt\], map: "operation_expiry"\)/, ''))
+    await releaseSchema(db, { ...target, schema: before })
+    await db.$runCommandRaw({ dropIndexes: 'SuperTabOperation', index: 'operation_expiry' }).catch(() => {})
+    await db.superTabOperation.create({ data: { id: 'receipt', tabId: 't', actorKey: 'agent:a', requestHash: 'h', revision: 0, result: {} } })
+    // As Prisma reports Mongo's refusal (code 13) of collMod to production's app user; db push runs as its own process.
+    const refusing = new Proxy(db, { get: (held, key) => key === '$runCommandRaw'
+      ? (command: Record<string, unknown>) => 'collMod' in command
+        ? Promise.reject(new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "SuperTabOperation" }`'))
+        : held.$runCommandRaw(command as never)
+      : Reflect.get(held, key) })
+    const since = new Date()
+    await releaseSchema(refusing, target)
+    expect((await indexChanges(db, since)).filter(change => change.includes('SuperTabOperation'))).toEqual(['createIndexes SuperTabOperation operation_expiry'])
     expect(await expiryIndexes(db)).toEqual(EXPIRY)
     await db.$disconnect()
   }, 240_000)

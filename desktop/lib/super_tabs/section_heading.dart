@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
+
 import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
+import 'count_badge.dart' show SuperTabCountBadge;
 
 /// Keeps resource headings aligned whether their add action is available or not.
 class SuperTabSectionHeading extends StatelessWidget {
@@ -19,9 +22,14 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.collapsed,
     this.onToggleCollapsed,
     this.titleTooltip,
+    this.titleStyle,
+    this.waiting = 0,
   });
 
   final String title;
+
+  /// The title's style, where a screen sets its own: the Swarm sidebar's are Slack's ([SwarmType.sidebar]).
+  final TextStyle? titleStyle;
   final VoidCallback? onAdd;
   final String? addTooltip;
 
@@ -54,6 +62,11 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// Expand, and a screen reader hears this as the button's hint, never its
   /// name.
   final String? titleTooltip;
+
+  /// What waits inside a folded group: shown only while [collapsed], as a
+  /// bold title and this count in a row's red number, so a folded Projects
+  /// still says a tag is in it (audit finding 19).
+  final int waiting;
 
   /// The chevron and every action are a fixed 32 px square; the gap
   /// before the actions is 4 px; the title always keeps at least this
@@ -89,9 +102,17 @@ class SuperTabSectionHeading extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final titleStyle = DesktopChrome.metadata().copyWith(
-              fontWeight: FontWeight.w600,
-            );
+            final shownWaiting = collapsed == true && collapsible ? waiting : 0;
+            final ordinaryStyle =
+                this.titleStyle ??
+                DesktopChrome.metadata().copyWith(fontWeight: FontWeight.w600);
+            // Bold at full strength, as a row with something unread.
+            final titleStyle = shownWaiting > 0
+                ? ordinaryStyle.copyWith(
+                    fontWeight: grid.AppFont.semibold,
+                    color: grid.SidebarInk.foreground(context),
+                  )
+                : ordinaryStyle;
             final titleMeasure = TextPainter(
               text: TextSpan(text: title, style: titleStyle),
               textDirection: Directionality.of(context),
@@ -152,13 +173,23 @@ class SuperTabSectionHeading extends StatelessWidget {
                                                 child: titleLabel,
                                               ),
                                       ),
+                                      if (shownWaiting > 0) ...[
+                                        const SizedBox(width: _trailingGap),
+                                        Semantics(
+                                          label: '$shownWaiting waiting',
+                                          excludeSemantics: true,
+                                          child: SuperTabCountBadge(
+                                            shownWaiting,
+                                          ),
+                                        ),
+                                      ],
                                       const SizedBox(width: _trailingGap),
                                       Icon(
                                         collapsed == true
                                             ? AppIcons.chevronRight
                                             : AppIcons.chevronDown,
                                         size: AppIcons.inlineSize,
-                                        color: DesktopChrome.muted,
+                                        color: grid.SidebarInk.muted(context),
                                       ),
                                     ],
                                   ),

@@ -38,7 +38,7 @@ class UsagePage extends StatefulWidget {
   State<UsagePage> createState() => _UsagePageState();
 }
 
-class _UsagePageState extends State<UsagePage> {
+class _UsagePageState extends State<UsagePage> with WidgetsBindingObserver {
   /// Owned by the page rather than by the app, which is the opposite of the
   /// desktop's choice and right for the opposite reason. There the rail
   /// unmounts whenever the sidebar folds, so a poller living in it would
@@ -55,10 +55,27 @@ class _UsagePageState extends State<UsagePage> {
   void initState() {
     super.initState();
     _usage.addListener(_rememberSummary);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// In a pocket (`hidden`, `paused`) the page asks nothing; back in front, one cycle at once and
+  /// the minute's poll again ([UsageController.pause]). `inactive` — the app switcher, a system
+  /// sheet — is still in front of somebody, and changes nothing.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.hidden || AppLifecycleState.paused:
+        _usage.pause();
+      case AppLifecycleState.resumed:
+        _usage.resume();
+      case AppLifecycleState.inactive || AppLifecycleState.detached:
+        break;
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _usage.removeListener(_rememberSummary);
     _usage.dispose();
     super.dispose();
@@ -232,7 +249,9 @@ class _EmptyUsage extends StatelessWidget {
   /// The providers named once each, in [UsageProvider] order — two machines
   /// signed out of the same account are one sentence, not two.
   static String _providers(List<ProviderUsage> readings) {
-    final seen = <UsageProvider>{for (final reading in readings) reading.provider};
+    final seen = <UsageProvider>{
+      for (final reading in readings) reading.provider,
+    };
     final labels = [
       for (final provider in UsageProvider.values)
         if (seen.contains(provider)) provider.label,
@@ -286,7 +305,9 @@ class _AccountCardState extends State<_AccountCard> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(AppCard.radius),
-          onTap: expandable ? () => setState(() => _expanded = !_expanded) : null,
+          onTap: expandable
+              ? () => setState(() => _expanded = !_expanded)
+              : null,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(13, 12, 13, 13),
             child: Column(
@@ -451,7 +472,10 @@ class _WindowRow extends StatelessWidget {
                 // Amber at 20% left, red at 5%. The figure is exact either way,
                 // so the colour is not carrying the number — it is carrying the
                 // moment the number starts to matter.
-                color: usagePressureInk(window.pressure, AppPalette.textPrimary),
+                color: usagePressureInk(
+                  window.pressure,
+                  AppPalette.textPrimary,
+                ),
                 fontSize: 13.5,
                 fontWeight: FontWeight.w600,
                 fontFeatures: AppFont.tabularFigures,

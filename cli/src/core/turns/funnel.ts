@@ -16,6 +16,7 @@ import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
+import { WHOLE_TEXT_ENGINES, type TurnEnds } from './ends.js'
 import type { TurnRecaps } from './recaps.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
@@ -59,8 +60,6 @@ export interface FunnelDeps {
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
-  /** On-demand, bounded native prompt/answer observers. No consumer is awaited. */
-  nativeTurns?: { ingest(agentId: string, events: readonly Events[number][], replay: boolean): void }
   /** How a consumer outside the core is called ([outsideConsumers]). */
   outside?: OutsideConsumers
   /** The agent's engine is working now: a live turn start or its progress, never a re-read (the mover's quiet clock,
@@ -69,6 +68,9 @@ export interface FunnelDeps {
   /** Each live turn's start and end, never a re-read: the short-turn guard holds automatic input to an agent that
    *  loops (shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'started' | 'ended'>
+  /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts), which is told each turn as it goes: that is how
+   *  an end says which turn it was, and what the turn answered. */
+  ends?: Pick<TurnEnds, 'started' | 'said' | 'worked' | 'ended' | 'compacted'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -109,7 +111,7 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(), working, shortTurns,
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns, ends,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -156,6 +158,9 @@ export function funnelFor({
         outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
+        // A turn the daemon picks up at attach is told as one whose first part it never saw, and so is one of an engine whose texts are
+        // not whole messages; a re-read of history is not told at all.
+        if (!opts?.replay) outside('turn-ends', () => ends?.started(sessionId, event.payload.userMessage, !!opts?.resumed || !WHOLE_TEXT_ENGINES.has(usageSession?.engine ?? '')))
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
         // daemon is picking back up at attach: a dialog on the pane then is THIS turn's, still waiting,
         // and marking it pre-turn is how a restarted daemon never announced a question Codex had open.
@@ -183,9 +188,19 @@ export function funnelFor({
         // Do NOT stop the heartbeat here: the turn is closed but its recap is just being cut (the recaps
         // hear the batch below and say its card is busy). The timer keeps beating for the device's card and
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
+        // Whoever answers a person at a turn's end (the Swarm host, superTabs/agentReplies.ts) hears every live end, the one before
+        // a queued follow-up included: each message is its own turn. Never one re-read from disk.
+        if (!replay) outside('turn-ends', () => ends?.ended({ agentId, sessionId, aborted: event.payload.aborted === true }))
+      } else if (event.type === 'text_delta') {
+        if (!replay) outside('turn-ends', () => ends?.said(sessionId, event.payload.content, event.payload.commentary === true))
+      } else if (event.type === 'tool_start' && !event.payload.parentToolUseId) {
+        // A tool a sub-agent calls is not the turn's own: what the turn said stays what it said.
+        if (!replay) outside('turn-ends', () => ends?.worked(sessionId))
+      } else if (event.type === 'context_compact') {
+        // Its agent's context was compacted: the end of this turn, or of its next, says so (core/turns/ends.ts).
+        if (!replay) outside('turn-ends', () => ends?.compacted(sessionId))
       }
     }
-    if (nativeTurns) outside('native-turns', () => nativeTurns.ingest(agentIdFor(sessionId), events, !!(opts?.resumed || opts?.replay)))
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))

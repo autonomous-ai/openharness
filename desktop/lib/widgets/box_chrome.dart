@@ -4,23 +4,26 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
 import '../terminal/terminal_text.dart';
 
 const double kTerminalCornerRadius = 3;
 
 /// A stable rim for the terminal pane, independent of the desktop dialog frame.
+///
+/// The same line focused or not: no colored focus lines (owner, 2026-11-04).
+/// An unfocused pane among others is told apart by its dimming.
 BorderSide terminalPaneBorder({bool focused = false, bool remote = false}) =>
-    BorderSide(
-      color: !focused
-          ? grid.AppPalette.divider
-          : remote
-          ? grid.AppPalette.remotePaneFocus
-          : grid.AppPalette.accentOnSurface,
-      width: 1,
-    );
+    BorderSide(color: grid.AppPalette.divider, width: 1);
 
 /// One gutter around the workspace, between panes, and beside command docks.
 const double kWorkspaceInset = 9.5;
+
+/// The gutter around and between panes: none in the Compact pane style.
+double get kPaneInset =>
+    appearancePrefsStore.value.panes.style == PaneStyle.compact
+    ? 0
+    : kWorkspaceInset;
 
 /// How solid the workspace's panes paint their own fill: below 1 while the
 /// background shows through them (any Background but Blank). Only fills turn
@@ -169,6 +172,9 @@ double boxRowHeight(TextScaler scale) =>
 /// Key hints, shortcut glyphs and counts: the box's meta line.
 Color get kBoxFaint => boxText(.54);
 TextStyle get kBoxFaintStyle => grid.AppType.monoMeta(color: kBoxFaint);
+
+/// A box field's placeholder: the color every other field's placeholder uses.
+Color get kBoxHint => grid.AppPalette.textFaint;
 
 /// Linux spells its chords out (`spellsModifierKeys`); the box prints them in
 /// its own lower-case, dash-joined form, as it does a Mac's glyphs.

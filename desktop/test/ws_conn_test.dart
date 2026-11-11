@@ -283,6 +283,43 @@ void main() {
     });
   });
 
+  // Browser settings carry a proxy's host, its login and its exit address.
+  test('no agent_browser request or its failure is logged', () async {
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() => appLog = previousLog);
+    hub = await FakeHub.start();
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'test',
+      machineId: 'fixture',
+      accessTokenProvider: (_, _) async => 'fixture-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    await conn!.connect();
+    await expectLater(
+      conn!.request(
+        'agent_browser_settings_save',
+        payload: {
+          'agentId': 'a1',
+          'settings': {
+            'proxy': {'host': 'proxy.example', 'username': 'ken'},
+          },
+        },
+        timeout: const Duration(milliseconds: 50),
+      ),
+      throwsA(isA<WsRequestTimeout>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      stream.entries.where((e) => e.message.contains('agent_browser')),
+      isEmpty,
+    );
+  });
+
   test(
     'uses SSO subprotocol, environment, readiness, and machine_select',
     () async {
@@ -697,7 +734,7 @@ void main() {
         request.response.statusCode = HttpStatus.serviceUnavailable;
         await request.response.close();
       });
-      var reconnecting = 0;
+      var dials = 0;
       conn = WsConn(
         wsBaseUrl: 'wss://unused.example',
         autonomousEnv: 'prod',
@@ -706,7 +743,10 @@ void main() {
         onAuthFailure: (_) {},
         onEvent: (_) {},
         onStatus: (status) {
-          if (status == ConnectionStatus.reconnecting) reconnecting++;
+          if (status == ConnectionStatus.reconnecting ||
+              status == ConnectionStatus.connecting) {
+            dials++;
+          }
         },
         transportKind: WsTransportKind.localPlaintext,
         allowLocalTcpFixture: true,
@@ -716,7 +756,7 @@ void main() {
       await conn!.connect();
       await Future<void>.delayed(const Duration(milliseconds: 650));
       expect(
-        reconnecting,
+        dials,
         greaterThanOrEqualTo(4),
         reason: 'backoff would allow one',
       );
@@ -747,7 +787,11 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 250));
     expect(failures, hasLength(1));
     expect(failures.single, startsWith('4403:'));
-    expect(statuses, contains(ConnectionStatus.reconnecting));
+    // Dialled again, on its first connect's quick tries (test/first_connect_test.dart).
+    expect(
+      statuses.where((status) => status == ConnectionStatus.connecting),
+      hasLength(greaterThan(1)),
+    );
     expect(conn!.isClosed, isFalse);
   });
 

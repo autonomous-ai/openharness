@@ -19,7 +19,7 @@ vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
-import { harnessShareRoutes, recipientShare } from './harnessShares.js'
+import { harnessShareRoutes, recipientShare, SHARES_TOLD_MS } from './harnessShares.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { logger } from '../utils/logger.js'
@@ -191,6 +191,25 @@ describe('account-bound harness invitations', () => {
     // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the invitation behind it.
     expect(info).toHaveBeenCalledWith('harness share: told the recipient it changed', { shareId: id, recipientId: 'ken' })
   })
+  // Task #3925 (Ken's scan, 11-06): a Swarm's agent restarts made a share per new agent for each member, and each one told every
+  // app of theirs to read its shares again: a burst of starts was a burst of share-list reads. A recipient is told at once, then
+  // at most once more a window, so the last change is never lost.
+  it('tells a recipient once for a burst of changes, then once more when the burst is over', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
+      for (let i = 0; i < 5; i++) {
+        const id = randomUUID()
+        mocks.prisma.harnessShare.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({ id, recipientEmail: 'ken@example.com' })
+        expect((await put({ ...input(), agentId: `agent-${i}` }, id)).statusCode).toBe(200)
+      }
+      expect(mocks.listChanged).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(SHARES_TOLD_MS)
+      expect(mocks.listChanged).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(SHARES_TOLD_MS * 2)
+      expect(mocks.listChanged).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
   it('tells the invited account when the owner takes the invitation back', async () => {
     const id = randomUUID()
     mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
@@ -232,27 +251,6 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findFirst.mockResolvedValueOnce({ ...machine, billingStatus: 'pending' })
     expect(await recipientShare('share', ken)).toBeNull()
   })
-  // A team machine (lib/teamSession.ts) hosts Swarm agents for teammates. Its daemon shares an agent's terminal with the
-  // Swarm members who may watch it, and nothing else: only its own machine's harnesses, only for a Swarm.
-  it('lets a team session share only its own machine\'s harnesses, for a Swarm, and take back only those', async () => {
-    const TEAM_COMPUTER = 'b'.repeat(32)
-    const teamMachine = { ...machine, machineId: 'team-mac', computerId: TEAM_COMPUTER, sessionKind: 'team' }
-    mocks.auth.mockResolvedValue({ ...owner, harnessSessionId: 'team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER })
-    mocks.prisma.machine.findMany.mockResolvedValue([teamMachine])
-    mocks.prisma.machine.findFirst.mockResolvedValue(teamMachine)
-    const swarm = { ...input(), machineId: 'team-mac', superTabId: 'a'.repeat(24) }
-    expect((await put(swarm)).statusCode).toBe(200)
-    for (const payload of [{ ...swarm, machineId: 'm1' }, { ...swarm, superTabId: null }, { ...input(), machineId: 'team-mac' }]) {
-      const res = await put(payload)
-      expect(res.statusCode).toBe(403)
-      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    }
-    expect(mocks.prisma.harnessShare.upsert).toHaveBeenCalledTimes(1)
-    const id = randomUUID()
-    expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
-    expect(mocks.prisma.harnessShare.updateMany).toHaveBeenLastCalledWith({ where: { id, ownerId: 'owner', autonomousEnv: 'prod', machineId: 'team-mac', OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
-      data: { revokedAt: expect.any(Date) } })
-  })
   it('rechecks Super Tab membership for session admission and excludes revoked views from inventory', async () => {
     mocks.auth.mockResolvedValue(ken)
     const share = { id: 'share', ...input(), superTabId: 'a'.repeat(24), ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
@@ -263,6 +261,21 @@ describe('account-bound harness invitations', () => {
     mocks.mayOpenShare.mockResolvedValue(false)
     expect(await recipientShare('share', ken)).toBeNull()
     expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+  })
+
+  // Prisma sends an empty list as `$or: []`, a scan of all machines (prod slow log, 2026-11-04): most people have no share.
+  it('reads no machines or owners for a person with no share', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })
+    expect(response.json().data.machines).toEqual([])
+    expect(mocks.prisma.machine.findMany).not.toHaveBeenCalled()
+    expect(mocks.prisma.user.findMany).not.toHaveBeenCalled()
+  })
+
+  it('reads no owners when none of the shared machines is usable', async () => {
+    mocks.prisma.harnessShare.findMany.mockResolvedValue([{ id: 's', ...input(), engine: null, ownerId: 'owner', expiresAt: new Date(input().expiresAt) }])
+    mocks.prisma.machine.findMany.mockResolvedValue([])
+    expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+    expect(mocks.prisma.user.findMany).not.toHaveBeenCalled()
   })
 
   it('asks the Swarms about an ordinary share too: a confidential session refuses it (final review, Critical 1)', async () => {

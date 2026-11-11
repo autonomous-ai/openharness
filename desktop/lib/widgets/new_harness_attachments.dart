@@ -67,21 +67,24 @@ void reportAttachProblem(BuildContext context, String? problem) {
       ?.showSnackBar(SnackBar(content: Text(problem)));
 }
 
-/// 📎 beside New Harness: opens the system's file chooser.
+/// 📎 beside New Harness: opens the system's file chooser. A Swarm composer
+/// draws it as the phone's + ([icon]).
 class NewHarnessAttachButton extends StatelessWidget {
   const NewHarnessAttachButton({
     super.key,
     required this.attachments,
     required this.enabled,
+    this.icon = AppIcons.paperclip,
   });
 
   final HarnessAttachments attachments;
   final bool enabled;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) => AppIconButton(
     key: const ValueKey('new-harness-attach'),
-    icon: AppIcons.paperclip,
+    icon: icon,
     tooltip: 'Attach files',
     size: 16,
     onPressed: !enabled

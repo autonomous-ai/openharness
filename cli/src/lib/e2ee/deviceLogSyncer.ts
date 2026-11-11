@@ -40,8 +40,8 @@ export type DeviceLogAppendAnswer = { head: DevLogHead } | { error: string; head
 export interface DevLogSignIn {
   /** Which sign-in it is. */
   epoch: string
-  /** Given to a session from before sign-ins were recorded: nobody saw it being made here, so it never
-   *  starts the log over (it may take a file over). */
+  /** Given to a session from before sign-ins were recorded: nobody saw it being made by hand here, so it never starts
+   *  the log over (it may take a file over). */
   adopted: boolean
   /** When it was made (ms); null when not known — then it never starts the log over either. */
   at: number | null
@@ -566,7 +566,7 @@ export class DeviceLogSyncer {
       }
       if (reset) {
         if (now) {
-          // What the account left behind trusted goes with its log, and comes back with it.
+          // The departing trust and log are kept, for a sign-in back to that account.
           this.deps.switchAccount?.(now.acct, got.acct)
           this.deps.store.archive(latest)
         }
@@ -1024,9 +1024,9 @@ export class DeviceLogSyncer {
       // The joined point never moves up past the reviewed head: a shorter list (rolled back, or
       // another account's) must leave every key added to it from here on news.
       const joinedSeq = Math.min(base.joinedSeq ?? base.notifiedUpTo, next.head.seq)
-      // The reviewed list is another account's: the one this machine leaves is kept, as on a sign-in
-      // (and what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
-      // goes on from where it was.
+      // The reviewed list is another account's: the departing log is kept as on a sign-in (and what a
+      // fork suspended in it stays suspended here) — and a kept one of the reviewed account goes on
+      // from where it was.
       if (file.state && !same) {
         this.deps.switchAccount?.(file.state.acct, next.acct)
         this.deps.store.archive(file)

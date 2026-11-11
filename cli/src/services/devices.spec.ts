@@ -122,19 +122,6 @@ vi.mock('../lib/voiceRouter.js', () => ({
   routeVoiceTask: vi.fn(),
 }))
 
-const jevMade = vi.hoisted(() => vi.fn())
-vi.mock('../lib/jev/jevClient.js', async (orig) => {
-  const actual = await orig<typeof import('../lib/jev/jevClient.js')>()
-  return {
-    ...actual,
-    createJevDecide: (options: Parameters<typeof actual.createJevDecide>[0]) => {
-      jevMade(options)
-      // Keep the real hosted request and answer parsing, without discovering a key or calling OpenRouter.
-      return actual.createJevDecide({ ...options, key: async () => null })
-    },
-  }
-})
-
 const { startDevices } = await import('./devices.js')
 
 let dataDir: string
@@ -401,39 +388,38 @@ describe('what the windows say, reaching the dial', () => {
   })
 
   describe('a summary\'s tier', () => {
-    afterEach(() => { delete process.env.HARNESS_NOTIFY_SMART })
-    it('builds the default decider without Jev when HARNESS_NOTIFY_SMART is 0, and with it otherwise', () => {
-      process.env.HARNESS_NOTIFY_SMART = '0'
-      start({ decideTier: null })
-      expect(jevMade).not.toHaveBeenCalled()
-      delete process.env.HARNESS_NOTIFY_SMART
-      start({ decideTier: null })
-      expect(jevMade).toHaveBeenCalledTimes(1)
-    })
-
-    it('asks the signed-in backend for a default tier, sends its answer to the dial, and tallies it', async () => {
-      delete process.env.HARNESS_NOTIFY_SMART
-      const backend = vi.fn(async () => ({ status: 200, body: { data: { answers: {
-        tier: { choice: 'alert', probabilities: { alert: 0.8, list: 0.15, silent: 0.05 } },
-      } } } }))
-      const core = fakeCore({ dataDir, account: { backend } })
-      const { port } = start({ core, decideTier: null })
+    it('decides a card without a tier by the fixed rules: a harness agent alerts, with no Jev call, and it is tallied', async () => {
+      const backend = vi.fn()
+      const { port } = start({ core: fakeCore({ dataDir, account: { backend } }), decideTier: null })
       port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'The requested build is ready.' } })
       await vi.waitFor(() => expect(calls('summary')).toEqual([
         ['a1', 'The requested build is ready.', 'done', 'alert', undefined, false],
       ]))
-      expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', {
-        state: {
-          agent: 'an agent', recap: 'The requested build is ready.', turn: 'duration unknown',
-          recent: '0 alerts and 0 list entries in the last 30 minutes',
-        },
-        questions: { tier: {
-          type: 'choice', instructions: expect.any(String),
-          criteria: { alert: expect.any(String), list: expect.any(String), silent: expect.any(String) },
-        } },
-      })
-      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · jev · p=alert=0\.80,list=0\.15,silent=0\.05 · \d+ms$/))
+      expect(backend).not.toHaveBeenCalled()
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · rule:turn · turn · \d+ms$/))
       expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 0$/))
+    })
+
+    it.each(['lead', 'buddy', 'agent', 'coordinator'])('decides a local Swarm agent\'s card silent, whatever its role (%s)', async (role) => {
+      const { port } = start({ core: fakeCore({ dataDir, agents: { byAgent: vi.fn(() => ({ agentId: 'a1', swarmSkill: { role, key: 'k' } }) as never) } }), decideTier: null })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'Built.', 'done', 'silent', undefined, false]]))
+      expect(logs).toContainEqual(expect.stringMatching(/silent · rule:swarm · swarm/))
+    })
+
+    it('follows the tier another of the person\'s machines decided: a Swarm agent there is silent on this dial', async () => {
+      const { port } = start({ decideTier: null })
+      seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-pm', text: 'done', recap: 'Planned.', tier: 'silent' })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([['far-pm', 'Planned.', 'done', 'silent', undefined, false]]))
+      void port
+    })
+
+    it('still decides a remote card that came without a tier, and never throws', async () => {
+      const { port } = start({ decideTier: null })
+      expect(() => seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: '' })).not.toThrow()
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+      expect(calls('summary')[0][3]).toBe('alert') // a harness agent's, whatever machine it ran on
+      void port
     })
 
     it('keeps a recap in the list when the decider rejects', async () => {
@@ -615,9 +601,9 @@ describe('what the windows say, reaching the dial', () => {
     it('tells the cards the window\'s open Swarm conversation, again only when it changes', () => {
       const superTabRequest = vi.fn(async () => ({ ok: true }))
       const { port, reconnected } = withRequest(superTabRequest)
-      const open = (active: string, conversationId?: string) => ({ active, tiles: [], swarms: [
+      const open = (active: string, conversationId?: string, threadRoot?: string) => ({ active, tiles: [], swarms: [
         { id: 'plain', name: 'plain', agentIds: [], panes: 0 },
-        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}) }] })
+        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}), ...(threadRoot ? { threadRoot } : {}) }] })
       port.swarms(open('tab-st1', 'pm1'))
       seen.host.swarmCardsWanted!(true)
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'pm1' } })
@@ -630,13 +616,18 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'] })
       port.swarms(open('tab-st1'))
       expect(superTabRequest).toHaveBeenCalledTimes(3)
-      // The window followed a device's own pick: the focus says so, for the cards to keep the dial's side.
+      // Whether the window followed a device's own pick is no part of the focus any more.
       port.swarms({ ...open('tab-st1', 'g2'), fromDevice: true })
-      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g2', fromDevice: true } })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g2' } })
       port.swarms(open('tab-st1', 'g1'))
       superTabRequest.mockClear()
       reconnected.forEach((run) => run())
       expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } }]])
+      // A thread opened or closed beside it is no news to the cards.
+      superTabRequest.mockClear()
+      port.swarms(open('tab-st1', 'g1', 'm1'))
+      port.swarms(open('tab-st1', 'g1'))
+      expect(superTabRequest).not.toHaveBeenCalled()
       // Nobody wants cards: a focus change says nothing.
       seen.host.swarmCardsWanted!(false)
       superTabRequest.mockClear()
@@ -670,7 +661,13 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null })
     })
 
-    it('asks for a swarmBuddy dial\'s face with the buddy flag, says so on its recap, and sends its side as cardSide', async () => {
+    // A refusal turned into null said nowhere why the dial's face stayed on the resting pet (Diego, 2026-11-03).
+    it('fails a refused recap with the service\'s code, so the dial\'s log says why', async () => {
+      withRequest(vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' })))
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1', true)).rejects.toThrow('SERVICE_UNAVAILABLE')
+    })
+
+    it('asks for a swarmBuddy dial\'s face with the buddy flag, and says so on its recap', async () => {
       const answers: Array<Record<string, unknown>> = [
         { ok: true, text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true },
         { ok: true, text: 'no chat named', at: 3, none: false, buddy: true },
@@ -688,8 +685,24 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true })
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1', 'buddy')
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
-      seen.host.swarmCardSide!('st1', 'buddy')
-      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSide', tabId: 'st1', side: 'buddy' })
+    })
+
+    // Task #3908: a recap, a post and a pick carry no thread; the service's answers about one are not read.
+    it('carries no thread on a recap or a post, whatever the service answers', async () => {
+      const answers: Array<Record<string, unknown>> = [
+        { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' },
+        { ok: true, said: true, thread: { tabId: 'st1', conversationId: 'lead-c1', root: 'm9' } },
+        { ok: true, said: true },
+      ]
+      const superTabRequest = vi.fn(async (_payload: Record<string, unknown>) => answers.shift()!)
+      const { core } = withRequest(superTabRequest)
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'on it', at: 3, none: false, chatId: 'lead-c1' })
+      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true })
+      await seen.host.swarmSay!('h1', 'build it', true, 'lead-c1', true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, chatId: 'lead-c1', reviewed: true })
+      // An ordinary pick is untouched.
+      seen.host.superTabSelected!('st1', 'proj1', 'buddy')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'buddy' } })
     })
 
     it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {
@@ -706,7 +719,10 @@ describe('what the windows say, reaching the dial', () => {
       expect(got).toMatchObject({ tabId: 'st1', leadId: 'lead1', at: 1792560000, none: false })
       expect(got!.text).toBe('é'.repeat(750))
       expect(await seen.host.swarmCardRecap!('st1', 'lead2')).toEqual({ tabId: 'st1', leadId: 'lead2', text: 'none', at: 0, none: true })
-      for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      // A refusal fails with its code; anything else unusable is null.
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('NOT_FOUND')
+      for (let i = 0; i < 4; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
     })
 
     it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
@@ -735,7 +751,7 @@ describe('what the windows say, reaching the dial', () => {
 
     it('answers no recap when the core has no service to ask', async () => {
       start()
-      expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1')   // nothing to tell, and nothing thrown
     })
 
@@ -1145,28 +1161,12 @@ describe('the other machines\' cards', () => {
   })
 })
 
-// A Swarm Reviewer on Diego's Mac's Harness Team account failed every turn in 1–2 s (2026-10-28), and each failure took
+// A Swarm Reviewer failed every turn in 1–2 s (2026-10-28), and each failure took
 // over the round dial with the engine's raw error for 8 s. A Swarm's workers report to their Lead, not to the person's dial.
 describe('a failed turn of a Swarm worker', () => {
   const swarmAgents = (sessions: Array<Partial<RegisteredSession>>) => fakeCore({ dataDir, agents: {
     byAgent: vi.fn((id: string) => sessions.find((s) => s.agentId === id) as RegisteredSession | undefined),
   } })
-  const teamAccount = (core: CoreApi) => {
-    vi.mocked(core.account.machines).mockResolvedValue({ status: 200, body: { success: true, data: { machines: [
-      { machineId: 'team-mac', name: 'Diego’s Mac', sessionKind: 'team' },
-      { machineId: 'mac-mini', name: 'Mac mini', sessionKind: 'computer' },
-    ] } } })
-    return seen.fleet!.deps.machines.refresh()
-  }
-
-  it('on a Harness Team account never reaches the dial as an error, and ends its tile quietly', async () => {
-    const { core } = start()
-    await teamAccount(core)
-    seen.fleet!.events!({ machineId: 'team-mac', kind: 'processing', agentId: 'reviewer', text: 'go', recap: '' })
-    seen.fleet!.events!({ machineId: 'team-mac', kind: 'error', agentId: 'reviewer', text: 'stream disconnected', recap: '' })
-    await vi.waitFor(() => expect(calls('turnDone')).toEqual([['reviewer']]))
-    expect(calls('turnError')).toEqual([])
-  })
 
   it('the Swarm started on this computer, a Builder or a Reviewer, never reaches the dial as an error', async () => {
     const { port } = start({ core: swarmAgents([
@@ -1181,11 +1181,10 @@ describe('a failed turn of a Swarm worker', () => {
   })
 
   it('the person has on a desk tab still reaches the dial as an error, as every desk agent\'s does', async () => {
-    const { core, port } = start({ core: swarmAgents([
+    const { port } = start({ core: swarmAgents([
       { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'agent', key: 'k1' } },
       { agentId: 'mine' },
     ]) })
-    await teamAccount(core)
     port.swarms({ active: 't1', swarms: [
       { id: 't1', name: 'api', agentIds: ['mine'], panes: 1 },
       { id: 't2', name: 'Swarm', agentIds: ['builder'], panes: 1 },
@@ -1193,7 +1192,7 @@ describe('a failed turn of a Swarm worker', () => {
     port.desk(['reviewer'], false)
     port.card({ type: 'commander_event', agentId: 'mine', payload: { kind: 'error', text: 'mine broke' } })
     port.card({ type: 'commander_event', agentId: 'builder', payload: { kind: 'error', text: 'builder broke' } })
-    seen.fleet!.events!({ machineId: 'team-mac', kind: 'error', agentId: 'reviewer', text: 'reviewer broke', recap: '' })
+    seen.fleet!.events!({ machineId: 'mac-mini', kind: 'error', agentId: 'reviewer', text: 'reviewer broke', recap: '' })
     // An agent on one of the person's own computers is the person's, whether or not it is on a tab.
     seen.fleet!.events!({ machineId: 'mac-mini', kind: 'error', agentId: 'far', text: 'far broke', recap: '' })
     await vi.waitFor(() => expect(calls('turnError')).toHaveLength(4))
@@ -1293,15 +1292,6 @@ describe('a failed turn of a Swarm worker', () => {
     port.card({ type: 'commander_event', agentId: 'lead', payload: { kind: 'error', text: 'lead broke' } })
     await vi.waitFor(() => expect(calls('turnError')).toEqual([['lead', 'lead broke']]))
     expect(calls('turnDone')).toEqual([])
-  })
-
-  it('on a machine once listed as a Harness Team account is the person\'s again once the list no longer says so', async () => {
-    const { core } = start()
-    await teamAccount(core)
-    vi.mocked(core.account.machines).mockResolvedValue({ status: 401, body: {} })
-    await seen.fleet!.deps.machines.refresh()
-    seen.fleet!.events!({ machineId: 'team-mac', kind: 'error', agentId: 'reviewer', text: 'boom', recap: '' })
-    await vi.waitFor(() => expect(calls('turnError')).toEqual([['reviewer', 'boom']]))
   })
 })
 

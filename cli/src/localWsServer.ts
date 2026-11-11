@@ -9,6 +9,7 @@ import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, pipeProofOf } from './lib/localSocket.js'
 import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
 import { localCredentialMatches } from './lib/localCredential.js'
+import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
   decodeTerminalLocal,
@@ -26,15 +27,15 @@ const DAEMON_PLATE = 'daemon_plate'
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
 
-const MAX_JSON_BYTES = 512 * 1024
 const LOCAL_IDLE_DEADLINE_MS = 40_000
 // The `ws` library enforces this on EVERY message on this socket, JSON or binary — so it has to
 // cover the largest binary frame this transport carries, not just JSON control frames. That is a
 // paste (see TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES in terminalBinary.ts), plus a little slack for
-// the local frame header; ordinary JSON frames stay bounded by MAX_JSON_BYTES regardless.
+// the local frame header; ordinary JSON frames stay bounded by LOCAL_JSON_MAX_BYTES regardless.
 const MAX_WS_MESSAGE_BYTES = TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES + 4_096
 
 import type { WindowVoiceReply } from './cable/windowRoute.js'
+import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
@@ -56,6 +57,8 @@ export interface LocalWsServerOptions {
   /** The daemon's local credential (lib/localCredential.ts). Given, a TCP upgrade must carry it: the
    *  loopback port takes any local OS user's process, the Unix socket only this user's. */
   localCredential?: string
+  /** Whether a TCP caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
    *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
    *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
@@ -194,17 +197,18 @@ function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
-function rejectUpgrade(socket: Socket, status: number, reason: string): void {
+function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfter?: number): void {
   if (socket.destroyed) return
   socket.end(
     `HTTP/1.1 ${status} ${reason}\r\n` +
+    (retryAfter === undefined ? '' : `Retry-After: ${retryAfter}\r\n`) +
     'Connection: close\r\n' +
     'Content-Length: 0\r\n' +
     '\r\n',
   )
 }
 
-function jsonFrame(raw: RawData, maxBytes = MAX_JSON_BYTES): Frame | null {
+function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): Frame | null {
   const bytes = Buffer.isBuffer(raw)
     ? raw
     : raw instanceof ArrayBuffer
@@ -255,8 +259,10 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     const projectId = typeof r.projectId === 'string' && CARD_ID.test(r.projectId) ? r.projectId : undefined
     // And the conversation it has open (its Lead's, the person's Buddy chat or a group), which the round dial's face follows.
     const conversationId = typeof r.conversationId === 'string' && CARD_ID.test(r.conversationId) ? r.conversationId : undefined
+    // And the thread open beside it, by its root: a thread is of a conversation, so with none named there is none.
+    const threadRoot = conversationId && typeof r.threadRoot === 'string' && CARD_ID.test(r.threadRoot) ? r.threadRoot : undefined
     swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}),
-      ...(conversationId ? { conversationId } : {}) })
+      ...(conversationId ? { conversationId } : {}), ...(threadRoot ? { threadRoot } : {}) })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null
@@ -278,6 +284,12 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
   }
   // Set by the window on the announce a device's pick caused, so the device is not told to follow its own choice back.
   return { active, swarms, tiles, ...(p.fromDevice === true ? { fromDevice: true } : {}) }
+}
+
+/** [raw]'s length in bytes, with nothing copied or made: it is read for every message. */
+function rawBytes(raw: RawData): number {
+  if (Array.isArray(raw)) { let total = 0; for (const part of raw) total += part.byteLength; return total }
+  return raw.byteLength
 }
 
 function binaryBytes(raw: RawData): Uint8Array {
@@ -355,7 +367,22 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       rejectUpgrade(socket, 401, 'Unauthorized')
       return
     }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+    if (options.localCredential === undefined) {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+      return
+    }
+    // A credential another account heard while it held this port during a restart (audit H1) must open nothing.
+    // Nothing else listens on this socket until the upgrade: a client's reset while the lookup runs would be uncaught.
+    const ignoreReset = (): void => {}
+    socket.on('error', ignoreReset)
+    void (options.peerAccount ?? peerIsThisAccount)(req.socket).then((mine) => {
+      socket.off('error', ignoreReset)
+      if (socket.destroyed) return
+      // Who is calling could not be looked up in time: not a refusal, and the client reconnects.
+      if (mine === 'unanswered') { rejectUpgrade(socket, 503, 'Service Unavailable', 1); return }
+      if (!mine) { rejectUpgrade(socket, 401, 'Unauthorized'); return }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+    }, () => { socket.off('error', ignoreReset); rejectUpgrade(socket, 401, 'Unauthorized') })
   }
   const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
   for (const each of servers) each.on('upgrade', onUpgrade)
@@ -503,8 +530,21 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       return
     }
 
+    // A JSON frame past LOCAL_JSON_MAX_BYTES is refused by name, with its size and the limit, before the close (1009, too big): closed
+    // with no word, an agent that posted a long log heard only "The connection to Harness closed." (Q3, 2026-11-10).
+    const tooLarge = (raw: RawData, isBinary: boolean): boolean => {
+      if (isBinary || serviceLink || ws.readyState !== WebSocket.OPEN) return false
+      const bytes = rawBytes(raw)
+      if (bytes <= LOCAL_JSON_MAX_BYTES) return false
+      console.warn(`[local-ws] ${connId} FRAME_TOO_LARGE ${bytes} bytes, past ${LOCAL_JSON_MAX_BYTES}: refused, closing`)
+      ws.send(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes, limit: LOCAL_JSON_MAX_BYTES } }))
+      close(1009, 'frame too large')
+      return true
+    }
+
     ws.on('message', (raw, isBinary) => {
       chain = chain.then(() => {
+        if (tooLarge(raw, isBinary)) return
         if (!selected) return selectMachine(raw, isBinary)
         if (serviceLink) {
           if (isBinary) { serviceLink.receiveBinary(binaryBytes(raw)); return }

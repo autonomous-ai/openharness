@@ -17,7 +17,6 @@ import { env } from '../config/env.js'
 import { probeProvider, ProviderProbeError } from '../lib/providerProbe.js'
 import { normalizeComputerId } from '../lib/deviceAuth.js'
 import { machinesSharedWith } from '../lib/machineAccess.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 
 const createBody = z.object({
   // Defaults to the caller; admins may provision for another user.
@@ -330,19 +329,14 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const computerId = normalizeComputerId(req.body.computerId)
       if (!computerId) return sendError(reply, 'Invalid computer id', 'BAD_REQUEST', 400)
-      // A Mac's team account registers its own computer, as a team machine, and nothing else (lib/teamSession.ts).
-      const team = isTeamSession(req.user)
-      if (team && computerId !== req.user!.harnessComputerId) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
-      const result = team
-        ? await machineService.resolveForTeamComputer(req.user!, computerId, req.body.label ?? 'computer', req.body.machineId)
-        : await machineService.resolveOrCreateForComputer(
-          req.user!.sub,
-          req.user!.autonomousEnv,
-          computerId,
-          req.body.label ?? 'computer',
-          req.body.machineId,
-          'computer',
-        )
+      const result = await machineService.resolveOrCreateForComputer(
+        req.user!.sub,
+        req.user!.autonomousEnv,
+        computerId,
+        req.body.label ?? 'computer',
+        req.body.machineId,
+        'computer',
+      )
       // The server-internal machine API key must never leave this SSO endpoint.
       return sendSuccess(reply, {
         machine: { machineId: result.machine.machineId, computerId: result.machine.computerId },
@@ -407,11 +401,24 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
     '/api/machines/:machineId',
     { preHandler: validateParams(machineParams) },
     async (req, reply) => {
-      await machineService.destroy(
-        req.params.machineId,
-        req.user!,
-        await requestAccessToken(req),
-      )
+      // Only a billed machine needs the SSO token: its subscription is cancelled with it. A session nothing
+      // backs (a phone signed in by Harness) removes any other machine all the same; it used to be refused
+      // up front, the free Harness-EE07 included (iPhone, 2026-11-03). A billed one still asks for the sign-in.
+      let accessToken: string | undefined
+      let signIn: AppError | undefined
+      try {
+        accessToken = await requestAccessToken(req)
+      } catch (err) {
+        if (!(err instanceof AppError) || err.code !== 'NEEDS_AUTONOMOUS_SIGN_IN') throw err
+        signIn = err
+      }
+      try {
+        await machineService.destroy(req.params.machineId, req.user!, accessToken)
+      } catch (err) {
+        // destroy's own refusal of a billed machine without a token: say what to do instead.
+        if (signIn && err instanceof AppError && err.statusCode === 401 && err.code === 'UNAUTHORIZED') throw signIn
+        throw err
+      }
       return sendSuccess(reply, { deleted: true })
     },
   )

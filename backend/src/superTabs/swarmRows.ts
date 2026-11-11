@@ -8,19 +8,16 @@ type Transaction = Prisma.TransactionClient
 // prefix: each list read examined every Swarm of the environment (roadmap Phase 3.3). These name the member index, so they
 // examine only the person's Swarms, and take them off it in id order without a sort (integration/superTabNamedReads.test.ts).
 
-export interface MemberSwarm { id: string; ownerId: string; revision: number; format: number; workspaceId: string | null }
+export interface MemberSwarm { id: string; ownerId: string; revision: number; format: number }
 
-/** The Swarms `userId` is in, by id after `after`, up to `limit` (all without one), with the fields lists show; only
- *  `workspaceId`'s when given. */
+/** The Swarms `userId` is in, by id after `after`, up to `limit` (all without one), with the fields lists show. */
 export async function memberSwarms(db: Transaction, autonomousEnv: string, userId: string,
-  page: { after?: string; limit?: number; workspaceId?: string }): Promise<MemberSwarm[]> {
+  page: { after?: string; limit?: number }): Promise<MemberSwarm[]> {
   const rows = await readBy(db, 'SuperTab', 'members', [
-    { $match: { autonomousEnv, memberIds: userId, ...page.after ? { _id: { $gt: page.after } } : {},
-      ...page.workspaceId ? { workspaceId: page.workspaceId } : {} } },
-    { $sort: { _id: 1 } }, ...page.limit ? [{ $limit: page.limit }] : [], { $project: { ownerId: 1, revision: 1, format: 1, workspaceId: 1 } }])
-  // A Swarm stored before `format` existed is whole in `state` (schema default 1); one from before Workspaces has none.
-  return rows.map(row => ({ id: row._id as string, ownerId: row.ownerId as string, revision: Number(row.revision ?? 0),
-    format: Number(row.format ?? 1), workspaceId: (row.workspaceId ?? null) as string | null }))
+    { $match: { autonomousEnv, memberIds: userId, ...page.after ? { _id: { $gt: page.after } } : {} } },
+    { $sort: { _id: 1 } }, ...page.limit ? [{ $limit: page.limit }] : [], { $project: { ownerId: 1, revision: 1, format: 1 } }])
+  // A Swarm stored before `format` existed is whole in `state` (schema default 1).
+  return rows.map(row => ({ id: row._id as string, ownerId: row.ownerId as string, revision: Number(row.revision ?? 0), format: Number(row.format ?? 1) }))
 }
 
 /**
@@ -42,4 +39,13 @@ export async function machineSwarms(db: Transaction, autonomousEnv: string, mach
 export async function swarmsIn(db: Transaction, autonomousEnv: string, ids: string[]): Promise<string[]> {
   if (!ids.length) return []
   return (await readBy(db, 'SuperTab', 'id', [{ $match: { _id: { $in: ids }, autonomousEnv } }, { $project: { _id: 1 } }])).map(row => row._id as string)
+}
+
+/** Up to `limit` live Swarms people at `domain` join by themselves (autoJoin.ts) that `userId` is not in and never declined: one
+ *  read on the auto-join index, which usually matches nothing. The two `$ne` are checked on the few rows of the domain. */
+export async function autoJoinSwarms(db: Transaction, autonomousEnv: string, domain: string, userId: string, limit: number): Promise<string[]> {
+  const rows = await readBy(db, 'SuperTab', 'autoJoin', [
+    { $match: { autonomousEnv, autoJoinDomain: domain, deletedAt: null, memberIds: { $ne: userId }, autoJoinDeclined: { $ne: userId } } },
+    { $limit: limit }, { $project: { _id: 1 } }])
+  return rows.map(row => row._id as string)
 }

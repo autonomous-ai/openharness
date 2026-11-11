@@ -112,6 +112,86 @@ enum HarnessPalette {
     tabBar: Color(0xffe9eef5),
     search: Color(0xffdce4ee),
     accent: Color(0xff2f5bb8),
+  ),
+  // Task #3006 (Dee, 11-05): four neutral themes modeled on the two most used
+  // team chat apps, untinted so the text carries the page. Each brings its own
+  // three grays (text, muted for times and names, faint for hints) and one
+  // accent for links, the unread dot and buttons; red stays for counts.
+  plum(
+    'Plum',
+    'White with a plum sidebar',
+    brightness: Brightness.light,
+    foreground: Color(0xff1d1c1d),
+    text: Color(0xff1d1c1d),
+    muted: Color(0xff616061),
+    faint: Color(0xff686768),
+    background: Color(0xffffffff),
+    panel: Color(0xfff8f8f8),
+    card: Color(0xfff8f8f8),
+    hover: Color(0xffefefef),
+    workspace: Color(0xfff8f8f8),
+    tabBar: Color(0xfff4f4f4),
+    search: Color(0xffededed),
+    accent: Color(0xff1264a3),
+    // The one dark surface in a light theme: the Swarm sidebar, with white
+    // ink and a blue selected row.
+    sidebar: Color(0xff3f0e40),
+    sidebarInk: Color(0xffffffff),
+    sidebarMuted: Color(0xffcfc3cf),
+    sidebarHover: Color(0xff350d36),
+    sidebarSelected: Color(0xff0b4c8c),
+    sidebarOnSelected: Color(0xffffffff),
+  ),
+  night(
+    'Night',
+    'Near-black, untinted',
+    foreground: Color(0xffd1d2d3),
+    text: Color(0xffd1d2d3),
+    muted: Color(0xffababad),
+    faint: Color(0xff9a9b9e),
+    background: Color(0xff1a1d21),
+    panel: Color(0xff19171d),
+    card: Color(0xff222529),
+    hover: Color(0xff27292d),
+    workspace: Color(0xff19171d),
+    tabBar: Color(0xff121016),
+    search: Color(0xff222529),
+    accent: Color(0xff1d9bd1),
+  ),
+  cloud(
+    'Cloud',
+    'White with gray sidebars',
+    brightness: Brightness.light,
+    foreground: Color(0xff313338),
+    text: Color(0xff313338),
+    muted: Color(0xff4e5058),
+    faint: Color(0xff5c5e66),
+    background: Color(0xffffffff),
+    panel: Color(0xfff2f3f5),
+    card: Color(0xffebedef),
+    hover: Color(0xffe3e5e8),
+    workspace: Color(0xfff2f3f5),
+    tabBar: Color(0xffe3e5e8),
+    search: Color(0xffffffff),
+    accent: Color(0xff4752c4),
+  ),
+  storm(
+    'Storm',
+    'Soft gray with a darker rail',
+    foreground: Color(0xffdbdee1),
+    text: Color(0xffdbdee1),
+    muted: Color(0xffb5bac1),
+    faint: Color(0xffa3a9b1),
+    background: Color(0xff313338),
+    panel: Color(0xff2b2d31),
+    card: Color(0xff383a40),
+    hover: Color(0xff35373c),
+    workspace: Color(0xff2b2d31),
+    tabBar: Color(0xff1e1f22),
+    search: Color(0xff2b2d31),
+    accent: Color(0xff949cf7),
+    // The shared dark red (#FF7068) is 4.2:1 on Storm's lighter field.
+    errorInk: Color(0xffff8f8a),
   );
 
   const HarnessPalette(
@@ -127,16 +207,56 @@ enum HarnessPalette {
     required this.tabBar,
     required this.search,
     required this.accent,
+    this.text,
+    this.muted,
+    this.faint,
+    this.errorInk,
+    this._sidebar,
+    this.sidebarInk,
+    this.sidebarMuted,
+    this._sidebarHover,
+    this._sidebarSelected,
+    this._sidebarOnSelected,
   });
 
   final String label, description;
   final Brightness brightness;
   final Color foreground;
   final Color background, panel, card, hover, workspace, tabBar, search, accent;
+
+  /// The palette's own text, muted and faint inks. Null keeps the app's
+  /// shared ramp for this brightness (`AppPalette.textPrimary` and the rest),
+  /// which is what every palette before these four uses.
+  final Color? text, muted, faint;
+
+  /// Error ink, where the shared one for this brightness is too dim on the
+  /// palette's grounds.
+  final Color? errorInk;
+
+  final Color? _sidebar, _sidebarHover, _sidebarSelected, _sidebarOnSelected;
+
+  /// The Swarm sidebar's ground: the workspace color unless the palette gives
+  /// the sidebar one of its own.
+  Color get sidebar => _sidebar ?? workspace;
+
+  /// Ink for a sidebar that is darker than the theme around it (Plum). Null
+  /// means the sidebar uses the page's ink.
+  final Color? sidebarInk, sidebarMuted;
+
+  /// Whether the Swarm sidebar wears its own ink rather than the page's.
+  bool get hasSidebarInk => sidebarInk != null;
+
+  Color get sidebarHover => _sidebarHover ?? hover;
+  Color get sidebarSelected => _sidebarSelected ?? hover;
+  Color get sidebarOnSelected =>
+      _sidebarOnSelected ?? sidebarInk ?? text ?? foreground;
   bool get isDark => brightness == Brightness.dark;
 
-  static HarnessPalette fromId(String? id) =>
-      values.where((palette) => palette.name == id).firstOrNull ?? graphite;
+  static HarnessPalette fromId(String? id) => byId(id) ?? graphite;
+
+  /// The palette saved under [id], or null for an unknown or missing one.
+  static HarnessPalette? byId(String? id) =>
+      values.where((palette) => palette.name == id).firstOrNull;
 
   Map<String, int> get nativeColors => {
     'tabBar': tabBar.toARGB32(),

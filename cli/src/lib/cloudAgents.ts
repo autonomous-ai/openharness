@@ -183,6 +183,8 @@ export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
     sessionId: harness.agentId,
     userId: '',
     name: harness.name,
+    // Whether a person chose it is not known here: a client sends nothing for it (agentFrame.ts).
+    nameChosen: false,
     title: null,
     status: harness.state === 'stopped' ? 'stopped' : 'active',
     activity: { state: working ? 'working' : 'idle', epoch: harness.agentId, revision: Date.parse(harness.updatedAt), validForMs: working ? 120_000 : 0 },
@@ -217,6 +219,8 @@ export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
     permissionMode: null,
     bypassPermission: null,
     namedAgent: null,
+    // A cloud harness is typed into by its own host: nothing here waits for it.
+    waitingFor: null,
     location: 'cloud',
     cloud: {
       place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity, links: harness.links, messages: harness.messages,

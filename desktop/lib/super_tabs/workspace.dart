@@ -9,13 +9,14 @@ import '../state/workspace_chrome.dart';
 import 'agent_group_picker.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
 import 'personal_projects.dart';
-import 'sharing.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
 import 'view.dart';
+import 'voice_recorder.dart';
 
 /// Keeps the app's one native canvas alive in the group's middle area.
 /// Switching chat/terminals never constructs a second terminal renderer.
@@ -26,13 +27,29 @@ class SuperTabWorkspace extends StatefulWidget {
     required this.canvas,
     required this.onAddAgent,
     this.onNewProject,
+    this.onNewAgent,
+    this.onAttachAgent,
     this.onNewSwarm,
+    this.onRenameSwarm,
+    this.github,
   });
   final AppNotifier app;
   final Widget canvas;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final VoidCallback? onNewProject;
+
+  /// + New agent: the workspace's Cmd-N form, with Member or Lead (#4196).
+  final VoidCallback? onNewAgent;
+
+  /// Attach beside + New agent: the ⌘P picker of agents already running on its person's own computers (Swarm v4).
+  final VoidCallback? onAttachAgent;
   final VoidCallback? onNewSwarm;
+
+  /// Rename in the Swarm's own menu: the workspace's Rename, for this Swarm.
+  final VoidCallback? onRenameSwarm;
+
+  /// Reads a project's tasks with `gh`; tests give their own.
+  final SwarmGitHub? github;
 
   @override
   State<SuperTabWorkspace> createState() => _SuperTabWorkspaceState();
@@ -44,13 +61,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   (String, String, String?, String, bool, String)? _terminalRequest;
   (String, String, String?, String, bool, String)? _readyRequest;
   // Navigation never undoes a person's stop. Only the pane's explicit Resume
-  // action may restart a saved session, with the Swarm's native context.
+  // action may restart a saved session.
   (String, String)? _resumeRequest;
   (String, String)? _focusRequest;
   Future<void> _terminalChange = Future.value();
   final _nativePanes = <TerminalPane>[];
   final _failures = <(String, String?), String>{};
-  final _nativeHeartbeats = <Timer>[];
 
   /// The Swarm tab last told to the client as the one on screen.
   String? _shown;
@@ -78,23 +94,16 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   }
 
   void _clearNativeContext() {
-    for (final timer in _nativeHeartbeats) {
-      timer.cancel();
-    }
-    _nativeHeartbeats.clear();
     final panes = _nativePanes.toList();
     _nativePanes.clear();
     _readyRequest = null;
     for (final pane in panes) {
-      if (pane.inputContext == null && pane.watchOnly) continue;
-      pane.inputContext = null;
+      if (pane.watchOnly) continue;
       pane.watchOnly = true;
       final session = pane.session;
-      session?.stageInputContext(null, watchOnly: true);
+      session?.stageWatchOnly(true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (pane.inputContext == null && pane.watchOnly) {
-          unawaited(session?.setInputContext(null, watchOnly: true));
-        }
+        if (pane.watchOnly) unawaited(session?.setWatchOnly(true));
       });
     }
   }
@@ -208,7 +217,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             agent,
             controller,
             swarmId,
-            request.$2,
             current,
             resume == (request.$2, agent.id),
           );
@@ -223,7 +231,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             pane.machineId,
             pane.agentId!,
             swarmId: swarmId,
-            inputContext: pane.inputContext,
             watchOnly: pane.watchOnly,
             autoTile: true,
             focus: false,
@@ -278,7 +285,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     SuperTabAgent agent,
     SuperTabController controller,
     String swarmId,
-    String conversationId,
     bool Function() current,
     bool resume,
   ) async {
@@ -311,7 +317,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         );
       }
       if (!current()) return;
-      String? inputContext;
       // A narrowly shared harness remains its existing read-only observer.
       // Controlling a machine and joining a Swarm are separate grants.
       if (controller.canWrite && machine?.machine.isShared != true) {
@@ -329,45 +334,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             throw SuperTabFailure('TERMINAL_UNAVAILABLE', resumeError);
           }
         }
-        if (stopped != true || resume) {
-          final issued = await controller.request(
-            'POST',
-            '/api/super-tabs/${controller.tabId}/native',
-            body: {
-              'operationId': superTabOperationId(),
-              'conversationId': conversationId,
-              'agentId': agent.id,
-            },
-          );
-          if (!current()) return;
-          inputContext = issued['contextId'] as String?;
-          if (inputContext == null ||
-              !RegExp(r'^[A-Za-z0-9_-]{16,160}$').hasMatch(inputContext)) {
-            throw const SuperTabFailure(
-              'NATIVE_UNAVAILABLE',
-              'Could not prepare terminal sharing. Try opening it again.',
-            );
-          }
-          final prepared = await app.superTabMachineRequest(agent.machineId, {
-            'action': 'prepareNative',
-            'tabId': controller.tabId,
-            'contextId': inputContext,
-          });
-          if (!current()) return;
-          if (prepared['inputContext'] != inputContext) {
-            throw const SuperTabFailure(
-              'NATIVE_UNAVAILABLE',
-              'This machine could not confirm terminal sharing.',
-            );
-          }
-        }
       }
       await app.assignAgentToPane(
         null,
         agent.machineId,
         agent.harnessId,
         swarmId: swarmId,
-        inputContext: inputContext,
         watchOnly: !controller.canWrite,
         autoTile: true,
         focus: false,
@@ -383,50 +355,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           case final pane?) {
         pane.composerVisible = false;
         _nativePanes.add(pane);
-      }
-      if (inputContext != null) {
-        var renewing = false;
-        _nativeHeartbeats.add(
-          Timer.periodic(const Duration(seconds: 20), (timer) async {
-            if (!current()) {
-              timer.cancel();
-              return;
-            }
-            if (renewing) return;
-            renewing = true;
-            try {
-              await app.superTabMachineRequest(agent.machineId, {
-                'action': 'renewNative',
-                'tabId': controller.tabId,
-                'contextId': inputContext,
-              });
-            } catch (failure) {
-              if (mounted && current()) {
-                _failures[(agent.machineId, agent.harnessId)] =
-                    'Terminal sharing paused. $failure';
-                final pane = tab.panes
-                    .where(
-                      (p) =>
-                          p.machineId == agent.machineId &&
-                          p.agentId == agent.harnessId,
-                    )
-                    .firstOrNull;
-                pane?.session?.stageInputContext(null, watchOnly: true);
-                if (pane != null) {
-                  pane.inputContext = null;
-                  pane.watchOnly = true;
-                  unawaited(
-                    pane.session?.setInputContext(null, watchOnly: true),
-                  );
-                }
-                setState(() {});
-              }
-              timer.cancel();
-            } finally {
-              renewing = false;
-            }
-          }),
-        );
       }
     } catch (failure) {
       if (mounted && current()) {
@@ -463,16 +391,38 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     setState(() {});
   }
 
+  /// What a Waiting on you notice asked to open
+  /// ([SuperTabController.openAgentTerminal]): the agent's terminal, focused,
+  /// beside the chat it waits in, where its card's Open terminal can open it
+  /// (#2951's rules); or a line saying why it can't (Huy, #2792).
+  void _takeAgentTerminal(SuperTabController controller, String tabId) {
+    final request = controller.agentTerminalRequest;
+    if (!mounted || request == null || controller.snapshot == null) return;
+    controller.agentTerminalRequest = null;
+    final agent = controller.snapshot!.agent(request.agentId);
+    if (agent == null) return;
+    final groups = superTabAgentTerminalGroups(controller, agent.id);
+    if (groups.isEmpty) {
+      final reason = superTabOpenTerminalBlocked(controller, agent.id);
+      if (reason != null) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(reason)));
+      }
+      return;
+    }
+    final group =
+        groups.where((g) => g.id == request.conversationId).firstOrNull ??
+        groups.where((g) => g.id == controller.selectedId).firstOrNull ??
+        groups.first;
+    _focusAgent(controller, tabId, agent, group.id);
+  }
+
   Future<void> _chooseAgentGroup(
     SuperTabController controller,
     String tabId,
     SuperTabAgent agent,
   ) async {
-    final groups =
-        controller.snapshot?.conversations
-            .where((g) => !g.closed && g.agentIds.contains(agent.id))
-            .toList() ??
-        <SuperTabConversation>[];
+    final groups = superTabAgentTerminalGroups(controller, agent.id);
     if (groups.isEmpty) return;
     if (groups.length == 1) {
       _focusAgent(controller, tabId, agent, groups.single.id);
@@ -538,6 +488,11 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                 }
               });
             }
+            if (controller.agentTerminalRequest != null) {
+              WidgetsBinding.instance.addPostFrameCallback(
+                (_) => _takeAgentTerminal(controller, tab.id),
+              );
+            }
             _syncTerminal(controller, tab.id);
             final agents = controller.terminalAgents(controller.selectedId);
             final local = _localPanes(controller);
@@ -559,12 +514,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final terminal = SuperPane(
               machineId: lead?.machineId ?? '',
               harnessId: lead?.harnessId ?? '',
-              title: lead == null
-                  ? kDefaultCoordinatorName
-                  : controller.snapshot!.coordinatorNameOf(
-                      controller.snapshot!.leadProjectForAgent(lead.id)?.id ??
-                          '',
-                    ),
+              title: kDefaultCoordinatorName,
               titles: {
                 for (final p in local)
                   if (app
@@ -616,11 +566,15 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                 SuperTabView(
                   key: ValueKey('${controller.accountId}:$id'),
                   controller: controller,
-                  onInvite: () =>
-                      unawaited(showSuperTabPeople(context, controller)),
+                  // macOS and the web record; Linux and Windows draw no mic.
+                  voiceRecorder: superTabVoiceRecorder(),
                   onAddAgent: widget.onAddAgent,
                   onNewProject: widget.onNewProject,
+                  onNewAgent: widget.onNewAgent,
+                  onAttachAgent: widget.onAttachAgent,
                   onNewSwarm: widget.onNewSwarm,
+                  onRenameSwarm: widget.onRenameSwarm,
+                  github: widget.github,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,
                     tab.id,
@@ -655,8 +609,3 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     );
   }
 }
-
-Future<void> showSuperTabPeople(
-  BuildContext context,
-  SuperTabController controller,
-) => showSuperTabSharing(context, controller);

@@ -90,6 +90,42 @@ void main() {
     );
   });
 
+  group("the task's requester (anh Dee, 2026-11-09)", () {
+    test('work I asked for in my project says I asked for it', () {
+      final asked = {
+        ...groupData('g1', status: 'needs_human'),
+        'requesterId': me,
+      };
+
+      final waiting = waitingIn([asked]);
+
+      expect(waiting.single.conversation.id, 'g1');
+      expect(waiting.single.requested, isTrue);
+    });
+
+    test("work I asked for in someone else's project does not wait on me: "
+        'the list and the badge stay its owner\'s', () {
+      final asked = {
+        ...groupData('g1', status: 'needs_human'),
+        'requesterId': me,
+      };
+
+      expect(waitingIn([asked], projectOwner: 'person-other'), isEmpty);
+    });
+
+    test('work someone else asked for still waits on me as its project\'s '
+        'owner, as one I did not ask for', () {
+      final asked = {
+        ...groupData('g1', status: 'blocked'),
+        'requesterId': 'person-other',
+      };
+
+      expect(waitingIn([asked]).single.requested, isFalse);
+      expect(waitingIn([groupData('g2', status: 'blocked')]).single.requested,
+          isFalse);
+    });
+  });
+
   test('its question is what the worker wrote', () {
     final row = {
       ...groupData('g1', status: 'needs_human'),

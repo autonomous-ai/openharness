@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, RESTART_HELD_MAX, type ServiceFrame } from './serviceLinks.js'
+import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 
 const TOKEN = 'a'.repeat(48)
 const ASKER = { local: false, owner: true }
@@ -167,9 +168,74 @@ describe('service links', () => {
     expect(lost).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
   })
 
+  // A screen read waits a second; Claude Code's reader, on demand, took 26 s to start on a Mac at load 40 (2026-11-10), and every
+  // read after the first was refused at once as if it could not start, so a person's first message was lost.
+  it('keeps waiting for one on demand while it starts, however short the requests that run out meanwhile, and says when it is up', async () => {
+    const want = vi.fn()
+    const links = make({ owned: { 'engine-claude': ['screen_read'] }, onDemand: new Set(['engine-claude']), want, startWaitMs: 60_000 })
+    const up = vi.fn()
+    void links.whenStarting('engine-claude')!.then(up)
+    for (let second = 0; second < 30; second++) {
+      const read = vi.fn()
+      void links.call('engine-claude', 'screen_read', {}, 1_000).then(read)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(read).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'engine-claude', retryable: true })
+    }
+    expect(up).not.toHaveBeenCalled()
+    // Still within its start wait: a read waits for it, and goes once it connects.
+    const late = vi.fn()
+    void links.call('engine-claude', 'screen_read', { capture: 'x' }, 1_000).then(late)
+    const engine = sink()
+    links.accept('engine-claude', TOKEN, engine, vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(up).toHaveBeenCalledWith(true)
+    expect(engine.sent).toEqual([{ type: 'screen_read', payload: { capture: 'x', requestId: 'route-31' }, asker: { local: true, owner: true } }])
+    // Up: nothing to wait for.
+    expect(links.whenStarting('engine-claude')).toBeNull()
+  })
+
+  it('says one on demand is not up when it does not connect in the wait, and when it could not start at all', async () => {
+    const links = make({ owned: { 'engine-claude': ['screen_read'], search: ['session_search'] }, onDemand: new Set(['engine-claude']), want: vi.fn(), startWaitMs: 60_000 })
+    // Another service's request in flight is no part of this start.
+    links.accept('search', TOKEN, sink(), vi.fn())
+    const searching = vi.fn()
+    void links.call('search', 'session_search', {}, 120_000).then(searching)
+    const up = vi.fn()
+    void links.whenStarting('engine-claude')!.then(up)
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(up).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(up).toHaveBeenCalledWith(false)
+    expect(searching).not.toHaveBeenCalled()
+    // Past its start wait it counts as not starting: nothing more is waited for, and a request is refused at once.
+    expect(links.whenStarting('engine-claude')).toBeNull()
+    const refused = vi.fn()
+    void links.call('engine-claude', 'screen_read', {}, 30_000).then(refused)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'engine-claude', retryable: true })
+    // One not on demand is never waited for, nor any where none is on demand.
+    expect(links.whenStarting('search')).toBeNull()
+    expect(links.whenStarting('nobody')).toBeNull()
+    expect(make().whenStarting('search')).toBeNull()
+    // One that connected and went is refused at once, as its requests are: nothing to wait for.
+    const once = make({ owned: { 'engine-claude': ['screen_read'] }, onDemand: new Set(['engine-claude']), want: vi.fn() })
+    once.accept('engine-claude', TOKEN, sink(), vi.fn())!.closed()
+    expect(once.whenStarting('engine-claude')).toBeNull()
+    // A reader may take longer to start than the others (its own start wait).
+    const readers = make({ owned: { 'engine-codex': ['screen_read'] }, onDemand: new Set(['engine-codex']), want: vi.fn(), startWaits: { 'engine-codex': 45_000 } })
+    const codex = vi.fn()
+    void readers.whenStarting('engine-codex')!.then(codex)
+    await vi.advanceTimersByTimeAsync(ON_DEMAND_START_MS)
+    expect(codex).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(45_000 - ON_DEMAND_START_MS)
+    expect(codex).toHaveBeenCalledWith(false)
+  })
+
   it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {
     const want = vi.fn()
-    const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want })
+    // Its start wait as long as the request's own: a shorter request no longer counts it as unable to start (see above).
+    const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want,
+      startWaitMs: 5_000 })
     const late = vi.fn()
     links.route('orchestrator', { action: 'list' }, ASKER, late)
     vi.advanceTimersByTime(5_000)
@@ -382,6 +448,25 @@ describe('service links', () => {
     // A type the waits only inherit from Object's prototype waits as any other does.
     links.route('session_search', {}, ASKER, vi.fn())
     expect(links.call('models', 'toString', {})).toBeInstanceOf(Promise)
+  })
+
+  // The change-agent handoff's preparation gives up at HANDOFF_DEADLINE_MS (lib/handoffAuthority.ts): the core waits
+  // no longer for its answer, whatever the usual wait.
+  it('waits for a handoff preparation its deadline, unless the waits say otherwise', () => {
+    const links = make({ owned: { handoff: ['agent_handoff_prepare'] }, timeoutMs: 30_000 })
+    links.accept('handoff', TOKEN, sink(), vi.fn())
+    const prepared = vi.fn()
+    links.route('agent_handoff_prepare', {}, ASKER, prepared)
+    vi.advanceTimersByTime(HANDOFF_DEADLINE_MS - 1)
+    expect(prepared).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(prepared).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'handoff', retryable: true })
+    const patient = make({ owned: { handoff: ['agent_handoff_prepare'] }, waits: { handoff: { agent_handoff_prepare: 30_000 } } })
+    patient.accept('handoff', TOKEN, sink(), vi.fn())
+    const later = vi.fn()
+    patient.route('agent_handoff_prepare', {}, ASKER, later)
+    vi.advanceTimersByTime(HANDOFF_DEADLINE_MS)
+    expect(later).not.toHaveBeenCalled()
   })
 
   it('answers what was waiting on a service that goes, and lets a newer connection replace an older one', () => {

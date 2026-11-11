@@ -33,9 +33,10 @@ impl crate::cmdparse::Env for App {
     fn expand(&mut self, format: &str) -> String { crate::format::expand_nojobs(self, format) }
     fn home(&self, user: Option<&str>) -> Option<String> {
         if user.is_none() { if let Some(h) = self.var("HOME").filter(|h| !h.is_empty()) { return Some(h) } }
-        let pw = unsafe { match user { Some(u) => { let c = std::ffi::CString::new(u).ok()?; libc::getpwnam(c.as_ptr()) } None => libc::getpwuid(libc::getuid()) } };
-        if pw.is_null() { return None }
-        Some(unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) }.to_string_lossy().into_owned())
+        match user {
+            Some(user) => crate::sys::home_of(user),
+            None => std::env::var_os("HOME").map(std::path::PathBuf::from).or_else(|| crate::sys::home_of(&crate::sys::username())),
+        }.map(|home| home.to_string_lossy().into_owned())
     }
 }
 
@@ -3350,7 +3351,7 @@ impl App {
         };
         // Named as tmux names a new window, for what it runs (the shell), until automatic-rename.
         let shell = self.options.get("default-shell", "", None).filter(|s| !s.is_empty()).or_else(|| std::env::var("SHELL").ok()).unwrap_or_else(|| "sh".into());
-        let program = command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell).rsplit('/').next().unwrap_or("sh").to_string();
+        let program = crate::sys::shell_label(command.as_deref().and_then(|c| c.split_whitespace().next()).unwrap_or(&shell)).to_string();
         let mut tab = Tab::new(window.unwrap_or(&program));
         tab.first_named = true;
         if window.is_some() {
@@ -5242,7 +5243,7 @@ impl App {
     pub fn open_pipe(&mut self, pane: u64, command: &str, input: bool, output: bool) {
         use std::process::Stdio;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let mut c = tokio::process::Command::new("/bin/sh");
+        let mut c = tokio::process::Command::new(crate::sys::sh());
         crate::ipc::set_job_env(&mut c, &crate::ipc::job_environ(&self.global_env, &self.session_env));
         c.arg("-c").arg(command)
             .stdin(if output { Stdio::piped() } else { Stdio::null() })
@@ -5976,7 +5977,10 @@ impl App {
             // restarts it, and a shell asked for meanwhile went to hn's own local shells
             // (`shell_machine`) — OpenCode then ran where no phone or desktop could see it.
             let daemon_ready = self.link(&self.fleet.local_id).is_some() && !self.daemon_down;
-            if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
+            // Set up from a phone with Swarm on: no welcome, and so no OpenCode of its own; the Swarm's Buddy is its
+            // first work. Its first use is over as with work of its own.
+            let for_swarm = self.os_first_use && !self.os_live && crate::os_welcome::set_up_for_swarm();
+            if (self.os_live || self.os_first_use) && !for_swarm && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
                 if !daemon_ready { return }
                 self.shell_asked = true;
                 // The welcome reply may arrive after another terminal is requested.
@@ -5985,7 +5989,7 @@ impl App {
                 crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
             } else if (self.os_live || self.os_first_use) && crate::os_welcome::welcome_waits_on_wifi(self) {
                 // Asked again every tick until the Wi-Fi form gives the tab back.
-            } else if self.os_first_use && !self.os_live && !own_work {
+            } else if self.os_first_use && !self.os_live && !own_work && !for_swarm {
                 // Only other computers' tabs on the desk: the welcome still comes, in a tab of its own.
                 if !daemon_ready { return }
                 self.shell_asked = true;
@@ -5996,7 +6000,7 @@ impl App {
                 // after setting this computer up — so it opens on that instead of a welcome with
                 // an OpenCode of its own. Its first use is over all the same: the welcome is what
                 // marks that (onboarding.py), and without the mark every boot is a first one.
-                if self.os_first_use && !self.os_live && own_work {
+                if self.os_first_use && !self.os_live && (own_work || for_swarm) {
                     self.os_first_use = false;
                     // Not from a test: it would mark the developer's own home.
                     if let Some(home) = std::env::var_os("HOME").filter(|_| !cfg!(test)) {
@@ -6258,7 +6262,7 @@ impl App {
     /// with the most votes names it, then the one fewer other tabs share, then type, project,
     /// machine in that order. A tab with no harness the app knows is `New Tab`.
     pub fn desk_tab_names(&self) -> HashMap<String, String> {
-        const CODE: [&str; 14] = ["claude", "codex", "cursor", "opencode", "pi", "hermes", "commandcode", "devin", "muse", "amp", "kilo", "grok", "copilot", "agy"];
+        const CODE: [&str; 15] = ["claude", "codex", "cursor", "opencode", "pi", "hermes", "commandcode", "devin", "muse", "amp", "kilo", "grok", "copilot", "agy", "openclaw"];
         let mut candidates: Vec<(String, Vec<(usize, String, usize)>)> = Vec::new();
         for tab in self.tabs.iter().filter(|t| t.on_desk && !t.named) {
             let mut votes: [Vec<(String, usize)>; 3] = Default::default();
@@ -6811,9 +6815,14 @@ pub enum Placement {
 pub fn tty_name() -> String {
     static TTY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     TTY.get_or_init(|| {
-        let p = unsafe { libc::ttyname(0) };
-        if p.is_null() { return String::new() }
-        unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        #[cfg(windows)]
+        { "console".to_string() }
+        #[cfg(unix)]
+        {
+            let p = unsafe { libc::ttyname(0) };
+            if p.is_null() { return String::new() }
+            unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
     }).clone()
 }
 
@@ -6821,11 +6830,16 @@ pub fn tty_name() -> String {
 pub fn utc_offset() -> i64 {
     static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     *OFFSET.get_or_init(|| {
-        let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
-        let sign = if out.starts_with('-') { -1 } else { 1 };
-        let h: i64 = out.get(1..3).and_then(|x| x.parse().ok()).unwrap_or(0);
-        let m: i64 = out.get(3..5).and_then(|x| x.parse().ok()).unwrap_or(0);
-        sign * (h * 3600 + m * 60)
+        #[cfg(windows)]
+        { crate::sys::utc_offset() }
+        #[cfg(unix)]
+        {
+            let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+            let sign = if out.starts_with('-') { -1 } else { 1 };
+            let h: i64 = out.get(1..3).and_then(|x| x.parse().ok()).unwrap_or(0);
+            let m: i64 = out.get(3..5).and_then(|x| x.parse().ok()).unwrap_or(0);
+            sign * (h * 3600 + m * 60)
+        }
     })
 }
 
@@ -6842,19 +6856,14 @@ pub struct HooksSeen { ready: bool, session_id: u32, titles: HashMap<u64, (Strin
 /// gethostname(3), as tmux's #{host} reads it (`mac.lan`, not `hostname -s`'s `mac`).
 pub fn full_hostname() -> String {
     static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    HOST.get_or_init(|| {
-        let mut buf = [0u8; 256];
-        let ok = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0;
-        if !ok { return String::new() }
-        let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-        String::from_utf8_lossy(&buf[..end]).into_owned()
-    }).clone()
+    HOST.get_or_init(crate::sys::hostname).clone()
 }
 
 pub fn hostname() -> String {
     static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HOST.get_or_init(|| {
-        let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        // (Windows' `hostname` takes no -s: it answers with an error about setting the name.)
+        let raw = if cfg!(windows) { crate::sys::hostname() } else { std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default() };
         if raw.is_empty() { "this computer".into() } else { raw }
     }).clone()
 }

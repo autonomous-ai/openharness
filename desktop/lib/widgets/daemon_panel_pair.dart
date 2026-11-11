@@ -238,10 +238,7 @@ mixin _PairSections on State<DaemonPanel> {
             decoration: BoxDecoration(
               color: focused ? DesktopChrome.selection : DesktopChrome.field,
               borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-              border: Border.all(
-                width: 1.5,
-                color: focused ? DesktopChrome.accent : Colors.transparent,
-              ),
+              border: Border.all(width: 1.5, color: Colors.transparent),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -665,7 +662,7 @@ mixin _PairSections on State<DaemonPanel> {
                 hintText: wait == null
                     ? 'ask $name something'
                     : 'wait ${(wait.inMilliseconds / 1000).ceil()}s',
-                hintStyle: _ink(_muted.withValues(alpha: .4)),
+                hintStyle: _ink(DesktopChrome.hint),
                 counterText: '',
               ),
               onSubmitted: (_) {

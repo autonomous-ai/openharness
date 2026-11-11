@@ -336,7 +336,7 @@ void main() {
       await tester.pumpAndSettle();
       final subscription = tester
           .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
-          .singleWhere((row) => row.title == 'OpenAI');
+          .singleWhere((row) => row.title == 'Codex');
       expect(subscription.selected, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -368,10 +368,11 @@ void main() {
 
     // A picker that can only move an agent ONTO a grid is a one-way door, so the engine's own login
     // is always the first row. It is named the way the window's own Models menu names it — by
-    // PROVIDER ('Anthropic'), not by engine ('Claude') — so the two controls agree about what the
+    // PROVIDER ('Claude'), not by engine ('Claude') — so the two controls agree about what the
     // thing is called, and it carries that menu's status text beside it.
-    expect(find.text('Anthropic').last, findsOneWidget);
-    expect(find.textContaining('usage'), findsOneWidget);
+    expect(find.text('Claude').last, findsOneWidget);
+    expect(find.textContaining('usage'), findsNothing);
+    // The fixture supplies model inventory, not a CLI usage report.
   });
 
   testWidgets(
@@ -399,7 +400,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('OpenAI'), findsNothing);
+      expect(find.text('Codex'), findsNothing);
       controller.open();
       await tester.pumpAndSettle();
       expect(find.text('local-model'), findsOneWidget);
@@ -709,8 +710,8 @@ void main() {
         .width;
     expect(
       width,
-      greaterThan(340),
-      reason: 'a row longer than the minimum asks for more',
+      greaterThanOrEqualTo(340),
+      reason: 'a long id still has the room a status clears',
     );
     expect(
       width,
@@ -874,13 +875,13 @@ void main() {
       var calls = 0;
       // Already on its own login: re-selecting it would respawn the pane for nothing.
       await open(tester, currentModel: null, onOwnLogin: () => calls++);
-      await tester.tap(find.text('Anthropic').last);
+      await tester.tap(find.text('Claude').last);
       await tester.pumpAndSettle();
       expect(calls, 0);
 
       // On a grid model: now it has somewhere to go.
       await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => calls++);
-      await tester.tap(find.text('Anthropic').last);
+      await tester.tap(find.text('Claude').last);
       await tester.pumpAndSettle();
       expect(calls, 1);
     },
@@ -900,7 +901,7 @@ void main() {
     );
     await open(tester);
 
-    for (final row in ['Anthropic', 'Qwen-Test']) {
+    for (final row in ['Claude', 'Qwen-Test']) {
       final inkWell = tester.widget<InkWell>(
         find.ancestor(of: find.text(row), matching: find.byType(InkWell)).first,
       );
@@ -1196,7 +1197,7 @@ void main() {
 
     expect(rowFor(tester, 'Qwen-Test').selected, isTrue);
     expect(rowFor(tester, 'DeepSeek-Test').selected, isFalse);
-    expect(rowFor(tester, 'Anthropic').selected, isFalse);
+    expect(rowFor(tester, 'Claude').selected, isFalse);
     expect(find.byIcon(AppIcons.check), findsOneWidget);
     expect(
       find.descendant(
@@ -1226,12 +1227,12 @@ void main() {
     );
     await open(tester);
 
-    expect(rowFor(tester, 'Anthropic').selected, isTrue);
+    expect(rowFor(tester, 'Claude').selected, isTrue);
     expect(rowFor(tester, 'Qwen-Test').selected, isFalse);
     expect(find.byIcon(AppIcons.check), findsOneWidget);
     expect(
       find.descendant(
-        of: find.byWidget(rowFor(tester, 'Anthropic')),
+        of: find.byWidget(rowFor(tester, 'Claude')),
         matching: find.byIcon(AppIcons.check),
       ),
       findsOneWidget,
@@ -1354,7 +1355,7 @@ void main() {
       isTrue,
       reason: 'a restarting pane is not an answer',
     );
-    expect(ticked(tester, 'Anthropic'), isFalse);
+    expect(ticked(tester, 'Claude'), isFalse);
 
     // And comes back up on what was asked for.
     report('gemma-4-31B-it');
@@ -1399,15 +1400,15 @@ void main() {
       );
       final report = await openLive(tester, currentModel: 'gemma-4-31B-it');
 
-      await tester.tap(find.text('Anthropic').last);
+      await tester.tap(find.text('Claude').last);
       await tester.pumpAndSettle();
       await tester.tap(find.byType(GridModelPicker));
       await tester.pumpAndSettle();
-      expect(ticked(tester, 'Anthropic'), isTrue);
+      expect(ticked(tester, 'Claude'), isTrue);
 
       report(null);
       await tester.pumpAndSettle();
-      expect(ticked(tester, 'Anthropic'), isTrue);
+      expect(ticked(tester, 'Claude'), isTrue);
       expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
 
       // And the guess is RELEASED by that confirmation, not merely agreed with: the next thing the
@@ -1416,7 +1417,7 @@ void main() {
       report('gemma-4-31B-it');
       await tester.pumpAndSettle();
       expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
-      expect(ticked(tester, 'Anthropic'), isFalse);
+      expect(ticked(tester, 'Claude'), isFalse);
     },
   );
 

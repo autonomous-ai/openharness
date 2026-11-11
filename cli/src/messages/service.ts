@@ -88,6 +88,7 @@ export interface MessagesOptions {
   project?: (cwd: string) => Promise<{ branch: string | null } | null>
   /** The shared tabs' tasks (tasks.ts, which runs `gh`); a test's own, so no test starts the real one. */
   tasks?: TaskReader
+
   now?: () => number
 }
 
@@ -234,6 +235,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   const tellOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).agentsTellAgents
   /** Whether a program acting for the person may reply to a harness here (`programs-reply`): read at each use, as `tellOn`. */
   const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
+
   let waking = false
   const later = (): void => {
     if (waking) return
@@ -285,6 +287,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     text: (delivery, message) => {
       // More work from its starter: no tab, so no roster note, which would invite it to message its teammates.
       if (message.tabId === TOLD_TAB) return toldText(message)
+
       // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them.
       if (message.tabId === REPLIED_TAB) return message.text
       const roster = rosterOf(delivery.agentId)
@@ -303,7 +306,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    * cannot be read (signed out, the backend down) would otherwise leave it there to be taken.
    */
   function forbidden(delivery: LocalDelivery): string | null {
-    return store.entry(delivery.messageId)?.message.tabId === 'started' ? 'it was sent outside any tab' : null
+    // `started`: 0.3.75's log of starts; `relayed`: a v3 Buddy's words for its person's harness, retired with the Buddy.
+    const tab = store.entry(delivery.messageId)?.message.tabId
+    return tab === 'started' || tab === 'relayed' ? 'it was sent outside any tab' : null
   }
 
   /** When the tabs stopped carrying each local delivery (`messageId agentId`), while they do not. */
@@ -328,6 +333,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
       return refusal ? { refused: refusal.message } : null
     }
+
     // A program's reply for the person: the switch is looked at again at each look, as a tell's is.
     if (entry.message.tabId === REPLIED_TAB) return replyOn() ? null : { refused: 'programs-reply was turned off' }
     if (!directory.current() && directory.on()) return null
@@ -621,9 +627,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     let from: Member
     if (local) {
       const pane = typeof payload.pane === 'string' ? payload.pane : ''
-      const session = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
-      if (!session) throw new MessageError('NOT_A_HARNESS', 'Run harness tell from the pane of the harness that started it.')
-      from = { machineId: self(), agentId: session.agentId }
+      const caller = PANE.test(pane) ? sessionForPaneId(live(), pane) : undefined
+      if (!caller) throw new MessageError('NOT_A_HARNESS', 'Run harness tell from the pane of the harness that started it.')
+      from = { machineId: self(), agentId: caller.agentId }
     } else {
       const claimed = payload.from as Record<string, unknown> | null | undefined
       if (typeof claimed?.machineId !== 'string' || !claimed.machineId || typeof claimed.agentId !== 'string' || !claimed.agentId) {

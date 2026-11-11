@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_buddy.dart';
-import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
@@ -368,31 +367,6 @@ void main() {
   });
 
   group("a project's work", () {
-    test('lists no Buddy chat and no private chat: Chat with PM is closed '
-        '(#2090), so its old history is hidden too', () async {
-      final swarm = FakeSwarm();
-      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-        groups: [
-          groupData('g1', title: 'Fix login', number: 7),
-          buddyChatData('buddy-me'),
-          groupData('pm-old', title: 'person-me', audience: [me]),
-          groupData('g2', title: 'Ship it', number: 8),
-        ],
-      );
-      final r = reader(swarm);
-      addTearDown(r.dispose);
-      await r.refresh();
-      final snapshot = r.snapshot!;
-
-      final work = swarmProjectWork(
-        snapshot,
-        snapshot.projects.single,
-        buddies: r.buddies,
-      );
-
-      expect([for (final g in work.active) g.id], ['g1', 'g2']);
-      expect(work.older, isEmpty);
-    });
   });
 
   group('the machines a Buddy may start on', () {
@@ -428,8 +402,20 @@ void main() {
       await r.refresh();
 
       expect(swarmBuddyMachines(r), [
-        (id: 'mac-4', name: 'Mac Studio', inSwarm: true, away: false),
-        (id: 'mac-1', name: 'Tonys-MacBook-Pro', inSwarm: true, away: false),
+        (
+          id: 'mac-4',
+          name: 'Mac Studio',
+          inSwarm: true,
+          away: false,
+          paused: false,
+        ),
+        (
+          id: 'mac-1',
+          name: 'Tonys-MacBook-Pro',
+          inSwarm: true,
+          away: false,
+          paused: false,
+        ),
       ]);
     });
 
@@ -454,9 +440,27 @@ void main() {
           ],
         ),
         [
-          (id: 'studio', name: 'Studio', inSwarm: false, away: false),
-          (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
-          (id: 'air', name: 'MacBook Air', inSwarm: false, away: true),
+          (
+            id: 'studio',
+            name: 'Studio',
+            inSwarm: false,
+            away: false,
+            paused: false,
+          ),
+          (
+            id: 'mac-1',
+            name: 'tropic',
+            inSwarm: true,
+            away: false,
+            paused: false,
+          ),
+          (
+            id: 'air',
+            name: 'MacBook Air',
+            inSwarm: false,
+            away: true,
+            paused: false,
+          ),
         ],
       );
       expect(
@@ -673,7 +677,13 @@ void main() {
       await actions.start(
         machineId: 'studio',
         engine: 'claude',
-        machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+        machine: (
+          id: 'studio',
+          name: 'Studio',
+          inSwarm: false,
+          away: false,
+          paused: false,
+        ),
         computers: computers,
       );
 
@@ -711,7 +721,13 @@ void main() {
       await actions.start(
         machineId: 'mac-1',
         engine: 'claude',
-        machine: (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
+        machine: (
+          id: 'mac-1',
+          name: 'tropic',
+          inSwarm: true,
+          away: false,
+          paused: false,
+        ),
         computers: computers,
       );
 
@@ -731,7 +747,13 @@ void main() {
         await actions.start(
           machineId: 'studio',
           engine: 'claude',
-          machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+          machine: (
+            id: 'studio',
+            name: 'Studio',
+            inSwarm: false,
+            away: false,
+            paused: false,
+          ),
           computers: computers,
         );
 

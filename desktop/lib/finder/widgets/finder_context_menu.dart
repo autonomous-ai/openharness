@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/widgets/app_menu.dart';
+
 /// A right-click menu for a row of the tree or the Changes list, drawn by
 /// the app's own menu theme (`AppMenuItem` rows).
 class FinderContextMenu extends StatefulWidget {
@@ -22,9 +24,11 @@ class _FinderContextMenuState extends State<FinderContextMenu> {
   List<Widget> _items = const [];
 
   @override
-  Widget build(BuildContext context) => MenuAnchor(
+  Widget build(BuildContext context) => AppDropdown(
     controller: _menu,
-    menuChildren: _items,
+    consumeOutsideTap: false,
+    alignmentOffset: Offset.zero,
+    children: _items,
     child: GestureDetector(
       onSecondaryTapDown: (details) {
         setState(() => _items = widget.items());

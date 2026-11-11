@@ -10,6 +10,7 @@
  * (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core has an entry of
  * its own, built apart (leanCoreEntry.ts), and the CLI always runs from cli.js.
  */
+import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv

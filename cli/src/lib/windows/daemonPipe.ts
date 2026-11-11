@@ -4,7 +4,7 @@
  * who serves a data folder (localSocket.ts `servedFolderDeps`) use it; it lives here, apart from either, so neither
  * imports the other.
  */
-import { daemonRecordPath, readDaemonRecord } from '../daemonRecord.js'
+import { configuredPortOf, daemonRecordPath, readDaemonRecord } from '../daemonRecord.js'
 import { pidAlive, recordedProcessDead, type HostLiveness } from '../processProof.js'
 import { readDaemonToken } from './pipeAuth.js'
 import type { PipeTarget } from './pipeClient.js'
@@ -24,12 +24,13 @@ const WINDOWS_LIVENESS: HostLiveness = {
  * a pipe and pid, no token, or the recorded process is proven gone. Once that process is gone, any user can create
  * a pipe of the recorded name.
  */
-export async function daemonPipe(dataDir: string, configuredPort: number, liveness: HostLiveness = WINDOWS_LIVENESS): Promise<PipeTarget | null> {
-  const record = readDaemonRecord(dataDir, configuredPort)
+export async function daemonPipe(dataDir: string, port: number, liveness: HostLiveness = WINDOWS_LIVENESS): Promise<PipeTarget | null> {
+  const configured = configuredPortOf(dataDir, port)
+  const record = readDaemonRecord(dataDir, configured)
   if (!record?.pipe || !record.pid) return null
   const token = readDaemonToken(dataDir)
   if (!token) return null
-  if (await recordedProcessDead(daemonRecordPath(dataDir, configuredPort), record.pid, liveness)) return null
+  if (await recordedProcessDead(daemonRecordPath(dataDir, configured), record.pid, liveness)) return null
   return { pipe: record.pipe, token }
 }
 

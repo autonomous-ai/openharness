@@ -16,6 +16,10 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { createLaunchHelpers } from './launch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
+// Real native preparation asks a real `/bin/sh` engine for its help. On a loaded machine its 5 s deadline, not the code,
+// decided (5155 ms at load 60): a creation held, and the DSH launch it left queued answered the next test. What a deadline
+// does is patientExec.spec.ts's to test.
+vi.mock('../../lib/patientExec.js', async (real) => ({ ...await real<object>(), patientDeadline: () => () => {} }))
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
@@ -159,8 +163,11 @@ describe('forking an agent', () => {
 
   it.each(['claude', 'codex'] as const)('keeps real %s launch preparation authorized and records its final harness-selected home', async engine => {
     const executable = await import('../../engines/kit/launchExecutable.js')
+    // An engine that runs: a launch that names no mode still asks for its help (nativeLaunch.ts).
+    const engineFile = join(root, 'engine')
+    writeFileSync(engineFile, '#!/bin/sh\necho "Usage: engine"\n', { mode: 0o755 })
     vi.spyOn(executable, 'captureLaunchExecutable').mockResolvedValue({ state: 'ready',
-      executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
+      executable: { command: engineFile, identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
@@ -182,6 +189,11 @@ describe('forking an agent', () => {
     expect(request.env?.HOME).toBe(root)
     expect(request.env?.CODEX_HOME).toBe(finalHome)
     if (engine === 'codex') expect(request.codexHome).toBe(finalHome)
+  })
+
+  it('keeps its source\'s Claude account on its row', async () => {
+    expect(await setup(source({ claudeHome: '/profiles/work' })).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].claudeHome).toBe('/profiles/work')
   })
 
   it('does not open instruction files or install API notes while its harness waits for the Store', async () => {
@@ -207,8 +219,8 @@ describe('forking an agent', () => {
       expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
     } finally { Object.defineProperty(process, 'platform', platform) }
     const cleared = (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { clearEnv?: string[] }).clearEnv ?? []
-    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].paneLaunch).toEqual({ cwd: work, afterExit: windowsAfterExit('claude'),
-      ...(cleared.length ? { clearInherited: cleared } : {}) })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].paneLaunch).toMatchObject({ cwd: work, afterExit: windowsAfterExit('claude'),
+      ...(cleared.length ? { clearInherited: cleared } : {}), env: { GRID_NO_UPDATE_CHECK: '1' } })
   })
 
   it('refuses a batch-file engine on Windows whose first message cmd.exe would read, by name', async () => {

@@ -1,0 +1,114 @@
+import { describe, expect, it } from 'vitest'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { createSuperTab, type Actor } from './model.js'
+import type { MessageChangeTarget } from './messageEdits.js'
+import { storedTask } from './storedWork.test-support.js'
+
+const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
+const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
+const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
+
+function fixture() {
+  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
+  let sequence = 0
+  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    const effects = applyCommand(state, actor, command, { now: 1000, operationId: `op-${++sequence}`, ...context })
+    state = effects.state
+    return effects
+  }
+  const invite = (role: 'viewer' | 'collaborator' = 'collaborator') => {
+    const invited = run({ type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
+    run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, peer)
+  }
+  const agent = () => run({ type: 'agent.add', conversationId: 'lead', machineId: 'machine', harnessId: 'h1', name: 'Worker', configuration,
+    lead: false }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+  const lead = () => state.conversations.find(c => c.id === 'lead')!
+  return { run, invite, agent, lead, get state() { return state } }
+}
+
+const edit = (text = 'Fixed text'): Command => commandSchema.parse({ type: 'message.edit', conversationId: 'lead', messageId: 'm1', text })
+const remove = (): Command => commandSchema.parse({ type: 'message.delete', conversationId: 'lead', messageId: 'm1' })
+const target = (extra: Partial<MessageChangeTarget> = {}): Partial<CommandContext> => ({ messageChange: { messageId: 'm1',
+  author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false, hasReplies: false, text: 'Old text', sequence: 1, ...extra } })
+
+describe('message edits', () => {
+  it('lets the author edit their own post and bumps the group only on a change', () => {
+    const f = fixture()
+    expect(f.run(edit(), owner, target()).result).toMatchObject({ changed: true })
+    expect(f.lead().reactionSeq).toBe(1)
+    expect(f.run(edit('Old text'), owner, target()).result).toMatchObject({ changed: false })
+    expect(f.lead().reactionSeq).toBe(1)
+  })
+
+  it('lets the author delete their own post, kept as deleted while it has replies', () => {
+    const f = fixture()
+    expect(f.run(remove(), owner, target()).result).toMatchObject({ changed: true, kept: false })
+    expect(f.run(remove(), owner, target({ hasReplies: true })).result).toMatchObject({ changed: true, kept: true })
+    expect(f.lead().reactionSeq).toBe(2)
+  })
+
+  it('only the author: never another person, a viewer or an agent', () => {
+    const f = fixture()
+    f.invite()
+    for (const command of [edit(), remove()]) {
+      expect(() => f.run(command, peer, target())).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    }
+    const worker = f.agent()
+    const asWorker: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'owner' }
+    for (const command of [edit(), remove()]) {
+      // The owner's own agent on the owner's own machine cannot change the owner's post either.
+      expect(() => f.run(command, asWorker, target())).toThrow(expect.objectContaining({ status: 403 }))
+      // Nor its own post: agents' messages are never edited.
+      expect(() => f.run(command, asWorker, target({ author: { kind: 'agent', id: worker } }))).toThrow(expect.objectContaining({ status: 403 }))
+    }
+    expect(f.lead().reactionSeq ?? 0).toBe(0)
+  })
+
+  it('refuses a viewer, a system row, a deleted message and a message the store did not find', () => {
+    const f = fixture()
+    for (const command of [edit(), remove()]) {
+      expect(() => f.run(command)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+      expect(() => f.run(command, owner, target({ messageId: 'other' }))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+      expect(() => f.run(command, owner, target({ plain: false }))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+      expect(() => f.run(command, owner, target({ deleted: true }))).toThrow(expect.objectContaining({ code: 'MESSAGE_DELETED' }))
+    }
+    f.invite('viewer')
+    expect(() => f.run(edit(), peer, target({ author: { kind: 'person', id: 'peer' } }))).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+  })
+
+  // The store's one-time removal of notices of retired kinds (store.ts removeRetiredNotice), which only the store gives a delete.
+  it('lets the store remove a retired notice, in an archived chat too, stepping the counters back, and never a person\'s post', () => {
+    const f = fixture()
+    const notice = (extra: Partial<MessageChangeTarget> = {}) => ({ ...target({ author: { kind: 'agent', id: 'gone-agent' }, plain: false, sequence: 4,
+      before: { message: 3, main: 3 }, ...extra }), retiredNotice: true as const })
+    Object.assign(f.lead(), { lastMessageSequence: 4, lastMainSequence: 4 })
+    expect(f.run(remove(), owner, notice()).result).toMatchObject({ changed: true, kept: false })
+    expect(f.lead()).toMatchObject({ lastMessageSequence: 3, lastMainSequence: 3, reactionSeq: 1 })
+    expect(f.run(remove(), owner, notice({ hasReplies: true })).result).toMatchObject({ kept: true })
+    expect(() => f.run(remove(), owner, { ...target(), retiredNotice: true })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.run(remove(), owner, notice({ deleted: true }))).toThrow(expect.objectContaining({ code: 'MESSAGE_DELETED' }))
+    f.lead().archived = true
+    expect(f.run(remove(), owner, notice()).result).toMatchObject({ changed: true })
+    expect(() => f.run(remove(), owner, target())).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+  })
+
+  it('refuses empty text unless the message has files, and an archived group', () => {
+    const f = fixture()
+    expect(() => f.run(edit('   '), owner, target())).toThrow(expect.objectContaining({ code: 'INVALID_MESSAGE' }))
+    expect(f.run(edit(''), owner, target({ hasFiles: true })).result).toMatchObject({ changed: true })
+    const group = storedTask(f.state, { title: 'Old', brief: 'Done.' })
+    f.run({ type: 'conversation.archive', conversationId: group, archived: true })
+    expect(() => f.run(commandSchema.parse({ type: 'message.edit', conversationId: group, messageId: 'm1', text: 'x' }), owner, target()))
+      .toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+  })
+
+  it('removes a credential edited into a message, as a send does, and tells the author', () => {
+    const f = fixture()
+    // Built at run time so no token-shaped literal sits in the source.
+    const token = ['ghp', 'Q7mZ2xK9pL4vB8nR1tY6wC3sD5fG0hJ2kM4n'].join('_')
+    const effects = f.run(edit(`Use ${token} for the deploy`), owner, target())
+    expect(effects.result).toMatchObject({ changed: true, credentialNotice: expect.stringContaining('Removed a credential') })
+    expect(effects.messageEdit).toEqual({ messageId: 'm1', text: 'Use [credential removed] for the deploy' })
+    expect(JSON.stringify(effects)).not.toContain(token)
+  })
+})

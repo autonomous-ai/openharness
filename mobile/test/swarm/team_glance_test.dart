@@ -150,8 +150,10 @@ void main() {
     String? running(
       List<Map<String, dynamic>> agents, [
       List<Map<String, dynamic>> groups = const [],
-    ]) =>
-        swarmTeamGlance(swarm(agents: agents, groups: groups), now: now).running;
+    ]) => swarmTeamGlance(
+      swarm(agents: agents, groups: groups),
+      now: now,
+    ).running;
 
     expect(running([]), isNull, reason: 'no agents');
     expect(running([agent('a1')]), isNull, reason: 'idle');

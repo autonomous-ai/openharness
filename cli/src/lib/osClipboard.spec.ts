@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { isWsl } from './osClipboard.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isWsl, writeImageToOsClipboard } from './osClipboard.js'
+
+describe('writeImageToOsClipboard on Windows', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  // Claude Code takes an image on Alt+V there, so a replayed Ctrl+V attached nothing: the pasted path is what works.
+  it('leaves the clipboard alone, so the saved file\'s path is pasted', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }))
+    expect(await writeImageToOsClipboard('C:\\p.png', new Uint8Array([1]))).toMatchObject({ state: 'unavailable' })
+  })
+})
 
 describe('isWsl', () => {
   it('knows WSL by the distro WSL names, or by its kernel when that is unset', () => {

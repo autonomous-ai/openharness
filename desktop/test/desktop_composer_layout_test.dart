@@ -129,9 +129,9 @@ class _ReviewApp extends AppNotifier {
     bool bypassPermission = false,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -141,6 +141,7 @@ class _ReviewApp extends AppNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     launches.add({
       'machine': machineId,
@@ -412,6 +413,34 @@ void main() {
       },
     );
   }
+
+  // anh Dee, 11-07 (#4196): the task starts three rows tall and grows to seven
+  // as it is typed; #2947 had cut the empty box to one row.
+  testWidgets('the task opens three rows tall and grows to seven', (
+    tester,
+  ) async {
+    await _mount(tester);
+    Future<double> heightWith(int lines) async {
+      await tester.enterText(
+        _task,
+        List.generate(lines, (i) => 'line $i').join('\n'),
+      );
+      await tester.pumpAndSettle();
+      return tester.getSize(_task).height;
+    }
+
+    final empty = tester.getSize(_task).height;
+    final three = await heightWith(3);
+    final four = await heightWith(4);
+    final seven = await heightWith(7);
+    final ten = await heightWith(10);
+    final one = await heightWith(1);
+    expect(three, empty, reason: 'An empty task is three rows tall');
+    expect(one, empty, reason: 'One row typed keeps three rows');
+    expect(four, greaterThan(three), reason: 'It grows past three rows');
+    expect(ten, seven, reason: 'It stops growing at seven rows');
+    expect(seven - three, closeTo((four - three) * 4, 1));
+  });
 
   testWidgets(
     'footer controls show their purpose and keep stable focus geometry',
@@ -770,7 +799,8 @@ void main() {
         expect(_query.hitTestable(), findsOneWidget);
         expect(_machine, findsNothing);
         final menu = tester.getRect(_chooser);
-        expect(menu.width, greaterThanOrEqualTo(400));
+        // As wide as the app's other dropdowns, unless a name needs more.
+        expect(menu.width, greaterThanOrEqualTo(240));
         final hint = find.descendant(
           of: _query,
           matching: find.text('Search repos'),

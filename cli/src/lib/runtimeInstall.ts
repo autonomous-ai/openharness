@@ -3,10 +3,10 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writ
 import { dirname, join, sep, win32 } from 'node:path'
 
 import { env } from '../config/env.js'
-import { gridAvailable, gridChildEnv, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
+import { gridAvailable, gridChildEnv, gridCommand, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
 import { installGrid } from './gridInstall.js'
 import { followWindowsGridPin } from './gridWindowsPin.js'
-import { managedNodePath } from './nodeRuntime.js'
+import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
 import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
 
 /**
@@ -142,8 +142,9 @@ interface ManagedArchive {
   /**
    * Whether an installed runtime that is not the manifest's version is replaced. Node stops at "one
    * is installed" — which version is the installer's business, and a daemon must not swap the
-   * interpreter it is running on. The grid follows the PIN: the manifest names the version this build
-   * of the CLI drives, and a pin that moved must reach a machine that already has an older one.
+   * interpreter it is running on — except below [MINIMUM_NODE_MAJOR] ([ensureNodeMeetsMinimum]). The
+   * grid follows the PIN: the manifest names the version this build of the CLI drives, and a pin that
+   * moved must reach a machine that already has an older one.
    */
   followsPin: boolean
   /** A version the manifest may not go below — this daemon's floor, which a manifest cannot lower. */
@@ -156,17 +157,23 @@ interface ManagedArchive {
    * write to is what makes that fail loudly instead of overwriting the pin.
    */
   readOnly?: boolean
+  /** Whether the runtimes this one replaces, but the last, are removed (see [retireSuperseded]). */
+  retiresSuperseded: boolean
+  /** Whether `current-<name>` is left as it is: the caller names the new runtime there itself, when it is time. */
+  leavesPointer?: boolean
+  /** How long the manifest may take to answer; [MANIFEST_TIMEOUT_MS] unless the caller has less time. */
+  manifestTimeoutMs?: number
   log: (message: string) => void
 }
 
-/**
- * Install [spec]'s runtime from its manifest, or move to the version the manifest pins, or leave it
- * be. Returns the binary this daemon should use — which is whatever it already had whenever the
- * manifest, the download or the unpacked binary cannot be trusted — or null when there is nothing.
- *
- * Everything here is best-effort and returns rather than throws: a daemon must not fail to start
- * because a download failed.
- */
+/** A manifest that does not answer must not hold up a start or an update for as long as the OS keeps a socket. */
+const MANIFEST_TIMEOUT_MS = 15_000
+
+/** Why a runtime was not moved to what the manifest names. 'unmanaged' is [ensureNodeMeetsMinimum]'s alone. */
+export type NodeMigrationReason = 'no-manifest-entry' | 'manifest-unreachable' | 'download-failed' | 'does-not-run' | 'unmanaged'
+
+type ArchiveResult = { path: string | null; reason: Exclude<NodeMigrationReason, 'unmanaged'> | null }
+
 /**
  * The staging folders of processes that are gone: a core that exited in the middle of an unpack (an
  * update's handoff, a master's restart) left its `.<name>-staging-<pid>-<time>`, the archive and a
@@ -188,32 +195,45 @@ function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
 }
 
-async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null> {
+/**
+ * Install [spec]'s runtime from its manifest, or move to the version the manifest pins, or leave it
+ * be. `path` is the binary this daemon should use — which is whatever it already had whenever the
+ * manifest, the download or the unpacked binary cannot be trusted — or null when there is nothing;
+ * `reason` says why it stopped short of the manifest's, and is null when it did not.
+ *
+ * Everything here is best-effort and returns rather than throws: a daemon must not fail to start
+ * because a download failed.
+ */
+async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult> {
   sweepStaging(spec.name)
   const installed = spec.installed()
-  if (installed && !spec.followsPin) return installed
+  const kept = (reason: ArchiveResult['reason']): ArchiveResult => ({ path: installed, reason })
+  if (installed && !spec.followsPin) return kept(null)
   const key = platformKey()
-  if (!key) return installed
+  if (!key) return kept('no-manifest-entry')
   const layout = runtimeLayout()
 
+  // What a throw means depends on how far it got: reading the manifest, or laying the runtime down.
+  let failure: ArchiveResult['reason'] = 'manifest-unreachable'
   try {
-    const response = await fetch(spec.manifestUrl)
-    if (!response.ok) return installed
+    const response = await fetch(spec.manifestUrl, { signal: AbortSignal.timeout(spec.manifestTimeoutMs ?? MANIFEST_TIMEOUT_MS) })
+    if (!response.ok) return kept('manifest-unreachable')
     const artifact = artifactFor(await response.json(), spec.name, key)
-    if (!artifact) return installed
-    if (spec.acceptsVersion && !spec.acceptsVersion(artifact.version)) return installed
+    if (!artifact) return kept('no-manifest-entry')
+    if (spec.acceptsVersion && !spec.acceptsVersion(artifact.version)) return kept('no-manifest-entry')
+    failure = 'download-failed'
 
     const target = join(env.ADAPTER_RUNTIME_DIR, `${spec.name}-${artifact.version}-${key}`)
     const binary = join(target, spec.binary)
     // The pin is what is installed: nothing to fetch, nothing to write.
-    if (installed === binary) return installed
+    if (installed === binary) return kept(null)
     if (!existsSync(binary)) {
       spec.log(`▸ installing the Harness ${spec.label} runtime (${artifact.version}, ${key})…`)
       // downloadVerified checks the sha256 but not the length, so check it here: a truncated body
       // that somehow collided would be caught by the hash anyway, but a mismatch here is the cheaper
       // and clearer failure.
       const bytes = await downloadVerified(artifact, RUNTIME_DOWNLOAD_LIMITS)
-      if (artifact.size !== undefined && bytes.length !== artifact.size) return installed
+      if (artifact.size !== undefined && bytes.length !== artifact.size) return kept('download-failed')
 
       mkdirSync(env.ADAPTER_RUNTIME_DIR, { recursive: true, mode: 0o700 })
       const staging = join(env.ADAPTER_RUNTIME_DIR, `.${spec.name}-staging-${process.pid}-${Date.now()}`)
@@ -222,9 +242,9 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
         const archive = join(staging, `${spec.name}${layout.archiveSuffix}`)
         writeFileSync(archive, bytes)
         const unpack = unpackCommand(archive, staging)
-        if (!await finishesCleanly(unpack.file, unpack.args, 120_000)) return installed
+        if (!await finishesCleanly(unpack.file, unpack.args, 120_000)) return kept('download-failed')
         const unpacked = join(staging, artifact.archiveRoot)
-        if (!existsSync(join(unpacked, spec.binary))) return installed
+        if (!existsSync(join(unpacked, spec.binary))) return kept('download-failed')
         // Another start may have won the race; theirs is as good as ours.
         if (!existsSync(target)) renameSync(unpacked, target)
       } finally {
@@ -243,21 +263,21 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
     // is asked on every daemon start, and without this a wrong-arch or broken build would cost a
     // hung exec each time until the manifest moved. A new pin is a new directory, and starts clean.
     const unrunnable = join(target, '.unrunnable')
-    if (spec.followsPin && existsSync(unrunnable)) return installed
+    if (spec.followsPin && existsSync(unrunnable)) return kept('does-not-run')
     if (!await spec.runs(binary)) {
       if (spec.followsPin) {
         try { writeFileSync(unrunnable, `${new Date().toISOString()}\n`, { mode: 0o600 }) } catch { /* the retry is the cost */ }
       }
-      return installed
+      return kept('does-not-run')
     }
     // Written last, and only once the binary has answered: Desktop Harness and the hook installer
     // both read this file to decide what to execute, so it must never name something that cannot run.
-    writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, { mode: 0o600 })
+    if (!spec.leavesPointer) writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, { mode: 0o600 })
     spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
-    if (spec.followsPin) retireSuperseded(spec.name, key, target, installed)
-    return binary
+    if (spec.retiresSuperseded) retireSuperseded(spec.name, key, target, installed)
+    return { path: binary, reason: null }
   } catch {
-    return installed
+    return kept(failure)
   }
 }
 
@@ -286,15 +306,9 @@ function retireSuperseded(name: string, key: string, target: string, previous: s
   }
 }
 
-/**
- * The managed Node, installing it when this computer has not got one. Returns its path, or null when
- * no runtime could be provisioned — callers keep whatever interpreter they already have.
- *
- * Idempotent and cheap once installed: [managedNodePath] returning a path under the runtime directory
- * means the work is already done, and nothing is fetched.
- */
-export async function ensureManagedRuntime(log: (message: string) => void = () => {}): Promise<string | null> {
-  return ensureManagedArchive({
+/** The Node every managed-Node ensure lays down, from the runtime manifest. */
+function nodeArchive(log: (message: string) => void): Omit<ManagedArchive, 'followsPin'> {
+  return {
     name: 'node',
     label: 'Node',
     manifestUrl: env.ADAPTER_RUNTIME_METADATA_URL,
@@ -303,10 +317,56 @@ export async function ensureManagedRuntime(log: (message: string) => void = () =
       const existing = managedNodePath()
       return existing.startsWith(env.ADAPTER_RUNTIME_DIR + sep) ? existing : null
     },
-    followsPin: false,
     runs: (node) => runs(node),
+    // Engines installed with `npm i -g` live inside the Node folder they were installed with, and are
+    // still found there after a switch; no Node folder is ever removed.
+    retiresSuperseded: false,
     log,
+  }
+}
+
+/**
+ * The managed Node, installing it when this computer has not got one. Returns its path, or null when
+ * no runtime could be provisioned — callers keep whatever interpreter they already have.
+ *
+ * Idempotent and cheap once installed: [managedNodePath] returning a path under the runtime directory
+ * means the work is already done, and nothing is fetched.
+ */
+export async function ensureManagedRuntime(log: (message: string) => void = () => {}): Promise<string | null> {
+  return (await ensureManagedArchive({ ...nodeArchive(log), followsPin: false })).path
+}
+
+/**
+ * Lay down the manifest's Node when the managed one is below [MINIMUM_NODE_MAJOR] — the one time a Node that is
+ * already installed is replaced. `node` is the managed Node to run on next: the new one, once it has answered
+ * `--version`, or on any failure the one already there, with `reason` saying why it stayed. Nothing is fetched while
+ * the installed Node meets the minimum. A computer on a Node the product did not lay down is left alone, and `reason`
+ * is 'unmanaged' when that Node ([running], this process's) is too old.
+ *
+ * `current-node` is left as it is: what starts the daemon next reads it, so it may name the new Node only together
+ * with a build staged on probation, whose rollback takes it back (lib/selfUpdate.ts `startSelfUpdater`).
+ */
+export async function ensureNodeMeetsMinimum(
+  log: (message: string) => void,
+  { timeoutMs, running = process.versions.node }: { timeoutMs?: number; running?: string } = {},
+): Promise<{ node: string | null; reason: NodeMigrationReason | null }> {
+  const spec = nodeArchive(log)
+  const installed = spec.installed()
+  if (!installed) {
+    const tooOld = Number(running.split('.')[0]) < MINIMUM_NODE_MAJOR
+    if (tooOld) log(`  ✗ Node ${running} is not the Harness runtime, and is older than ${MINIMUM_NODE_MAJOR}`)
+    return { node: null, reason: tooOld ? 'unmanaged' : null }
+  }
+  if ((nodeMajorOf(installed) ?? 0) >= MINIMUM_NODE_MAJOR) return { node: installed, reason: null }
+  const result = await ensureManagedArchive({
+    ...spec,
+    followsPin: true,
+    acceptsVersion: (version) => Number(/^v?(\d+)\./.exec(version)?.[1] ?? 0) >= MINIMUM_NODE_MAJOR,
+    manifestTimeoutMs: timeoutMs,
+    leavesPointer: true,
   })
+  if (result.reason) log(`  ✗ Node stays at ${installed}: ${result.reason}`)
+  return { node: result.path, reason: result.reason }
 }
 
 /**
@@ -328,7 +388,7 @@ export async function ensureManagedGrid(log: (message: string) => void = () => {
     await followWindowsGridPin({
       key: platformKey(),
       manifest: async () => {
-        const response = await fetch(env.ADAPTER_GRID_RUNTIME_METADATA_URL)
+        const response = await fetch(env.ADAPTER_GRID_RUNTIME_METADATA_URL, { signal: AbortSignal.timeout(MANIFEST_TIMEOUT_MS) })
         if (!response.ok) throw new Error(`manifest answered ${response.status}`)
         return response.json()
       },
@@ -338,7 +398,7 @@ export async function ensureManagedGrid(log: (message: string) => void = () => {
     })
     return null
   }
-  return ensureManagedArchive({
+  return (await ensureManagedArchive({
     name: 'grid',
     label: 'grid',
     manifestUrl: env.ADAPTER_GRID_RUNTIME_METADATA_URL,
@@ -347,10 +407,16 @@ export async function ensureManagedGrid(log: (message: string) => void = () => {
     followsPin: true,
     acceptsVersion: (version) => meetsVersionFloor(version),
     // A minute, not fifteen seconds: a onefile grid unpacks itself the first time it runs.
-    runs: (grid) => runs(grid, 60_000, gridChildEnv()),
+    // `gridCommand` steps past an unsigned launcher and runs the signed python it names, so this
+    // probe never asks Smart App Control to start the very file it would refuse (windows-rules.md §2).
+    runs: (grid) => {
+      const command = gridCommand(grid, ['--version'])
+      return finishesCleanly(command.file, command.args, 60_000, gridChildEnv())
+    },
     readOnly: true,
+    retiresSuperseded: true,
     log,
-  })
+  })).path
 }
 
 /** How often a running daemon re-reads the managed `grid` pin. */

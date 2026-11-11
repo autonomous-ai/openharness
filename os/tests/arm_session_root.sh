@@ -10,7 +10,7 @@ manager=$(command -v dnf5 || command -v microdnf)
   systemd systemd-udev systemd-pam systemd-resolved dbus-broker dbus-tools \
   NetworkManager sudo python3 shadow-utils util-linux procps-ng kmod iproute \
   xorg-x11-server-Xwayland chromium mesa-dri-drivers \
-  nodejs22-npm nodejs22-npm-bin git curl jq ripgrep less which unzip
+  nodejs24-npm nodejs24-npm-bin git curl jq ripgrep less which unzip
 # This unsigned private package was checked against the exact-source manifest by
 # the host builder. Repository dependencies still require Fedora signatures.
 "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True \

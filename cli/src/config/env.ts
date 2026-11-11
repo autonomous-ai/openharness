@@ -159,6 +159,9 @@ const fields = {
   // <COPILOT_HOME>/session-state/<sessionId>/events.jsonl, and hooks are read from
   // <COPILOT_HOME>/hooks/*.json — a directory, so Harness drops in its own file.
   COPILOT_HOME: text(join(homedir(), '.copilot')),
+  // OpenClaw state root, OpenClaw's own variable: agents' sessions live in
+  // <OPENCLAW_STATE_DIR>/agents/<agentId>/agent/openclaw-agent.sqlite. Used when the TUI's open files cannot be read.
+  OPENCLAW_STATE_DIR: text(join(homedir(), '.openclaw')),
   // Legacy Cursor fallback. cursor/home.ts resolves its distinct config (chats/hooks) and data
   // (projects/transcripts) roots using CURSOR_CONFIG_DIR, XDG_CONFIG_HOME and CURSOR_DATA_DIR.
   CURSOR_HOME: text(join(homedir(), '.cursor')),
@@ -180,7 +183,10 @@ const fields = {
   PI_HOME: text(join(homedir(), '.pi')),
   // Hermes state root — the SQLite store is <HERMES_HOME>/state.db and the shell hooks the adapter
   // installs live in <HERMES_HOME>/config.yaml (+ shell-hooks-allowlist.json).
-  HERMES_HOME: text(join(homedir(), '.hermes')),
+  // On Windows it is under %LOCALAPPDATA% (Hermes 0.22.7, hermes_constants.py), the one engine there not in the profile.
+  HERMES_HOME: text(process.platform === 'win32'
+    ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'hermes')
+    : join(homedir(), '.hermes')),
   // Command Code state root — transcripts live under <COMMANDCODE_HOME>/projects/<cwd-slug>/<id>.jsonl
   // and the adapter installs its shell hooks into <COMMANDCODE_HOME>/settings.json.
   COMMANDCODE_HOME: text(join(homedir(), '.commandcode')),
@@ -313,6 +319,8 @@ const fields = {
   // Path to the GitHub Copilot CLI. Two builds answer to `copilot` on a typical machine — a compiled
   // binary and the npm loader script — so an override is worth having.
   COPILOT_PATH: maybe,
+  // Path to the `openclaw` CLI (else `openclaw` is resolved from PATH).
+  OPENCLAW_PATH: maybe,
   // Path to the Antigravity CLI. Two binaries answer to `agy` on a typical PATH — the CLI itself and
   // the Antigravity IDE launcher — so an override is worth having.
   AGY_PATH: maybe,

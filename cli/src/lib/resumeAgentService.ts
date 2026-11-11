@@ -30,7 +30,7 @@ import { harnessPermissionEnvironment } from './harnessDefaults.js'
 
 export interface ResumeAgentServiceDeps {
   adoptSwarmSkill?: AdoptSwarmSkill
-  registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'updateProcessIdentity'>
+  registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'setLaunchArgs' | 'updateProcessIdentity'>
   stoppedAgents: StoppedAgentStore
   /** Where a resumed harness's new pane is made (main.ts `createBackend`); null with no backend ready. */
   createBackend: (CreateAgentPaneDeps['tmuxBackend'] & Pick<TerminalBackend, 'releaseHold'>) | null
@@ -50,6 +50,8 @@ export interface ResumeAgentServiceDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
+  /** Its browser starts again, for an agent created with Browser (core/api.ts `AgentBrowserPort.attached`). */
+  attachBrowser?(session: RegisteredSession): void
   /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
   attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
@@ -72,7 +74,7 @@ function preparationFailed(agent: string, error: unknown) {
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks } = deps
+    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -182,7 +184,12 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     return result
   }
 
-  const resumeStopped = (agentId: string, current: () => boolean, permissionMode?: string) => resumeStoppedAgent({
+  /** [launchArgs]: the owner's new launch words (an empty list clears them). They build this launch, and become the record's
+   *  only once the engine is confirmed back, so a resume that fails anywhere keeps the words that last worked. */
+  const resumeStopped = (agentId: string, current: () => boolean, permissionMode?: string, launchArgs?: string[]) => {
+  // The registry's own row, so the reply and the frame carry the words too.
+  const keepLaunchArgs = (row: RegisteredSession) => { if (launchArgs) registry.setLaunchArgs(row.agentId, launchArgs) }
+  return resumeStoppedAgent({
     live: () => registry.byAgent(agentId),
     saved: () => stoppedAgents.get(agentId),
     current,
@@ -275,7 +282,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           try { transcript?.verify(); return true }
           catch (error) { sourceError = error; return false }
         }
-        const built = await relaunchOverrides(saved, saved, sourceCurrent)
+        const built = await relaunchOverrides(saved, launchArgs ? { ...saved, launchArgs } : saved, sourceCurrent)
         if (sourceError) throw sourceError
         transcript?.verify()
         if (!built.ok) return built
@@ -303,7 +310,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           // A resume always starts a new engine: a turn left open before it is over.
           if (offset !== null) relaunchMarks?.note(saved.sessionId, offset, true)
         }
-        const { extraArgs, clearEnv } = built.overrides
+        const { extraArgs, ownerArgs, clearEnv } = built.overrides
         const launchEnv = permissionMode === undefined ? built.overrides.env
           : harnessPermissionEnvironment(saved.engine, built.overrides.env, permissionMode)
         // The engine may have been downgraded since this harness was paused. Nobody is waiting on
@@ -344,10 +351,12 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         const options = {
           ...(built.overrides.native ? { native: built.overrides.native } : {}),
           resumeSessionId,
+          agentId: saved.agentId,
           bypassPermission: permission.bypassPermission === true,
           ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           cwd,
           ...(extraArgs.length ? { extraArgs } : {}),
+          ...(ownerArgs?.length ? { ownerArgs } : {}),
           ...(clearEnv.length ? { clearEnv } : {}),
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
           installIfMissing: enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine),
@@ -407,11 +416,15 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           if (!current()) return resumeChanged
           const ready = registry.setLaunch(pending.agentId, { state: 'ready' })!
           stoppedAgents.finishResume(agentId, token)
+          keepLaunchArgs(ready)
           announceSession(ready)
           return { ok: true, session: ready, resumed: true }
         }
         if (pending.dsh) attachDsh(pending)
-        return await waitForResume(pending, current)
+        if (pending.browser) attachBrowser?.(pending)
+        const waited = await waitForResume(pending, current)
+        if (waited.ok) keepLaunchArgs(waited.session)
+        return waited
       } catch (error) {
         if (error instanceof IdentityReadUnavailable) return { ok: false,
           error: allocationAttempted ? 'RESUME_UNCONFIRMED' : error.code, detail: error.message }
@@ -422,18 +435,19 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       }
     },
   })
+  }
 
-  return (agentId: string, permissionMode?: string) => restartJobs.run(agentId, async current => {
+  return (agentId: string, permissionMode?: string, launchArgs?: string[]) => restartJobs.run(agentId, async current => {
     await stopJobs.get(agentId)
     if (!current()) return resumeChanged
     if (pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
-    const result = await resumeStopped(agentId, current, permissionMode)
+    const result = await resumeStopped(agentId, current, permissionMode, launchArgs)
     // Open may attach to an already running session. It must never claim to have changed that
     // process's permissions, including when another client started it during this request.
     if (result.ok && permissionMode !== undefined && result.session.permissionMode !== permissionMode) {
       return { ok: false, error: 'PERMISSION_CHANGE_REQUIRES_STOP', detail: 'Stop this harness before changing its permission mode.' }
     }
     return result
-  }, permissionMode === undefined ? 'resume' : `resume:${permissionMode}`)
+  }, permissionMode === undefined ? 'resume' : `resume:${permissionMode}`, launchArgs && JSON.stringify(launchArgs))
 
 }

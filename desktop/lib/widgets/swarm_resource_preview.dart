@@ -23,6 +23,7 @@ import '../state/harness_sessions.dart';
 import '../state/harness_placement.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
+import '../super_tabs/visible_tick.dart';
 import '../terminal/terminal_text.dart';
 import 'finger_target.dart';
 import '../terminal/terminal_theme.dart';
@@ -127,7 +128,8 @@ class SwarmResourcePreview extends StatefulWidget {
   State<SwarmResourcePreview> createState() => _SwarmResourcePreviewState();
 }
 
-class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
+class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
+    with WidgetsBindingObserver, VisibleTick<SwarmResourcePreview> {
   AppNotifier get app => widget.search.app;
   SwarmDestination? get row => widget.search.selected;
   ModelSearchEntry? get model => widget.search.models?.entries[row?.modelId];
@@ -136,7 +138,6 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   late SwarmPreviewScrollController _scroll;
   final _actionFocus = FocusNode(debugLabel: 'Resource controls');
   final _buttonFocus = <String, FocusNode>{};
-  Timer? _resourceTimer;
   String? _focusedResource;
   bool _readingResources = false;
   MachinePickerFormKind? _machineForm;
@@ -345,11 +346,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   }
 
   Future<void> _readResources() async {
-    if (_readingResources ||
-        !widget.search.isMachineMode ||
-        !app.inForeground) {
-      return;
-    }
+    if (_readingResources || !widget.search.isMachineMode) return;
     _readingResources = true;
     try {
       await widget.search.refreshMachineResources();
@@ -365,15 +362,21 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     widget.controls.dispatch = _dispatch;
     widget.controls.commands = _commands;
     widget.search.addListener(_searchChanged);
-    final interval =
-        widget.resourcePollInterval ??
-        (kUnderTest ? null : const Duration(seconds: 10));
-    if (interval != null) {
-      _resourceTimer = Timer.periodic(
-        interval,
-        (_) => unawaited(_readResources()),
-      );
-    }
+    // Machine metrics every 10 seconds while the preview can be seen, and once as it is seen
+    // again: a hidden window asks no machine.
+    if (_resourceEvery case final every?) visibleTick(every);
+  }
+
+  late final _resourceEvery =
+      widget.resourcePollInterval ??
+      (kUnderTest ? null : const Duration(seconds: 10));
+
+  @override
+  void onTick() => unawaited(_readResources());
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen && _resourceEvery != null) onTick();
   }
 
   SwarmPreviewScrollController _scrollController() =>
@@ -412,7 +415,6 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     if (widget.controls.dispatch == _dispatch) widget.controls.dispatch = null;
     if (widget.controls.commands == _commands) widget.controls.commands = null;
     widget.search.removeListener(_searchChanged);
-    _resourceTimer?.cancel();
     _actionFocus.dispose();
     for (final node in _buttonFocus.values) {
       node.dispose();

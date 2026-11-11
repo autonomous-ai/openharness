@@ -9,6 +9,7 @@ import 'model.dart';
 import 'parts.dart';
 import 'swarm_buddy.dart';
 import 'swarm_chat_notify.dart';
+import 'swarm_kept.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
@@ -106,6 +107,10 @@ class SwarmReader extends ChangeNotifier {
   /// How far the person has read each chat, which its inbox keeps with it;
   /// null where nobody keeps them, and nothing reads as unread.
   SwarmReadMarks? readMarks;
+
+  /// The account's drafts and unsent posts, which its inbox keeps; null where
+  /// nobody keeps them, and each chat holds its own while it is open.
+  SwarmKept? kept;
 
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;
@@ -262,9 +267,7 @@ class SwarmReader extends ChangeNotifier {
     final held = _parts;
     if (held != null) {
       try {
-        final answer = await _get(
-          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
-        );
+        final answer = await _get('$_path/changes?${held.changesQuery}');
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
           try {
@@ -278,7 +281,14 @@ class SwarmReader extends ChangeNotifier {
           return (changed: change.changed || stale, view: null);
         }
       } on SuperTabFailure catch (failure) {
-        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+        // A backend rolled back to one without the summary etag refuses it
+        // (#2906): read in full, which holds none.
+        final etagRefused =
+            failure.code == 'VALIDATION_ERROR' && held.derivedEtag != null;
+        if (!etagRefused &&
+            !const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+          rethrow;
+        }
       }
       _parts = null;
     }
@@ -292,9 +302,6 @@ class SwarmReader extends ChangeNotifier {
     _bigParts = _big(answer);
     _heldLoad = number;
     generation++;
-    // A new store holds no closed conversations: they are read again.
-    _dormantPages.clear();
-    _dormantReads.clear();
     return (changed: true, view: load.view);
   }
 
@@ -326,18 +333,24 @@ class SwarmReader extends ChangeNotifier {
     _parts = null;
     _heldLoad = 0;
     generation++;
-    _dormantPages.clear();
-    _dormantReads.clear();
     _poll?.cancel();
   }
 
   /// The reader's notification setting for chat [id] (backend
   /// chatSettings.ts): the one being sent, else the one the server kept and
-  /// no read has carried yet, else the last read's, else Mentions only.
-  SwarmNotify notifyOf(String id) =>
-      _notifySending[id] ??
-      _notifyKept[id]?.$1 ??
-      SwarmNotify.parse(snapshot?.chatSettings[id]);
+  /// no read has carried yet, else the last read's, else Mentions only. A
+  /// project's channel muted before reads as Mentions only: Swarm v4 has no
+  /// way to unmute it, and the server pushes its tags (lead, 2026-11-10); what
+  /// the server keeps stays as it is.
+  SwarmNotify notifyOf(String id) {
+    final level =
+        _notifySending[id] ??
+        _notifyKept[id]?.$1 ??
+        SwarmNotify.parse(snapshot?.chatSettings[id]);
+    return level == SwarmNotify.muted && snapshot?.isProjectLead(id) == true
+        ? SwarmNotify.mentions
+        : level;
+  }
 
   /// Settings sent and not yet answered: the newest choice per chat, with
   /// its number.
@@ -458,57 +471,6 @@ class SwarmReader extends ChangeNotifier {
     _show(_viewOf(parts, accountId));
     notifyListeners();
     return snapshot?.conversation(id) != null;
-  }
-
-  /// Each project's closed conversations as read: where the next earlier
-  /// page starts, null when there is none. A project not here is not read.
-  final _dormantPages = <String, String?>{};
-  final _dormantReads = <String, Future<void>>{};
-
-  /// Whether [projectId]'s closed conversations have been read.
-  bool dormantLoaded(String projectId) => _dormantPages.containsKey(projectId);
-
-  /// Whether a read of [projectId]'s closed conversations is under way.
-  bool dormantLoading(String projectId) => _dormantReads.containsKey(projectId);
-
-  /// Whether [projectId] has closed conversations older than those read.
-  bool hasEarlierDormant(String projectId) => _dormantPages[projectId] != null;
-
-  /// Reads [projectId]'s closed conversations (archived, or quiet for a day),
-  /// which no first load has, newest first and a page at a time (section
-  /// 4.5): the first page once, [earlier] the next. Joins a read under way;
-  /// a read that failed throws, and asking again reads again — the desktop's
-  /// `loadDormant`.
-  Future<void> loadDormant(String projectId, {bool earlier = false}) {
-    if (_disposed || accessRevoked || _parts == null) return Future.value();
-    if (_dormantReads[projectId] case final reading?) return reading;
-    if (earlier ? !hasEarlierDormant(projectId) : dormantLoaded(projectId)) {
-      return Future.value();
-    }
-    late final Future<void> reading;
-    reading = _readDormant(projectId, earlier).whenComplete(() {
-      if (identical(_dormantReads[projectId], reading)) {
-        _dormantReads.remove(projectId);
-      }
-      if (!_disposed) notifyListeners();
-    });
-    _dormantReads[projectId] = reading;
-    notifyListeners();
-    return reading;
-  }
-
-  Future<void> _readDormant(String projectId, bool earlier) async {
-    final parts = _parts!;
-    final before = earlier ? _dormantPages[projectId] : null;
-    final answer = await _get(
-      '$_path/groups?dormant=1&projectId=${Uri.encodeQueryComponent(projectId)}'
-      '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
-    );
-    // Read again from nothing meanwhile: this page is of the parts before.
-    if (_disposed || accessRevoked || !identical(parts, _parts)) return;
-    final change = parts.addDormant(answer['groups'] as List);
-    _dormantPages[projectId] = answer['next'] as String?;
-    if (change.changed) _show(_viewOf(parts, accountId));
   }
 
   @override

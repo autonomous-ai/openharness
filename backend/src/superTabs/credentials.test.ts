@@ -31,8 +31,15 @@ const fake = {
   awsSecret: () => noise(40, B64, 18),
   slack: (kind = 'b') => [`xox${kind}`, '1234567890', '9876543210', noise(24, ALNUM, 19)].join('-'),
   google: () => ['AI', 'za', noise(35, B64URL, 20)].join(''),
+  // Stripe: sk_ (secret) or rk_ (restricted), live_ or test_, then the key.
+  stripe: (kind = 'sk', mode = 'live') => [kind, mode, noise(99, ALNUM, 25)].join('_'),
+  // GitLab: a type prefix (glpat personal, gldt deploy, …), then the token, with a routable .xx.yyyyyyyyy suffix on new ones.
+  gitlab: (prefix = 'glpat', routable = false) => [prefix, `${noise(routable ? 27 : 20, B64URL, 26)}${routable ? `.01.${noise(9, 'abcdefghijklmnopqrstuvwxyz0123456789', 27)}` : ''}`].join('-'),
+  npm: () => ['npm', noise(36, ALNUM, 28)].join('_'),
   pem: (kind = 'RSA PRIVATE') => [`-----BEGIN ${kind} KEY-----`, noise(64, B64, 21), noise(64, B64, 22), `${noise(20, B64, 23)}==`, `-----END ${kind} KEY-----`].join('\n'),
   password: () => `Fx${noise(16, ALNUM, 24)}`,
+  // A Harness join or link token (sharing.ts): 32 random bytes as base64url, 43 characters.
+  linkToken: () => noise(43, B64URL, 29),
 }
 
 describe('findCredentials: every kind it removes', () => {
@@ -40,6 +47,7 @@ describe('findCredentials: every kind it removes', () => {
     ['jwt', 'a signed JWT', fake.jwt()],
     ['jwt', 'an encrypted JWT (five segments)', fake.jwe()],
     ['harness', 'a Harness access token', fake.harness('hna')],
+    ['link-token', 'a bare Harness join or link token', fake.linkToken()],
     ['harness', 'a Harness refresh token', fake.harness('hnr')],
     ['harness', 'a Harness team access token', fake.harness('hta')],
     ['harness', 'a Harness team refresh token', fake.harness('htr')],
@@ -63,6 +71,14 @@ describe('findCredentials: every kind it removes', () => {
     ['slack', 'a Slack user token', fake.slack('p')],
     ['slack', 'a Slack app token', fake.slack('a')],
     ['google', 'a Google API key', fake.google()],
+    ['stripe', 'a Stripe live secret key', fake.stripe()],
+    ['stripe', 'a Stripe test secret key', fake.stripe('sk', 'test')],
+    ['stripe', 'a Stripe restricted key', fake.stripe('rk')],
+    ['gitlab', 'a GitLab personal access token', fake.gitlab()],
+    ['gitlab', 'a routable GitLab token', fake.gitlab('glpat', true)],
+    ['gitlab', 'a GitLab deploy token', fake.gitlab('gldt')],
+    ['gitlab', 'a GitLab runner token', fake.gitlab('glrt')],
+    ['npm', 'an npm token', fake.npm()],
     ['private-key', 'a PEM RSA private key', fake.pem()],
     ['private-key', 'a PKCS#8 private key', fake.pem('PRIVATE')],
     ['private-key', 'an OpenSSH private key', fake.pem('OPENSSH PRIVATE')],
@@ -187,7 +203,8 @@ describe('findCredentials: what it leaves alone', () => {
     'def get_secret(name: str) -> str:\n    return vault.read(name)', 'SELECT id, password_reset_at FROM users WHERE token_id = $1',
     'for (const token of tokens) count += token.length', '<input type="password" name="password" autocomplete="current-password">',
     // Placeholders and redacted values
-    'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'sk-...', 'sk-your-key-here', 'sk-learn and scikit-learn', 'AKIAXXXXXXXXXXXXXXXX',
+    'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', ['sk', 'live', 'x'.repeat(24)].join('_'), ['glpat', 'x'.repeat(20)].join('-'),
+    ['npm', '0'.repeat(36)].join('_'), 'npm_config_registry=https://registry.npmjs.org', 'Set your glpat- token in CI.', 'sk-...', 'sk-your-key-here', 'sk-learn and scikit-learn', 'AKIAXXXXXXXXXXXXXXXX',
     'xoxb-your-token-here', 'password=changeme', 'password: ********', 'token: <redacted>', 'secret=${SECRET}', 'API_KEY=<your key>',
     'password=test-password-123', 'token: e2e-token-agent-client', 'apiKey: gridkey-abc123', `token: ${CREDENTIAL_MARKER}`, 'hna_short',
     'Bearer tokens expire after an hour.', 'Basic authentication is disabled.', 'Authorization: Bearer test-access-token',

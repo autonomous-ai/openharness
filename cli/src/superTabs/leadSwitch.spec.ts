@@ -160,3 +160,4 @@ it('reads no switch from an unreadable record, and holds none from a clock far a
   expect(leadSwitchOf(dir, LEAD)).toBeNull()
   expect(switchWithin(null, now)).toBe(false)
 })
+

@@ -79,6 +79,11 @@ bool ht_supertab_lead_add(ht_supertab_t *t, const ht_lead_in_t *in)
                  put_id(l->chat_id, in->chat_id, true);
     if (named) put_text(l->chat_name, sizeof l->chat_name, in->chat_name);
     else { l->chat = HT_CHAT_LEAD; l->chat_id[0] = 0; l->chat_name[0] = 0; }
+    // The thread on the face: a root this dial cannot hold is no thread (the main chat), and so is one without a title read.
+    if (put_id(l->thread_root, in->thread, true)) {
+        put_text(l->thread_title, sizeof l->thread_title, in->thread_title);
+        l->thread_replies = in->thread_replies < 0 ? -1 : in->thread_replies > INT32_MAX ? INT32_MAX : (int32_t)in->thread_replies;
+    } else { l->thread_root[0] = 0; l->thread_title[0] = 0; l->thread_replies = -1; }
     // The reader's Buddy, only while Buddies are on. One the dial cannot draw is no Buddy; the Lead stays.
     l->buddies = in->buddies;
     const ht_buddy_in_t *b = &in->buddy;
@@ -193,40 +198,88 @@ int ht_supertabs_put(ht_supertabs_t *s, const ht_supertab_t *in, uint32_t now_ms
     return events;
 }
 
+static ht_lead_t *lead_of(ht_supertabs_t *s, const char *tab, const char *lead)
+{
+    ht_supertab_t *t = (ht_supertab_t *)ht_supertabs_find(s, tab);
+    for (int i = 0; t && lead && i < t->lead_n; i++) if (!strcmp(t->leads[i].id, lead)) return &t->leads[i];
+    return NULL;
+}
+// The recap on the face, as its Lead's remembered one: in its own place, else a free one, else the oldest's.
+static void remember(ht_supertabs_t *s)
+{
+    int at = -1, oldest = 0;
+    for (int i = 0; i < HT_RECAP_REMEMBERED && at < 0; i++)
+        if (s->remembered[i].used && !strcmp(s->remembered[i].tab, s->recap.tab) && !strcmp(s->remembered[i].lead, s->recap.lead)) at = i;
+    for (int i = 0; i < HT_RECAP_REMEMBERED && at < 0; i++) if (!s->remembered[i].used) at = i;
+    for (int i = 1; i < HT_RECAP_REMEMBERED; i++) if (s->remembered[i].used < s->remembered[oldest].used) oldest = i;
+    ht_recap_memo_t *r = &s->remembered[at < 0 ? oldest : at];
+    put_text(r->tab, sizeof r->tab, s->recap.tab);
+    put_text(r->lead, sizeof r->lead, s->recap.lead);
+    put_text(r->chat_id, sizeof r->chat_id, s->recap.chat_id);
+    put_text(r->thread, sizeof r->thread, s->recap.thread);
+    put_text(r->text, sizeof r->text, s->recap.text);
+    r->at = s->recap.at;
+    r->empty = s->recap.state == HT_RECAP_EMPTY;
+    r->used = ++s->remembered_n;
+}
 void ht_supertabs_recap_open(ht_supertabs_t *s, const char *tab, const char *lead, uint32_t now_ms)
 {
     bool open = lead && *lead && tab && *tab;
     // The Lead already on the face keeps what it shows until a new recap replaces it: emptying it left the resting pet
-    // for the 5 s retry on every reopen (Diego, 2026-10-29). Only while the face's chat is still the one it was for.
-    // A kept recap is not LOADING, so its refresh has no 5 s retry: one lost on the way waits for the next push.
+    // for the 5 s retry on every reopen (Diego, 2026-10-29). Only while the face's chat and thread are still the ones it
+    // was for. A kept recap is not LOADING, so its refresh has no 5 s retry: one lost on the way waits for the next push.
     if (open && (s->recap.state == HT_RECAP_LOADED || s->recap.state == HT_RECAP_EMPTY) && !strcmp(s->recap.tab, tab) && !strcmp(s->recap.lead, lead)) {
-        const ht_supertab_t *t = ht_supertabs_find(s, tab);
-        for (int i = 0; t && i < t->lead_n; i++)
-            if (!strcmp(t->leads[i].id, lead) && !strcmp(t->leads[i].chat_id, s->recap.chat_id)) {
-                s->recap.asked_ms = now_ms;
-                return;
-            }
+        const ht_lead_t *l = lead_of(s, tab, lead);
+        if (l && !strcmp(l->chat_id, s->recap.chat_id) && !strcmp(l->thread_root, s->recap.thread)) {
+            s->recap.asked_ms = now_ms;
+            return;
+        }
+    }
+    // A Lead that was on the face before shows the recap it had, while still its chat's and thread's.
+    const ht_lead_t *face = open ? lead_of(s, tab, lead) : NULL;
+    for (int i = 0; face && i < HT_RECAP_REMEMBERED; i++) {
+        const ht_recap_memo_t *r = &s->remembered[i];
+        if (!r->used || strcmp(r->tab, tab) || strcmp(r->lead, lead) || strcmp(r->chat_id, face->chat_id) || strcmp(r->thread, face->thread_root)) continue;
+        put_text(s->recap.tab, sizeof s->recap.tab, tab);
+        put_text(s->recap.lead, sizeof s->recap.lead, lead);
+        put_text(s->recap.chat_id, sizeof s->recap.chat_id, r->chat_id);
+        put_text(s->recap.thread, sizeof s->recap.thread, r->thread);
+        put_text(s->recap.text, sizeof s->recap.text, r->text);
+        s->recap.at = r->at;
+        s->recap.asked_ms = now_ms;
+        s->recap.state = r->empty ? HT_RECAP_EMPTY : HT_RECAP_LOADED;
+        return;
     }
     put_text(s->recap.tab, sizeof s->recap.tab, open ? tab : "");
     put_text(s->recap.lead, sizeof s->recap.lead, open ? lead : "");
     s->recap.chat_id[0] = 0;
+    s->recap.thread[0] = 0;
     s->recap.text[0] = 0;
     s->recap.at = 0;
     s->recap.asked_ms = now_ms;
     s->recap.state = open ? HT_RECAP_LOADING : HT_RECAP_NONE;
 }
-bool ht_supertabs_recap_put(ht_supertabs_t *s, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
+bool ht_supertabs_recap_put(ht_supertabs_t *s, const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none)
 {
     if (s->recap.state == HT_RECAP_NONE || !tab || !lead || strcmp(s->recap.tab, tab) || strcmp(s->recap.lead, lead))
         return false;
-    // A recap for another chat than the one on the face (the desktop moved on while it was read) is not this face's.
-    const ht_supertab_t *t = ht_supertabs_find(s, tab);
-    const char *face = "";
-    for (int i = 0; t && i < t->lead_n; i++) if (!strcmp(t->leads[i].id, lead)) face = t->leads[i].chat_id;
-    if (strcmp(chat_id ? chat_id : "", face)) return false;
+    // A recap for another chat or thread than the one on the face (the desktop moved on while it was read, or the dial
+    // left its thread) is not this face's.
+    const ht_lead_t *l = lead_of(s, tab, lead);
+    const char *face = l ? l->chat_id : "", *root = l ? l->thread_root : "";
+    if (strcmp(chat_id ? chat_id : "", face) || strcmp(thread ? thread : "", root)) return false;
     put_text(s->recap.chat_id, sizeof s->recap.chat_id, face);
+    put_text(s->recap.thread, sizeof s->recap.thread, root);
     put_text(s->recap.text, sizeof s->recap.text, none ? "" : text);
     s->recap.at = at;
     s->recap.state = s->recap.text[0] ? HT_RECAP_LOADED : HT_RECAP_EMPTY;
+    remember(s);
+    return true;
+}
+bool ht_supertabs_thread_leave(ht_supertabs_t *s, const char *tab, const char *lead)
+{
+    ht_lead_t *l = lead_of(s, tab, lead);
+    if (!l || !l->thread_root[0]) return false;
+    l->thread_root[0] = 0; l->thread_title[0] = 0; l->thread_replies = -1;
     return true;
 }

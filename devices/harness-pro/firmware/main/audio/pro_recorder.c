@@ -32,6 +32,7 @@ static atomic_bool s_active, s_recording, s_stop, s_abort, s_quiet, s_capture_do
 static atomic_uint s_level;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static char s_agent[ID_MAX], s_upload[24], s_lang[CFG_VLANG_MAX];
+static bool s_face;   // spoken on a Lead view (pro_cable_voice_begin)
 static uint32_t s_produced, s_high_water, s_read_max_us;
 
 static void capture(void *unused)
@@ -95,13 +96,14 @@ static void sender(void *unused)
         if (!atomic_load(&s_active)) continue;
         char agent[ID_MAX], upload[24], lang[CFG_VLANG_MAX];
         portENTER_CRITICAL(&s_mux);
+        const bool face = s_face;
         snprintf(agent, sizeof agent, "%s", s_agent);
         snprintf(upload, sizeof upload, "%s", s_upload);
         snprintf(lang, sizeof lang, "%s", s_lang);
         portEXIT_CRITICAL(&s_mux);
         const int64_t began = esp_timer_get_time();
         xTaskNotifyGive(s_capture_task);
-        if (!pro_cable_voice_begin(agent, lang, AUDIO_SAMPLE_RATE, upload)) atomic_store(&s_abort, true);
+        if (!pro_cable_voice_begin(agent, face, lang, AUDIO_SAMPLE_RATE, upload)) atomic_store(&s_abort, true);
         uint32_t delivered = 0, send_max_us = 0;
         for (;;) {
             if (atomic_load(&s_abort)) break;
@@ -169,7 +171,7 @@ bool pro_rec_init(void)
     return true;
 }
 
-bool pro_rec_start(const char *agent_id, const char *lang, const char *upload_id)
+bool pro_rec_start(const char *agent_id, bool face, const char *lang, const char *upload_id)
 {
     if (!s_capture_task || !s_sender_task) {
         ESP_LOGE(TAG, "audio unavailable");
@@ -181,6 +183,7 @@ bool pro_rec_start(const char *agent_id, const char *lang, const char *upload_id
         return false;
     }
     snprintf(s_agent, sizeof s_agent, "%s", agent_id ? agent_id : "");
+    s_face = face;
     snprintf(s_upload, sizeof s_upload, "%s", upload_id ? upload_id : "");
     snprintf(s_lang, sizeof s_lang, "%s", lang ? lang : "");
     s_produced = s_high_water = s_read_max_us = 0;

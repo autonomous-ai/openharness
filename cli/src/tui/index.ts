@@ -19,11 +19,14 @@ import { fileURLToPath } from 'node:url'
 import { installedTuiPath, installTui } from './install.js'
 import { installManagedTui } from './manage.js'
 import { localDaemonStatus } from '../lib/daemonEndpoint.js'
+import { payloadFile } from '../lib/windows/payloadFile.js'
 export { installTui, platformKey, TUI_MANIFEST_URL } from './install.js'
 
-export function findTuiBinary(): string | null {
+export function findTuiBinary(platform: NodeJS.Platform = process.platform): string | null {
   const fromEnv = process.env.HARNESS_TUI_BIN
   if (fromEnv && existsSync(fromEnv)) return fromEnv
+  // On Windows hn is one of the signed programs in the payload, updated with it.
+  if (platform === 'win32') return payloadFile('harness-tui.exe')
   if (existsSync(installedTuiPath())) return installedTuiPath()
   try {
     const here = dirname(fileURLToPath(import.meta.url))
@@ -101,29 +104,28 @@ async function ensureDaemon(port: number, dataDir: string, identity?: () => stri
   return false
 }
 
-/** `hn` is not built for Windows (spec B, decision 5): said once, in place of a download that cannot succeed. */
-export const TUI_UNAVAILABLE_ON_WINDOWS =
-  'The Harness terminal app (hn) is not available on Windows yet. Use the Harness desktop app, or `harness` commands.'
+/** A Windows install whose payload predates hn. */
+export const TUI_NOT_IN_PAYLOAD = 'This Harness has no terminal app (hn) yet. Update Harness with: harness update'
 
 export async function tuiCommand(
   argv: string[],
-  opts: { port: number; dataDir?: string; identity?: () => string; platform?: NodeJS.Platform },
+  opts: { port: number; dataDir?: string; identity?: () => string; platform?: NodeJS.Platform; find?: () => string | null },
 ): Promise<number> {
-  if ((opts.platform ?? process.platform) === 'win32') {
-    if (argv[0] === '--where') { console.log('(not available on Windows)'); return 0 }
-    console.error(`  ✗ ${TUI_UNAVAILABLE_ON_WINDOWS}`)
-    return 1
-  }
+  const windows = (opts.platform ?? process.platform) === 'win32'
+  const find = opts.find ?? (() => findTuiBinary(opts.platform))
+  if (argv[0] === '--where') { console.log(find() ?? (windows ? `(${TUI_NOT_IN_PAYLOAD})` : '(not installed)')); return 0 }
+  if (windows && !find()) { console.error(`  ✗ ${TUI_NOT_IN_PAYLOAD}`); return 1 }
+  // It came with the payload: there is nothing to install, and nothing else to run on Windows.
+  if (windows && (argv[0] === '--install' || argv[0] === 'install')) { console.log(`  ✓ ${find()}`); return 0 }
   if (argv[0] === '--install' || argv[0] === 'install') {
     try { await installManagedTui(process.argv[1] ?? '', (line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }
-  if (argv[0] === '--where') { console.log(findTuiBinary() ?? '(not installed)'); return 0 }
   const port = clientPort(argv, opts.port)
   const dataDir = opts.dataDir ?? process.env.ADAPTER_DATA_DIR ?? resolve(homedir(), '.harness', 'cli', 'data')
   if (port !== null && !(await ensureDaemon(port, dataDir, opts.identity))) {
     console.log('  Opening a local shell; Harness will reconnect when available.')
   }
-  let binary = findTuiBinary()
+  let binary = find()
   if (!binary) {
     try { binary = await installTui((line) => console.log(line)) } catch (error) {
       console.error(`  ✗ ${(error as Error).message}`)

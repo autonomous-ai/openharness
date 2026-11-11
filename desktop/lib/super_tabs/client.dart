@@ -5,13 +5,12 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../core/models.dart';
 import 'account_keys.dart';
 import 'attachment_upload.dart';
-import 'avatar_upload.dart';
-import 'activity.dart';
 import 'controller.dart';
-import 'decisions.dart';
 import 'model.dart';
+import 'my_agents.dart';
 import 'notifications.dart';
 import 'parts.dart';
 import 'reading.dart';
@@ -35,12 +34,9 @@ class SuperTabClient {
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
-    this.onMention,
     this.onChatMessage,
-    this.onTagCounts,
     this.onNotices,
     this.upload = refuseUpload,
-    this.avatarUpload = refuseAvatarUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   }) : _storage = storage,
        viewStorage = viewStorage ?? storage;
@@ -65,56 +61,24 @@ class SuperTabClient {
   /// A tab's selected conversation changed, by a click here or by a device.
   final void Function(SuperTabController)? onSelection;
 
-  /// A Lead tagged this account in one of its Swarms while the app was open.
-  /// A new tag of the reader in Swarm `tabId`.
-  final void Function(String tabId, SuperTabMention mention)? onMention;
-
-  /// A new message in a chat the reader set to All new messages
-  /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
+  /// A new message in a chat the reader set to All new messages, or in an
+  /// agent's own chat with them ([SuperTabChatNotices]), with the Swarm, the
+  /// chat and how far it goes.
   final void Function(String tabId, SuperTabConversation group, int sequence)?
   onChatMessage;
 
-  /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
-  final void Function()? onTagCounts;
-
-  /// An open Swarm's list of the reader's tags or decisions changed: what the
-  /// menu bar lists.
+  /// Which of the reader's agents ask them changed in an open Swarm ([agentsAsking]): what the menu bar lists and the
+  /// Dock counts.
   final void Function()? onNotices;
-  final _tagCounts = <String, int>{};
 
-  /// The digest of each Swarm's tags as the list last told it, for the tags
-  /// last counted: the list says they moved when it changes.
-  final _tagDigests = <String, String>{};
+  /// The reader's agents with something new for them in their 1:1 chats in a Swarm open here
+  /// ([superTabAgentsAsking]); none in a Swarm not open.
+  int agentsAsking(String id) => switch (_loaded[id]) {
+    final controller? => superTabAgentsAsking(controller).length,
+    null => 0,
+  };
 
-  /// Whether the list is asked for each Swarm's tags (`?mentions=1`). Off for
-  /// the session once a backend refuses the query.
-  bool _listMentions = true;
-  final _tagsSeen = <String, Set<String>>{};
-
-  /// The tags waiting for this account in a Swarm: its own state once open,
-  /// else what discovery last read, so a tab not opened yet still shows them.
-  /// A Swarm paused while away ([SuperTabReading.pausesAway]) reads nothing:
-  /// discovery's count is the fresh one until it is shown again.
-  int waitingTags(String id) {
-    final counted = _tagCounts[id];
-    if (counted != null && _paused(id)) return counted;
-    return _loaded[id]?.snapshot?.mentionsWaiting ?? _tagCounts[id] ?? 0;
-  }
-
-  /// The open decisions asked of this account in a Swarm open here; none for
-  /// one not open.
-  int waitingDecisions(String id) =>
-      _loaded[id]?.snapshot?.decisionsWaiting ?? 0;
-
-  /// The unread messages in this account's own Buddy chats in a Swarm open
-  /// here ([SuperTabController.buddyUnread]); none for one not open.
-  int waitingBuddy(String id) => _loaded[id]?.buddyUnread ?? 0;
-
-  /// Open here, but not polling: not on screen while the reading pauses.
-  bool _paused(String id) =>
-      _reading.pausesAway && (_loaded[id]?.away ?? false);
   final SuperTabUpload upload;
-  final SuperTabAvatarUpload avatarUpload;
   final Duration discoveryInterval;
 
   /// How every Swarm tab here keeps itself current. Desktop's unless the host
@@ -147,11 +111,39 @@ class SuperTabClient {
   }
 
   /// False while the page or window is hidden: every Swarm tab is away.
+  ///
+  /// Hidden while the server pushes, nothing is read on a clock: a told change is still read at
+  /// once, the safety nets wait (task #2953). Shown again, each open Swarm
+  /// reads once ([SuperTabController.away]) and so does the list, if its safety net came due or
+  /// the server's word came meanwhile.
   set pageVisible(bool visible) {
     if (_pageVisible == visible) return;
     _pageVisible = visible;
     _applyAway();
+    if (!visible) return;
+    final last = _lastDiscovery;
+    if (_toldWhileHidden ||
+        (_pushing &&
+            last != null &&
+            clock.now().difference(last) >= kSwarmDiscoverySafetyNet)) {
+      _toldWhileHidden = false;
+      _discoverWhenAllowed();
+    }
   }
+
+  /// The server's word that it pushes came while the page was hidden: what it asks for is read
+  /// on return.
+  bool _toldWhileHidden = false;
+
+  /// When the server's word that it pushes was last heard.
+  DateTime? _lastPushWord;
+
+  /// How far from [kSwarmPushRepeat] a repeat may land: a hidden window's socket is read late
+  /// (App Nap), and a reconnect inside this window waits, at worst, for the return.
+  static const _pushBeatSlack = Duration(seconds: 30);
+
+  /// Hidden while the server pushes: the reads on a clock rest.
+  bool get _restsHidden => !_pageVisible && _pushing;
 
   bool _isAway(String id) => !_pageVisible || id != _shown;
 
@@ -252,13 +244,9 @@ class SuperTabClient {
       final away = _isAway(entry.key);
       // Going away: what changed since the last write is kept now.
       if (away && _viewSaves.containsKey(entry.key)) _saveView(entry.key);
-      // Back on screen, the Swarm reads its own tags: the count discovery
-      // kept while it was away is stale from now on.
-      if (!away && entry.value.away) {
-        _tagCounts.remove(entry.key);
-        _tagDigests.remove(entry.key);
-      }
-      entry.value.away = away;
+      entry.value
+        ..pageHidden = !_pageVisible
+        ..away = away;
     }
   }
 
@@ -310,11 +298,29 @@ class SuperTabClient {
   /// lib/swarmClientPushes.ts, a `swarm_changed` frame). Naming no Swarm, it
   /// pushes. Naming one, the Swarm open here reads it ([SuperTabController.told]),
   /// and a change to its main parts reads discovery ([_discoverWhenAllowed]),
-  /// once for a burst of them across Swarms (new tags, a Swarm joined or left).
+  /// once for a burst of them across Swarms (a Swarm joined or left).
   void swarmChanged(Map<String, dynamic> payload) {
     if (_account == null) return;
     final tabId = payload['tabId'], parts = payload['parts'];
     if (tabId == null && parts == null) {
+      // Hidden, the word repeated every 4 minutes renews the lease and reads nothing until the
+      // page shows; once the lease had lapsed the away poll was reading all along. A word off that
+      // beat is a socket that reconnected, the same payload (review of #3035): a push may have been
+      // lost meanwhile, so Desktop reads once, as shown, for the menu bar and notices. The web
+      // reads nothing while away anyway ([SuperTabReading.pausesAway]).
+      final now = clock.now(), last = _lastPushWord;
+      _lastPushWord = now;
+      final onBeat =
+          last != null &&
+          (now.difference(last) - kSwarmPushRepeat).abs() <= _pushBeatSlack;
+      if (_restsHidden && (onBeat || _reading.pausesAway)) {
+        _pushUntil = clock.now().add(kSwarmPushLease);
+        for (final controller in _loaded.values) {
+          controller.pushUntil = _pushUntil;
+        }
+        _toldWhileHidden = true;
+        return;
+      }
       _pushUntil = clock.now().add(kSwarmPushLease);
       // Said on every connect (review of #2121): a daemon that reconnected
       // was not told what changed meanwhile, so each open Swarm and the list
@@ -367,6 +373,11 @@ class SuperTabClient {
   /// still protects its Product Managers, without reading anything more.
   final _closedSnapshots = <String, SuperTabSnapshot>{};
 
+  /// The files waiting to go in Swarms let go, for their next controllers: in
+  /// memory for this account, and for the newest [_keptFilesSwarms] alone.
+  final _keptFiles = <String, SuperTabKeptFiles>{};
+  static const _keptFilesSwarms = 8;
+
   /// How many times each Swarm was closed here: an open a close overtook
   /// stops before it makes a controller.
   final _closes = <String, int>{};
@@ -375,16 +386,101 @@ class SuperTabClient {
 
   /// Native close actions name the machine's harness id, not the Swarm agent id.
   String? leadProtectionReasonForHarness(String machineId, String harnessId) =>
-      _leadOfHarness(machineId, harnessId)?.reason;
+      _leadOfHarness(machineId, harnessId);
 
-  /// The coordinator's name in the project the machine's harness coordinates.
-  String? leadCoordinatorForHarness(String machineId, String harnessId) =>
-      _leadOfHarness(machineId, harnessId)?.coordinator;
-
-  ({String reason, String coordinator})? _leadOfHarness(
+  /// Renames the agent a harness is in every loaded Swarm that holds it
+  /// (Rename Harness, task #2912): each Swarm shows the agent by its own
+  /// name, so the rename reaches everyone's sidebar. Why each Swarm that
+  /// refused did, empty when all took it or none holds the harness.
+  Future<List<String>> renameHarnessAgent(
     String machineId,
     String harnessId,
-  ) {
+    String name,
+  ) async {
+    final errors = <String>[];
+    for (final controller in loadedControllers.toList()) {
+      final agent = controller.snapshot?.agents
+          .where((a) => a.machineId == machineId && a.harnessId == harnessId)
+          .firstOrNull;
+      if (agent == null) continue;
+      final error = await controller.renameAgent(agent.id, name);
+      if (error != null) errors.add(error);
+    }
+    return errors;
+  }
+
+  /// Names already sent by [syncChosenNames]: Swarm, agent and name, so each is
+  /// sent once per run, a refused one included.
+  final _chosenNamesSent = <String>{};
+
+  /// What each Swarm's agents and their names were when [agentNamesChanged]
+  /// last looked.
+  final _agentNamesSeen = <String, String>{};
+
+  /// Whether Swarm [tabId]'s agents or the names it shows for them changed
+  /// since this last said so: a message or a task moving in it is not a change,
+  /// so the sync of chosen names does not run for it (review of #3021).
+  bool agentNamesChanged(String tabId) {
+    final snapshot = _loaded[tabId]?.snapshot;
+    if (snapshot == null) return false;
+    final now = [
+      for (final agent in snapshot.agents)
+        '${agent.id}:${snapshot.agentName(agent.id)}',
+    ].join('|');
+    if (_agentNamesSeen[tabId] == now) return false;
+    _agentNamesSeen[tabId] = now;
+    return true;
+  }
+
+  /// A name as the Swarm keeps it: one space between words, trimmed.
+  static String _spaced(String name) =>
+      name.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// Sends the names people chose for their agents to the Swarms that show
+  /// something else (task #2920): an agent renamed before the rename reached
+  /// the Swarm shows its new name with no second rename. [native] reads the
+  /// harness an agent runs as on this person's own machines, null for one this
+  /// app cannot see or may not rename.
+  ///
+  /// Only a name the daemon says a person chose, never the creation name or an
+  /// engine's session title; a daemon that does not say sends nothing. Only for
+  /// an agent this person may rename (its contributor or its machine's owner,
+  /// as the Swarm decides).
+  /// [tabId] narrows it to one Swarm, [machineId] and [harnessId] to one
+  /// harness: only what changed is looked at. Returns how many were sent.
+  Future<int> syncChosenNames(
+    Agent? Function(String machineId, String harnessId) native, {
+    String? tabId,
+    String? machineId,
+    String? harnessId,
+  }) async {
+    var sent = 0;
+    for (final MapEntry(key: swarm, value: controller)
+        in _loaded.entries.toList()) {
+      if (tabId != null && swarm != tabId) continue;
+      final snapshot = controller.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents.toList()) {
+        if (machineId != null && agent.machineId != machineId) continue;
+        if (harnessId != null && agent.harnessId != harnessId) continue;
+        final person = controller.accountId;
+        if (agent.contributorId != person && agent.machineOwnerId != person) {
+          continue;
+        }
+        final local = native(agent.machineId, agent.harnessId);
+        if (local == null || local.nameChosen != true) continue;
+        final name = _spaced(local.name);
+        if (name.isEmpty || name == _spaced(snapshot.agentName(agent.id))) {
+          continue;
+        }
+        if (!_chosenNamesSent.add('$swarm|${agent.id}|$name')) continue;
+        if (await controller.renameAgent(agent.id, name) == null) sent++;
+      }
+    }
+    return sent;
+  }
+
+  String? _leadOfHarness(String machineId, String harnessId) {
     for (final snapshot in [
       for (final controller in loadedControllers) ?controller.snapshot,
       ..._closedSnapshots.values,
@@ -394,11 +490,7 @@ class SuperTabClient {
           continue;
         }
         if (snapshot.leadProtectionReason(agent.id) case final reason?) {
-          final project = snapshot.leadProjectForAgent(agent.id)!;
-          return (
-            reason: reason,
-            coordinator: snapshot.coordinatorNameOf(project.id),
-          );
+          return reason;
         }
       }
     }
@@ -437,11 +529,10 @@ class SuperTabClient {
     _hidden = {};
     _creating.clear();
     _visibility.clear();
-    _tagCounts.clear();
-    _tagDigests.clear();
     _owners = const {};
-    _tagsSeen.clear();
-    _listMentions = true;
+    _listed = const {};
+    _listAnswers = 0;
+    _listAsked.clear();
     discoveryError = null;
     for (final controller in _loaded.values) {
       // Desktop keeps each account's unsent and unconfirmed messages for its
@@ -464,13 +555,14 @@ class SuperTabClient {
     _controllers.clear();
     _loaded.clear();
     _closedSnapshots.clear();
+    _keptFiles.clear();
     _closes.clear();
     if (account != null &&
         onTabs != null &&
         discoveryInterval > Duration.zero) {
       unawaited(refreshTabs());
       _discoveryTimer = Timer.periodic(discoveryInterval, (_) {
-        if (_discoveryDue) unawaited(refreshTabs());
+        if (_discoveryDue && !_restsHidden) unawaited(refreshTabs());
       });
     }
   }
@@ -533,7 +625,6 @@ class SuperTabClient {
         if (generation != _generation) return;
         final tabs = <String, SuperTabListing>{};
         final owners = <String, String>{};
-        final tags = <String, ({int count, String digest})>{};
         final cursors = <String>{};
         String? after;
         do {
@@ -550,14 +641,6 @@ class SuperTabClient {
             final id = row['id'] as String;
             tabs[id] = (id: id, name: row['name'] as String);
             if (row['ownerId'] case final String owner) owners[id] = owner;
-            // Told only by a backend that counts them (and only when asked).
-            if (row['mentionsWaiting'] case final int count
-                when row['mentionsDigest'] is String) {
-              tags[id] = (
-                count: count,
-                digest: row['mentionsDigest'] as String,
-              );
-            }
           }
           after = page['next'] as String?;
           if (after != null && !cursors.add(after)) {
@@ -566,10 +649,12 @@ class SuperTabClient {
         } while (after != null);
         discoveryError = null;
         _owners = owners;
+        _listed = tabs.keys.toSet();
+        _listAnswers++;
         final hidden = Set<String>.unmodifiable({..._hidden, ..._creating});
         onTabs!(tabs.values.toList(), hidden);
         // Every page read: a Swarm not listed is no longer this account's.
-        // In the background: the lock another tab holds never delays tags.
+        // In the background: the lock another tab holds never delays discovery.
         if (_forgetsWebOnly) {
           unawaited(
             _views
@@ -577,16 +662,6 @@ class SuperTabClient {
                 .catchError((Object _) {}),
           );
         }
-        await _readTags(
-          [
-            for (final id in tabs.keys)
-              if (!hidden.contains(id) &&
-                  (!_loaded.containsKey(id) || _paused(id)))
-                id,
-          ],
-          generation,
-          tags,
-        );
       } catch (error) {
         if (generation == _generation) {
           discoveryError = error;
@@ -600,29 +675,52 @@ class SuperTabClient {
     });
   }
 
-  /// One page of the Swarm list, with each Swarm's waiting tags while the
-  /// backend counts them. A backend from before that refuses the query: the
-  /// page is read without it, and every page after it for the session.
-  Future<Map<String, dynamic>> _readListPage(String? after) async {
-    String path() {
-      final query = [
-        if (_listMentions) 'mentions=1',
-        if (after != null) 'after=${Uri.encodeComponent(after)}',
-      ];
-      return '/api/super-tabs/list${query.isEmpty ? '' : '?${query.join('&')}'}';
-    }
+  /// The Swarms the last list read that answered named, and how many list
+  /// reads have answered for this account.
+  Set<String> _listed = const {};
+  int _listAnswers = 0;
 
-    try {
-      return await map('GET', path());
-    } on SuperTabFailure catch (failure) {
-      if (!_listMentions ||
-          (failure.statusCode != 400 && failure.code != 'VALIDATION_ERROR')) {
-        rethrow;
+  /// When each Swarm last asked for the list ([_stillListed]), and how many
+  /// list reads had answered then.
+  final _listAsked = <String, ({DateTime at, int answers})>{};
+
+  /// Whether the account's list still names Swarm [id]: a Swarm refuses a
+  /// read while its backend restarts, and only the list says it is gone.
+  /// Throws when the list cannot be read, or the account changed meanwhile.
+  ///
+  /// A restart refuses every read for a while, so the list is read for a
+  /// Swarm at most once a minute (task #2767). Within that minute the answer
+  /// is the latest list that answered since this Swarm asked, whoever read it
+  /// (discovery too); with none, it is unknown.
+  Future<bool> _stillListed(String id) async {
+    final now = clock.now();
+    final asked = _listAsked[id];
+    if (asked != null && now.difference(asked.at) < kSwarmListRecheckEvery) {
+      if (_listAnswers == asked.answers) {
+        throw const SuperTabFailure(
+          'LIST_UNREAD',
+          'The Swarm list has not answered since it was asked.',
+        );
       }
-      _listMentions = false;
-      return map('GET', path());
+      return _listed.contains(id);
     }
+    _listAsked[id] = (at: now, answers: _listAnswers);
+    final generation = _generation;
+    await refreshTabs();
+    if (generation != _generation) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    if (discoveryError case final error?) throw error;
+    return _listed.contains(id);
   }
+
+  /// One page of the Swarm list.
+  Future<Map<String, dynamic>> _readListPage(String? after) => map(
+    'GET',
+    after == null
+        ? '/api/super-tabs/list'
+        : '/api/super-tabs/list?after=${Uri.encodeComponent(after)}',
+  );
 
   Future<Object?> request(
     String method,
@@ -683,6 +781,16 @@ class SuperTabClient {
     final loaded = _loaded.remove(id);
     // One that has read nothing yet keeps what the last close kept.
     if (loaded?.snapshot case final snapshot?) _closedSnapshots[id] = snapshot;
+    if (loaded != null) {
+      final kept = loaded.keptFiles;
+      _keptFiles.remove(id);
+      if (kept.chats.isNotEmpty || kept.threads.isNotEmpty) {
+        _keptFiles[id] = kept;
+        if (_keptFiles.length > _keptFilesSwarms) {
+          _keptFiles.remove(_keptFiles.keys.first);
+        }
+      }
+    }
     loaded?.dispose();
     if (loaded != null) unawaited(loaded.flush().catchError((Object _) {}));
     // Still reading its saved state: that open stops ([_open]).
@@ -723,18 +831,16 @@ class SuperTabClient {
             },
             save: (state) => storage.write(key, jsonEncode(state)),
             upload: upload,
-            avatarUpload: avatarUpload,
             reading: _reading,
+            stillListed: onTabs == null ? null : () => _stillListed(id),
           )
+          ..pageHidden = !_pageVisible
           ..away = _isAway(id)
           ..pushUntil = _pushUntil;
-    var seenChange = (
-      lastChangedAt: -1,
-      mentionsWaiting: -1,
-      decisionsWaiting: -1,
-      buddyUnread: -1,
-    );
+    if (_keptFiles.remove(id) case final kept?) controller.adoptFiles(kept);
+    var seenChange = -1;
     var seenSelected = controller.selectedId;
+    var seenThread = controller.threadOnScreen;
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
         if (controller.accessRevoked) {
@@ -746,43 +852,39 @@ class SuperTabClient {
           _saveViewSoon(id);
         }
       }
-      if (controller.selectedId != seenSelected) {
+      // A thread opened or closed beside the chat is a selection too: the
+      // round dial's face follows it.
+      if (controller.selectedId != seenSelected ||
+          controller.threadOnScreen != seenThread) {
         seenSelected = controller.selectedId;
+        seenThread = controller.threadOnScreen;
         onSelection?.call(controller);
       }
-      if (controller.snapshot case final snapshot?) {
+      if (controller.snapshot != null) {
         // Its own state replaces what a close kept.
         _closedSnapshots.remove(id);
-        final change = (
-          lastChangedAt: controller.lastChangedAt,
-          mentionsWaiting: snapshot.mentionsWaiting,
-          // What needs the person moves the Dock's badge.
-          decisionsWaiting: snapshot.decisionsWaiting,
-          // A read mark or a PM chat's messages move the Swarm badge too.
-          buddyUnread: controller.buddyUnread,
-        );
-        if (change != seenChange) {
-          seenChange = change;
+        if (controller.lastChangedAt != seenChange) {
+          seenChange = controller.lastChangedAt;
           onSnapshot?.call(controller);
         }
       }
     });
-    // What discovery already announced is not news when the Swarm opens.
-    SuperTabMentions.of(controller)
-      ..seen(_tagsSeen.remove(id))
-      ..onArrived = onMention == null
-          ? null
-          : (mention) => onMention!(id, mention);
     if (onChatMessage case final told?) {
       SuperTabChatNotices.of(controller).onMessage = (group, sequence) =>
           told(id, group, sequence);
     }
     if (onNotices case final changed?) {
-      SuperTabMentions.of(controller).addListener(changed);
-      SuperTabDecisions.of(controller).addListener(changed);
+      // A read mark moved here, or a message arrived: told only when which agents ask moves.
+      var asking = const <String>[];
+      controller.addListener(() {
+        final now = [
+          for (final (_, chat) in superTabAgentsAsking(controller)) chat.id,
+        ];
+        if (listEquals(now, asking)) return;
+        asking = now;
+        changed();
+      });
     }
-    _tagCounts.remove(id);
-    _tagDigests.remove(id);
     _loaded[id] = controller;
     void drawSaved(Map<String, dynamic>? view) {
       if (view != null && generation == _generation) {
@@ -809,79 +911,6 @@ class SuperTabClient {
       unawaited(_views.read(account, id).then(drawSaved));
     }
     return controller;
-  }
-
-  /// One light read per Swarm tab that is not open: its waiting tags. A
-  /// failed read, a backend before tags included, changes nothing and is
-  /// tried again on the next round.
-  Future<void> _readTags(
-    List<String> ids,
-    int generation,
-    Map<String, ({int count, String digest})> listed,
-  ) async {
-    var changed = false;
-    for (final id in ids) {
-      if (generation != _generation) break;
-      if (_loaded.containsKey(id) && !_paused(id)) continue;
-      // The list told this Swarm's tags: unchanged, there is nothing to ask;
-      // none, there is nothing to list. Otherwise their text is read.
-      final counted = listed[id];
-      if (counted != null) {
-        if (_tagCounts[id] == counted.count &&
-            _tagDigests[id] == counted.digest) {
-          continue;
-        }
-        if (counted.count == 0) {
-          // The baseline a later tag is new against.
-          _tagsSeen[id] ??= {};
-          _tagDigests[id] = counted.digest;
-          if (_tagCounts[id] != 0) {
-            _tagCounts[id] = 0;
-            changed = true;
-          }
-          continue;
-        }
-      }
-      try {
-        final answer = await map(
-          'GET',
-          '/api/super-tabs/${Uri.encodeComponent(id)}/mentions?state=waiting',
-        );
-        if (generation != _generation ||
-            (_loaded.containsKey(id) && !_paused(id))) {
-          continue;
-        }
-        final waiting = [
-          for (final row in answer['mentions'] as List)
-            SuperTabMention.fromJson(superTabMap(row)),
-        ];
-        // A paused Swarm already knows the tags it read before it was away.
-        final mentions = _loaded[id] == null
-            ? null
-            : SuperTabMentions.of(_loaded[id]!);
-        final seen = mentions == null
-            ? _tagsSeen[id]
-            : {...?_tagsSeen[id], for (final m in mentions.waiting) m.id};
-        final told = <String>{};
-        if (seen != null) {
-          for (final mention in waiting.reversed) {
-            if (!seen.contains(mention.id)) {
-              onMention?.call(id, mention);
-              told.add(mention.id);
-            }
-          }
-        }
-        // Not news again when the Swarm is shown and reads its own.
-        mentions?.seen(told);
-        _tagsSeen[id] = {...?seen, for (final m in waiting) m.id};
-        if (counted != null) _tagDigests[id] = counted.digest;
-        if (_tagCounts[id] != waiting.length) {
-          _tagCounts[id] = waiting.length;
-          changed = true;
-        }
-      } catch (_) {}
-    }
-    if (changed && generation == _generation) onTagCounts?.call();
   }
 
   void dispose() => bind(null);

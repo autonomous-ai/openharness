@@ -654,7 +654,12 @@ Ships in one release with phases 3 and 5, backend first. It relies on phase 3's 
 `swarm-instructions` refresh, `instructions`, neutral start prompts) and changes none of it except where named. Tasks 1-10
 are backend and run in order (most edit `commands.ts`); 11-13 are CLI (11 reads task 7's read); 14 is the done check.
 
-Phase 4 is done when `removedRefusals.test.ts` and `integration/superTabWorkflow.test.ts` (task 14) pass: no refusal code
+**Superseded 2026-11-06 (Dee, task #3591):** checkable rules belong in code. The blanket prohibition on the
+inventory's refusal codes below no longer applies; `removedRefusals.test.ts` guards only retired role-registry
+codes, each with a stated reason. Plain rule refusal codes are allowed. See the updated design's
+"Phase-4 enforcement policy" note. The tasks below are the historical phase-4 implementation.
+
+Original phase-4 completion criterion: `removedRefusals.test.ts` and `integration/superTabWorkflow.test.ts` (task 14) pass: no refusal code
 in the inventory's list is reachable, and a Tester, an Engineer and a Reviewer run the template's workflow with no
 coordinator action between "ready" and "passed".
 

@@ -19,29 +19,33 @@ const EXEC_LINE = /^exec .*$/m
  * `--no-updates` variant carrying a comment block and `ADAPTER_UPDATE_DISABLE=true`. All three end in
  * a single `exec … cli.js "$@"` line with everything else preamble, so replacing ONLY that line
  * handles all three and preserves a developer's pin for free: the interpreter is repaired, and the
- * promise that no release reaches that computer on its own is untouched.
+ * promise that no release reaches that computer on its own is untouched. Says whether it rewrote it.
  */
-export function ensureLauncher(node: string, log: (message: string) => void = () => {}): void {
+export function ensureLauncher(node: string, log: (message: string) => void = () => {}): boolean {
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  let current: string
+  // A missing launcher means the CLI is being run some other way: writing one nobody asked for is a different feature.
+  try { current = readFileSync(launcher, 'utf-8') } catch { return false }
+  const cli = join(env.ADAPTER_CLI_DIR, 'cli.js')
+  const exec = EXEC_LINE.exec(current)
+  // Only ever rewrite a launcher that runs OUR bundle. Anything else at this path belongs to somebody else.
+  if (!exec || !exec[0].includes(cli)) return false
+
+  const next = current.replace(EXEC_LINE, `exec ${shellQuote(node)} ${shellQuote(cli)} "$@"`)
+  if (next === current) return false
+
+  const temporary = `${launcher}.tmp-${process.pid}`
   try {
-    const launcher = join(env.HARNESS_BIN_DIR, 'harness')
-    const current = readFileSync(launcher, 'utf-8')
-    const cli = join(env.ADAPTER_CLI_DIR, 'cli.js')
-    const exec = EXEC_LINE.exec(current)
-    // Only ever rewrite a launcher that runs OUR bundle. Anything else at this path belongs to
-    // somebody else, and a missing launcher means the CLI is being run some other way — writing one
-    // nobody asked for is a different feature.
-    if (!exec || !exec[0].includes(cli)) return
-
-    const next = current.replace(EXEC_LINE, `exec ${shellQuote(node)} ${shellQuote(cli)} "$@"`)
-    if (next === current) return
-
-    const temporary = `${launcher}.tmp-${process.pid}`
     writeFileSync(temporary, next, { mode: 0o755 })
     renameSync(temporary, launcher)
-    log(`  ✓ repointed ${launcher} at ${node}`)
-  } catch {
-    // A read-only bin dir, a launcher owned by another user — none of it is worth failing a start.
+  } catch (error) {
+    try { rmSync(temporary, { force: true }) } catch { /* never written */ }
+    // A read-only bin dir, a launcher owned by another user: said, and not worth failing a start over.
+    log(`  ✗ could not repoint ${launcher} at ${node}: ${(error as Error).message}`)
+    return false
   }
+  log(`  ✓ repointed ${launcher} at ${node}`)
+  return true
 }
 
 /**

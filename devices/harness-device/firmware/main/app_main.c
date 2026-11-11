@@ -49,8 +49,7 @@ static const char *TAG = "app";
 // A button held through power-on = factory reset. All that is left to clear is the screen brightness and
 // the voice language — the credentials this used to wipe do not exist any more.
 //
-// WHICH button, and whether there is one at all, is the board's to answer (board.h): the dial reads BOOT,
-// and the Pro has nothing it could read, because its only switch is the one that just turned it on.
+// WHICH button is the board's to answer (board.h): the dial reads BOOT.
 static bool boot_button_held(void) { return board_factory_reset_requested(); }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
@@ -178,6 +177,7 @@ static void refresh_task(void *arg)
 
 void app_main(void)
 {
+    ram_telemetry_init();   // PSRAM-first cJSON allocator; before any cJSON use
     ram_telemetry_checkpoint("boot");
     last_words_boot();   // before the first log line, so the previous boot's ring is read, not overwritten
     board_detect();      // which dial this is — the panel's reset pin comes from here, so before display_init
@@ -217,21 +217,29 @@ void app_main(void)
     ui_perf_run();  // synthetic, local-only, before the cable can affect a live harness
 #endif
 
-    if (!cable_client_start()) {
+    bool linked = cable_client_start();
+    if (!linked) {
+        // A failed start cleans up after itself, so one retry is safe; a transient shortage often clears.
+        ESP_LOGW(TAG, "cable link did not start — retrying once");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        linked = cable_client_start();
+    }
+    if (!linked) {
         // A dial with no link still runs, still lights up, and still says so on screen. A device stuck in a
         // boot loop is not diagnosable from across the room; one showing "Not connected" is.
         ESP_LOGE(TAG, "cable link did not start — the dial will show no machine");
     }
 
-    // If this boot is a freshly installed image, confirm it HERE and nowhere earlier — see fw_mark_valid.
-    // Both things that make the dial fixable have now happened: it can draw, and the port is open so a
-    // daemon can reach it to offer another image.
-    fw_mark_valid();
+    // If this boot is a freshly installed image, decide it HERE and nowhere earlier — see fw_confirm_boot.
+    // Confirmed only if the port opened, so a daemon can reach it to offer another image; a fresh image
+    // that cannot reach the host is rolled back, because the cable is the only way to replace it.
+    fw_confirm_boot(linked);
 
     // Create the refresh task BEFORE the first tiles exist: tile creation fragments the remaining internal
     // heap enough that a contiguous stack allocation can fail afterwards, which would leave the carousel on
     // the loading spinner forever because nobody drains ui_request_agent_reload().
-    BaseType_t rt_ok = xTaskCreate(refresh_task, "proj_refresh", 7168, NULL, 4, NULL);
+    // 4096: measured peak use 2,248 B (STACK free_min 4,920 of 7,168, fw >= 0.0.94).
+    BaseType_t rt_ok = xTaskCreate(refresh_task, "proj_refresh", 4096, NULL, 4, NULL);
     if (rt_ok != pdPASS) {
         ESP_LOGE(TAG, "refresh task create failed (%d), free_int=%u largest_int=%u; rebooting",
                  (int)rt_ok,

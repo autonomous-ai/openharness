@@ -10,6 +10,17 @@ import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, 
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
+// A setup or a doctor runs in the login shell (dsh/shell.ts): the person's own, with their rc files, took seconds a spawn here.
+// A plain sh stands in for it, as update.spec does.
+let shellDir = ''
+beforeEach(() => {
+  shellDir = mkdtempSync(join(tmpdir(), 'dsh-install-shell-'))
+  const shell = join(shellDir, 'test-shell')
+  writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
+  vi.stubEnv('SHELL', shell)
+})
+afterEach(() => { vi.unstubAllEnvs(); rmSync(shellDir, { recursive: true, force: true }) })
+
 function gitRepo(dir: string, files: Record<string, string>): string {
   mkdirSync(dir, { recursive: true })
   for (const [name, body] of Object.entries(files)) {
@@ -246,6 +257,19 @@ describe('installDsh, every way it can go', () => {
       const again = await installDsh({ source: repo, link: true, path: 'ignored/for/a/link' })
       expect(again.ok).toBe(true)
       expect(readInstalledIndex()).toHaveLength(1)
+    })
+
+    // Node 25.3's rmSync({ force: true }) leaves a link whose checkout is gone in place, so linking again failed with EEXIST.
+    it('links again over a link whose checkout is gone', async () => {
+      const gone = join(root, 'gone')
+      mkdirSync(gone)
+      writeFileSync(join(gone, 'harness.json'), JSON.stringify({ spec: 1, id: 'acme/thing', name: 'Thing', engine: 'claude' }))
+      expect((await installDsh({ source: gone, link: true })).ok).toBe(true)
+      rmSync(gone, { recursive: true })
+      const repo = thing()
+      const again = await installDsh({ source: repo, link: true })
+      expect(again.ok, JSON.stringify(again)).toBe(true)
+      expect(realpathSync(dshInstallDir('acme/thing'))).toBe(realpathSync(repo))
     })
 
     it('a folder that is not a git checkout links with no commit', async () => {

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
@@ -9,23 +8,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
-import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
+import 'package:harness_mobile/swarm/swarm_home_view_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_mark_all.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'swarm_fixture.dart';
 
-/// Mark all read and the unread filter on the phone, as Desktop has them
+/// Mark all read on the phone, as Desktop has it
 /// (#2453): every chat shown unread reads as read at once, and its mark goes
 /// to the server only once 6 s pass without Undo, since read marks never
 /// move back there. Leaving the app or closing the session is no Undo; access
-/// lost sends nothing. The filter lists only the projects with something
-/// unread, kept on this phone.
+/// lost sends nothing.
 void main() {
   const web = 'project-2';
   const webLead = 'group-lead-web';
@@ -444,51 +441,6 @@ void main() {
     });
   });
 
-  group('The unread filter', () {
-    test('is kept on this phone and read back', () async {
-      final store = MemoryKeyValueStore();
-      final prefs = SwarmHomePrefs(accountId: me, store: store);
-      await settle();
-      prefs.toggleUnreadOnly();
-      await settle();
-      prefs.dispose();
-
-      final again = SwarmHomePrefs(accountId: me, store: store);
-      await settle();
-      expect(again.unreadOnly, isTrue);
-
-      again.toggleUnreadOnly();
-      await settle();
-      // Nothing else chosen: nothing left on the phone.
-      expect(store.values['swarm_home.$me'], isNull);
-      again.dispose();
-    });
-
-    test('what an older phone wrote reads with it off; turned on before '
-        'the choices are back, it stays on', () async {
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({
-          'pins': ['$tab/$project'],
-        });
-      final old = SwarmHomePrefs(accountId: me, store: store);
-      await settle();
-      expect(old.unreadOnly, isFalse);
-      expect(old.pins, {'$tab/$project'});
-      old.dispose();
-
-      final early = SwarmHomePrefs(accountId: me, store: store)
-        ..toggleUnreadOnly();
-      await settle();
-      expect(early.unreadOnly, isTrue);
-      expect(early.pins, {'$tab/$project'});
-      expect(
-        jsonDecode(store.values['swarm_home.$me']!),
-        containsPair('unread', true),
-      );
-      early.dispose();
-    });
-  });
-
   group('Home', () {
     Future<SwarmHost> pump(
       WidgetTester tester,
@@ -532,80 +484,81 @@ void main() {
     Finder row(String projectId) => key('swarm-project-$tab-$projectId');
     bool bold(WidgetTester tester, String projectId) =>
         tester.widget<SwarmHomeProjectRow>(row(projectId)).project.news.bold;
-    SwarmIconButton button(WidgetTester tester, String k) =>
-        tester.widget<SwarmIconButton>(key(k));
 
-    testWidgets('the filter lists only projects with something unread, '
-        'and says so when none has, with Show all', (tester) async {
-      await pump(tester, backend());
-      expect(row(project), findsOneWidget);
-      expect(row(web), findsOneWidget);
-      expect(button(tester, 'swarm-unread-only').selected, isFalse);
+    /// Opens Sort and filter, where Mark all read is (2026-11-03), from the
+    /// Swarm switcher (2026-11-04).
+    Future<void> openView(WidgetTester tester) async {
+      for (final k in ['swarm-title-button', 'swarm-switch-view']) {
+        await tester.tap(key(k));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+      }
+    }
 
-      await tester.tap(key('swarm-unread-only'));
-      await tester.pumpAndSettle();
-
-      expect(row(project), findsOneWidget);
-      expect(row(web), findsNothing);
-      expect(button(tester, 'swarm-unread-only').selected, isTrue);
-      expect(
-        tester.getSemantics(key('swarm-unread-only')),
-        matchesSemantics(
-          label: 'Show all projects',
-          isButton: true,
-          hasEnabledState: true,
-          isEnabled: true,
-          hasToggledState: true,
-          isToggled: true,
-          hasTapAction: true,
-        ),
-      );
-
+    /// Mark all read, from Sort and filter: the sheet closes, then it marks.
+    Future<void> markAll(WidgetTester tester) async {
+      await openView(tester);
       await tester.tap(key('swarm-mark-all-read'));
-      await tester.pumpAndSettle();
-      expect(row(project), findsNothing);
-      expect(key('swarm-unread-none'), findsOneWidget);
+    }
 
-      await tester.tap(key('swarm-unread-show-all'));
-      await tester.pumpAndSettle();
-      expect(row(project), findsOneWidget);
-      expect(row(web), findsOneWidget);
-      expect(button(tester, 'swarm-unread-only').selected, isFalse);
-      await tester.pump(const Duration(seconds: 7));
-    });
-
-    testWidgets('Mark all read tells how many with Undo; Undo puts the bold '
-        'back and sends nothing, and with nothing unread it is greyed', (
-      tester,
-    ) async {
-      final fake = backend();
-      await pump(tester, fake);
-      expect(bold(tester, project), isTrue);
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNotNull);
-
-      await tester.tap(key('swarm-mark-all-read'));
+    /// Whether Mark all read has something to mark, as its row in Sort and
+    /// filter says; the sheet then closes.
+    Future<bool> markable(WidgetTester tester) async {
+      await openView(tester);
+      final on =
+          tester
+              .widget<SwarmHomeViewAction>(key('swarm-mark-all-read'))
+              .onTap !=
+          null;
+      Navigator.of(tester.element(key('swarm-mark-all-read'))).pop();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 400));
+      return on;
+    }
 
-      expect(find.text('Marked 2 chats read'), findsOneWidget);
-      expect(bold(tester, project), isFalse);
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+    testWidgets(
+      'Mark all read tells how many with Undo; task reads are restored '
+      'without bolding the read project, and nothing unread greys the action',
+      (tester) async {
+        final fake = backend();
+        final host = await pump(tester, fake);
+        final reader = host.session!.inbox.reader(tab)!;
+        bool taskUnread() =>
+            reader.readMarks!.unread(reader.snapshot!.conversation('g1')!);
+        // Only the tasks are unread; the project's own chat is already read.
+        expect(taskUnread(), isTrue);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isTrue);
 
-      await tester.tap(find.text('Undo'));
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 7));
-      await tester.pumpAndSettle();
+        await markAll(tester);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
 
-      expect(marksSent(fake), isEmpty);
-      expect(bold(tester, project), isTrue);
+        expect(find.text('Marked 2 chats read'), findsOneWidget);
+        expect(taskUnread(), isFalse);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isFalse);
 
-      await tester.tap(key('swarm-mark-all-read'));
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 7));
-      await tester.pumpAndSettle();
-      expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
-    });
+        await tester.tap(find.text('Undo'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+
+        expect(marksSent(fake), isEmpty);
+        expect(taskUnread(), isTrue);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isTrue);
+
+        await markAll(tester);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+        expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
+        expect(taskUnread(), isFalse);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isFalse);
+      },
+    );
 
     testWidgets('a chat muted on this phone a moment ago is not marked: the '
         'toast counts the rest, and with all muted the button greys', (
@@ -626,7 +579,7 @@ void main() {
 
       reader.setNotify('g1', SwarmNotify.muted);
       await tester.pump();
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Marked 1 chat read'), findsOneWidget);
@@ -637,7 +590,7 @@ void main() {
 
       reader.setNotify('g2', SwarmNotify.muted);
       await tester.pump();
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+      expect(await markable(tester), isFalse);
       expect(marksSent(fake), isEmpty);
       for (final answer in answers) {
         answer.complete({'notify': 'muted'});
@@ -649,7 +602,7 @@ void main() {
         'with them', (tester) async {
       final fake = backend();
       await pump(tester, fake);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Undo'), findsOneWidget);
@@ -674,7 +627,7 @@ void main() {
       );
       final fake = backend();
       final host = await pump(tester, fake);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Marked 2 chats read'), findsOneWidget);
@@ -692,7 +645,7 @@ void main() {
       );
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pump();
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
@@ -712,7 +665,7 @@ void main() {
       final fake = backend();
       final host = await pump(tester, fake);
       host.foreground = true;
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Undo'), findsOneWidget);
@@ -731,7 +684,7 @@ void main() {
       final fake = backend();
       final account = ValueNotifier<String?>(me);
       await pump(tester, fake, signedIn: account);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Undo'), findsOneWidget);
@@ -748,7 +701,7 @@ void main() {
         'sent, and nothing is left to mark', (tester) async {
       final fake = backend();
       final host = await pump(tester, fake);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
 
       host.session!.inbox.reader(tab)!.revoke();

@@ -4,16 +4,17 @@ import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHook
 
 export interface NativePlugin {
   file: string
-  template: readonly (string | { argument: 'port' | 'credential' | 'version' })[]
+  template: readonly (string | { argument: 'port' | 'credential' | 'version' | 'socket' })[]
   directories?: readonly { path: string; mode?: number }[]
   messages: { current: string; installed: string; after: readonly string[]; failed: string }
 }
-export interface NativePluginValues { port: string; credential: string; version: string }
+/** `socket`: the daemon's private socket as JSON, or `null` where it can have none (Windows, or a home too long as well). Absent reads as `null`. */
+export interface NativePluginValues { port: string; credential: string; version: string; socket?: string }
 export interface PreparedNativePlugin { verify(): void; commit(attempt: HookPreparationAttempt): Promise<HookFilePublication> }
 
 /** Joining parts once keeps a path's contents literal, even when it resembles a template argument. */
 export function nativePluginSource(rule: NativePlugin, values: NativePluginValues): string {
-  return rule.template.map(part => typeof part === 'string' ? part : values[part.argument]).join('')
+  return rule.template.map(part => typeof part === 'string' ? part : values[part.argument] ?? 'null').join('')
 }
 
 /** Observe every destination before a multi-file installation changes any of them. */

@@ -226,7 +226,7 @@ impl Form {
     }
     fn project_name(&self) -> String {
         match &self.draft.project {
-            Project::Folder(p) => p.trim_end_matches('/').rsplit('/').next()
+            Project::Folder(p) => Some(crate::sys::path_name(p))
                 .filter(|name| !name.is_empty()).unwrap_or("/").into(),
             Project::New(n) => {
                 if n.is_empty() {
@@ -350,7 +350,7 @@ fn short_path(path: &str, home: &str) -> String {
 /// A machine's home folder: as its daemon reported it, or this computer's own.
 fn machine_home(app: &App, machine: &str) -> Option<String> {
     app.homes.get(machine).cloned().or_else(|| {
-        (machine == app.fleet.local_id || crate::local::is_local(machine)).then(|| std::env::var("HOME").ok()).flatten()
+        (machine == app.fleet.local_id || crate::local::is_local(machine)).then(|| std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()).flatten()
     })
 }
 
@@ -386,7 +386,7 @@ fn saved_agent(saved: &Value) -> What {
     }
 }
 fn remember(form: &Form) {
-    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    use std::io::Write;
     let path = defaults_path();
     let Some(parent) = path.parent() else { return };
     let mut saved = defaults();
@@ -410,11 +410,7 @@ fn remember(form: &Form) {
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut f = crate::sys::private_file(std::fs::OpenOptions::new().write(true).create_new(true)).open(&tmp)?;
         f.write_all(saved.to_string().as_bytes())?;
         std::fs::rename(&tmp, &path)
     };
@@ -731,7 +727,7 @@ fn project_rows(app: &App, draft: &Draft, show_machine: bool) -> Vec<Row> {
     }
     // The chosen machine's home first, as the composer offers "this folder": a machine whose recent
     // agents all ran in scratch folders otherwise offered nothing else.
-    if let Some(home) = app.homes.get(chosen).filter(|h| h.starts_with('/')) {
+    if let Some(home) = app.homes.get(chosen).filter(|h| crate::sys::path_absolute(h)) {
         let label = if show_machine { format!("~ @ {}", machine_label(app, chosen)) } else { "~".into() };
         // (Its own id, not a recent project's "at:": chosen the same way, never counted among them.)
         rows.push(Row::new(format!("home:{chosen}\t{home}"), label).extra(format!("home {}", app.fleet.machine_name(chosen))).group("Home"));
@@ -1400,7 +1396,7 @@ fn choose(app: &mut App, form: &mut Form) {
             } else {
                 query
             };
-            if !path.starts_with('/') {
+            if !crate::sys::path_absolute(&path) {
                 form.error = "Enter an absolute path or ~/folder".into();
                 form.child = Some(c);
                 return;
@@ -2598,7 +2594,7 @@ mod tests {
     #[tokio::test]
     async fn the_home_folder_is_a_new_project_unless_the_harness_is_a_terminal() {
         let mut app = app();
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::sys::home().display().to_string();
         app.homes.insert(crate::local::MACHINE.into(), home.clone());
         let form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some(format!("{home}/")), Surface::Dialog).unwrap();
         assert!(matches!(&form.draft.project, Project::New(name) if name.is_empty()), "{:?}", form.draft.project);

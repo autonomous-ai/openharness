@@ -9,6 +9,8 @@
 // (amber #FFB340 / red #FF5C5C: the bubble less a copy of itself 6 px to the right, so it follows the corners; the tail, here a whole turned square,
 // is drawn over it as in the mockup), and on the avatar's bottom right corner a 40 px badge (#3B2E55, radius 12, a 3 px ring of the room's ground)
 // holding a diamond 16 px across in the room's ink (two triangles; the mockup's ◆ inherits that colour).
+// A Swarm chat's notice (an entry with `tab`; owner's mockup pro-swarm-parity 1E) is a plain row with that same name line, "<project> · <Swarm name>" in purple,
+// the Lead's pet as the avatar, and none of the question's marks (no edge, no badge); the Swarm gone from the model: no tag. A tap is POD_A_OPEN_NOTIF by the Lead's id.
 #include <stdio.h>
 #include <string.h>
 
@@ -32,6 +34,14 @@ static const ht_pro_font_t *const MSG = &ph_sb_32, *const META_F = &ph_sb_22;
 
 typedef struct { const pod_agent_t *a; const pod_unread_t *u; int unread_index; } item_t;
 
+// A Swarm chat's notice names no agent (its `agent` is a Lead's id, which no roster row owns): the Lead and its Swarm, either NULL when gone.
+static const pod_swarm_t *notice_swarm(const pod_model_t *m, const pod_unread_t *u) { return u && u->tab[0] ? pod_model_swarm(m, u->tab) : NULL; }
+static const pod_lead_t *notice_lead(const pod_swarm_t *sw, const pod_unread_t *u)
+{
+    const int j = sw ? pod_model_lead_index(sw, u->agent) : -1;
+    return j < 0 ? NULL : &sw->leads[j];
+}
+
 static int collect(const pod_model_t *m, item_t out[MAX_ITEMS])
 {
     int n = 0;
@@ -39,7 +49,7 @@ static int collect(const pod_model_t *m, item_t out[MAX_ITEMS])
         if (pod_model_eff(m, &m->agents[i]) == POD_ASKING) out[n++] = (item_t){&m->agents[i], NULL, -1};
     const int first = n;
     for (int i = 0; i < m->unread_count && n < MAX_ITEMS; i++) {
-        const pod_agent_t *ag = pod_model_find(m, m->unread[i].agent);
+        const pod_agent_t *ag = m->unread[i].tab[0] ? NULL : pod_model_find(m, m->unread[i].agent);
         if (ag && pod_model_eff(m, ag) == POD_ASKING) continue;   // it is listed above by its question; the entry waits for when it stops asking
         out[n++] = (item_t){ag, &m->unread[i], i};
     }
@@ -73,7 +83,8 @@ int ph_notices_top(const pod_model_t *m, int max, ph_notice_line_t *out)
     const int n = collect(m, it);
     int k = 0;
     for (; k < n && k < max; k++) {
-        out[k].engine = it[k].a ? it[k].a->engine : NULL;
+        const pod_lead_t *ld = it[k].u ? notice_lead(notice_swarm(m, it[k].u), it[k].u) : NULL;
+        out[k].engine = it[k].a ? it[k].a->engine : ld ? ld->engine : NULL;
         out[k].name = it[k].a ? it[k].a->name : it[k].u ? it[k].u->name : "";
         item_line(&it[k], out[k].text, sizeof out[k].text);
     }
@@ -124,13 +135,15 @@ static void row(pod_out_frame_t *f, const pod_model_t *m, const item_t *it, int 
     ht_scene_t *s = f->scene;
     const pod_agent_t *a = it->a;
     char text[POD_UNREAD_TEXT > 320 ? POD_UNREAD_TEXT : 320], rows[3][POD_ROW_MAX], age[12];
-    const char *name;
+    const char *name, *engine = a ? a->engine : NULL;
+    const pod_swarm_t *sw = notice_swarm(m, it->u);   // a Swarm chat's notice: the Lead's pet and "· <Swarm name>"
     const pod_attention_t attn = it->u ? POD_ATTN_NONE : pod_model_attention(m, a);
     if (it->u) {
         ph_first_sentence(text, sizeof text, it->u->text);
         int32_t d = (int32_t)(m->clock_ms - it->u->at_ms);
         pod_fmt_age(age, sizeof age, d > 0 ? (uint32_t)d / 1000 : 0);
         name = a && a->name[0] ? a->name : it->u->name[0] ? it->u->name : "Agent";
+        if (it->u->tab[0]) { const pod_lead_t *ld = notice_lead(sw, it->u); engine = ld ? ld->engine : NULL; }
     } else {
         snprintf(text, sizeof text, "%s", a->question);
         for (char *c = text; *c; c++) if (*c == '\n' || *c == '\r' || *c == '\t') *c = ' ';
@@ -141,7 +154,7 @@ static void row(pod_out_frame_t *f, const pod_model_t *m, const item_t *it, int 
     const int h = PAD_TOP + NAME_H + 4 + n * MSG_PITCH + PAD_BOT;
 
     ht_pro_rect_aa(s, AV_X, y + AV_Y, AV, AV, 28, C(AV_FILL));
-    face_art(s, AV_X + AV / 2, y + AV_Y + AV / 2, a ? a->engine : NULL);
+    face_art(s, AV_X + AV / 2, y + AV_Y + AV / 2, engine);
     if (attn != POD_ATTN_NONE) {   // the Super Tab badge: a ring of the ground, the purple square, the white diamond
         const int bx = AV_X + AV + BADGE_OUT - BADGE, by = y + AV_Y + AV + BADGE_OUT - BADGE, cx = bx + BADGE / 2, cy = by + BADGE / 2;
         ht_pro_rect_aa(s, bx, by, BADGE, BADGE, BADGE_R, C(BG));
@@ -162,8 +175,8 @@ static void row(pod_out_frame_t *f, const pod_model_t *m, const item_t *it, int 
     int aw = ht_pro_width(META_F, age), nw = ht_pro_width(META_F, name), room = tw - aw - 16;
     char tag[SUPER_TAB_MAX + 4] = "";
     int gw = 0;
-    if (attn != POD_ATTN_NONE) {   // "name · Super Tab": the name keeps at least half the room, the Super Tab the rest (cut with dots)
-        snprintf(tag, sizeof tag, "\xc2\xb7 %s", a->super_tab);
+    if (attn != POD_ATTN_NONE || sw) {   // "name · Super Tab" (a Swarm's notice: "project · Swarm"): the name keeps at least half the room, the tag the rest (cut with dots)
+        snprintf(tag, sizeof tag, "\xc2\xb7 %s", sw ? sw->name : a->super_tab);
         const int want = ht_pro_width(META_F, tag);
         int keep = room - TAG_GAP - want;   // what the name may take beside the whole tag
         if (keep < room / 2) keep = room / 2;

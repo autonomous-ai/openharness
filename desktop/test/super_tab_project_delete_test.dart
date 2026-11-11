@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -26,7 +27,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             onNewProject: () {},
@@ -42,7 +42,9 @@ void main() {
   Future<void> openDelete(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Delete Project'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete Project'));
     await tester.pumpAndSettle();
   }
 
@@ -107,7 +109,9 @@ void main() {
       expect(c.snapshot!.conversations.single.id, 'design-lead');
       expect(c.draft('offline'), isEmpty);
       expect(find.text('Old project conversation.'), findsNothing);
-      expect(composer, findsOneWidget);
+      // Only agents post in a project's channel (Swarm v4): its line stands where the box was.
+      expect(composer, findsNothing);
+      expect(find.byKey(const ValueKey('super-agents-only')), findsOneWidget);
       await finish(tester);
     },
   );
@@ -204,7 +208,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.hasPendingAction, isTrue);
       expect(c.snapshot!.projects, isEmpty);
-      await tester.tap(find.widgetWithText(TextButton, 'Check pending action'));
+      await tester.tap(find.widgetWithText(TextButton, 'Check again'));
       await tester.pumpAndSettle();
       expect(c.hasPendingAction, isFalse);
       expect(server.posts, hasLength(2));
@@ -223,6 +227,8 @@ void main() {
     });
     await mount(tester, server: server, account: 'peer');
     await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
     await tester.pumpAndSettle();
     expect(find.text('Delete Project'), findsNothing);
     expect(server.posts, isEmpty);

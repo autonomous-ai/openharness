@@ -145,10 +145,16 @@ void main() {
         (tester.widget<AnimatedContainer>(box).decoration! as BoxDecoration)
                 .border!
             as Border;
+    Color? fill() =>
+        (tester.widget<AnimatedContainer>(box).decoration! as BoxDecoration)
+            .color;
     final before = rim();
+    final restingFill = fill();
     focus.requestFocus();
     await tester.pump();
-    expect(rim().top.color, isNot(before.top.color));
+    // Focus shows in the fill, never as a colored line.
+    expect(fill(), isNot(restingFill));
+    expect(rim().top.color, before.top.color);
     expect(rim().top.width, before.top.width);
     expect(tester.getRect(find.text('Alpha')), label);
     expect(tester.widget<AnimatedContainer>(box).duration, Duration.zero);
@@ -438,10 +444,7 @@ void main() {
     expect(calls, 0, reason: 'a no-op choice must not write to disk');
   });
 
-  testWidgets('the picker uses the roomy row, a context menu keeps compact', (
-    tester,
-  ) async {
-    // Both variants use the terminal font; only spacing and icon size differ.
+  testWidgets('a picker and a context menu use the same row', (tester) async {
     await tester.pumpWidget(
       _host(
         Column(
@@ -471,15 +474,7 @@ void main() {
     final pickerRow = tester.widget<AppMenuItem>(
       find.widgetWithText(AppMenuItem, 'Menlo'),
     );
-    expect(pickerRow.metrics, AppMenuRowMetrics.roomy);
-    expect(
-      AppMenuRowMetrics.roomy.fontSize,
-      equals(AppMenuRowMetrics.compact.fontSize),
-    );
-    expect(
-      AppMenuRowMetrics.roomy.iconSize,
-      greaterThan(AppMenuRowMetrics.compact.iconSize),
-    );
+    expect(pickerRow.metrics, AppMenuRowMetrics.compact);
   });
 
   testWidgets('a row measures the extent its metrics claim', (tester) async {
@@ -506,7 +501,7 @@ void main() {
     final second = tester.getRect(find.byType(AppMenuItem).at(1));
     expect(
       second.top - first.top,
-      closeTo(AppMenuRowMetrics.roomy.extent, 0.1),
+      closeTo(AppMenuRowMetrics.compact.extent, 0.1),
     );
   });
 
@@ -541,11 +536,10 @@ void main() {
     final first = tester.getRect(find.byType(AppMenuItem).at(0));
     final last = tester.getRect(find.byType(AppMenuItem).at(6));
     expect(last.top, greaterThan(first.top));
-    expect(last.height, greaterThan(AppMenuRowMetrics.compact.extent));
+    expect(last.height, closeTo(AppMenuRowMetrics.compact.extent, 0.1));
     expect(
       last.bottom - first.top,
-      greaterThan(6 * AppMenuRowMetrics.compact.extent),
-      reason: 'seven roomy rows must occupy more than seven compact ones would',
+      closeTo(7 * AppMenuRowMetrics.compact.extent, 0.1),
     );
   });
 
@@ -637,12 +631,12 @@ void main() {
       final first = tester.getRect(find.byType(AppMenuItem).at(0));
       expect(
         first.height,
-        greaterThan(AppMenuRowMetrics.roomy.extent),
+        greaterThan(AppMenuRowMetrics.compact.extent),
         reason: 'a row carrying a sentence is taller than one without',
       );
       expect(
         tester.getRect(find.byType(AppMenuItem).at(1)).bottom - first.top,
-        lessThanOrEqualTo(2 * AppMenuRowMetrics.roomy.detailExtent + 1),
+        lessThanOrEqualTo(2 * AppMenuRowMetrics.compact.detailExtent + 1),
       );
     });
   });

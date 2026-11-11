@@ -34,11 +34,10 @@ import {
   type TerminalP2pData,
   type TerminalP2pPolicy,
 } from './terminalP2p.js'
-import { warmStunUrls } from './stunSelect.js'
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
-import { admitRelayedPairFrame, isPairFrameType } from './e2ee/applicationFrames.js'
+import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, isPairFrameType } from './e2ee/applicationFrames.js'
 import { declaredClientQuery } from './declaredClient.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
@@ -59,8 +58,28 @@ const ISOLATED_DIAL_COOLDOWN_MS = 30_000
 // median 0.4 s, open, sign in, select, refused, closed, because the window's pool dialled again on every
 // select its local clients made: the app's retry, a TUI, a CLI command.
 const REFUSED_BACKOFF_MAX_MS = 30_000
+// A machine refused as offline, which no list says is offline (LISTED_RECHECK_MS), is asked again after 30 s, then 1, 2,
+// 4 minutes, and at most every 5: a machine that is off is usually off for long, and every ask is a socket and a sign-in.
+// A list that shows it online lifts this at once.
+const OFFLINE_BACKOFF_FIRST_MS = 30_000
+const OFFLINE_BACKOFF_MAX_MS = 5 * 60_000
 // A retry-after longer than this is read as this: a wrong answer must not shut a machine out for long.
 const RETRY_AFTER_MAX_MS = 5 * 60_000
+// A machine the account's machine list shows offline is not dialled at all: its selects are answered MACHINE_OFFLINE
+// from the list until a list shows it online. Prod, 2026-11-04: about 3,600 web-ws opens an hour from 76 users, mostly
+// CLI 0.5.33, each signed in, refused MACHINE_OFFLINE and closed in ~120 ms. The backoff above is per machine and capped
+// at 30 s, so a person with many offline machines kept the loop going, and every open cost the backend a session
+// sign-in. While selects are held the list is asked again at most this often: one read for every machine, served from
+// the cache when anything else read it since.
+const LISTED_RECHECK_MS = 5 * 60_000
+// An explicit redial (a person pressing Retry) of a held machine asks the list again at once, served from the cache when
+// it is younger than this, and dials if the list now shows the machine back. No online event reaches the CLI (review of
+// #2891: the backend pushes a list change only on create, rename, delete or share), so without it a machine back for a
+// minute stayed unreachable until the 5-minute recheck. One list read for every machine, never a socket per machine.
+const REDIAL_RECHECK_MS = 30_000
+// A list read longer ago than this holds nothing: the backoff decides again, so a list nothing can re-read (the
+// backend unreachable over REST) cannot shut a machine out.
+const LISTED_TRUST_MS = 15 * 60_000
 // Warm background sessions kept per machine. Each concurrent background client needs its own (they
 // must not see each other's frames), so the cap is "how many pollers may overlap on one machine and
 // still find a warm session"; beyond it the extra session is closed on detach, as `shelf full`, so the backend's
@@ -115,6 +134,8 @@ const P2P_UPGRADE_ATTEMPT_TIMEOUT_MS = 15_000
 // already-live channel — 5s is generous for that, not for a cold negotiation.
 const P2P_UPGRADE_DRAIN_TIMEOUT_MS = 5_000
 const P2P_PROMOTE_ACK_TIMEOUT_MS = 5_000
+// Agent browser opens in flight on one machine: four viewers a browser, with room. The machine answers every one.
+const BROWSER_OPENS_MAX = 32
 
 
 function binaryBytes(raw: RawData): Uint8Array {
@@ -211,6 +232,15 @@ interface Entry {
    *  no "next demote" to re-arm a budget for here, since staying on direct or giving up are both
    *  permanent for this entry. */
   upgradeDone: boolean
+  /**
+   * Agent browser streams open through this entry, each with the P2P channel it opened on (null: the relay). Never in
+   * `streams`: a terminal survives a move between wires through its resync and keyframe, and VNC has neither, so
+   * promoteOpenStreams(), demoteP2p() and promoteToDirect() never resync or move these. A stream whose channel goes
+   * ends with reason `route`, and its panel opens a new one on whatever route there is then.
+   */
+  browserStreams: Map<string, TerminalP2pInitiator | null>
+  /** `agent_browser_open`s waiting for their result, by request id, with the channel each was sent on. */
+  browserOpens: Map<string, TerminalP2pInitiator | null>
 }
 
 export interface RelaySession {
@@ -275,11 +305,20 @@ export interface RemoteRelayPoolOptions {
   refusals?: Map<string, Refusal>
   /** The clock the backoff reads; a test's own. */
   now?: () => number
+  /** Shared record of the machines the account's machine list last showed offline (LISTED_RECHECK_MS). */
+  listedOffline?: ListedOffline
+  /** Ask the machine list again unless it was read within `maxAgeMs`: a held select may be of a machine back since. It
+   *  settles once the list read (and `listed()` was told), or failed. */
+  recheckList?: (maxAgeMs: number) => Promise<void>
 }
 
+/** The machines the account's machine list last showed offline, when it was read, and when a held select last asked
+ *  for it again. `at` 0: no list the backend answered, which holds nothing. */
+export interface ListedOffline { ids: Set<string>; at: number; asked: number }
+
 /** A machine whose last dials failed `count` times in a row: selects of it before `until` get `error` back.
- *  `asked`: the backend set `until` (its retry-after), which even an explicit redial waits out. */
-interface Refusal { until: number; error: unknown; count: number; asked: boolean }
+ *  `askedUntil`: the end of the backend's own retry-after, which even an explicit redial waits out. */
+interface Refusal { until: number; error: unknown; count: number; askedUntil: number }
 
 const DENIED_TRIES = 3
 const DENIED_WINDOW_MS = 60_000
@@ -299,6 +338,8 @@ export class RemoteRelayPool {
   private readonly denials: Map<string, number[]>
   private readonly refusals: Map<string, Refusal>
   private readonly now: () => number
+  private readonly listedOffline: ListedOffline
+  private readonly recheckList: ((maxAgeMs: number) => Promise<void>) | null
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
@@ -323,6 +364,33 @@ export class RemoteRelayPool {
     this.denials = opts.denials ?? new Map()
     this.refusals = opts.refusals ?? new Map()
     this.now = opts.now ?? Date.now
+    this.listedOffline = opts.listedOffline ?? { ids: new Set(), at: 0, asked: 0 }
+    this.recheckList = opts.recheckList ?? null
+  }
+
+  /** The account's machine list was read: these of its machines are offline. null: the list is not the backend's
+   *  (a sign-out, or no read yet), which holds nothing. A machine it no longer shows offline is dialled at its next
+   *  select, whatever backoff its last refusal left: the list is what says it came back. */
+  listed(offline: string[] | null): void {
+    const next = new Set(offline ?? [])
+    for (const machineId of this.listedOffline.ids) {
+      if (next.has(machineId)) continue
+      this.refusals.delete(machineId)
+      this.lastDialFailure.delete(machineId)
+    }
+    this.listedOffline.ids = next
+    this.listedOffline.at = offline ? this.now() : 0
+  }
+
+  /** Whether the machine list says `machineId` is offline, recently enough to answer its select without a dial. */
+  private heldByList(machineId: string): boolean {
+    const listed = this.listedOffline
+    if (!listed.at || !listed.ids.has(machineId) || this.now() - listed.at >= LISTED_TRUST_MS) return false
+    if (this.now() - listed.asked >= LISTED_RECHECK_MS) {
+      listed.asked = this.now()
+      void this.recheckList?.(LISTED_RECHECK_MS).catch(() => { /* the next held select asks again */ })
+    }
+    return true
   }
 
   /** `machineId` denied this machine's key. Drop the pin — unless the device key log says it should
@@ -357,7 +425,8 @@ export class RemoteRelayPool {
     const shelf = this.idleIsolated.get(machineId) ?? []
     const pool = shelf.pop() ?? new RemoteRelayPool(this.auth, this.backendWsBase, this.selfIdentity, this.peers,
       { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure,
-        ...(this.expectsTrust ? { expectsTrust: this.expectsTrust } : {}), denials: this.denials, refusals: this.refusals, now: this.now })
+        ...(this.expectsTrust ? { expectsTrust: this.expectsTrust } : {}), denials: this.denials, refusals: this.refusals, now: this.now,
+        listedOffline: this.listedOffline, ...(this.recheckList ? { recheckList: this.recheckList } : {}) })
     const session = await pool.acquire(machineId, autonomousEnv, selectFrame, {
       ...sink,
       sendFrame: frame => sink.sendFrame(frame.type === 'connected'
@@ -458,8 +527,16 @@ export class RemoteRelayPool {
     // An explicit redial (`forceReconnect`: the app saw its session die, or a person asked again) is not made to
     // wait out the backoff, only what the backend itself asked for.
     const redial = (selectFrame.payload as { forceReconnect?: unknown } | undefined)?.forceReconnect === true
+    // Not even an explicit redial: the backend, whose list this is, would refuse it. A redial asks the list first.
+    if (this.heldByList(machineId)) {
+      if (!redial || !this.recheckList) return Promise.reject(new RelayConnectError('MACHINE_OFFLINE', 1013))
+      return this.recheckList(REDIAL_RECHECK_MS).catch(() => { /* answered from the list it has */ }).then(() => {
+        if (this.heldByList(machineId)) throw new RelayConnectError('MACHINE_OFFLINE', 1013)
+        return this.connect(machineId, autonomousEnv, selectFrame)
+      })
+    }
     const refused = this.refusals.get(machineId)
-    if (refused && this.now() < refused.until && (refused.asked || !redial)) return Promise.reject(refused.error)
+    if (refused && this.now() < (redial ? refused.askedUntil : refused.until)) return Promise.reject(refused.error)
     const failed = this.lastDialFailure.get(machineId)
     if (failed && this.dialCooldownMs > 0 && Date.now() - failed.at < this.dialCooldownMs) {
       return Promise.reject(failed.error)
@@ -508,10 +585,13 @@ export class RemoteRelayPool {
       }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
-    const backoff = Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
+    const offline = error instanceof RelayConnectError && error.message === 'MACHINE_OFFLINE'
+    const backoff = offline
+      ? Math.min(OFFLINE_BACKOFF_MAX_MS, OFFLINE_BACKOFF_FIRST_MS * 2 ** (count - 1))
+      : Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
     const asked = error instanceof RelayConnectError && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
       ? Math.min(Math.max(error.retryAfterMs, 0), RETRY_AFTER_MAX_MS) : 0
-    this.refusals.set(machineId, { until: this.now() + Math.max(backoff, asked), error, count, asked: asked > backoff })
+    this.refusals.set(machineId, { until: this.now() + Math.max(backoff, asked), error, count, askedUntil: this.now() + asked })
   }
 
   private async dial(machineId: string, autonomousEnv: string, selectFrame: Frame, forceRefresh: boolean): Promise<Entry> {
@@ -553,6 +633,8 @@ export class RemoteRelayPool {
       upgradeWaitResolve: null,
       upgradeOrphan: null,
       upgradeDone: false,
+      browserStreams: new Map(),
+      browserOpens: new Map(),
     }
     entry.viewers = new RemoteViewerProxy({
       supported: () => crypto.viewerForwardingVersion === 1,
@@ -594,21 +676,19 @@ export class RemoteRelayPool {
             if (frame.type === 'connected' && payload?.machineId === machineId) {
               selected = true
               entry.p2pPolicy = p2pPolicy(payload.p2p)
-              // Earliest instant the url list exists. startP2p() fires one round trip later on
-              // e2e_welcome, so the cache is usually still cold — what actually pays off is the
-              // in-flight dedupe: begin() joins THIS race instead of starting a second one, and its
-              // cost hides behind the welcome round trip. Nothing here is load-bearing for
-              // correctness; drop it and the only change is a slightly later first terminal.
-              // Unconditional, one line per machine select. Whether the backend actually handed us a
-              // TURN credential is invisible everywhere else — not in LOG_FRAMES (which only covers
-              // backendSocket, never this relay client), not in the badge, not in p2p_result — and its
-              // absence is indistinguishable from "TURN is configured but ICE preferred direct".
-              // Names only, never the credential itself.
+              // Names only, never the credential: whether the backend handed us a TURN credential
+              // is invisible everywhere else (not in LOG_FRAMES, which covers backendSocket, never
+              // this relay client; not in the badge; not in p2p_result).
+              //
+              // The policy is logged, never pre-warmed here. A STUN race opens UDP sockets bound
+              // to 0.0.0.0, and on Windows the firewall asks about that program the first time —
+              // for a computer the person only selected, not one they are watching. begin() races
+              // when a terminal actually negotiates, inside its 10s budget: the only cost is a
+              // slightly later first terminal, never correctness.
               if (entry.p2pPolicy && this.p2pEnabled) {
                 const p = entry.p2pPolicy
                 console.log(`[p2p] policy · machine=${sid(machineId)} stun=${p.stunUrls.length}`
                   + ` turn=${p.turn ? `${p.turn.urls.length} urls` : 'NONE'} openWait=${p.openWaitMs}ms`)
-                warmStunUrls(p.stunUrls)
               }
               try { ws.send(JSON.stringify(crypto.helloFrame())) } catch { /* the close handler below rejects */ }
               return
@@ -714,8 +794,9 @@ export class RemoteRelayPool {
           try { ws.close(4404, 'peer revoked trust') } catch { ws.terminate() }
           return
         }
-        // The relay cannot inject response bytes/headers into a local browser in plaintext.
-        if (typeof frame.type === 'string' && VIEWER_UP_TYPES.has(frame.type)
+        // The relay cannot inject response bytes/headers into a local browser in plaintext, nor open or close an
+        // agent browser's stream: those are sealed to this session alone.
+        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type))
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
         // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
         if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
@@ -751,6 +832,7 @@ export class RemoteRelayPool {
         if (entry.sink && entry.viewers?.receive(plain)) return
         entry.sink?.sendFrame(plain)
         this.noteTerminalResponse(entry, plain, 'relay')
+        this.noteBrowserResponse(entry, plain)
       })
       ws.once('close', (code, reasonBuf) => {
         if (!settled) {
@@ -832,6 +914,7 @@ export class RemoteRelayPool {
     let detached = false
     return {
       send: async (frame) => {
+        if (typeof frame.type === 'string' && AGENT_BROWSER_DOWN_TYPES.has(frame.type)) return this.sendBrowserFrame(machineId, entry, frame)
         if (frame.type === 'terminal_open') {
           frame = { ...frame, payload: { ...framePayload(frame), viewId } }
         }
@@ -864,6 +947,7 @@ export class RemoteRelayPool {
       sendBinary: async (clear) => {
         const sealed = entry.crypto.encryptTerminal(clear)
         if (!sealed) return
+        if (clear.kind === TerminalBinaryKind.browser) return this.sendBrowserBinary(machineId, entry, clear.streamId, sealed)
         const wantsP2p = entry.p2pStreams.has(clear.streamId)
         // A burst of large frames (a chunked upload's chunks, fired back-to-back) can push the data
         // channel's send buffer over TERMINAL_P2P_MAX_BUFFERED_BYTES well before the real network has
@@ -968,6 +1052,11 @@ export class RemoteRelayPool {
     if (typeof data !== 'string') {
       const clear = entry.crypto.decryptTerminal(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
       if (!clear) return
+      if (clear.kind === TerminalBinaryKind.browser) {
+        const local = encodeTerminalLocal(clear)
+        if (local) entry.sink?.sendBinary(local)
+        return
+      }
       if (clear.kind !== TerminalBinaryKind.output && clear.kind !== TerminalBinaryKind.keyframe
         && clear.kind !== TerminalBinaryKind.sync) return
       // Phase 2 of a live migration confirmed: the responder has committed its own flip and this
@@ -991,6 +1080,74 @@ export class RemoteRelayPool {
     if (!plain) return
     entry.sink?.sendFrame(plain) // real frame before the derived terminal_link_mode — see comment above
     this.noteTerminalResponse(entry, plain, 'p2p')
+    this.noteBrowserResponse(entry, plain)
+  }
+
+  /** An agent browser stream's control frame: on the channel the stream opened on. A frame that channel refuses goes
+   *  over the relay (the machine keeps the stream's route whichever wire its frames come on), and the lost channel's
+   *  streams end. An open takes the direct link when there is one, waiting for it as a terminal's open does. */
+  private async sendBrowserFrame(machineId: string, entry: Entry, frame: Frame): Promise<void> {
+    const payload = framePayload(frame)
+    let channel: TerminalP2pInitiator | null
+    if (frame.type === 'agent_browser_open') {
+      if (typeof payload.requestId !== 'string') return
+      const p2p = entry.p2p
+      const ready = !!p2p && (p2p.isReady || await p2p.waitUntilReady(entry.p2pPolicy?.openWaitMs ?? 1_500))
+      channel = ready && entry.p2p === p2p ? p2p : null
+      if (entry.browserOpens.size >= BROWSER_OPENS_MAX) entry.browserOpens.delete(entry.browserOpens.keys().next().value!)
+      entry.browserOpens.set(payload.requestId, channel)
+    } else {
+      const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+      channel = entry.browserStreams.get(streamId) ?? null
+      if (frame.type === 'agent_browser_close') entry.browserStreams.delete(streamId)
+    }
+    const wrapped = JSON.stringify(entry.crypto.wrapOutgoing(frame))
+    const direct = !!channel && channel === entry.p2p
+    if (direct && channel!.send(wrapped)) return
+    try { entry.ws.send(wrapped) } catch { /* closed — onClosed will fire */ }
+    if (direct) this.demoteP2p(machineId, entry, 'send_failed')
+  }
+
+  /** An agent browser stream's keys and mouse: on its own channel only, never moved onto the relay. */
+  private async sendBrowserBinary(machineId: string, entry: Entry, streamId: string, sealed: Uint8Array): Promise<void> {
+    const channel = entry.browserStreams.get(streamId) ?? null
+    if (!channel) {
+      try { entry.ws.send(sealed, { binary: true }) } catch { /* closed — onClosed will fire */ }
+      return
+    }
+    // A stream still bound to a channel that is gone was closed with it: what the page sends for it goes nowhere.
+    if (channel !== entry.p2p) return
+    if (await channel.sendWithBackpressureRetry(Buffer.from(sealed))) return
+    if (entry.p2p === channel) this.demoteP2p(machineId, entry, 'send_failed')
+  }
+
+  /** The machine's word on a browser stream: its open's result binds it to the channel the open went on. */
+  private noteBrowserResponse(entry: Entry, frame: Frame): void {
+    const payload = framePayload(frame)
+    const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+    if (frame.type === 'agent_browser_close') { entry.browserStreams.delete(streamId); return }
+    if (frame.type !== 'agent_browser_open_result' || typeof payload.requestId !== 'string') return
+    const channel = entry.browserOpens.get(payload.requestId) ?? null
+    entry.browserOpens.delete(payload.requestId)
+    if (!streamId) return
+    entry.browserStreams.set(streamId, channel)
+    // Opened on a channel that went while the machine answered.
+    if (channel && channel !== entry.p2p) this.closeBrowserStream(entry, streamId)
+  }
+
+  /** A browser stream whose channel went: the app is told `route` (its panel reconnects once by itself), and the
+   *  machine is told over the relay, so its exec ends. */
+  private closeBrowserStream(entry: Entry, streamId: string): void {
+    entry.browserStreams.delete(streamId)
+    entry.sink?.sendFrame({ type: 'agent_browser_close', payload: { streamId, reason: 'route' } })
+    const close = entry.crypto.wrapOutgoing({ type: 'agent_browser_close', payload: { streamId } })
+    try { entry.ws.send(JSON.stringify(close)) } catch { /* relay close handles cleanup */ }
+  }
+
+  /** Every browser stream on [channel] ends with it. */
+  private closeBrowserStreamsOn(entry: Entry, channel: TerminalP2pInitiator | null): void {
+    if (!channel) return
+    for (const [streamId, on] of [...entry.browserStreams]) if (on === channel) this.closeBrowserStream(entry, streamId)
   }
 
   /**
@@ -1060,6 +1217,8 @@ export class RemoteRelayPool {
     entry.upgradeWaitResolve = null
     const p2p = entry.p2p
     entry.p2p = null
+    // Opens still waiting on this channel are kept: their result, when it comes, closes the stream (noteBrowserResponse).
+    this.closeBrowserStreamsOn(entry, p2p)
     const streamIds = [...entry.p2pStreams]
     entry.p2pStreams.clear()
     entry.p2pPendingOpens.clear()
@@ -1273,7 +1432,9 @@ export class RemoteRelayPool {
       }
     }
     // Phase 2 — the actual cutover. entry.p2pStreams is untouched: every streamId in it was already
-    // p2p and stays p2p, only the object behind entry.p2p changes.
+    // p2p and stays p2p, only the object behind entry.p2p changes. A browser stream cannot be drained or moved: it
+    // ends here, after every bail-out above, so an abandoned upgrade closes nothing.
+    this.closeBrowserStreamsOn(entry, old)
     entry.p2p = shadow
     entry.upgradeShadow = null
     const acked = await this.waitForUpgradeMilestone(entry, () => {

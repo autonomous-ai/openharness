@@ -90,7 +90,7 @@ class _SwarmSearchFieldState extends State<SwarmSearchField> {
         style: AppType.body(),
         decoration: InputDecoration(
           hintText: widget.hintText,
-          hintStyle: AppType.body(color: AppPalette.textSecondary),
+          hintStyle: AppType.body(color: AppPalette.textFaint),
           prefixIcon: const Icon(AppIcons.search, size: 18),
           filled: true,
           fillColor: AppDesktop.field,

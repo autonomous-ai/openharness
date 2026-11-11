@@ -105,7 +105,7 @@ describe('a person\'s invitation list (Ken\'s prod profile, 2026-10-28)', () => 
     clock = NOW
     await db.superTab.createMany({ data: Array.from({ length: OTHERS }, (_, i) => ({ id: `other-${String(i).padStart(3, '0')}`, ownerId: owner.sub,
       autonomousEnv: 'prod', memberIds: [owner.sub, `member-${i}`], invitedEmails: [`someone-${i}@example.com`], machineIds: [`machine-${i}`],
-      workspaceId: `workspace-${i}`, format: 2, state: { version: 2 } })) })
+      format: 2, state: { version: 2 } })) })
   })
 
   it('lists the pending invitations of its environment, as before', async () => {
@@ -155,7 +155,7 @@ describe('more than 100 Swarms invite one address', () => {
   beforeAll(async () => {
     // Stored in reverse id order: a read that takes the index's or the collection's own order takes the wrong 100.
     await db.superTab.createMany({ data: Array.from({ length: CROWD }, (_, i) => ({ id: `crowd-${String(CROWD - 1 - i).padStart(3, '0')}`, ownerId: owner.sub,
-      autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: ['crowd@example.com'], machineIds: [], workspaceId: 'workspace-crowd',
+      autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: ['crowd@example.com'], machineIds: [],
       format: 2, state: { version: 2 } })) })
   })
   const first100 = Array.from({ length: 100 }, (_, i) => `crowd-${String(i).padStart(3, '0')}`)

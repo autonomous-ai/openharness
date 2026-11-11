@@ -10,6 +10,8 @@ export interface ProfileEntry {
   docsExamined?: number
   keysExamined?: number
   nreturned?: number
+  /** The bytes of the operation's reply to the backend: what queryStats' result bytes count per route. */
+  responseLength?: number
   millis: number
 }
 
@@ -100,7 +102,7 @@ export function renderProfile(profile: ProfileSummary & { peakConnections: numbe
 /** A `system.profile` aggregation that keeps of each operation only what `ProfileEntry` reads: its filter (a find's, an update's,
  *  or the first `$match` of a pipeline, as `match`) and never its whole command. Session ids, cluster times and a pipeline's
  *  own `$type` expressions are more than Prisma's raw reply can decode. */
-export const PROFILE_STAGES = [{ $project: { _id: 0, op: 1, ns: 1, planSummary: 1, docsExamined: 1, keysExamined: 1, nreturned: 1, millis: 1,
+export const PROFILE_STAGES = [{ $project: { _id: 0, op: 1, ns: 1, planSummary: 1, docsExamined: 1, keysExamined: 1, nreturned: 1, responseLength: 1, millis: 1,
   'command.aggregate': 1, 'command.find': 1, 'command.filter': 1, 'command.q': 1, 'command.query': 1,
   match: { $first: { $map: { input: { $filter: { input: { $ifNull: ['$command.pipeline', []] },
     cond: { $ne: [{ $type: { $getField: { field: { $literal: '$match' }, input: '$$this' } } }, 'missing'] } } },
@@ -109,7 +111,7 @@ export const PROFILE_STAGES = [{ $project: { _id: 0, op: 1, ns: 1, planSummary: 
 /** A row of PROFILE_STAGES as the ProfileEntry it stands for. */
 export function profileEntry(row: ProfileEntry & { match?: unknown }): ProfileEntry {
   const { match, ...entry } = row
-  return { ...entry, millis: Number(entry.millis),
+  return { ...entry, millis: Number(entry.millis), ...entry.responseLength !== undefined ? { responseLength: Number(entry.responseLength) } : {},
     ...match !== undefined || entry.command?.aggregate ? { command: { ...entry.command, pipeline: [{ $match: match ?? {} }] } } : {} }
 }
 

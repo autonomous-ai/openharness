@@ -31,7 +31,7 @@ it.each(['missing', 'stalled'] as const)('discovers Muse and closes/resumes Pi w
   }
   const script = join(scratch, mode, 'cli.js'); mkdirSync(dirname(script), { recursive: true })
   writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
-  const d = daemon = await IsolatedDaemon.create({ scriptPath: script, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
   onTestFailed(() => console.log(d.log()))
   d.env.MUSE_HOME = join(d.root, 'muse'); d.env.PI_HOME = join(d.root, 'pi')
   const museId = 'aaaaaaaa-1111-4222-8333-444444444444'

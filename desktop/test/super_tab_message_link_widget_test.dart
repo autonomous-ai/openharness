@@ -29,7 +29,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -42,7 +41,7 @@ void main() {
   }
 
   ConversationServer chat(int count) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= count; i++) {
       server.append('Note $i');
     }

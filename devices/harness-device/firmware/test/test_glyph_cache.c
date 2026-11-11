@@ -1,6 +1,6 @@
 // Cached small-glyph rendering must be pixel-identical to the original path,
 // including clipping inside a cell, eviction, font/palette changes and fallback.
-#include "../main/ui/habitat/octopus.h"
+#include "../main/ui/habitat/terminal.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,13 +19,7 @@ static void compare(const ht_scene_t *scene, ht_rect_t clip)
 }
 int main(void)
 {
-    // The Pro's two atlases are in this list too: they are the ones the cache was widened for, and
-    // the ones whose extra columns the unrolled copy in terminal.c used to drop.
-    const ht_font_t *fonts[] = {&ht_octopus_font_2, &ht_octopus_font_4,
-        &ht_octopus_font_6, &ht_octopus_font_8, &ht_octopus_font_10,
-#if HT_FACE_PX >= 720
-        &ht_octopus_font_14, &ht_octopus_font_16,
-#endif
+    const ht_font_t *fonts[] = {&ht_mono_16, &ht_mono_20, &ht_mono_24, &ht_mono_28, &ht_open_20,
         &ht_mono_20};
     const unsigned nfonts = sizeof fonts / sizeof *fonts;
     char alphabet[128];
@@ -43,30 +37,5 @@ int main(void)
         ht_rect_t clip = {next() % 80, next() % 110, 1 + next() % 380, 1 + next() % 40};
         compare(&scene, clip);
     }
-    ht_tim_face_t face = {.recipient = "Firmware", .status = "Coalescing",
-        .mood = HT_TIM_WORKING, .foreground = 0xffff, .dim = 0x7777, .ink = 0xafe0};
-    for (int layout = 0; layout < 4; layout++) {
-        face.focus = layout == 1;
-        const char *recap = layout == 2 ? "Fixed. All checks pass." : layout == 3 ?
-            "The update is installed. Voice input now sends to the selected agent. The result stays in the center." : NULL;
-        for (int frame = 0; frame < HT_OCTOPUS_FRAMES; frame++) {
-            face.pose = (ht_tim_pose_t){.blink = frame % 7 == 0, .level = frame % 5};
-            face.mood = (frame % 8);
-            face.unread = frame % 3 == 0;
-            ht_scene_clear(&scene, ht_rgb(0x080c08));
-            ht_octopus_face(&scene, &face, frame, ht_rgb(0xc8a9f0), recap);
-            compare(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT});
-            uint32_t builds = ht_glyph_cache_builds();
-            for (int y = 0; y < HT_HEIGHT; y += 24)
-                compare(&scene, (ht_rect_t){0, y, HT_WIDTH, y + 24 > HT_HEIGHT ? HT_HEIGHT - y : 24});
-            assert(ht_glyph_cache_builds() == builds); // full-to-strip reuse, no palette churn
-        }
-    }
-    // 24 slots of the widest atlas this face has: 5x10 on the dial, 8x16 on the Pro.
-#if HT_FACE_PX >= 720
-    assert(ht_glyph_cache_bytes() <= 6400);
-#else
-    assert(ht_glyph_cache_bytes() <= 2600);
-#endif
-    puts("glyph cache: 6000 clipped mixed scenes + 252 complete poses match the original renderer; guards and warm reuse pass");
+    puts("glyph cache: 6000 clipped mixed scenes match the original renderer");
 }

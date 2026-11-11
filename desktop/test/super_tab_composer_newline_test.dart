@@ -25,7 +25,7 @@ void main() {
   String draft() => shown.draft(shown.selectedId);
 
   Future<ConversationServer> show(WidgetTester tester) async {
-    final server = ConversationServer()..append('Which build?');
+    final server = ConversationServer.chat()..append('Which build?');
     final c = shown = server.controller();
     await c.refresh();
     await tester.pumpWidget(
@@ -34,7 +34,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',

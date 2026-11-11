@@ -16,6 +16,7 @@ import {
   ambiguousAgentProcess,
   engineProcessMatchScore,
   enrichProcessRows,
+  hermesGatewaysUnder,
   launchArgs,
   processRows,
   processTreePids,
@@ -56,6 +57,9 @@ export interface DiscoveredTerminalAgent {
    * Backend-agnostic for the same reason `gateway` is: it is a fact about the process, not the pane.
    */
   grid?: GridAssignment | null
+  /** Processes under this one that an older build recorded as this pane's engine (Hermes' shared gateway,
+   *  processTable.ts `hermesGatewaysUnder`): a row holding one of them is this agent, not one it replaces. */
+  formerProcesses?: ProcessIdentity[]
   /** Sanitized launch markers; classified after the binding pass, never awaited by it. */
   gridProcess?: GridAssignmentProcess
   /**
@@ -194,7 +198,7 @@ export function discoverTerminalAgentsFromSnapshot(
   daemonPid: number,
   backendOrder: readonly string[],
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
-  ownership = agentCommandOwnershipSnapshot(),
+  ownership?: AgentCommandOwnershipSnapshot,
 ): { agents: DiscoveredTerminalAgent[]; ambiguousPlacements: Set<string> } {
   // Every pane belongs to this same snapshot. Build the process indexes once per scan, rather
   // than copying the whole machine's process table for every persistent pane. Keep them local:
@@ -209,6 +213,9 @@ export function discoverTerminalAgentsFromSnapshot(
   const ambiguousPlacements = new Set<string>()
 
   for (const root of roots) {
+    // Which engine owns each command on PATH, read only once a pane is there to own: walking PATH for every
+    // engine was most of an idle core's CPU, every pass, with no pane at all (#3880).
+    ownership ??= agentCommandOwnershipSnapshot()
     const owner = rootOwner(root, byPid, children, excluded, ownership, hints.get(terminalRouteKey(root.runtime)))
     if (owner.ambiguous) {
       ambiguousPlacements.add(terminalPlacementKey(root.runtime))
@@ -241,22 +248,28 @@ export function discoverTerminalAgentsFromSnapshot(
   return { agents, ambiguousPlacements }
 }
 
-/** Probe all targets independently while reading the OS process table exactly once. */
+/** Whether the last pass saw a pane: the next one then reads the process table beside the panes. */
+let panesLastPass = false
+
+/** Probe all targets independently while reading the OS process table at most once. */
 export async function probeTerminalAgents(
   backends: readonly TerminalBackend[],
   backendOrder: readonly string[],
   daemonPid = process.pid,
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
 ): Promise<TerminalAgentProbe> {
-  const [targets, rows] = await Promise.all([
-    Promise.all(backends.map(async (backend): Promise<TerminalTargetProbe> => ({
-      instanceId: backend.instanceId,
-      result: await backend.inventory().catch(() => ({ state: 'unavailable' as const, reason: 'terminal inventory failed' })),
-    }))),
-    processRows(),
-  ])
-  if (!rows) return { processTableAvailable: false, targets, agents: [], ambiguousPlacements: new Set() }
+  // The process table is read only for the panes' trees. With no pane (a daemon at rest) it is not read at all:
+  // `ps` over the whole machine, every 5 s, found nothing to look under (#3880). While there are panes, and for a
+  // pass someone waits on (a hint: an engine starting in a pane), it is still read beside them, as fast as before.
+  const beside = hints.size || panesLastPass ? processRows() : undefined
+  const targets = await Promise.all(backends.map(async (backend): Promise<TerminalTargetProbe> => ({
+    instanceId: backend.instanceId,
+    result: await backend.inventory().catch(() => ({ state: 'unavailable' as const, reason: 'terminal inventory failed' })),
+  })))
   const roots = targets.flatMap((target) => target.result.state === 'available' ? target.result.roots : [])
+  panesLastPass = roots.length > 0
+  const rows = beside || roots.length ? await (beside ?? processRows()) : []
+  if (!rows) return { processTableAvailable: false, targets, agents: [], ambiguousPlacements: new Set() }
   const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, roots.map((root) => root.rootPid)))
   const discovered = discoverTerminalAgentsFromSnapshot(
     roots,
@@ -284,6 +297,10 @@ export async function probeTerminalAgents(
     agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
     // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
     agent.dsh = await probeDsh(agent.processIdentity)
+    if (agent.engine === 'hermes') {
+      const former = hermesGatewaysUnder(enrichedRows, agent.processIdentity)
+      if (former.length) agent.formerProcesses = former
+    }
   }))
   return { processTableAvailable: true, targets, ...discovered }
 }

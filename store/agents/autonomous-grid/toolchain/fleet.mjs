@@ -9,7 +9,7 @@ import { mlxCandidates } from '../lib/candidates.mjs';
 import { recipe } from '../lib/recipes.mjs';
 import { modelFacts } from '../lib/modelFacts.mjs';
 import { linkModel, remoteModels } from '../lib/remoteModels.mjs';
-import { serve, stop } from '../lib/serve.mjs';
+import { serve, servedPids, stop } from '../lib/serve.mjs';
 import { connectWorkspace, initializeWorkspace, mergeMachines, readStatus } from '../lib/connect.mjs';
 
 const workspace = resolve(process.env.HARNESS_WORKSPACE || process.cwd());
@@ -89,7 +89,7 @@ try {
       if (extraRoots.length || extraPorts.length) throw new Error('--root and --port apply to this machine only.');
       console.log((await remoteModels(machine, { summary })).text);
     } else {
-      const found = await inventory({ extraRoots, extraPorts });
+      const found = await inventory({ extraRoots, extraPorts, served: await servedPids(workspace) });
       console.log(summary ? summarize(found) : JSON.stringify(found, null, 2));
     }
   } else if (command === 'link') {

@@ -1,4 +1,5 @@
-import { cleanUsageContext, type ProductUsageContext } from '../lib/productHealthContract.js'
+import { cleanUsageContext, type NODE_HELD_REASONS, type ProductUsageContext } from '../lib/productHealthContract.js'
+import type { NodeStatus } from '../lib/nodeStatus.js'
 import { cleanHealthState, createProductHealth, type HealthState } from './productHealth.js'
 import { reportFailure } from './reportFailure.js'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -25,6 +26,13 @@ const listed = (code: unknown): LaunchErrorCode => typeof code === 'string' && l
 // fleet spreads out again; the mean interval stays a minute.
 const FIRST_REPORT_MS: readonly [number, number] = [10_000, 60_000]
 const TICK_MS: readonly [number, number] = [45_000, 75_000]
+// Spec 2026-11-02-poll-cost Part 4.1: every tick read the choice and reported (prod 2026-11-02: 330 settings GETs and 284
+// report POSTs a minute). The ticks stay, for the counts kept on this computer (the resource samples need them 45 s apart),
+// but the choice is read at start, when it is made on this computer (`choiceChanged`), after a failed read or request, and then hourly: a report
+// carries its revision, so one sent after an opt-out elsewhere is refused (CHOICE_CHANGED) and the choice read at the next
+// tick. Reports go at most every 5 minutes, from the queue kept on disk.
+const SETTINGS_EVERY_MS = 3_600_000
+const REPORT_EVERY_MS = 300_000
 // A refusal that says the backend is busy or down (429, 5xx, a timeout) waits longer each time it repeats: full
 // jitter under a doubling ceiling, at most half an hour, and never sooner than its Retry-After.
 const BACKOFF_BASE_MS = 60_000
@@ -44,6 +52,7 @@ const requestActions = new Map<string, Reach>([
   ...PRODUCT_USAGE_USER_OPENED_ACTIONS.map(action => [`${action}_user_requests`, `${action}_user`] as const),
 ])
 const isTuiMetric = (metric: string): boolean => metric.startsWith('ui_tui_') || metric.startsWith('health_tui_')
+const isNodeMetric = (metric: string): boolean => metric.startsWith('health_cli_node_')
 const key = (now: number) => new Date(now).toISOString().slice(0, 10)
 const week = (now: number) => { const d = new Date(now); return key(now - ((d.getUTCDay() + 6) % 7) * DAY) }
 type Counters = Partial<Record<ProductUsageMetric, number>>
@@ -77,6 +86,8 @@ export interface ProductUsageDeps {
   file: string
   context?: ProductUsageContext
   sample?: () => { rss: number; cpuPercent?: number }
+  /** The daemon's Node (lib/nodeStatus.ts), counted once a collector day. */
+  node?: () => NodeStatus
   /** `retryAfterMs`: the answer's Retry-After, when it had one (gateway/accountHttp.ts). */
   request(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown>; retryAfterMs?: number }>
   now?(): number
@@ -111,6 +122,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   writers.set(deps.file, writer)
   // A report waits until `postAt` after a busy or failing backend; `backoffs` counts those refusals in a row.
   let postAt = 0, backoffs = 0
+  // When the ticks next read the choice and next report (SETTINGS_EVERY_MS, REPORT_EVERY_MS).
+  let settingsAt = 0, reportAt = 0
   // hn's counters: those it observed before the first choice read, held in RAM until that is known
   // (hn is often opened at the daemon's start), and the UTC day a backend from before `tui` refused
   // them. Neither is persisted; a restart tries again.
@@ -242,6 +255,12 @@ export function createProductUsage(deps: ProductUsageDeps) {
   function dirty(): void {
     if (!persistTimer) { persistTimer = setTimeout(() => { void persist() }, 1000); persistTimer.unref() }
   }
+  /** Enums only: the major's bucket, and the reason's name. No version, path or machine. */
+  function countNode(node: NodeStatus): void {
+    const major = node.version.replace(/^v/, '').split('.')[0]
+    add(`health_cli_node_${major === '22' || major === '24' ? major : 'other'}`)
+    if (node.migration) add(`health_cli_node_held_${node.migration.replaceAll('-', '_') as typeof NODE_HELD_REASONS[number]}`)
+  }
   function add(metric: ProductUsageMetric, day = key(now())): void {
     if (state.measurementDay !== key(now())) {
       state.measurementDay = key(now())
@@ -291,28 +310,32 @@ export function createProductUsage(deps: ProductUsageDeps) {
   function unit(): number { const r = random(); return Number.isFinite(r) && r >= 0 && r < 1 ? r : 0.5 }
   /** A delay in [low, high) milliseconds, at random: the fleet's reports spread out across it. */
   const between = ([low, high]: readonly [number, number]): number => low + Math.floor(unit() * (high - low))
-  /** [post]: send a report now. The gateway's first read of the choice does not, so collection starts at once
-   *  and the report waits for the first tick; every tick reads the choice and posts unless backing off. */
-  async function syncOnce(post: boolean): Promise<void> {
+  /** [read]: read the choice first; [post]: send a report now. The gateway's first read of the choice does not
+   *  report, so collection starts at once and the report waits for the first tick; a tick reads the choice when it is
+   *  due (SETTINGS_EVERY_MS) and reports when one is due (REPORT_EVERY_MS) unless backing off. */
+  async function syncOnce(read: boolean, post: boolean): Promise<void> {
     let posting = false
     try {
-      const response = await deps.request('GET', '/api/product-usage/settings')
-      if (stopped) return
-      const body = response.body.data as ProductUsageChoice | undefined
-      if (response.status !== 200 || typeof body?.enabled !== 'boolean'
-          || !Number.isSafeInteger(body.revision) || body.revision < 0) { enabled = false; forget(); health.clearObservations(); return }
-      await choice(body)
-      if (!choiceKnown) {
-        // Counted only now that sharing is known to be on; discarded when it is off.
-        choiceKnown = true
-        const held = tuiHeld
-        tuiHeld = []
-        if (enabled && !tuiRefused()) for (const metric of held) add(metric)
+      if (read) {
+        const response = await deps.request('GET', '/api/product-usage/settings')
+        if (stopped) return
+        const body = response.body.data as ProductUsageChoice | undefined
+        if (response.status !== 200 || typeof body?.enabled !== 'boolean'
+            || !Number.isSafeInteger(body.revision) || body.revision < 0) { enabled = false; forget(); health.clearObservations(); return }
+        await choice(body)
+        settingsAt = now() + SETTINGS_EVERY_MS
+        if (!choiceKnown) {
+          // Counted only now that sharing is known to be on; discarded when it is off.
+          choiceKnown = true
+          const held = tuiHeld
+          tuiHeld = []
+          if (enabled && !tuiRefused()) for (const metric of held) add(metric)
+        }
       }
       if (!enabled) return
       if (context) {
         health.start(context.release); health.checkpoint(); health.sample(deps.sample)
-        if (state.healthDay !== key(now())) { state.healthDay = key(now()); add('health_cli_collector_days') }
+        if (state.healthDay !== key(now())) { state.healthDay = key(now()); add('health_cli_collector_days'); if (deps.node) countNode(deps.node()) }
       }
       for (const turn of running.values()) if (!turn.response && !turn.waited && now() - turn.started >= 60_000) {
         turn.waited = true; add('turns_waiting_over_1m')
@@ -332,11 +355,13 @@ export function createProductUsage(deps: ProductUsageDeps) {
       if (!state.pending) {
         const day = Object.keys(state.days).sort().find(d => validDay(d) && Object.keys(state.days[d]).length)
         if (!day) return
-        // hn's counters travel alone: a backend from before `tui` refuses its whole report (400), and
-        // that refusal drops the report, so it must never carry the daemon's or the Desktop's counts.
+        // hn's counters and the Node counters each travel alone: a backend from before their names refuses
+        // the whole report (400), and that refusal drops the report, so it must never carry the other counts.
         const entries = Object.entries(state.days[day])
-        const own = entries.filter(([metric]) => !isTuiMetric(metric))
-        const counters = Object.fromEntries((own.length ? own : entries).slice(0, MAX_REPORT_METRICS)) as Counters
+        const own = entries.filter(([metric]) => !isTuiMetric(metric) && !isNodeMetric(metric))
+        const node = entries.filter(([metric]) => isNodeMetric(metric))
+        const group = own.length ? own : node.length ? node : entries
+        const counters = Object.fromEntries(group.slice(0, MAX_REPORT_METRICS)) as Counters
         const reportContext = state.dayContexts[day] ?? context
         state.pending = { schemaVersion: 1, revision: state.revision, id: uuid(), day, counters, ...(reportContext ? { context: reportContext } : {}) }
         for (const metric of Object.keys(counters)) delete state.days[day][metric as ProductUsageMetric]
@@ -347,6 +372,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       const report = state.pending
       if (!report) return
       posting = true
+      reportAt = now() + REPORT_EVERY_MS
       const answer = await deps.request('POST', '/api/product-usage/report', report)
       if (stopped) return
       // Busy, failing or out of time (429, 5xx; a timeout is a 504): the next report waits. Anything else is an
@@ -355,12 +381,16 @@ export function createProductUsage(deps: ProductUsageDeps) {
       else { backoffs = 0; postAt = 0 }
       const result = answer.body.data as { accepted?: boolean; reason?: string } | undefined
       if (answer.status === 200 && result?.accepted === true) { state.pending = null; await persist() }
-      else if (result?.reason === 'CHOICE_CHANGED') { enabled = false; state = fresh(-1); forget(); health.reset(); await persist() }
+      else if (result?.reason === 'CHOICE_CHANGED') { enabled = false; settingsAt = 0; state = fresh(-1); forget(); health.reset(); await persist() }
       else if (result?.reason === 'EXPIRED') { state.pending = null; add('health_cli_report_expired'); await persist() }
       else if (answer.status === 400 && Object.keys(report.counters).length && Object.keys(report.counters).every(isTuiMetric)) {
         // A backend from before `tui` knows none of hn's names. That is not a failed delivery, so it
         // is not counted as one: the report goes, and hn's counts with it until the next UTC day.
         state.pending = null; tuiRefusedDay = key(now()); await persist()
+      }
+      else if (answer.status === 400 && Object.keys(report.counters).length && Object.keys(report.counters).every(isNodeMetric)) {
+        // A backend from before the Node names: the same, for that day's Node counters, which come once a day.
+        state.pending = null; await persist()
       }
       else {
         add('health_cli_report_rejected')
@@ -371,15 +401,23 @@ export function createProductUsage(deps: ProductUsageDeps) {
     } catch {
       if (posting) backOff()
       if (enabled) add('health_cli_report_failed')
-      enabled = false; forget(); health.clearObservations() /* No error text or request body in logs. */
+      // Off until the choice is read again, at the next tick.
+      enabled = false; settingsAt = 0; forget(); health.clearObservations() /* No error text or request body in logs. */
     }
   }
   /** Read the choice and, with [post] (the default), send a report now. */
-  const sync = (post = true): Promise<void> => syncing ??= syncOnce(post).finally(() => { syncing = null })
+  const sync = (post = true): Promise<void> => syncing ??= syncOnce(true, post).finally(() => { syncing = null })
+  const tick = (): Promise<void> => syncing ??= syncOnce(now() >= settingsAt, now() >= postAt && now() >= reportAt).finally(() => { syncing = null })
+  /** The choice was just made on this computer: read it now, without a report. After whatever is already on its way,
+   *  since a read in that run may have come back before the choice was made. */
+  const choiceChanged = async (): Promise<void> => {
+    while (syncing) await syncing
+    if (!stopped) await sync(false)
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   const schedule = (ms: number): void => {
     if (stopped) return
-    timer = setTimeout(() => { void sync(now() >= postAt).finally(() => schedule(between(TICK_MS))) }, ms)
+    timer = setTimeout(() => { void tick().finally(() => schedule(between(TICK_MS))) }, ms)
     timer.unref?.()
   }
   schedule(between(FIRST_REPORT_MS))
@@ -406,6 +444,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
 
   return {
     sync,
+    choiceChanged,
     counter(metric: ProductUsageMetric): void {
       if (stopped || !metricSet.has(metric)) return
       if (isTuiMetric(metric)) {

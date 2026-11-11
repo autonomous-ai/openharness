@@ -368,10 +368,10 @@ void main() {
       .data;
   bool rowEnabled(WidgetTester tester, String id) =>
       tester
-          .widget<MenuItemButton>(
+          .widget<AppMenuItem>(
             find.descendant(
               of: leadRow(id),
-              matching: find.byType(MenuItemButton),
+              matching: find.byType(AppMenuItem),
             ),
           )
           .onPressed !=
@@ -490,7 +490,6 @@ void main() {
       freeAgents: 3,
       own: false,
       native: false,
-      team: true,
       owner: diego,
     ),
     LeadMachine(
@@ -610,7 +609,7 @@ void main() {
       );
       await openMachines(tester);
       SemanticsNode node(String id) => tester.getSemantics(
-        find.descendant(of: leadRow(id), matching: find.byType(MenuItemButton)),
+        find.descendant(of: leadRow(id), matching: find.byType(AppMenuItem)),
       );
       expect(
         node('laptop'),
@@ -703,14 +702,13 @@ void main() {
     online: true,
     freeAgents: 0,
   );
-  const diegoTeam = LeadMachine(
+  const diegoMac = LeadMachine(
     id: 'diego-mac',
     name: 'Diego MacBook',
     online: true,
     freeAgents: 3,
     own: false,
     native: false,
-    team: true,
   );
 
   for (final brightness in Brightness.values) {
@@ -774,12 +772,12 @@ void main() {
 
   for (final brightness in Brightness.values) {
     testWidgets(
-      'A teammate’s Team account takes the PM when yours are full in ${brightness.name}',
+      'A teammate’s machine takes the PM when yours are full in ${brightness.name}',
       (tester) async {
         final (box, boundary) = await mount(
           tester,
           brightness: brightness,
-          leadMachines: [studioFull, diegoTeam],
+          leadMachines: [studioFull, diegoMac],
           setup: agentIn,
           lead: 'diego-mac',
         );
@@ -787,7 +785,7 @@ void main() {
         expect(box.leadSwarmMachine, 'diego-mac');
         // The repo stays the one chosen on your machine; Diego's Mac clones it.
         expect(box.machineId, 'm');
-        // Its own name only: no owner, no "Team account" words.
+        // Its own name only: no owner.
         expect(chipLabel(tester, 'machine'), 'Diego MacBook');
         expect(find.textContaining('there first'), findsNothing);
         box.setTask('Plan the launch');
@@ -824,7 +822,7 @@ void main() {
   testWidgets('Choosing your machine again starts the PM here', (tester) async {
     final (box, _) = await mount(
       tester,
-      leadMachines: [studio, diegoTeam],
+      leadMachines: [studio, diegoMac],
       setup: agentIn,
     );
     expect(box.leadThroughSwarm, isFalse);
@@ -1180,7 +1178,7 @@ void main() {
                 .getSemantics(
                   find.descendant(
                     of: leadRow(id),
-                    matching: find.byType(MenuItemButton),
+                    matching: find.byType(AppMenuItem),
                   ),
                 )
                 .getSemanticsData()
@@ -1222,7 +1220,7 @@ void main() {
       tester,
       width: 520,
       textScale: 2,
-      leadMachines: [studioFull, diegoTeam],
+      leadMachines: [studioFull, diegoMac],
       setup: agentIn,
       lead: 'diego-mac',
     );
@@ -1360,6 +1358,29 @@ void main() {
     expect(box.isGitProject, isTrue);
     box.toggleWorktree();
     expect(box.worktree, isTrue);
+    await unmount(tester);
+  });
+
+  // A harness starts in the folder of a repository with no commits; the
+  // Product Manager never works in the person's checkout, so it is refused.
+  testWidgets('The Product Manager is refused a repository with no commits', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio],
+      setup: (f) => f.app.gitProjectReaderForTest = (_, _) async => {
+        'isGit': true,
+        'root': '/home/u',
+        'branch': 'main',
+        'branches': [],
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(box.noCommitsYet, isTrue);
+    expect(box.requiredChoice?.field, NewHarnessField.projectMenu);
+    expect(box.requiredChoice?.message, contains('no commits'));
+    expect(box.requiredChoice?.message, contains('Product Manager'));
     await unmount(tester);
   });
 }

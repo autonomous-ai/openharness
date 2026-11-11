@@ -1054,6 +1054,30 @@ void main() {
       await focus.close();
     });
 
+    testWidgets('Change agent is offered on the person\'s own machine, online '
+        'only, as on the desktop', (tester) async {
+      var focus = await _Focus.open(tester, agents: [switchable()]);
+      final state = focus.app.stateOf('m')!;
+      state.machine = Machine(
+        machineId: 'm',
+        authMode: state.machine.authMode,
+        name: state.machine.name,
+        status: state.machine.status,
+        shared: true,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Change agent'), findsNothing, reason: 'shared');
+      await focus.close();
+
+      focus = await _Focus.open(tester, agents: [switchable()]);
+      focus.app.stateOf('m')!.nodeOnline = false;
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Change agent'), findsNothing, reason: 'offline');
+      await focus.close();
+    });
+
     testWidgets('Change agent: the desktop picker’s rows, then the agent picked '
         'opens in place of this one', (tester) async {
       final conn = EdgeConn({
@@ -1065,6 +1089,7 @@ void main() {
           'degraded': <String>[],
         },
         'agent_close': {'closed': true},
+        'agent_handoff_complete': {'ok': true},
       }, startsAgents)..handshaken = true;
       final focus = await _Focus.open(
         tester,
@@ -1694,6 +1719,64 @@ void main() {
       final focus = await asked(tester, buttons: '    Accept    Decline');
       expect(find.bySemanticsLabel(RegExp('^Answer ')), findsNothing);
       expect(find.byKey(const ValueKey('terminal-key-Enter')), findsOneWidget);
+      await focus.close();
+    });
+  });
+
+  // Codex's update prompt words its footer `enter continue · esc skip`, which the page did not read
+  // as a dialog's: its answers had no bands, and a tap on "1. Update now" pressed nothing.
+  group('Codex\'s update prompt', () {
+    const update =
+        '\r\n'
+        '  \x1b[1mUpdate available\x1b[0m · 0.165.0 → 0.167.0\r\n'
+        '  Release notes:\r\n'
+        '  https://github.com/openai/codex/releas\r\n'
+        '  es/latest\r\n'
+        '\r\n'
+        '\x1b[36m› 1. Update now (runs `npm install -g\r\n'
+        '     @openai/codex`)\x1b[0m\r\n'
+        '  2. Skip\r\n'
+        '  3. Skip until next version\r\n'
+        '\r\n'
+        '  \x1b[2menter continue · esc skip\x1b[0m';
+
+    Future<_Focus> asked(WidgetTester tester) async {
+      final focus = await _Focus.open(
+        tester,
+        agents: [edgeAgent('a', engine: 'codex')],
+      );
+      focus.session.terminal.write(update);
+      await frames(tester);
+      return focus;
+    }
+
+    testWidgets('a tap on "1. Update now" presses 1, with no Return after it', (
+      tester,
+    ) async {
+      final focus = await asked(tester);
+      await focus.tapRow('1. Update now');
+      await frames(tester);
+      expect(focus.typed, contains('1'));
+      expect(focus.typed, isNot(contains('\r')));
+      await focus.close();
+    });
+
+    testWidgets('a tap on the line its first answer wrapped onto presses 1', (
+      tester,
+    ) async {
+      final focus = await asked(tester);
+      await focus.tapRow('@openai/codex`)');
+      await frames(tester);
+      expect(focus.typed, contains('1'));
+      await focus.close();
+    });
+
+    testWidgets('a tap on "2. Skip" presses 2', (tester) async {
+      final focus = await asked(tester);
+      await focus.tapRow('2. Skip');
+      await frames(tester);
+      expect(focus.typed, contains('2'));
+      expect(focus.typed, isNot(contains('1')));
       await focus.close();
     });
   });

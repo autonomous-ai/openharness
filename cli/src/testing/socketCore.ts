@@ -25,6 +25,7 @@ import { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import { hermesDb } from '../core/transcripts/databaseHistory.js'
 import { registry } from '../lib/registry.js'
+import { openclawSessionDb } from '../lib/openclawStore.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { tmuxPaneInfo } from '../lib/tmux.js'
@@ -37,7 +38,7 @@ export function bindHistory(socket: BackendSocket): void {
     resolve: (id) => registry.resolve(id),
     stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(),
-    dbs: { opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db') },
+    dbs: { opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db'), openclaw: openclawSessionDb },
     hermesDb,
   })
   socket.historyProvider = history.sessionGet
@@ -147,7 +148,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
       receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,
       resumeAgent: () => state.resume, restartAgent: () => state.restart,
-      byAgent: (id) => registry.byAgent(id), toProject: (s) => socket.toProject(s),
+      byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),
       modelTarget: (selection) => (state.modelTarget ?? MODELS_OFF.launchTarget)(selection),
     })
     socket.createProvider = launches.create

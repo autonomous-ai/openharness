@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client'
 import { SuperTabError, type Agent, type SuperTabState } from './model.js'
 import { RETRYABLE_SWARM_CODES } from './retry.js'
 import { loadActive, reassemble } from './parts/index.js'
-import { confidentialSession, sessionKey, type OtherRegistrations } from './projects.js'
+import { confidentialSession, confidentialSets, sessionKey, type OtherRegistrations } from './projects.js'
 import { bindSession, sessionRecordId } from './sessionScope.js'
 
 type Transaction = Prisma.TransactionClient
@@ -44,7 +44,9 @@ export async function confidentialSessions(tx: Transaction, agentIds: string[], 
       busyClosed(tabId)
       continue
     }
-    for (const target of state.agents) if (pending.includes(target.id) && confidentialSession(state, target)) found.add(target.id)
+    // One build of the sets for all of them, not one per agent (task #4504).
+    const sets = confidentialSets(state)
+    for (const target of state.agents) if (pending.includes(target.id) && confidentialSession(state, target, sets)) found.add(target.id)
   }
   return found
 }
@@ -66,7 +68,8 @@ export async function otherRegistrations(tx: Transaction, state: SuperTabState, 
   }
   for (const [tabId, targets] of unmarked) {
     const there = reassemble(await loadActive(tx, tabId, { agentIds: targets.map(t => t.id) }))
-    for (const target of there.agents) if (targets.some(t => t.id === target.id) && confidentialSession(there, target)) confidential.add(sessionKey(target.machineId, target.harnessId))
+    const sets = confidentialSets(there)
+    for (const target of there.agents) if (targets.some(t => t.id === target.id) && confidentialSession(there, target, sets)) confidential.add(sessionKey(target.machineId, target.harnessId))
   }
   return { registered, confidential }
 }
@@ -75,6 +78,6 @@ export async function otherRegistrations(tx: Transaction, state: SuperTabState, 
  *  registration of the same session committing in another Swarm meanwhile then conflicts with this write, so one of the
  *  two retries and is refused (projects.ts requireSingleRegistration). */
 export async function recordConfidential(tx: Transaction, state: SuperTabState, target: Agent, now: number): Promise<void> {
-  await bindSession(tx, state, target, now)
+  await bindSession(tx, state, target, now, true)
   await tx.superTabSessionScope.update({ where: { id: sessionRecordId(state, target) }, data: { confidential: true } })
 }

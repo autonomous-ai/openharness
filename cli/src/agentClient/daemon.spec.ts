@@ -1,11 +1,11 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
 import http from 'node:http'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectSocket, openDaemon, whereFor, type ClientSocket } from './daemon.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { WebSocketServer } from 'ws'
@@ -14,6 +14,10 @@ import { attachLocalWsServer } from '../localWsServer.js'
 import { localSocketPath } from '../lib/localSocket.js'
 import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
 import { newPipePath } from '../lib/windows/pipeAuth.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 /** A real named pipe on Windows; a short Unix socket with the same auth name elsewhere. */
 function pipeFixture(): { path: string; close: () => void } {
@@ -77,8 +81,9 @@ describe('a line to the daemon that cannot open', () => {
   })
 })
 
-it('dials the port this user recorded when another daemon took the configured port', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'agent-daemon-port-'))
+it('where no socket can exist, dials the port this user recorded when another daemon took the configured port', async () => {
+  const dataDir = join(mkdtempSync(join(tmpdir(), 'agent-daemon-port-')), 'd'.repeat(100))
+  mkdirSync(dataDir, { mode: 0o700 })
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
   try {
     await new Promise<void>((resolve) => server.once('listening', resolve))
@@ -200,4 +205,56 @@ it('rejects a pipe squatter before sending any agent frame', async () => {
     fixture.close()
     rmSync(dataDir, { recursive: true, force: true })
   }
+})
+
+// A request past what the daemon's socket takes was closed with no word: an agent that posted a long log heard only "The connection
+// to Harness closed." (Q3, 2026-11-10). It is refused by name, with its size and the limit, whichever side sees it.
+describe('a request too large for the daemon', () => {
+  const line = () => {
+    const sent: string[] = []
+    const socket = new EventEmitter() as unknown as ClientSocket & EventEmitter
+    Object.assign(socket, {
+      send: (text: string) => {
+        sent.push(text)
+        if (JSON.parse(text).type === 'machine_select') setImmediate(() => socket.emit('message', Buffer.from(JSON.stringify({ type: 'connected', payload: {} })), false))
+      },
+      close: vi.fn(),
+    })
+    setImmediate(() => socket.emit('open'))
+    return { sent, socket }
+  }
+  const where = { port: 1, dataDir: '/nowhere', machineId: 'm1' }
+
+  it('refuses one past 512 KiB by name, with its size and the limit, and sends nothing', async () => {
+    const { sent, socket } = line()
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const refused = daemon.request('super_tabs', { text: 'x'.repeat(600 * 1024) })
+    await expect(refused).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE',
+      // Its size as sent: the words and the request around them.
+      message: 'This request is 601 KiB, and Harness takes at most 512 KiB in one: nothing was sent. Put the rest in a file and send its path.' })
+    expect(sent.map(text => JSON.parse(text).type)).toEqual(['machine_select'])
+    // The line stays open for what fits.
+    void daemon.request('agents_list').catch(() => {})
+    expect(sent).toHaveLength(2)
+    daemon.close()
+  })
+
+  it('says the daemon\'s own refusal, before its close, to what was waiting', async () => {
+    const { socket } = line()
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const waiting = daemon.request('agents_list')
+    socket.emit('message', Buffer.from(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes: 700 * 1024, limit: 512 * 1024 } })), false)
+    socket.emit('close', 1009)
+    // The daemon's own numbers, and not that this request was refused: it is not named, and may have run.
+    await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE', message: 'A request on this line was 700 KiB, and Harness takes at most '
+      + '512 KiB in one: it closed the line. What else waited on it may have run. Put the rest in a file and send its path.' })
+  })
+
+  it('says a frame too big for the transport itself as too large, not a bare close', async () => {
+    const { socket } = line()
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const waiting = daemon.request('agents_list')
+    socket.emit('close', 1009)
+    await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE' })
+  })
 })

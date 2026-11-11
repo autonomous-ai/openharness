@@ -15,6 +15,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
+import type { AgentBrowserPort } from '../api.js'
 import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -54,11 +55,16 @@ export interface LifecycleDeps {
   prepareSessionResume: ResumeAgentServiceDeps['prepareSessionResume']
   refreshGridWebSearch: ResumeAgentServiceDeps['refreshGridWebSearch']
   attachDsh: ResumeAgentServiceDeps['attachDsh']
+  attachBrowser?: ResumeAgentServiceDeps['attachBrowser']
   attachSession: ResumeAgentServiceDeps['attachSession']
   relaunchMarks?: ResumeAgentServiceDeps['relaunchMarks']
   /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The harnesses it started close with it
-   *  (services/agentCleanup.ts `closed`). */
+   *  (services/agentCleanup.ts `closed`). Its browser hears it from the forget the stop ends with
+   *  (`createAgentBrowserLifecycle`), as for every other way an agent ends. */
   stopped?: (agentId: string) => void
+  /** An agent was purged: its conversation is gone for good, and with it its agent browser's profile
+   *  (services/agentBrowser.ts `deleted`). A stop keeps the profile, so the login survives a resume. */
+  purged?: (agentId: string) => void
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
   /** Whether the agent is a Lead the core must never stop, as core/main.ts hands it in; absent, none is. */
@@ -74,7 +80,7 @@ export class LeadProtectedError extends Error {
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer, moveHeld,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
   leadProtected,
 }: LifecycleDeps) {
   /**
@@ -108,15 +114,16 @@ export function createAgentLifecycle({
       if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
       registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))
       send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
+      purged?.(s.agentId)
     },
   })
 
   const resume = createResumeAgentService({
     registry, stoppedAgents, createBackend, noBackendCode, backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
+    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode) => {
+  const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
     // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
     // the row's), so a resume would find the engine gone and start a second one beside it: not this start.
     const heldId = (stoppedAgents.get(id) ?? registry.byAgent(id))?.agentId ?? id
@@ -124,13 +131,34 @@ export function createAgentLifecycle({
       console.warn(moveHeldLine(heldId))
       return Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' })
     }
-    return resumeChecked(id, permissionMode)
+    return resumeChecked(id, permissionMode, launchArgs)
   }
-  const resumeChecked: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
+  const resumeChecked: ResumeAgent = (id, permissionMode, launchArgs) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
     ? Promise.resolve(GUEST_HARNESS_REFUSAL)
     : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
-      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)
+      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode, launchArgs)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
+}
+
+/**
+ * The agent browser (services/agentBrowser.ts) as its agent starts and ends here. `ended` is reached from every
+ * way an agent stops running: a stop, a purge and every other forget (agents/forget.ts), and an engine that exits
+ * or crashes by itself (lib/retainExitedSession.ts). Only a stop used to tell the browser, so the 2 GB container of
+ * an agent whose engine exited on its own kept running and held a limit slot (review, 2026-11-10). One end is
+ * seen more than once (an exit, then the forget of the same id), so the browser is told once per start.
+ */
+export function createAgentBrowserLifecycle(browser: () => Pick<AgentBrowserPort, 'attached' | 'stopped'> | null) {
+  // Only agents with Browser that run here: bounded by them, not by every agent the daemon ever saw.
+  const running = new Set<string>()
+  return {
+    attached(session: RegisteredSession): void {
+      if (session.browser) running.add(session.agentId)
+      browser()?.attached(session)
+    },
+    ended(agentId: string): void {
+      if (running.delete(agentId)) browser()?.stopped(agentId)
+    },
+  }
 }
 
 /**

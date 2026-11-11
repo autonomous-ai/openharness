@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -20,87 +19,38 @@ import 'machines.dart' show contributeComputer;
 enum AddComputerStatus { ready, offline, unlinked, added }
 
 /// One row of Add your computers: a computer signed in to the reader's own
-/// account, with its name and a word or two on where it stands. [tag] is why
-/// teammates' work does not run there yet, in a word or two; [reason] says it
-/// in full, for its tooltip (Dee, 10-29: less is better).
+/// account, with its name and a word or two on where it stands (Dee, 10-29:
+/// less is better).
 class AddComputerRow {
   const AddComputerRow({
     required this.id,
     required this.name,
     required this.status,
     required this.here,
-    this.tag,
-    this.reason,
   });
   final String id, name;
   final AddComputerStatus status;
 
   /// The computer running this app.
   final bool here;
-  final String? tag, reason;
-}
-
-/// Why teammates' work does not run on a computer yet, from the Swarm's
-/// refusal code (backend superTabs/machines.ts `teamWorkRefusal`) and, for
-/// this computer, what its daemon remembers of the Team account setup: a word
-/// or two for the row, and the whole of it for its tooltip. Null when it does
-/// run there, or for a code this build does not know.
-({String tag, String reason})? _teamWhy(
-  Object? code,
-  ({String state, String? detail})? setup,
-) {
-  const only = 'so only your projects run here.';
-  return switch (code) {
-    'TEAM_ACCOUNT_REQUIRED' => switch (setup?.state) {
-      'failed' => (
-        tag: 'setup failed',
-        reason: 'Team account setup failed, $only',
-      ),
-      'running' => (
-        tag: 'setting up',
-        reason: 'Its Team account is being set up, $only',
-      ),
-      _ => (tag: 'not set up', reason: 'No Team account yet, $only'),
-    },
-    'PRIVACY_UNCHECKED' => (
-      tag: 'not checked',
-      reason: 'Its Team account hasn’t passed the privacy check yet, $only',
-    ),
-    'PRIVACY_CHECK_FAILED' => (
-      tag: 'check failed',
-      reason: 'Its Team account failed the privacy check, $only',
-    ),
-    'PRIVACY_CHECK_STALE' => (
-      tag: 'check outdated',
-      reason: 'Its Team account’s privacy check is out of date, $only',
-    ),
-    'MACHINE_OFFLINE' => (
-      tag: 'account offline',
-      reason: 'Its Team account is offline, $only',
-    ),
-    _ => null,
-  };
 }
 
 /// The rows of Add your computers: every computer signed in to the reader's
-/// own account, never another account's, and a Mac's Harness Team account
-/// only inside its Mac's row. This computer comes first while it is not
+/// own account, never another account's nor a leftover Harness Team
+/// account (the removal pop-up takes those away). This computer comes first while it is not
 /// added; then those that can be added, those that cannot yet, and those
 /// already in the Swarm. [added] are computers this box has just added.
 List<AddComputerRow> addComputerRows(
   AppNotifier app,
   SuperTabController c, {
   Set<String> added = const {},
-  ({String state, String? detail})? teamSetup,
 }) {
   final snapshot = c.snapshot;
   final pools = snapshot?.machines ?? const <Map<String, dynamic>>[];
-  final teamAccounts = snapshot?.teamAccounts ?? false;
   final rows = <AddComputerRow>[];
   for (final m in app.machineStates.values) {
     final id = m.machine.machineId;
     if (m.belongsToOtherAccount || m.machine.isTeamAccount) continue;
-    if ((snapshot?.placeOf(id) ?? id) != id) continue;
     final here = m.isLocalMachine;
     final inSwarm =
         added.contains(id) || pools.any((p) => p['machineId'] == id);
@@ -111,21 +61,6 @@ List<AddComputerRow> addComputerRows(
         : m.isOffline
         ? AddComputerStatus.offline
         : AddComputerStatus.ready;
-    ({String tag, String reason})? why;
-    if (teamAccounts && inSwarm) {
-      final pool = pools.where((p) => p['machineId'] == id).firstOrNull;
-      final team = pools.where((p) => p['hostMachineId'] == id).firstOrNull;
-      final work = (team ?? pool)?['teamWork'];
-      if (work is Map && work['allowed'] == false) {
-        why = _teamWhy(work['code'], here ? teamSetup : null);
-      }
-    } else if (teamAccounts && here && teamSetup?.state == 'failed') {
-      why = (
-        tag: 'setup failed',
-        reason:
-            'Team account setup failed, so only your projects will run here.',
-      );
-    }
     rows.add(
       AddComputerRow(
         id: id,
@@ -133,8 +68,6 @@ List<AddComputerRow> addComputerRows(
         name: superTabMachineName(m.machine.displayName),
         status: status,
         here: here,
-        tag: why?.tag,
-        reason: why?.reason,
       ),
     );
   }
@@ -157,24 +90,17 @@ List<AddComputerRow> addComputerRows(
 /// Add your computers (Dee, 10-29): the reader's other computers, added to
 /// the Swarm in one step with today's defaults, one at a time. Their first
 /// computer never comes through here: joining or creating a Swarm adds it.
-/// [readResources] stands in for [AppNotifier.readMachineResources] and
-/// [openDownload] for opening the download page.
+/// [openDownload] stands in for opening the download page.
 Future<void> showAddComputers(
   BuildContext context,
   SuperTabController c,
   AppNotifier app, {
-  Future<MachineResources?> Function(String machineId)? readResources,
   void Function(Uri url)? openDownload,
 }) => showAppDialog<void>(
   context: context,
   builder: (context) => SuperTabDialogScope(
     controller: c,
-    child: _AddComputers(
-      controller: c,
-      app: app,
-      readResources: readResources,
-      openDownload: openDownload,
-    ),
+    child: _AddComputers(controller: c, app: app, openDownload: openDownload),
   ),
 );
 
@@ -182,12 +108,10 @@ class _AddComputers extends StatefulWidget {
   const _AddComputers({
     required this.controller,
     required this.app,
-    this.readResources,
     this.openDownload,
   });
   final SuperTabController controller;
   final AppNotifier app;
-  final Future<MachineResources?> Function(String machineId)? readResources;
   final void Function(Uri url)? openDownload;
 
   @override
@@ -216,21 +140,6 @@ class _AddComputersState extends State<_AddComputers> {
   /// The computers the last Add asked for.
   var _requested = <String>{};
   bool _busy = false, _closing = false;
-  ({String state, String? detail})? _teamSetup;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_readTeamSetup());
-  }
-
-  /// Only this computer's own daemon is asked, and only where its Team
-  /// account can be made; one that cannot say leaves the Swarm's own line.
-  Future<void> _readTeamSetup() async {
-    if (!app.canSetUpTeamAccount) return;
-    final read = await app.teamSetupStatus();
-    if (mounted) setState(() => _teamSetup = read);
-  }
 
   bool get _sameAccount => app.currentUser?.id == _accountId;
 
@@ -238,8 +147,7 @@ class _AddComputersState extends State<_AddComputers> {
   /// may still change this Swarm.
   bool _alive() => mounted && !_closing && _sameAccount && c.canWrite;
 
-  List<AddComputerRow> get _rows =>
-      addComputerRows(app, c, added: _added, teamSetup: _teamSetup);
+  List<AddComputerRow> get _rows => addComputerRows(app, c, added: _added);
 
   bool _ticked(AddComputerRow row) =>
       row.status == AddComputerStatus.ready && (_ticks[row.id] ?? true);
@@ -257,7 +165,6 @@ class _AddComputersState extends State<_AddComputers> {
         _errors.remove(id);
       }
     });
-    final teamAccountOnly = c.snapshot?.teamAccounts ?? false;
     for (final id in ids) {
       // A computer that went offline meanwhile waits for the next try.
       final still = _rows.where((r) => r.id == id && _ticked(r)).firstOrNull;
@@ -272,8 +179,6 @@ class _AddComputersState extends State<_AddComputers> {
           id,
           setupId: setupId,
           alive: _alive,
-          teamAccountOnly: teamAccountOnly,
-          readResources: widget.readResources,
         );
         _setups.remove(id);
         if (done == null) break;
@@ -386,10 +291,9 @@ class _AddComputersState extends State<_AddComputers> {
   ) {
     if (row.id == _adding) return (words: 'adding…', reason: null);
     if (error != null) return (words: 'failed', reason: error);
-    String also(String word) => row.tag == null ? word : '$word · ${row.tag}';
     return switch (row.status) {
       // Ready needs no word of its own: a status only when needed (Dee).
-      AddComputerStatus.ready => (words: row.tag ?? '', reason: row.reason),
+      AddComputerStatus.ready => (words: '', reason: null),
       AddComputerStatus.offline => (
         words: 'offline',
         reason: 'Turn it on to add it.',
@@ -398,7 +302,7 @@ class _AddComputersState extends State<_AddComputers> {
         words: 'not linked',
         reason: 'Link it in Machines to add it.',
       ),
-      AddComputerStatus.added => (words: also('added'), reason: row.reason),
+      AddComputerStatus.added => (words: 'added', reason: null),
     };
   }
 
@@ -488,7 +392,7 @@ class _AddComputersState extends State<_AddComputers> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app, c]),
+    listenable: Listenable.merge([app, c, c.machinesChanged]),
     builder: (context, _) {
       // Another account signed in: nothing of this one's stays on screen.
       if (!_sameAccount) {

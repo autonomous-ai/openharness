@@ -7,12 +7,12 @@ import { emptyPorts, type Asker, type BackendNotice } from '../core/api.js'
 import type { GuestHelperState } from '../lib/guestHelperInstall.js'
 import type { PortFailure, SharedMachine, SharedMachinesPort, SharePolicy } from '../lib/sharedMachinesPort.js'
 import type { GuestLaunches } from './guestLaunches.js'
-import { guestLaunchInput, normalizeEmails, normalizeFolders, ownerFolderProblem, readPolicy, SHARE_EMAILS_MAX, SHARED_FOLDERS_MAX,
+import { guestLaunchInput, machineGuests, normalizeEmails, normalizeFolders, ownerFolderProblem, readPolicy, sameSharedPath, withinSharedPath, SHARE_EMAILS_MAX, SHARED_FOLDERS_MAX,
   SHARED_MACHINES_REQUESTS, startSharedMachines, stillShared, trustedKeys } from './sharedMachines.js'
 
-// The real guests reach the machine (the helper, sudo, the owner's sign-ins, a loopback relay): never in a test. The
+// The real guests reach the machine (the helper, sudo): never in a test. The
 // defaults are proven against these fakes, which say what they were asked.
-const machine = vi.hoisted(() => ({ state: 'missing' as string, relayLog: null as ((line: string) => void) | null }))
+const machine = vi.hoisted(() => ({ state: 'missing' as string }))
 vi.mock('../lib/guestHelperInstall.js', () => ({
   guestHelperStatus: vi.fn(async () => ({ state: machine.state, version: null })),
   installGuestHelper: vi.fn(async () => ({ ok: false, code: 'CANCELLED', message: 'cancelled' })),
@@ -20,14 +20,6 @@ vi.mock('../lib/guestHelperInstall.js', () => ({
 vi.mock('../lib/guestAccounts.js', async (actual) => ({
   ...await actual<typeof import('../lib/guestAccounts.js')>(),
   createGuestAccounts: () => ({ ensureGuest: async () => ({ user: 'hg_0123456789ab', home: '/g', workspace: '/g/work' }) }),
-}))
-vi.mock('../lib/ownerSubscriptions.js', () => ({ createOwnerSubscriptions: () => ({}) }))
-vi.mock('../lib/subscriptionRelay.js', async (actual) => ({
-  ...await actual<typeof import('../lib/subscriptionRelay.js')>(),
-  startSubscriptionRelay: vi.fn(async (deps: { log: (line: string) => void }) => {
-    machine.relayLog = deps.log
-    return { port: 1, url: 'http://127.0.0.1:1', mintToken: () => 'token', revoke: () => {}, close: async () => {} }
-  }),
 }))
 
 const owner: Asker = { local: true, owner: true }
@@ -76,7 +68,7 @@ describe('shared machines', () => {
     file = join(dir, 'shared-machines.json')
     timers = []
     log.mockReset()
-    guests = { launch: vi.fn(async () => ({ ok: true, workspace: '/g/work', argv: ['sh'], env: {} })), sync: vi.fn(async () => {}), stop: vi.fn(async () => {}) }
+    guests = { launch: vi.fn(async () => ({ ok: true, workspace: '/g/work', argv: ['sh'], env: {} })), sync: vi.fn(async () => {}) }
     guestAccess = vi.fn(async () => 'ready' as const)
     enableGuests = vi.fn(async () => ({ ok: true }))
   })
@@ -304,8 +296,8 @@ describe('shared machines', () => {
   })
 
   describe('guests', () => {
-    // A guest's harness runs as their own OS account, on the owner's subscription
-    // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    // A guest's harness runs as their own OS account, on their own sign-in
+    // (docs/plans/2026-10-19-guest-machine-sharing-plan.md; no owner subscription relay, task #4137).
     const input = { email: 'kim@acme.io', engine: 'claude', bypassPermission: true }
 
     it('says whether guest access is on, and turns it on behind the owner\'s one admin prompt', async () => {
@@ -323,7 +315,7 @@ describe('shared machines', () => {
       expect(await handle({ action: 'enable_guests' }, owner)).toEqual({ ok: true, guestAccess: 'missing' })
     })
 
-    it('builds a guest\'s harness for the core, and stops its relay and its reads when the service stops', async () => {
+    it('builds a guest\'s harness for the core, and stops its reads when the service stops', async () => {
       const ports = emptyPorts()
       start(fakePort(), undefined, ports)
       expect(await ports.sharedMachines!.guestLaunch(input)).toEqual({ ok: true, workspace: '/g/work', argv: ['sh'], env: {} })
@@ -331,7 +323,6 @@ describe('shared machines', () => {
       expect(live()).toHaveLength(1)
       await ports.sharedMachines!.stop()
       expect(live()).toHaveLength(0)
-      expect(guests.stop).toHaveBeenCalledTimes(1)
       // Stopped before its first read was scheduled: nothing to cancel.
       const early = emptyPorts()
       const core = fakeCore({ dataDir: dir })
@@ -412,6 +403,16 @@ describe('shared machines', () => {
         expect(readPolicy(file).folders).toEqual([])
       })
 
+      it('treats one Windows folder spelled two ways as one folder, and POSIX paths as exact', () => {
+        expect(sameSharedPath('c:\\ProgramData\\HarnessGuests', 'C:\\ProgramData\\HarnessGuests', 'win32')).toBe(true)
+        expect(sameSharedPath('C:\\Users\\DELL', 'C:\\Users\\Dell', 'win32')).toBe(true)
+        expect(sameSharedPath('/Users/dee', '/users/dee', 'darwin')).toBe(false)
+        expect(sameSharedPath('/Users/dee', '/Users/dee', 'darwin')).toBe(true)
+        expect(withinSharedPath('C:\\ProgramData\\HarnessGuests\\requests', 'c:\\programdata\\harnessguests', 'win32')).toBe(true)
+        expect(withinSharedPath('/Users/Shared/HarnessGuests/hg_x', '/Users/Shared/HarnessGuests', 'darwin')).toBe(true)
+        expect(withinSharedPath('/Users/Shared/HarnessGuestsX', '/Users/Shared/HarnessGuests', 'darwin')).toBe(false)
+      })
+
       it('says in words why a folder cannot be shared, before the helper would', () => {
         const home = mkdtempSync(join(tmpdir(), 'owner-home-'))
         try {
@@ -432,6 +433,12 @@ describe('shared machines', () => {
           expect(ownerFolderProblem(join(home, 'missing'))).toMatch(/^No such folder/)
         } finally { rmSync(home, { recursive: true, force: true }) }
       })
+    })
+
+    it('builds the real guests from the setup task on Windows, and the helper elsewhere', () => {
+      // Only their construction: the accounts' own contracts are tested beside them (the setup client, the helper).
+      expect(typeof machineGuests(() => {}, file, 'win32').launch).toBe('function')
+      expect(typeof machineGuests(() => {}, file, 'darwin').launch).toBe('function')
     })
 
     it('reads a launch the core asked for, and nothing else as one', () => {
@@ -458,7 +465,7 @@ describe('shared machines', () => {
     })
   })
 
-  it('keeps its own guests, helper check and install by default, on the machine\'s helper and the owner\'s sign-ins', async () => {
+  it('keeps its own guests, helper check and install by default, on the machine\'s helper', async () => {
     const said = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.stubEnv('LANG', 'vi_VN.UTF-8')
     try {
@@ -474,9 +481,7 @@ describe('shared machines', () => {
       machine.state = 'ready'
       expect(await ports.sharedMachines!.guestLaunch({ email: 'kim@acme.io', engine: 'claude', bypassPermission: true }))
         .toMatchObject({ ok: true, workspace: '/g/work', env: expect.objectContaining({ LANG: 'vi_VN.UTF-8' }) })
-      machine.relayLog!('claude · 200')
       expect(said).toHaveBeenCalledWith('[shared-machines] guest launch · claude · hg_0123456789ab')
-      expect(said).toHaveBeenCalledWith('[shared-machines] relay · claude · 200')
       await ports.sharedMachines!.stop()
     } finally { said.mockRestore(); vi.unstubAllEnvs() }
   })

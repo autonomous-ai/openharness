@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/usage/usage_summary.dart';
@@ -28,6 +29,7 @@ Widget buildUsageSettingsRow(
   valueListenable: lastUsageSummary,
   builder: (context, summary, _) => SettingsRow(
     title: 'Usage',
+    glyph: LucideIcons.gauge300,
     // Nothing until something has been read: a dash was a dead word on the row.
     value: summary,
     onTap: () =>

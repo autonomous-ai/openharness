@@ -73,7 +73,7 @@ void main() {
     c.dispose();
   });
   test(
-    'queued sends retain their project, workgroup and own Buddy destinations',
+    'queued sends retain their project and workgroup destinations',
     () async {
       final s = ConversationServer();
       final gate = Completer<void>();
@@ -89,10 +89,9 @@ void main() {
         },
       );
       await c.refresh();
-      await c.addBuddy(projectId: 'lead', machineId: 'mac', engine: 'claude');
       hold = true;
       final sends = <Future<Map<String, dynamic>?>>[];
-      for (final id in ['lead', 'offline', 'buddy-owner-lead']) {
+      for (final id in ['lead', 'offline']) {
         expect(await c.select(id), isTrue);
         c.setDraft(id, 'Message for $id');
         sends.add(c.send());
@@ -103,11 +102,7 @@ void main() {
       final posts = s.posts
           .map((p) => p['command'] as Map)
           .where((p) => p['type'] == 'message.send');
-      expect(posts.map((p) => p['conversationId']), [
-        'lead',
-        'offline',
-        'buddy-owner-lead',
-      ]);
+      expect(posts.map((p) => p['conversationId']), ['lead', 'offline']);
       await c.flush();
       c.dispose();
     },
@@ -739,7 +734,7 @@ void main() {
       request: (method, path, {body}) async {
         final reply = await server.request(method, path, body: body);
         if (isCommand(method, path) &&
-            (body!['command'] as Map)['type'] == 'member.status') {
+            (body!['command'] as Map)['type'] == 'conversation.archive') {
           holdSave = true;
         }
         return reply;
@@ -752,9 +747,10 @@ void main() {
     final first = c.send();
     await pumpEventQueue();
     expect(c.saving, isFalse, reason: 'Acknowledged; its read is held.');
-    final status = c.command({
-      'type': 'member.status',
-      'status': {'text': 'Reviewing', 'emoji': null},
+    final reopen = c.command({
+      'type': 'conversation.archive',
+      'conversationId': 'offline',
+      'archived': false,
     });
     await pumpEventQueue();
     expect(c.saving, isTrue);
@@ -764,10 +760,10 @@ void main() {
     expect(
       c.saving,
       isTrue,
-      reason: 'The status change still holds the lane while it saves.',
+      reason: 'The reopened chat still holds the lane while it saves.',
     );
     saving.complete();
-    await status;
+    await reopen;
     expect(c.saving, isFalse);
   });
 

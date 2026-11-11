@@ -1,39 +1,39 @@
 import { createHash } from 'node:crypto'
+import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { availableParallelism, homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { codingRefusal } from '../lib/codingModel.js'
-import { backend, identifier, object, SuperTabHostError } from './wire.js'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
+import { backend, FIELD_REFUSED_MS, fieldRefused, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
-import { readAuthSession } from '../lib/authSession.js'
+import { settleHiddenScreen } from './startScreen.js'
+import { prepareSwarmStart } from './projectFolder.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
+import { inRepositoryTurn } from '../lib/gitProject.js'
 import { projectsRoot } from '../lib/projectFolder.js'
+import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
-import { teamPrivacyObserver } from '../team/observer.js'
-import { teamRelayed } from '../team/relay.js'
-import type { PrivacyObservation } from '../team/privacy.js'
-import { repositoryKey } from './route.js'
-import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
+import { cleanupClosed } from './cleanupCloses.js'
+import { repositoryKey } from './repositoryKey.js'
+import { profileId } from '../lib/claudeProfiles.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
-// The route's requirements are not known before the Lead routes. Include common tools in each snapshot, then
-// include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
+// A start's requirements are not known before it is queued. Include common tools in each snapshot, then
+// include tools from pending starts. An uncommon tool first named by a start remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
-/** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
- *  task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
- *  is heard from within this long. */
-const FIELD_REFUSED_MS = 10 * 60_000
+/** How long a tool the probe could not verify stays unverified before it is probed again. */
 const UNVERIFIED_TOOL_TTL_MS = 60_000
 /** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
  *  `git status` per running session a minute, and the backend stops an idle worker only on a report under 2 minutes old. */
@@ -49,12 +49,22 @@ const UNCOMMITTED_PARALLEL = 4
  *  machine is left to show as offline rather than kept healthy by a loop that no longer reads anything. */
 const BEAT_LIMIT_MS = 3 * 60_000
 /** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
- *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
+ *  busy CPU or memory may pass, and the Swarm saw this machine able a moment ago. A refusal no one reported left starts
  *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
 const START_REFUSED_MS = 60_000
+/** How long a fault of this machine (its creation folder cannot be used, say) may hold an undispatched start before it fails with the
+ *  fault's reason, so the Lead starts it elsewhere: longer than a refusal, since a person may fix the machine meanwhile. stone7890's
+ *  Mac held one for four hours with only the host log to say why (task #3861). */
+const START_FAULT_MS = 5 * 60_000
 /** What a start answers while its launch may already have happened or is under way: never failed from here, or an agent
  *  could run with no start to show for it. The failures already reported say so themselves. */
 const NOT_REFUSED = new Set(['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED', 'START_FAILED', 'SWARM_ENGINE'])
+/** How long a launched start's creation may wait on a dependency it names (the engine's executable, its launch
+ *  environment, a model) before this machine cancels it and fails the start with that reason. Past the three minutes the
+ *  daemon gives a credential preparation (core/agents/pendingLaunches.ts), well inside the backend's 15 (liveness.ts):
+ *  on Diego's Mac's Harness Team account a held creation used them all, and the Lead read only "still preparing"
+ *  (2026-10-28). Not while Harness installs the engine, which the backend's 15 minutes cover. */
+const START_HELD_MS = 300_000
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
  *  would report with what it last did. Only this read is this frequent: the resource readers run when there is
@@ -68,7 +78,8 @@ const POOLS_FRESH_MS = 2_000
 
 /** The worktrees this machine's Swarm starts made, by tab: what a removal may delete besides the tab's Swarm folders. */
 export const swarmWorktreesFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-worktrees-${machineId}.json`)
-type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string }
+/** `kind: 'agent-folder'`: a folder Harness made for an agent whose start named a temporary one (agentFolder.ts, #3713). */
+type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder' }
 function readWorktrees(file: string): SwarmWorktree[] {
   let saved: unknown
   try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
@@ -121,13 +132,8 @@ const folderGone = (path: string) => realpath(path).then(() => false, (error: No
 export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
   log?: (message: string) => void; env?: NodeJS.ProcessEnv
-  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
-   *  work is for when it uses the Harness GitHub App, else null. */
-  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
-  /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
-  team?: () => boolean
-  /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
-  privacy?: () => PrivacyObservation | null
+  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`). */
+  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<void>
   /** What says this machine's Swarm models changed, read every pass without asking the daemon ([localModelsStamp]). */
   modelsStamp?: () => Promise<string>
   /** The machine's host form and Swarm reads, shared with its host (superTabs/host.ts). */
@@ -139,9 +145,6 @@ export interface MachineDeps {
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
-  /** In the Harness Team account: whether its engines can spend the owner's subscription through the owner's relay
-   *  (team/relay.ts), so one it has not signed in itself is ready all the same. */
-  relayed?: () => boolean
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 /** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
@@ -157,22 +160,26 @@ const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm
 export const READINGS_RETRY_MS = 10 * 60_000
 /** The most Swarms' readings the backend takes in one call (backend routes/superTabs.ts READINGS_MAX). */
 const READINGS_MAX = 64
-/** The batch route is not there: an older backend answers 404, and its team gate 403 for a route it does not list. A body
- *  past its limit (413) is sent per Swarm too. */
-const readingsMissing = (error: unknown) => error instanceof SuperTabHostError
-  && (error.status === 404 || error.status === 413 || (error.status === 403 && error.code === 'TEAM_SESSION_LIMITED'))
+/** The batch route is not there: an older backend answers 404. A body past its limit (413) is sent per Swarm too. */
+const readingsMissing = (error: unknown) => error instanceof SuperTabHostError && (error.status === 404 || error.status === 413)
 /** A reading the backend would not validate: the next, older form of it is tried (an older backend refusing a newer field). */
-const fieldRefused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
 /** One Swarm's reading of this pass, to send. */
 interface Reading { tab: string; observation: Record<string, unknown>; localModels: LocalModelReading[] | null; signature: string }
 
-/** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
- *  before them never launches one as a worker. */
-const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts)]
-/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
- *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
- *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy']
+/** A host's starts: its workers', and its Product Managers' and Regular agents', which the backend lists apart so that a host
+ *  from before them never launches one as a worker. */
+const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.leadStarts), ...list(row.regularStarts)]
+/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, which the
+ *  backend offers only on a host that says so. */
+// `regularAgent`: it launches a Regular agent's start, sent apart as `regularStarts` (backend agent.new, task #4116).
+const CAPABILITIES = ['leadStart', 'regularAgent']
+/** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
+ *  said beside the others: the backend refuses a switch to a host that does not. */
+CAPABILITIES.push('leadSwitch')
+
+/** This host sends its PM's turn with the PM's delivery list read (host.ts, task #3545): only then does the backend keep people's
+ *  messages and crew needs to that PM for its inbox, which goes when its turn ends. */
+CAPABILITIES.push('turnInbox')
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)
@@ -184,6 +191,9 @@ export class ContributedMachines {
   /** A pass or one of its publishes failed: the next one waits a whole beat, as every pass once did. */
   private failed = false
   private readonly cursors = new Map<string, number>()
+  /** A stale host feed kept reporting a missing failed start 581 times (Ken, 2026-11-06). Keep its one report until the feed
+   *  drops the start: terminal after acceptance/NOT_FOUND, otherwise retry its original receipt without launching again. */
+  private readonly failureReports = new Map<string, { path: string; input: Record<string, unknown>; failures: number; nextAt: number; done: boolean }>()
   private repairTrust?: ReturnType<typeof createSwarmCloneTrustRepair>
   /** Per tab, when its observation was last sent and what it said that matters to a reader: the harnesses
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
@@ -202,6 +212,8 @@ export class ContributedMachines {
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
   private readonly waiting = new Map<string, string>()
+  /** Per waiting start, the fault reason the Swarm has been told, so it hears each once (agent.startWaiting). */
+  private readonly told = new Map<string, string>()
   /** Per tab, why its last reading did not reach the backend, so the log says it once per error and once when it clears. */
   private readonly readingFailures = new Map<string, string>()
   /** Per waiting start, since when this machine has refused it without a break. */
@@ -210,8 +222,19 @@ export class ContributedMachines {
    *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
    *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
   private readonly preparing = new Set<string>()
+  /** Per start, the waiting screen its engine showed on the last pass (startScreen.ts), until the next pass reads it again. */
+  private readonly hiddenScreens = new Map<string, string>()
+  /** The starts whose host reports the backend refused (a 403), with its refusal, as this machine's passes met them. Named in
+   *  the next reading so the backend fails each at once (backend liveness.ts failRefusedStarts), where it waited out its 3
+   *  minutes with the refusal in this log alone (task #2441). */
+  private readonly refused = new Map<string, string>()
+  /** Per launched start whose creation is held on a dependency, since when without a break. */
+  private readonly heldSince = new Map<string, number>()
   /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
   private readonly unconfirmed = new Map<string, Unconfirmed>()
+  /** Starts dispatched here whose creation has no agent yet, by start id ([failedEarly]). In memory only: after a restart the
+   *  ledger's launch deadline frees them (reservations.ts LAUNCH_DEADLINE_MS). */
+  private readonly agentless = new Map<string, Agentless>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -228,12 +251,12 @@ export class ContributedMachines {
   private readonly removals = new Map<string, Promise<void>>()
   /** Until when this machine sends one reading per Swarm, its backend having no route for all of them in one call. */
   private readingsRefusedUntil = 0
-  /** Until when the reading leaves out its privacy field, which the backend refused. */
-  private privacyRefusedUntil = 0
+  /** Until when this machine's cores are left out of its resources: a backend before them refused them (sendAlone). */
+  private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
-  private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
+  private closedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
   private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number; readAt: number; shown?: number }>()
   /** Whether git is reading session folders beside the pass now. */
@@ -242,6 +265,8 @@ export class ContributedMachines {
   private readinessRefusedUntil = 0
   /** Until when the reading leaves out the starts it is preparing, which the backend refused. */
   private preparingRefusedUntil = 0
+  /** Until when the reading leaves out the starts the backend refused, a field an older backend refuses. */
+  private refusedStartsRefusedUntil = 0
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
    *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
   private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
@@ -251,49 +276,59 @@ export class ContributedMachines {
   private readonly goodQuota = new Map<string, { windows: ReturnType<typeof quotaOf>['windows']; at: number }>()
   /** Until when the reading leaves out why an allowance is unknown, which the backend refused. */
   private quotaReasonsRefusedUntil = 0
+  /** Until when the reading leaves out its profiles, which the backend refused. */
+  private profilesRefusedUntil = 0
   /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
    *  asks the remote, so it is read beside the pass, never holding up a start. */
   private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
   private readonly checkoutReading = new Set<string>()
   private async engineReadiness(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<ReadyEngine[] | null> {
     const now = this.deps.now()
-    if (this.engineRead && now < this.engineRead.until) return this.engineRead.value
+    return this.engineRead && now < this.engineRead.until ? this.engineRead.value : await this.ownEngines(local, now)
+  }
+  /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
+  private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
+    // Periodic work asks only engines with account readers. Add a vendor here when its reader lands;
+    // unsupported engines would spawn login shells just to return unknown (#3839 security review).
     const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
     const engines = object(answer).engines
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
     // such a machine fails its first start loudly instead (review of #1743).
-    // A Harness Team account that has not signed an engine in spends its owner's subscription through the owner's relay
-    // (team/relay.ts): the Lead routed nothing to it while it read as signed out (routeCommand.ts `unreadyPool`).
-    const relayed = (this.deps.relayed ?? teamRelayed)()
-    const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
+    const value = Array.isArray(engines) ? list(engines).filter(e => (PROCESS_ENGINES as readonly unknown[]).includes(e.engine))
       .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
-        signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || relayed : null })) : null
+        signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
     return value
   }
-  /** The account reader's answer, read again only once the last one is [USAGE_FRESH_MS] old: sooner, and Anthropic refuses
-   *  the reads for 5 minutes. A refused or failed read is not repeated sooner than its own wait. */
+  /** The account reader's answer, read again only once the last one is [USAGE_FRESH_MS] old. A failed read is not repeated
+   *  sooner than [USAGE_RETRY_MS]. */
   private async allowance(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }) {
     const now = this.deps.now()
     if (this.usageRead && now < this.usageRead.until) return this.usageRead
     const value = object(await local.request('usage_read', {}, 20_000).catch(() => null))
-    const providers = list(value.providers)
-    const wait = !Array.isArray(value.providers) ? USAGE_RETRY_MS
-      : providers.some(p => p.outcome === 'answered' && p.httpStatus === 429) ? USAGE_LIMITED_MS : USAGE_FRESH_MS
+    const wait = Array.isArray(value.providers) ? USAGE_FRESH_MS : USAGE_RETRY_MS
     return this.usageRead = { value, at: now, until: now + wait }
+  }
+  /** The accounts a Product Manager here could move to, by id and label only: each engine's default account, with the
+   *  allowance already read. No other account is on the Swarm: offering one went with Desktop's accounts page (F9). */
+  private profiles(engines: string[], allowances: Array<{ engine: string; windows: Parameters<typeof allowanceLeft>[0] }>) {
+    return (['claude', 'codex'] as const).filter(engine => engines.includes(engine)).map(engine => {
+      const { left, resetsAt } = allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])
+      return { engine, id: profileId(this.machineId, engine, 'default'), label: 'Default', leftPercent: left, resetsAt }
+    })
   }
   /** What the reading says of [engine]'s allowance. Windows that could not be read again stand for [USAGE_KEEP_MS] after
    *  they were read, unless the engine signed out; past that, unknown says why. */
   private quotaFor(read: { value: Record<string, unknown>; at: number }, engine: string) {
     const q = quotaOf(read.value, engine, false)
     if (q.known) { this.goodQuota.set(engine, { windows: q.windows, at: read.at }); return { engine, known: true, windows: q.windows } }
-    // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+    // Windows that could not be read on an API key are metered: known, with none.
     if (meteredEngine(engine, this.deps.env ?? process.env)) return { engine, known: true, windows: [] }
     if (list(read.value.providers).find(p => p.provider === engine)?.outcome === 'signedOut') this.goodQuota.delete(engine)
     const kept = this.goodQuota.get(engine)
     if (kept && this.deps.now() - kept.at <= USAGE_KEEP_MS) return { engine, known: true, windows: kept.windows }
-    return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine, (this.deps.relayed ?? teamRelayed)()) ?? undefined }
+    return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine) ?? undefined }
   }
   /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
    *  until the first read is in. */
@@ -311,13 +346,6 @@ export class ContributedMachines {
         .finally(() => this.checkoutReading.delete(root))
     }
     return read?.value ?? null
-  }
-  /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
-  private privacy(): PrivacyObservation | null {
-    try { return (this.deps.privacy ?? teamPrivacyObserver)() } catch (error) {
-      // A check that could not run is not a pass: a team account reports it unchecked, never private.
-      return { mode: 'account', passed: false, item: 'unchecked', detail: `The privacy check did not run: ${error instanceof Error ? error.message : String(error)}`, checkedAt: this.deps.now() }
-    }
   }
   /** The grids this machine reads, at most once a minute: every Swarm's reading shares it. */
   private gridModelsRead: { at: number; answer: unknown } | null = null
@@ -344,6 +372,41 @@ export class ContributedMachines {
     this.waiting.set(startId, reason)
     this.log(`Swarm start ${startId} is waiting: ${reason}`)
   }
+  /** Tells the Swarm why a start waits on this machine, once per reason: the PM sees it on the start instead of
+   *  only "Queued". A server that does not know the report (an older backend) is not asked again; any other failure is retried. */
+  private async tell(scoped: ScopedRequest, startId: string, reason: string) {
+    if (this.told.get(startId) === reason) return
+    try {
+      await scoped({ action: 'command', operationId: `waiting-${startId}-${createHash('sha256').update(reason).digest('hex').slice(0, 12)}`,
+        command: { type: 'agent.startWaiting', startId, reason } })
+    } catch (error) {
+      if (!(error instanceof SuperTabHostError && error.status >= 400 && error.status < 500)) return
+    }
+    this.told.set(startId, reason)
+  }
+  private async reportStartFailure(startId: string, path: string, input: Record<string, unknown>): Promise<void> {
+    let report = this.failureReports.get(startId)
+    if (!report) {
+      report = { path, input: { operationId: input.operationId, command: input.command }, failures: 0, nextAt: 0, done: false }
+      this.failureReports.set(startId, report)
+    }
+    if (report.done || this.deps.now() < report.nextAt) return
+    try {
+      await this.deps.backend(this.core, 'POST', report.path, report.input)
+      report.done = true
+      if (report.failures) this.log(`Swarm start ${startId}: its failed-start report reached the server.`)
+    } catch (error) {
+      if (error instanceof SuperTabHostError && error.code === 'NOT_FOUND') {
+        report.done = true
+        this.log(`Swarm start ${startId}: the server no longer has this start; dropped its failed-start report.`)
+        return
+      }
+      // Error bodies may contain private server text; only the report's state belongs in this log.
+      if (!report.failures) this.log(`Swarm start ${startId}: could not report its failure; retrying with backoff capped at five minutes.`)
+      report.failures = Math.min(report.failures + 1, 6)
+      report.nextAt = this.deps.now() + Math.min(15_000 * 2 ** (report.failures - 1), 300_000)
+    }
+  }
   /** Diego's Mac, 2026-10-28: 410 reading timeouts in two days, none of them in the log. */
   private noteReading(tabId: string, error: unknown) {
     const was = this.readingFailures.get(tabId)
@@ -355,6 +418,13 @@ export class ContributedMachines {
     if (was === reason) return
     this.readingFailures.set(tabId, reason)
     this.log(`Could not send this machine's reading to Swarm ${tabId}: ${reason}`)
+  }
+  /** An engine was just signed in here (claudeSignIn.ts): read the engines again at the next pass, and let it run now, not
+   *  [READINESS_MS] on. A start is refused while the reading still says signed out (backend engineHealth.ts engineUnusable;
+   *  the Dell, 2026-11-05). */
+  engineSignedIn(): void {
+    this.engineRead = null
+    this.next = 0
   }
   /** One pass at a time, one [MACHINE_POLL_MS] after the last began (or a beat after one that failed). */
   tick(): Promise<void> {
@@ -415,17 +485,22 @@ export class ContributedMachines {
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
     const pools = list((await this.sources.feed.current(POOLS_FRESH_MS)).pools).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
-    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); this.readingFailures.clear(); return }
+    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); this.readingFailures.clear(); this.failureReports.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => startsOf(row).map(start => start.id)))
+    for (const id of this.failureReports.keys()) if (!pendingIds.has(id)) this.failureReports.delete(id)
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
+    for (const id of this.told.keys()) if (!pendingIds.has(id)) this.told.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
+    for (const id of this.refused.keys()) if (!pendingIds.has(id)) this.refused.delete(id)
+    for (const id of this.heldSince.keys()) if (!pendingIds.has(id)) this.heldSince.delete(id)
+    for (const id of this.hiddenScreens.keys()) if (!pendingIds.has(id)) this.hiddenScreens.delete(id)
     this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
+    for (const [id, launch] of this.agentless) if (!pendingIds.has(id) && !launch.checking) void this.failedEarly(id, launch, where)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
-    const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
     // machine's panel waited up to 15 s more for it (2026-10-26). Files only, so a pass with nothing new asks nobody.
     const modelsStamp = pools.some(row => typeof row.localGrid === 'string')
@@ -437,6 +512,9 @@ export class ContributedMachines {
       // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
       const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
       const due: Reading[] = []
+
+      // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
+      const cleaned = began >= this.closedRefusedUntil ? cleanupClosed(this.core.dataDir, began) : new Set<string>()
       for (const row of pools) {
         try {
         if (this.stopped || !identifier(row.tabId)) return
@@ -450,18 +528,28 @@ export class ContributedMachines {
         for (const id of ids) {
           if (await this.core.agents.stopped?.(id) || (!this.core.agents.byAgent(id) && await this.core.agents.gone?.(id))) stopped.push(id)
         }
-        const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
+        // A session whose agent left as closed, reopened here: listed running, and that report brings its agent back (backend
+        // closedAgents.ts restoreSessions). The backend names them, so nothing else on this machine is ever reported.
+        const removed = Array.isArray(row.removedHarnessIds) ? row.removedHarnessIds.filter(identifier) : []
+        const reopened: string[] = []
+        for (const id of removed) {
+          if (!ids.includes(id) && this.core.agents.byAgent(id) && !await this.core.agents.stopped?.(id)) reopened.push(id)
+        }
+        const running = [...ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id)), ...reopened]
+        const closed = stopped.filter(id => cleaned.has(id))
         const pending = startsOf(row)
         looked.push({ row, pool, pending })
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
+        const refusedStarts = began >= this.refusedStartsRefusedUntil ? pending.flatMap(start => {
+          const reason = this.refused.get(String(start.id))
+          return reason ? [{ startId: String(start.id), reason }] : []
+        }) : []
         const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {
           const wanted = object(object(start.request).requirements).tools
           return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
         })])].slice(0, 20)
-        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
-          pending.map(start => start.id).sort(), [...preparing].sort(),
-          // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
-          privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
+        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), [...closed].sort(), row.paused === true || pool.paused === true,
+          pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
           typeof row.localGrid === 'string' ? modelsStamp : null])
         const last = this.published.get(String(row.tabId))
         // A model still starting is read again every pass until the grid lists it, so the panel shows it live at once.
@@ -504,10 +592,12 @@ export class ContributedMachines {
         // it again). Unknown — the grid could not be read — keeps the reading as it is.
         const live = typeof row.localGrid === 'string'
           ? liveOn(await local.request('grid_swarm_heal', { grid: row.localGrid }, 30_000).catch(() => ({}))) : null
-        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows and
-        // the route never offers, rather than left out until the grid lists it.
+        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows,
+        // rather than left out until the grid lists it.
         const marked = (m: LocalModelReading): LocalModelReading => !live || live.has(m.model) ? m : { ...m, starting: true }
-        const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})) : null
+        // Other apps' models as the last scan a person asked for found them (`scan: false`, services/models.ts): what
+        // this machine serves there was started through such an ask, which scanned.
+        const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', { scan: false }, 20_000).catch(() => ({})) : null
         const refusedModels = typeof row.localGrid === 'string' ? refusedOn(fleet, row.localGrid) : []
         const localModels = typeof row.localGrid === 'string' ? [
           ...servedOn(fleet, row.localGrid).map(marked),
@@ -521,28 +611,35 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
-        const tokens = began >= this.tokensRefusedUntil ? await this.tokensOf(running) : {}
         const allowances = engines.map(engine => this.quotaFor(readings, engine))
         const quotaReasons = began >= this.quotaReasonsRefusedUntil
           ? Object.fromEntries(allowances.flatMap(q => 'reason' in q && q.reason ? [[q.engine, q.reason]] : [])) : {}
         // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
         // every reading with it.
-        const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
+        // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
+        const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? this.profiles(engines, allowances) : []
+
+        const observation = { generation: pool.generation, tools: reportedTools,
           ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
+
+          ...(profiles.length ? { profiles } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
+          ...(refusedStarts.length ? { refusedStarts } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
-          ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
-          resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
+          // Its logical cores, which the PM's Harness plans this machine's work against (assign/crew.ts).
+          resources: { cpuPercent: finite(resources.cpuPercent), ...(began >= this.coresRefusedUntil ? { cpuCores: availableParallelism() } : {}),
+            memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
           quotas: allowances.map(q => ({ engine: q.engine, known: q.known, windows: q.windows })), runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(closed.length ? { closedHarnessIds: closed } : {}),
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         due.push({ tab: String(row.tabId), observation, localModels, signature })
@@ -571,57 +668,91 @@ export class ContributedMachines {
         const round = pending.length ? [...pending.slice(cursor % pending.length), ...pending.slice(0, cursor % pending.length)].slice(0, 2) : []
         for (const start of round) {
           if (this.stopped) return
-          if (!identifier(start.id) || ((row.paused || pool.paused) && !start.dispatched)) continue
+          if (!identifier(start.id)) continue
+          const report = this.failureReports.get(start.id)
+          if (report) {
+            await this.reportStartFailure(start.id, report.path, report.input)
+            // A dispatched receipt may already own a native session: retain its existing reconciliation/abandoned cleanup.
+            if (!report.done || !start.dispatched) continue
+          }
+          if ((row.paused || pool.paused) && !start.dispatched) continue
           if (this.cleaningTabs.has(String(row.tabId))) { this.noteWaiting(start.id, CLEANING_WAIT); continue }
           const launched = this.startInFlight(String(row.tabId))
           try {
             const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
             // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
             // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
-            const scoped: ScopedRequest = async input => input.action !== 'startStatus' && input.action !== 'command'
-              ? { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
-              : { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
-                input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
-            try {
-              // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
-              // here as well as by routing, and never moved to the owner's account instead.
-              if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
-                await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
-                  command: { type: 'agent.startFailed', startId: start.id,
-                    error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can run \`harness team setup\` to repair it.` } })
-                continue
+            const scoped: ScopedRequest = async input => {
+              if (input.action !== 'startStatus' && input.action !== 'command') return { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
+              if (input.action === 'command' && object(input.command).type === 'agent.startFailed') {
+                await this.reportStartFailure(String(start.id), path, input)
+                // The host owns this queued report now; the launch path can finish its existing cleanup.
+                return { ok: true, value: {} }
               }
-              // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
-              // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
-              let github: { requester: string } | null = null
+              return { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
+                input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
+            }
+            try {
+              // The project's checkout is made here before the start launches, with this machine's own GitHub login
+              // (superTabs/projectFolder.ts); one that cannot be made fails the start.
               if (!start.dispatched) {
-                try {
-                  github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
-                    { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
-                } catch (error) {
-                  // A token call that got no answer is tried again on the next passes, on the clock of a refused start, and
-                  // fails it with the last reason once that runs out (Diego's Mac, 2026-10-30: one timeout failed a start).
-                  if (error instanceof PrepareRetryError) {
-                    const since = this.refusedSince.get(start.id) ?? began
-                    this.refusedSince.set(start.id, since)
-                    this.noteWaiting(start.id, error.message)
-                    if (began - since < START_REFUSED_MS) continue
-                  }
+                try { await (this.deps.prepare ?? prepareSwarmStart)(this.core, row, start) }
+                catch (error) {
                   await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                     command: { type: 'agent.startFailed', startId: start.id,
                       error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
                   continue
                 }
               }
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id }, scoped, where, this.deps.open)
+              this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
               if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
               else this.preparing.delete(String(start.id))
-              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
-              if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
+              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it. So
+              // with a join the server refused (backend leadStart.ts leadOvertaken): the start's own close deletes nothing, and
+              // this close tries again until it has (security review 1 of #2668).
+              if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
-              } else this.forget(String(start.id))
+              // A start the Swarm failed is listed for one more pass, which reads the failure with no agent named. Kept for [abandoned]:
+              // forgotten here, the agent ran on as nobody's (three Codex panes on DESKTOP-0TFH0OJ, 2026-11-04).
+              } else if (result.error !== 'START_FAILED') this.forget(String(start.id))
+              // Dispatched here with a creation and no agent yet: should the Swarm fail it, [failedEarly] frees its memory at once.
+              if (result.ok !== true && !identifier(result.harnessId) && identifier(result.creationId)) {
+                this.agentless.set(String(start.id), { path, creationId: result.creationId, tries: this.agentless.get(String(start.id))?.tries ?? 0, checking: false })
+              } else this.agentless.delete(String(start.id))
+              // Launched, its engine yet to record its session: a screen it stopped on that nobody sees is answered, or fails
+              // the start now rather than at the backend's 3 minutes (startScreen.ts, task #3009). Its agent goes as any failed
+              // start's does, through [abandoned], which [remember] above keeps it for.
+              if (result.error === 'START_PENDING' && result.state !== 'pending' && identifier(result.harnessId)) {
+                const settled = await settleHiddenScreen(this.core.superTabs, result.harnessId, object(start.request), this.hiddenScreens.get(start.id),
+                  async error => { await scoped({ action: 'command', operationId: `hidden-screen-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error } }) },
+                  line => this.log(line))
+                if (settled.screen !== undefined) this.hiddenScreens.set(start.id, settled.screen)
+                else this.hiddenScreens.delete(start.id)
+                if (settled.outcome === 'failed') { this.refusedSince.delete(start.id); continue }
+              } else this.hiddenScreens.delete(start.id)
+              const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
+              if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
+              else {
+                const since = this.heldSince.get(start.id) ?? began
+                this.heldSince.set(start.id, since)
+                if (began - since >= START_HELD_MS && identifier(result.creationId)) {
+                  // Only a cancellation the daemon confirms fails the start: a launch that won the race is reconciled next pass.
+                  local ??= await this.deps.open(where)
+                  const cancelled = object(await local.request('agent_create_cancel', { creationId: result.creationId }, 10_000).catch(() => null))
+                  if (cancelled.creationId === result.creationId && cancelled.state === 'cancelled') {
+                    await local.request('super_tabs', { action: 'observeCapacity', creationId: result.creationId }, 10_000).catch(() => {})
+                    this.preparing.delete(String(start.id))
+                    // Its creation was cancelled here: nothing it launched is left to stop as abandoned.
+                    this.forget(String(start.id))
+                    await scoped({ action: 'command', operationId: `held-${start.id}`, command: { type: 'agent.startFailed', startId: start.id,
+                      error: `This machine held the agent's launch for ${START_HELD_MS / 60_000} minutes and stopped it: ${held.detail}` } })
+                    continue
+                  }
+                }
+              }
               if (!refused) this.refusedSince.delete(start.id)
               if (result.ok === true && identifier(result.harnessId)) {
                 this.waiting.delete(start.id)
@@ -644,15 +775,25 @@ export class ContributedMachines {
               } else if (result.ok !== true) {
                 const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
                 this.noteWaiting(start.id, reason)
+                const fault = result.error === 'START_MACHINE_FAULT'
+                if (fault) await this.tell(scoped, start.id, reason)
                 const since = this.refusedSince.get(start.id) ?? began
                 if (refused) this.refusedSince.set(start.id, since)
-                if (refused && began - since >= START_REFUSED_MS) {
+                if (refused && began - since >= (fault ? START_FAULT_MS : START_REFUSED_MS)) {
                   await scoped({ action: 'command', operationId: `refused-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error: reason } })
                 }
               }
             }
             // Keep its durable receipt; another start must not be starved by this failure.
-            catch (error) { this.refusedSince.delete(start.id); this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
+            catch (error) {
+              this.refusedSince.delete(start.id)
+              // The backend refused this host's own report for it: the next reading says so, and the backend fails it with this.
+              // One with no message is named by its code: an empty reason would never be reported (review of #2793).
+              if (error instanceof SuperTabHostError && error.status === 403) {
+                this.refused.set(String(start.id), (error.message || `The server refused this machine's report for it (${error.code}).`).slice(0, 300))
+              }
+              this.noteWaiting(start.id, error instanceof Error ? error.message : String(error))
+            }
           } finally { launched() }
         }
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
@@ -717,7 +858,7 @@ export class ContributedMachines {
     return lost
   }
 
-  /** What [beat] sends again for a Swarm: the reading the backend took, without whether folders hold uncommitted work. */
+  /** What [beat] sends again for a Swarm: the reading the backend took, without folder proof; an unchanged heartbeat cannot vouch for it. */
   private taken(tab: string, body: Record<string, unknown>) {
     const { harnessUncommitted: _fresh, ...kept } = body
     this.lastSent.set(tab, { path: `/api/super-tabs/${tab}/machines/${this.machineId}`, body: kept, at: this.deps.now() })
@@ -725,49 +866,70 @@ export class ContributedMachines {
 
   /**
    * One Swarm's reading through its own route, newest form first. Older backends reject the additive fields. The newest go
-   * alone first (the starts it is preparing, uncommitted work, readiness, progress, then privacy): a backend that takes
-   * everything else keeps the local models it reads. Their boolean-only view still safely refuses an unverified tool, and a
-   * reading without privacy is never one a Team machine passes on. [refused]: the batch already refused the newest form.
+   * alone first (the starts the backend refused, the starts it is preparing, uncommitted work, readiness, then progress): a
+   * backend that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
+   * unverified tool. [refused]: the batch already refused the newest form.
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
-    const { quotaReasons: _reasons, ...unreasoned } = observation
-    const { harnessTokens: _tokens, ...untokened } = unreasoned
-    const { preparingStartIds: _preparing, ...unprepared } = untokened
+    const { closedHarnessIds: _closed, ...unclosed } = observation
+    const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
+    const { profiles: _profiles, ...unprofiled } = unrefused
+    const { quotaReasons: _reasons, ...unreasoned } = unprofiled
+    const { preparingStartIds: _preparing, ...unprepared } = unreasoned
     const { harnessUncommitted: _uncommitted, ...known } = unprepared
     const { readiness: _readiness, ...ready } = known
     const { harnessProgress: _progress, ...withoutProgress } = ready
-    const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
-    const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
+    const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutProgress
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
-      ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('quotaReasons' in observation ? [observation] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+      ? [{ ...withoutProgress, localModels: localModels.filter(m => !m.starting) }] : []
+    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('preparingStartIds' in unreasoned ? [unreasoned] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
-      ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
+      ...listedOnly,
       ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
     const refuse = (attempt: Record<string, unknown>) => {
-      if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
-      else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
+      if ('closedHarnessIds' in attempt) this.closedRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('profiles' in attempt) this.profilesRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
       else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
-      else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
     }
-    // The batch sent the newest form, which is the first attempt: it is not sent again.
-    if (refused) {
+    // The machine's cores sit inside its resources, whose schema refuses a key it does not know, and a backend before them
+    // names them in its refusal ('Unrecognized key: "cpuCores"'): that form goes again without them, and they are left out
+    // for a while, as any refused field is. Every other field falls back as before.
+    const coresRefused = (error: unknown) => fieldRefused(error) && /\bcpuCores\b/.test(error instanceof Error ? error.message : '')
+    let coreless = false
+    const formOf = (attempt: Record<string, unknown>): Record<string, unknown> => {
+      if (!coreless || !('cpuCores' in object(attempt.resources))) return attempt
+      const { cpuCores: _cores, ...resources } = object(attempt.resources)
+      return { ...attempt, resources }
+    }
+    // The batch sent the newest form, which is the first attempt: it is not sent again, unless only its cores were refused.
+    if (refused && coresRefused(refused)) {
+      this.coresRefusedUntil = began + FIELD_REFUSED_MS
+      coreless = true
+    } else if (refused) {
       if (attempts.length === 1) throw refused
       refuse(attempts[0]!)
     }
-    for (const [index, attempt] of attempts.entries()) {
-      if (refused && index === 0) continue
+    for (let index = refused && !coreless ? 1 : 0; index < attempts.length; index++) {
+      const attempt = formOf(attempts[index]!)
       try {
         await this.deps.backend(this.core, 'POST', path, attempt)
         this.taken(tab, attempt)
         return
       } catch (error) {
+        if (!coreless && 'cpuCores' in object(attempt.resources) && coresRefused(error)) {
+          this.coresRefusedUntil = began + FIELD_REFUSED_MS
+          coreless = true
+          index--
+          continue
+        }
         if (!fieldRefused(error) || index === attempts.length - 1) throw error
         refuse(attempt)
       }
@@ -834,20 +996,30 @@ export class ContributedMachines {
     } finally { launch.checking = false }
   }
 
-  /** Each running session's token counts by model, from the daemon's last usage reading (never a transcript read): the
-   *  Swarm prices each attempt by them (backend superTabs/costs). Counts only; the reading's folders and pull requests stay
-   *  here. A session with none read yet is left out. */
-  private async tokensOf(running: readonly string[]): Promise<Record<string, Record<string, ModelTokens>>> {
-    const counted: Record<string, Record<string, ModelTokens>> = {}
-    for (const id of running) {
-      const session = this.core.agents.byAgent(id)
-      const target = session && usageTarget(session)
-      if (!target || !validUsageTarget(target)) continue
-      const models = (await this.core.usage?.(target).catch(() => null))?.models
-      if (models && Object.keys(models).length && validModelTokens(models)) counted[id] = models
-    }
-    return counted
+  /**
+   * A start dispatched here with no agent that the backend no longer lists as pending: when the backend says it failed (its
+   * machine did not start it within 3 minutes, say) and no agent joined, this machine's ledger ends its reservation at once
+   * rather than at its launch deadline (River on task #2890, issue #2989). A status the backend cannot give now is asked
+   * again on later passes, a few times; a daemon that cannot end it keeps the row until that deadline.
+   */
+  private async failedEarly(startId: string, launch: Agentless, where: Parameters<MachineDeps['open']>[0]): Promise<void> {
+    launch.checking = true
+    try {
+      const status = object(await this.deps.backend(this.core, 'GET', launch.path))
+      if (identifier(status.harnessId) || !status.error) { this.agentless.delete(startId); return }
+      this.agentless.delete(startId)
+      const local = await this.deps.open(where)
+      try {
+        const ended = object(await local.request('super_tabs', { action: 'endCapacity', creationId: launch.creationId }, 10_000))
+        if (ended.ok === true) this.log(`Freed the memory of start ${startId}, which the Swarm failed: ${String(status.error)}`)
+        else this.log(`Could not free the memory of failed start ${startId}: ${String(ended.error ?? 'no answer')}; its launch deadline frees it.`)
+      } finally { local.close() }
+    } catch (error) {
+      if (++launch.tries >= ABANDONED_TRIES) this.agentless.delete(startId)
+      this.log(`Could not free the memory of failed start ${startId}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally { launch.checking = false }
   }
+
   /** Whether each running session's folder has uncommitted changes (git status), as last read, for the sessions git could
    *  read: the backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts).
    *  The folders due are read beside the pass, never holding the reading up; what they say goes with a later one. A folder
@@ -905,10 +1077,11 @@ export class ContributedMachines {
     if (!record) return
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
-    if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    if (await folderGone(record.path)) return this.removed(file, mine)
+    if (record.kind === 'agent-folder') return this.removeAgentFolder(file, record, mine)
     if (!await swarmWorktree(record.path, record.source, record.startId)) {
       // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
-      if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+      if (await folderGone(record.path)) return this.removed(file, mine)
       this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
       return
     }
@@ -924,16 +1097,38 @@ export class ContributedMachines {
     if (!await sweepOne(record.path, Date.now(), 0, unused).catch(error => {
       this.log(`Kept a Swarm worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
     })) return
+    this.removed(file, mine)
+  }
+
+  /** A worktree gone: its record goes. */
+  private removed(file: string, mine: (w: SwarmWorktree) => boolean) {
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
-  /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */
+  /** An agent's own folder (#3713), only when it is still the one Harness made and marked in its agent-home folder, and no
+   *  session, live or paused, works in it: it holds nothing but that agent's own work. A record that no longer proves that
+   *  is kept, its folder untouched; the log names no path. */
+  private async removeAgentFolder(file: string, record: SwarmWorktree, mine: (w: SwarmWorktree) => boolean): Promise<void> {
+    if (!removableAgentFolder(record.path, projectsRoot())) { this.log('Kept an agent folder: AGENT_FOLDER_UNPROVEN'); return }
+    const used = this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))
+      || this.core.agents.all().some(a => a.agentId !== record.harnessId && !!a.cwd && within(record.path, a.cwd))
+    if (used) return
+    // The agent's work is never deleted with its folder (security review of #3341): one that holds any is kept, with its
+    // record, for its person, as a worktree with uncommitted changes is.
+    if (!agentFolderEmpty(record.path)) { this.log('Kept an agent folder: AGENT_FOLDER_HAS_WORK'); return }
+    try { rmSync(record.path, { recursive: true, force: true }) } catch { this.log('Kept an agent folder: AGENT_FOLDER_REMOVAL_FAILED'); return }
+    this.removed(file, mine)
+  }
+
+  /** A removal deletes only what is provably the Swarm's: the record says which worktree, or agent folder, each start made. */
   private recordWorktree(tabId: string, startId: string, harnessId: string, request: Record<string, unknown>) {
     const path = this.core.agents.byAgent(harnessId)?.cwd
-    if (request.worktree !== true || typeof request.cwd !== 'string' || !path) return
+    const agentFolder = request.worktree !== true && !!path && removableAgentFolder(path, projectsRoot())
+    if ((request.worktree !== true && !agentFolder) || typeof request.cwd !== 'string' || !path) return
     try {
       const file = swarmWorktreesFile(this.core.dataDir, this.machineId), worktrees = readWorktrees(file)
-      if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId, source: request.cwd, path }])
+      if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId,
+        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}) }])
     } catch (error) { this.log(`Could not record the worktree of Swarm start ${startId}: ${error instanceof Error ? error.message : String(error)}`) }
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }
@@ -1057,9 +1252,9 @@ export class ContributedMachines {
         kept.add(basename(target)); continue
       }
       if (addedAgain(await read())) return
-      const source = candidates.find(c => c.path === target)?.source
+      const candidate = candidates.find(c => c.path === target)
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
-      if (source) await git(source, ['worktree', 'remove', '--force', target]).catch(() => null)
+      if (candidate) await inRepositoryTurn(candidate.source, () => git(candidate.source, ['worktree', 'remove', '--force', target])).catch(() => null)
       await rm(target, { recursive: true, force: true })
     }
     // Diego 10-29: a folder kept for a live session was confirmed cleaned anyway and its records dropped, so nothing ever
@@ -1072,20 +1267,25 @@ export class ContributedMachines {
   }
 }
 
-// ── Readiness (#229 v1 routing) ─────────────────────────────────────────────────────────────────────────────────────
-// The route picked a Windows machine that never started agents, machines without the project and machines that could not
-// push, because nothing told it so. The reading says what this machine is ready for; the route leaves out only what it
-// says cannot work (routeCommand.ts), and anything unknown stays a candidate.
+// ── Readiness (#229) ─────────────────────────────────────────────────────────────────────────────────────────────────
+// A Windows machine that never started agents, machines without the project and machines that could not push were chosen
+// because nothing told the Swarm so. The reading says what this machine is ready for (Desktop places a PM by it,
+// state/lead_placement.dart), and anything unknown stays unknown.
 
 /** How long an engine's sign-in and a checkout's push access stand before they are read again, and how soon an engine
  *  probe that failed is tried again. */
 const READINESS_MS = 10 * 60_000
 const READINESS_RETRY_MS = 60_000
-/** How long an allowance reading stands. 2026-10-29: Anthropic answered 5 reads in a row, then refused them for 5 minutes
- *  (HTTP 429, retry-after 300); read on every 15-second report, Claude's allowance showed as unknown. */
+/** How long an allowance reading stands: Codex's is a process start of its app-server (lib/codexRateLimits.ts). */
 const USAGE_FRESH_MS = 3 * 60_000
-/** After a refused read: Anthropic's own retry-after. */
-const USAGE_LIMITED_MS = 5 * 60_000
+/** The allowance left on an account, from its tightest window, and when that window resets (ISO, as the backend takes it). */
+function allowanceLeft(windows: ReturnType<typeof quotaOf>['windows']): { left: number | null; resetsAt: string | null } {
+  const tightest = windows.reduce<(typeof windows)[number] | null>((t, w) => !t || w.usedPercent > t.usedPercent ? w : t, null)
+  if (!tightest) return { left: null, resetsAt: null }
+  const at = typeof tightest.resetsAt === 'number' ? new Date(tightest.resetsAt < 1e12 ? tightest.resetsAt * 1000 : tightest.resetsAt)
+    : typeof tightest.resetsAt === 'string' ? new Date(tightest.resetsAt) : null
+  return { left: Math.min(100, Math.max(0, Math.round(100 - tightest.usedPercent))), resetsAt: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null }
+}
 /** After the reader on this machine did not answer at all. */
 const USAGE_RETRY_MS = 60_000
 /** How long the last readable windows stand while later reads fail; past it the allowance is unknown, with why. */
@@ -1105,7 +1305,7 @@ export function createQuietGit(timeoutMs = 15_000): GitRun {
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never',
       GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0' }
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
-    const child = spawn('git', ['-C', cwd, ...args], { env, detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('git', ['-C', cwd, ...args], { env, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = '', stderr = '', settled = false
     const settle = (answer: { ok: boolean; timedOut?: boolean }) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ ...answer, stdout, stderr }) } }
     child.stdout.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })
@@ -1141,8 +1341,8 @@ const NOT_A_REPOSITORY = /not a git repository/i
 /** Each project folder in a Swarm folder: the repository its origin names (without credentials), whether it is a
  *  checkout of its own, and whether this machine's login can push there, by a dry run that runs no hooks. git's own
  *  words never leave the machine. A folder whose probe failed (a timeout, git that would not start, an unreadable
- *  repository) is left out, which the route reads as unknown, and [unsure] says to read it again soon. */
-export async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
+ *  repository) is left out, which reads as unknown, and [unsure] says to read it again soon. */
+async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
   const folders = (await readdir(root, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith('.'))
     .map(e => e.name).sort().slice(0, MAX_CHECKOUTS)
   const out: ReadyCheckout[] = []
@@ -1172,6 +1372,8 @@ const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
 
 /** A start this host launched whose engine has not recorded its session yet (ContributedMachines `abandoned`). */
 interface Unconfirmed { path: string; harnessId: string; creationId: string; tries: number; checking: boolean }
+/** A start dispatched here whose creation has no agent yet (ContributedMachines `failedEarly`). */
+interface Agentless { path: string; creationId: string; tries: number; checking: boolean }
 /** How many passes ask about an abandoned start before it is let go. */
 const ABANDONED_TRIES = 5
 
@@ -1241,13 +1443,12 @@ function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why
 }
 
 /** The models this machine serves on [grid] that can drive a coding agent. One too small or too slow is reported apart
- *  ([refusedOn]), and the route offers it with that note (project instructions, phase 4, decision 19). */
+ *  ([refusedOn]). */
 export function servedOn(answer: unknown, grid: string): LocalModelReading[] {
   return fleetOn(answer, grid).filter(m => m.why === null).map(({ why: _why, ...reading }) => reading)
 }
 
-/** The models this machine serves on [grid] too small or too slow for a coding agent, with why: the route offers them with
- *  that note (routeCommand.ts servedModels), rather than telling the agent to share a model the Swarm already has (2026-10-24). */
+/** The models this machine serves on [grid] too small or too slow for a coding agent, with why. */
 export function refusedOn(answer: unknown, grid: string): Array<{ grid: string; model: string; name?: string; why: string }> {
   return fleetOn(answer, grid).flatMap(({ grid: g, model, name, why }) => why === null ? [] : [{ grid: g, model, ...(name ? { name } : {}), why: why.slice(0, 300) }])
 }

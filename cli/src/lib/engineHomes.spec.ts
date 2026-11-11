@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import {
-  adoptEngineHomes, adoptHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, movedHomes,
+  adoptEngineHomes, adoptHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, launchHomeOf, movedEngineHomes, movedHomes,
   ownHomeOf, profileEnvironment, resetEngineHomes, sessionClaudeHome, sessionCodexHome, sessionFolderOf, sessionRoots,
   confirmHomes, durableEngineHomes, nativeSessionRoots, recoverEngineHomes, engineHomeSnapshot,
 } from './engineHomes.js'
@@ -285,6 +285,12 @@ describe('the home an engine launched now uses', () => {
     expect(launchClaudeConfigDir({ CLAUDE_CONFIG_DIR: '/claude-work' })).toBe('/claude-work')
     expect(launchClaudeConfigDir({ CLAUDE_CONFIG_DIR: 'relative' })).toBe(homedir())
     expect(launchClaudeConfigDir({})).toBe(homedir())
+  })
+
+  it('launchHomeOf honours the profile for CLAUDE_CONFIG_DIR homes (the trust file resolves into it)', () => {
+    const trustHome = { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' } as const
+    expect(launchHomeOf(trustHome, '/profiles/work', { CLAUDE_CONFIG_DIR: '/moved' })).toBe('/profiles/work')
+    expect(launchHomeOf(trustHome, null, { CLAUDE_CONFIG_DIR: '/moved' })).toBe('/moved')
   })
 
   it('reads the login shell\'s environment over the daemon\'s own: the profile is what the pane runs', () => {

@@ -14,26 +14,12 @@ import 'swarm_state_test.dart' show createApp;
 /// Set to a folder to write the PR's sidebar pictures there.
 final shots = Platform.environment['SUPER_TAB_SIDEBAR_SHOTS'];
 
-/// SF Symbols as AppKit draws them (`systemSymbolPng`), `<name>.png` at 2×:
-/// what the Mac app's channel answers with.
-final symbols = Platform.environment['SUPER_TAB_SIDEBAR_SYMBOLS'];
-
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   for (final brightness in Brightness.values) {
     testWidgets('the Swarm sidebar in ${brightness.name}', (tester) async {
       if (shots == null) return;
-      if (symbols != null) {
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          const MethodChannel('harness/system_symbols'),
-          (call) async {
-            final name = (call.arguments as Map)['name'];
-            final file = File('$symbols/$name.png');
-            return file.existsSync() ? file.readAsBytesSync() : null;
-          },
-        );
-      }
       final previous = grid.AppTheme.brightness.value;
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = previous);
@@ -57,10 +43,7 @@ void main() {
           'resources': {'deviceType': ?type},
         },
       };
-      final server = ConversationServer()
-        ..tag('message-1')
-        ..tag('message-2')
-        ..ask(['Ship it behind a flag?']);
+      final server = ConversationServer();
       server.state['agents'] = <Object>[];
       server.state['machines'] = [
         machine('studio', 'MACs-Mac-Studio.local', 'Mac Studio'),
@@ -82,7 +65,6 @@ void main() {
               body: SuperTabView(
                 controller: c,
                 app: app,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 onNewProject: () {},

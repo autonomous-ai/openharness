@@ -7,6 +7,7 @@
 import { z } from 'zod'
 import { INSTANCE_ID } from '../lib/instance.js'
 import { logger } from '../utils/logger.js'
+import type { HostStamp } from './cache.js'
 import { SWEEP_EVERY_MS } from './liveness.js'
 
 /** A record is read again only within this long of its Swarm's last full report. */
@@ -18,20 +19,35 @@ export const DEADLINE_CAP_MS = 300_000
 export interface ReportRecord {
   /** The Swarm's `main` stamp read before the full report loaded it. */
   stamp: number
+  /** This machine's host stamps read with it (cache.ts HostStamp); absent from a record of an older server. */
+  hosts?: { host: number; all: number }
   /** This machine's agents Lent counts for the next report (leaderboard/lent.ts lentAgents). */
   lentCount: number
+  /** The same agents by the project of their task (lentProjects); absent from a record of an older server. */
+  lentProjects?: Record<string, number>
   /** Whether any machine of the Swarm was being removed (machines.ts expireRemovals). */
   removals: boolean
-  /** The earliest a worker here may lose its task to time (liveness.ts nextLossAt), at most DEADLINE_CAP_MS on. */
+  /** The earliest a closed agent's removal falls due (closedAgents.ts nextRemovalAt), at most DEADLINE_CAP_MS on: this record holds a
+   *  heartbeat on the fast path until then. */
   deadline: number
-  /** Whether the Swarm's record says the machine is a Team account's (store.ts teamByRecord). */
-  team: boolean
   /** Who is told of a reading (parts/commit.ts membersToTell): the Swarm's people. */
   members: string[]
   /** The starts this machine may say it is preparing (machines.ts preparableStart). */
   preparable: string[]
   /** When the full report ran. */
   at: number
+}
+
+/**
+ * Whether nothing a full report of this machine decides from changed since [record] (task #3119): the Swarm unchanged, or
+ * changed only where neither this machine's host nor every host is concerned, by servers that all move host stamps. A busy
+ * Swarm's `main` moves every few seconds, which sent every machine's every reading through the whole Swarm's load.
+ */
+export function recordHolds(record: ReportRecord, now: HostStamp): boolean {
+  if (now.main === record.stamp) return true
+  // A Swarm whose stamps Redis lost reads 0 everywhere: nothing says what changed since (review of #3119).
+  return !!record.hosts && now.main > 0 && now.hosted === now.main && now.uncovered <= record.stamp
+    && now.host === record.hosts.host && now.all === record.hosts.all
 }
 
 export interface ReportMemory {
@@ -49,8 +65,8 @@ export interface ReportRedis {
   set(key: string, value: string, px: 'PX', ms: number, nx: 'NX'): Promise<string | null>
 }
 
-const record = z.object({ stamp: z.number().finite(), lentCount: z.number().int().nonnegative(), removals: z.boolean(), deadline: z.number().finite(),
-  team: z.boolean(), members: z.array(z.string()), preparable: z.array(z.string()), at: z.number().finite() })
+const record = z.object({ stamp: z.number().finite(), hosts: z.object({ host: z.number().finite(), all: z.number().finite() }).optional(), lentCount: z.number().int().nonnegative(), lentProjects: z.record(z.string(), z.number().int().nonnegative()).optional(), removals: z.boolean(), deadline: z.number().finite(),
+  members: z.array(z.string()), preparable: z.array(z.string()), at: z.number().finite() })
 
 function parse(value: string | null): ReportRecord | undefined {
   if (value === null) return undefined

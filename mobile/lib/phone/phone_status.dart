@@ -31,7 +31,13 @@ PhoneMachineStatus phoneMachineStatusOf(MachineState machine) {
   // fail. The password is worth asking for once there is something to give it to, which is what the
   // desktop's "Offline · Link required" already says.
   if (machine.nodeOnline == false) return PhoneMachineStatus.offline;
-  if (machine.needsLink) return PhoneMachineStatus.needsPassword;
+  // Its key not in the account's log yet ([MachineState.awaitingKey]): late, not locked. It comes
+  // in by itself once the key lands; only a wait that runs out asks for its password.
+  if (machine.needsLink) {
+    return machine.awaitingKey
+        ? PhoneMachineStatus.connecting
+        : PhoneMachineStatus.needsPassword;
+  }
   final answering =
       machine.connectionStatus == ConnectionStatus.connected &&
       machine.agentLoadStatus != AgentLoadStatus.loading;
@@ -133,11 +139,14 @@ String _agentCount(int count) => switch (count) {
   _ => '$count harnesses',
 };
 
-/// What an agent is doing, as its row says it. Waiting on the person outranks working, which
-/// outranks everything else: it is the one state somebody has to act on.
+/// What an agent is doing, as its row says it. Waiting on the person outranks a named state, which
+/// outranks working, which outranks everything else: those two are the ones somebody has to act on.
 PhoneSummary phoneAgentSummary(MachineState machine, Agent agent) {
   if (machine.blockedAgents.containsKey(agent.id)) {
     return (label: 'Waiting for you', tone: PhoneTone.attention);
+  }
+  if (agent.namedState case final state?) {
+    return (label: state, tone: PhoneTone.attention);
   }
   if (machine.processingAgentIds.contains(agent.id)) {
     return (label: 'Working…', tone: PhoneTone.busy);

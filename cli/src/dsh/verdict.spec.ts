@@ -28,9 +28,21 @@ describe('parseVerdict', () => {
       errors: 2,
       warnings: 1,
       artifact: 'boards/main.board.json',
+      preview: null,
       phases: [],
       updatedAt: '2026-09-14T20:00:00Z',
     })
+  })
+
+  it('names a preview only as a loopback page with a port', () => {
+    const preview = (value: unknown): string | null | undefined => parseVerdict(JSON.stringify({ spec: 1, ready: true, preview: value }))?.preview
+    expect(preview('http://127.0.0.1:5173/')).toBe('http://127.0.0.1:5173/')
+    expect(preview('http://localhost:3000/menu?x=1')).toBe('http://localhost:3000/menu?x=1')
+    expect(preview('http://example.com:5173/')).toBeNull()
+    expect(preview('https://127.0.0.1:5173/')).toBeNull()
+    expect(preview('http://127.0.0.1/')).toBeNull()
+    expect(preview('http://me:pw@127.0.0.1:5173/')).toBeNull()
+    expect(preview(5173)).toBeNull()
   })
 
   it('keeps the phases in order, sanitised, and never more than twelve', () => {
@@ -116,7 +128,7 @@ describe('DshVerdictWatcher', () => {
 describe('the edges of parseVerdict', () => {
   it('reads a blank summary, no findings and an empty artifact as nothing', () => {
     expect(parseVerdict(JSON.stringify({ spec: 1, ready: true, summary: '   ', findings: 'none', artifact: '' })))
-      .toEqual({ ready: true, summary: null, errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null })
+      .toEqual({ ready: true, summary: null, errors: 0, warnings: 0, artifact: null, preview: null, phases: [], updatedAt: null })
   })
 
   it('caps the summary, refuses an overlong artifact, and skips a phase that is a list', () => {

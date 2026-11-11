@@ -14,7 +14,7 @@
  * E2EE_REQUIRED. backendSocket.spec.ts and gateway/gateway.spec.ts hold each of them.
  */
 import { env } from '../config/env.js'
-import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
+import type { BrowserRoute, GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
 import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
 import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
@@ -40,6 +40,9 @@ import { UpstreamLink } from './upstream.js'
 
 type Frame = Record<string, unknown>
 
+/** Agent browser opens a client may have waiting on its P2P channel: four viewers a browser, with room. */
+const BROWSER_PENDING_OPENS_MAX = 32
+
 export interface RelayGatewayOptions {
   /** Backend-resolved machine id, persisted by the SSO login preflight; in isolated unit tests, the token. */
   machineId: string
@@ -57,6 +60,21 @@ export interface RelayGatewayOptions {
 export const TUI_ONLY_EVENTS: ReadonlySet<string> = new Set(['tool_end', 'subagent_finished', 'done', 'context_compact'])
 /** The longest the backend's word that a terminal app is open is taken for (backend bus.ts TUI_OPEN_FOR_MS). */
 export const TUI_OPEN_MAX_MS = 180_000
+/** A machine's live events: what an app viewing it shows as it happens, and none of it read by the backend. While the
+ *  backend counts no app on the machine they stay off the relay, a publish that reached no one
+ *  (docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md, Part 4). `turn_started`, `agent_synced` and
+ *  `agent_deleted` are not here: the backend counts turns and keeps the machine's agents from them. An app that connects
+ *  lists the sessions itself, so what was held leaves nothing missing. */
+export const UI_GATED_EVENTS: ReadonlySet<string> = new Set([
+  'text_delta', 'tool_start', 'tool_end', 'user_message', 'thinking_delta', 'thinking_title', 'turn_heartbeat',
+  'agent_activity', 'turn_ended', 'turn_summary', 'subagent_finished', 'done', 'context_compact',
+])
+/** How long a frame from a remote app keeps live events flowing without the backend's count: an app's first frame, its
+ *  E2EE hello, comes before the `__clients` that counts it. */
+export const UI_QUIET_MS = 60_000
+/** How long the backend's "no app views this machine" is believed without being said again. It repeats `__clients` every
+ *  15 s (backend nodeRole PRESENCE_REFRESH_MS); a word six repeats old may come from a backend that stopped counting. */
+export const UI_SNAPSHOT_MAX_MS = 90_000
 
 export class RelayGateway implements GatewayPort {
   /** Optional scalar-only measurement hooks. Never hand a frame or user payload to the collector. */
@@ -98,11 +116,25 @@ export class RelayGateway implements GatewayPort {
    * closed meanwhile is closed again by the `terminal_closed` that follows it, which takes it off P2P.
    */
   private readonly liveStreams = new Map<string, Set<string>>()
+  /** The `agent_browser_open`s a client sent over its P2P channel, by request id: the stream its result names opens there. */
+  private readonly browserPendingOpens = new Map<string, Set<string>>()
+  /**
+   * Each client's agent browser streams, and the route each opened on, kept apart from the terminal's `p2pStreams`:
+   * a terminal survives a move between wires through its resync and keyframe, and VNC has neither (core/browserStreams.ts).
+   * A stream keeps its route until it closes; when the route goes, the stream ends.
+   */
+  private readonly browserStreams = new Map<string, Map<string, BrowserRoute>>()
   /** Cross-instance commander (device) client count, from backend `__clients` frames. */
   private commanderCount = 0
   /** Until when a terminal app of the account counts as open, from the backend's `__tui_open`; null until it has said
    *  (an older backend, a team account, the link not yet back), when every event is relayed as before. */
   private tuiUntil: number | null = null
+  /** The backend's count of apps viewing this machine, from `__clients`, kept only when the backend says live events may be
+   *  held on it (`uiGate`). null until it has said so (an older backend, or its RELAY_UI_GATE off) and while the link is
+   *  down, when every event is relayed as before. */
+  private uiGate: { ui: number; at: number } | null = null
+  /** When a remote app (not a device, not the backend, not a Share viewer) last sent a frame. */
+  private lastRemoteFrameAt = 0
   /** Subset of commanderCount whose device is ACTIVELY rendering this machine (multi-attach). null = the
    *  backend doesn't send the signal (old build). */
   private commanderActive: number | null = null
@@ -175,6 +207,7 @@ export class RelayGateway implements GatewayPort {
       onSessionOpened: (connId, role, identity) => {
         // A new session counts from the start again: a counter kept from the last one would pin its streams.
         this.forgetRoutes(connId)
+        this.forgetBrowserStreams(connId)
         const peer = this.e2ee.pairedPeers().find(p => p.identityPub === identity)
         this.core.client(connId, {
           role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
@@ -186,6 +219,7 @@ export class RelayGateway implements GatewayPort {
       },
       onSessionDropped: (connId) => {
         this.forgetRoutes(connId)
+        this.forgetBrowserStreams(connId)
         this.core.client(connId, null)
       },
       onPeerLinked: (peer) => {
@@ -233,8 +267,11 @@ export class RelayGateway implements GatewayPort {
     this.liveStreams.clear()
     this.routeCounters.clear()
     this.staleRouteLogged.clear()
+    this.browserPendingOpens.clear()
+    this.browserStreams.clear()
     this.replayCommanderOnNextSnapshot = true
     this.tuiUntil = null
+    this.uiGate = null
   }
 
   /** The ONE place commander presence changes. Both callers — the `__clients` snapshot and the link going
@@ -307,7 +344,7 @@ export class RelayGateway implements GatewayPort {
       } catch { /* Work continues without metrics. */ }
     }
     if (this.link.servesThisComputerOnly()) return
-    if (!this.heldForNoTerminalApp(frame.type)) this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
+    if (!this.heldForNoTerminalApp(frame.type) && !this.heldForNoUi(frame.type)) this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
     if (guest) {
       for (const connId of this.e2ee.guestSessions(guest)) {
         const sealed = this.e2ee.wrapFor(connId, frame)
@@ -320,6 +357,14 @@ export class RelayGateway implements GatewayPort {
    *  (docs/plans/2026-10-31-live-events-relay-design.md, change 5). A guest's own sealed copy is never held. */
   private heldForNoTerminalApp(type: unknown): boolean {
     return this.tuiUntil !== null && Date.now() >= this.tuiUntil && typeof type === 'string' && TUI_ONLY_EVENTS.has(type)
+  }
+
+  /** Whether [type] is a live event and no app can see it now: the backend said it may be held and counts none, and no
+   *  remote app has sent a frame for a minute. A guest's own sealed copy, and every reply and targeted frame, are never held. */
+  private heldForNoUi(type: unknown): boolean {
+    return this.uiGate !== null && this.uiGate.ui === 0 && Date.now() - this.uiGate.at < UI_SNAPSHOT_MAX_MS
+      && Date.now() - this.lastRemoteFrameAt >= UI_QUIET_MS
+      && typeof type === 'string' && UI_GATED_EVENTS.has(type)
   }
 
   /** The guest a remote connection's session is (gateway/sharedTrust.ts), '' when its store did not
@@ -375,6 +420,7 @@ export class RelayGateway implements GatewayPort {
   terminal(connId: string, type: string, payload: Record<string, unknown>): boolean {
     const frame = this.e2ee.wrapTarget(connId, type, payload)
     if (!frame) return false
+    if (type.startsWith('agent_browser_')) return this.browserFrame(connId, type, payload, frame)
     this.noteLiveStream(connId, type, payload)
     if (this.routeTerminalOutputToP2p(connId, type, payload)) {
       if (this.terminalP2p.send(connId, JSON.stringify(frame))) return true
@@ -392,6 +438,7 @@ export class RelayGateway implements GatewayPort {
   /** Pairwise-encrypted binary terminal output/keyframe. The hop prefix exposes
    * only connId and direction to the opaque backend relay. */
   terminalBinary(connId: string, clear: TerminalBinaryClear): boolean {
+    if (clear.kind === TerminalBinaryKind.browser) return this.browserBinary(connId, clear)
     const clientFrame = this.e2ee.wrapTerminalBinary(connId, clear)
     if (!clientFrame) return false
     if (this.p2pStreams.get(connId)?.has(clear.streamId)) {
@@ -550,6 +597,10 @@ export class RelayGateway implements GatewayPort {
       return
     }
     if (type.startsWith('observer_')) return
+    // An app that connects sends its E2EE hello first, before the backend's next `__clients` counts it: live events flow
+    // again from that frame on, so it misses nothing it could open. The backend's own frames (connId '' or `__`) and a
+    // device's are no app viewing. A reconnecting device's hello, before it is known as one, opens it for a minute.
+    if (connId && !type.startsWith('__') && !this.isDeviceConn(connId)) this.lastRemoteFrameAt = Date.now()
     // E2EE control frames (pairing/handshake) are handled by the manager, never as node RPCs.
     if (type.startsWith('e2e_')) {
       const deviceBefore = deviceDump.enabled && (this.isDeviceConn(connId) || (type === 'e2e_pair_intent' && (frame.payload as { role?: unknown } | undefined)?.role === 'device'))
@@ -627,6 +678,7 @@ export class RelayGateway implements GatewayPort {
     }
     // `unwrapDown` opened it, so its envelope counter is a number.
     if (type.startsWith('terminal_')) this.noteTerminalInputRoute(connId, type, payload, transport, (frame.payload as WrappedPayload).__e2e.n)
+    else if (type === 'agent_browser_open') this.noteBrowserOpen(connId, payload, transport)
     await this.core.frame(connId, opened, transport, role)
   }
 
@@ -635,7 +687,9 @@ export class RelayGateway implements GatewayPort {
     // Cross-instance client snapshot. Generation detects leave/join cycles that coalesce to the same
     // count; count rise remains the compatibility fallback for older backends.
     if (type === '__clients') {
-      const payload = (frame.payload ?? {}) as { commander?: number; commanderActive?: number; commanderJoinGeneration?: number }
+      const payload = (frame.payload ?? {}) as { ui?: number; commander?: number; commanderActive?: number; commanderJoinGeneration?: number; uiGate?: unknown }
+      // A count that is no number is never 0, so it holds nothing.
+      this.uiGate = payload.uiGate === true ? { ui: Number(payload.ui ?? 0), at: Date.now() } : null
       const commander = Number(payload.commander ?? 0)
       const rawGeneration = payload.commanderJoinGeneration
       const generation = typeof rawGeneration === 'number' && Number.isSafeInteger(rawGeneration) && rawGeneration >= 0
@@ -673,11 +727,32 @@ export class RelayGateway implements GatewayPort {
       this.p2pStreams.delete(connId)
       this.liveStreams.delete(connId)
       this.forgetRoutes(connId)
+      this.forgetBrowserStreams(connId)
       await this.core.disconnected(connId)
+      return
+    }
+    // A Lead's terminal request waits for an agent of this machine (spec 2026-11-02-poll-cost Part 4.2): the Swarm host picks
+    // it up now. A `__` frame, so a daemon from before it drops it below; one naming no agent is no request.
+    if (type === '__terminal_waiting') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      if (typeof p.tabId === 'string' && typeof p.agentId === 'string') this.core.notice({ type, tabId: p.tabId, agentId: p.agentId })
+      return
+    }
+    // The server renews the Swarm host's delivery push lease (task #2800, review of #2977): nothing to read, the host only
+    // keeps reading idle workers' lists when told. A `__` frame, so a daemon from before it drops it below.
+    if (type === '__deliveries_lease') {
+      this.core.notice({ type })
       return
     }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.
     if (type.startsWith('__')) return
+
+    // The relay dropped one of this machine's browser frames over its budget (backend lib/adapterWs.ts). It cannot
+    // say whose: the stream is inside the ciphertext.
+    if (type === 'agent_browser_transport_error') {
+      this.core.browserTransportError()
+      return
+    }
 
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. Closing the link blocks the reconnect that would otherwise fire on socket drop.
@@ -978,7 +1053,85 @@ export class RelayGateway implements GatewayPort {
     this.p2pPendingOpens.delete(connId)
     this.p2pStreams.delete(connId)
     this.forgetRoutes(connId)
-    console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}`)
+    this.browserPendingOpens.delete(connId)
+    // A browser stream never falls back to the relay with its terminals: it ends, and its panel opens a new one.
+    const browser = this.browserStreams.get(connId)
+    const lost = browser ? [...browser].filter(([, route]) => route !== 'relay').map(([streamId]) => streamId) : []
+    for (const streamId of lost) browser!.delete(streamId)
+    if (browser?.size === 0) this.browserStreams.delete(connId)
+    console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}${lost.length ? ` browser_streams_closed=${lost.length}` : ''}`)
+    for (const streamId of lost) this.core.browserRouteLost(streamId)
+  }
+
+  // ── agent browser streams, each on the route it opened on ─────────────────────────────────────────
+
+  /** An open over the client's P2P channel opens its stream there. Bounded: the core answers every open. */
+  private noteBrowserOpen(connId: string, payload: Record<string, unknown>, transport: RemoteTransport): void {
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+    if (!requestId) return
+    let pending = this.browserPendingOpens.get(connId)
+    if (transport !== 'p2p') {
+      pending?.delete(requestId)
+      return
+    }
+    if (!pending) { pending = new Set(); this.browserPendingOpens.set(connId, pending) }
+    if (pending.size >= BROWSER_PENDING_OPENS_MAX) pending.delete(pending.values().next().value!)
+    pending.add(requestId)
+  }
+
+  /** A browser stream's control frame to its client: on the stream's own route, the open's result fixing it. A frame
+   *  the direct link refuses goes over the relay, ahead of the closes the lost link raises. */
+  private browserFrame(connId: string, type: string, payload: Record<string, unknown>, frame: Frame): boolean {
+    const streamId = typeof payload.streamId === 'string' ? payload.streamId : ''
+    let route: BrowserRoute | undefined
+    if (type === 'agent_browser_open_result') {
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+      const pending = this.browserPendingOpens.get(connId)
+      const opened = !!requestId && pending?.delete(requestId) === true
+      if (pending?.size === 0) this.browserPendingOpens.delete(connId)
+      // A link the responder cannot classify is paced as TURN, which is billed per GB.
+      route = !opened ? 'relay' : this.terminalP2p.transport(connId) === 'direct' ? 'direct' : 'turn'
+      if (streamId) {
+        let streams = this.browserStreams.get(connId)
+        if (!streams) { streams = new Map(); this.browserStreams.set(connId, streams) }
+        streams.set(streamId, route)
+        this.core.browserRoute(streamId, route)
+      }
+    } else {
+      const streams = this.browserStreams.get(connId)
+      route = streams?.get(streamId)
+      if (type === 'agent_browser_close' && streams?.delete(streamId) && streams.size === 0) this.browserStreams.delete(connId)
+    }
+    const direct = route === 'direct' || route === 'turn'
+    if (direct && this.terminalP2p.send(connId, JSON.stringify(frame))) return true
+    const sent = this.link.sendBestEffort({ t: 'up', targetConnId: connId, webEligible: true, commanderEligible: false, frame })
+    if (direct) this.demoteP2pConnection(connId, 'send_failed')
+    return sent
+  }
+
+  /**
+   * A browser stream's screen bytes, on its route only. One that cannot go (the direct link refused it, there is no
+   * session, the relay socket is closed, or the stream has no route here) is dropped and its stream told to end: a
+   * hole in a VNC stream corrupts it, and a move onto the other wire would reorder it.
+   */
+  private browserBinary(connId: string, clear: TerminalBinaryClear): boolean {
+    const route = this.browserStreams.get(connId)?.get(clear.streamId)
+    const sealed = route ? this.e2ee.wrapTerminalBinary(connId, clear) : null
+    if (sealed && route !== 'relay') {
+      if (this.terminalP2p.send(connId, Buffer.from(sealed))) return true
+      // The demotion ends this stream with every other one on the link.
+      this.demoteP2pConnection(connId, 'send_failed')
+      return false
+    }
+    const packet = sealed ? encodeTerminalHop(TerminalHopDirection.up, connId, sealed) : null
+    if (packet && this.link.sendBinary(packet)) return true
+    this.core.browserRouteLost(clear.streamId)
+    return false
+  }
+
+  private forgetBrowserStreams(connId: string): void {
+    this.browserPendingOpens.delete(connId)
+    this.browserStreams.delete(connId)
   }
 
   // ── the Wi-Fi device's direct links, which ride the same E2EE sessions ──────────────────────────

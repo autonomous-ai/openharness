@@ -49,9 +49,11 @@ import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js
 import type { GridAssignment } from './gridAssignment.js'
 import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunchWire.js'
 import { parseScmLaunchRecord, type ScmLaunchRecord } from '../scm/types.js'
+import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
+import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
@@ -175,12 +177,37 @@ export interface RegisteredSession {
    */
   subscriptionModel?: string | null
   /**
+   * The model and effort this session was launched with as flags (`agent_create`'s launch model, lib/launchModel.ts),
+   * or the one a person moved it onto through Harness since (`agent_update`). Every relaunch passes them again
+   * (lib/launchOverrides.ts): the flags hold for one launch only, and a Product Manager launched on Opus at xhigh came
+   * back on its engine's own default, the machine's last-used Claude Code model, once reopened (task #3395, anh Dee
+   * 11-05). Absent for a session launched with none.
+   */
+  launchModel?: LaunchModel
+  /**
+   * Extra command-line words an owner asked for on this agent (`agent_restart`'s `launchArgs`, lib/launchArgs.ts),
+   * appended to every relaunch so they hold across a restart, a reboot and a daemon update until cleared. Never an
+   * empty array: clearing deletes the field. Absent for an agent with none.
+   */
+  launchArgs?: string[]
+  /**
+   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
+   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
+   */
+  browser?: true
+  /**
    * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
    * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
    * process — a running agent cannot be moved to a different profile the way it can be retargeted
    * to a different grid.
    */
   codexHome?: string | null
+  /**
+   * The CLAUDE_CONFIG_DIR folder (a Claude profile) this agent was launched against, if one was chosen instead of
+   * `~/.claude`. Claude only. Chosen once at creation like `codexHome`; the row is the relaunch source, so restart and
+   * resume come back in the same account.
+   */
+  claudeHome?: string | null
   /**
    * The Hermes home this session's history lives in — `~/.hermes/profiles/<name>` for an agent started
    * with `hermes -p <name>`, null for this machine's default home.
@@ -195,6 +222,12 @@ export interface RegisteredSession {
    * fleet's activity cards empty forever while their terminals streamed perfectly (openharness#191).
    */
   hermesHome?: string | null
+  /**
+   * OpenClaw only: the state folder its TUI held open when the session was bound (lib/openclawStore.ts). A `--profile`
+   * or `--dev` TUI keeps its store outside the default folder, and once the TUI has exited this is where its history,
+   * usage and checkpoint are read from.
+   */
+  openclawStateDir?: string | null
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -348,6 +381,13 @@ export function projectDisplayName(s: RegisteredSession): string {
 }
 
 
+/** Whether a person chose [s]'s name: they renamed it (kept in agent-names.json), as against the name it was created with
+ *  or the engine's session title, which `projectDisplayName` falls back to. The agent frame carries it (`nameChosen`), so
+ *  a client sends only a chosen name to the Swarm and never a title (task #2920). */
+export function isNameChosen(s: RegisteredSession): boolean {
+  return !!(NAME_OVERRIDES.get(s.sessionId) || NAME_OVERRIDES.get(s.agentId))
+}
+
 /** The engine's own name for this session, or null while it has none worth showing. */
 export function sessionDisplayTitle(s: RegisteredSession): string | null {
   return namingTitle(titleDisplayName(s.title), { engine: s.engine, cwd: s.cwd, defaultName: s.defaultName })
@@ -358,6 +398,8 @@ const NAMES_FILE = join(env.ADAPTER_DATA_DIR, 'agent-names.json')
 const BOOT_FILE = join(env.ADAPTER_DATA_DIR, 'registry-boot')
 const LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'registry.json.lock')
 const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
+/** Written once this machine's saved agents are cleared of the permission modes Harness forced (`withoutForcedModes`). */
+const OWN_MODES_FILE = join(env.ADAPTER_DATA_DIR, 'registry-own-modes')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
@@ -410,7 +452,9 @@ function normalizedAgentEngine(value: unknown): AgentEngine {
     : 'claude'
 }
 const LOCK_WAIT_MS = 20
-const LOCK_ATTEMPTS = 100
+/** How long a write waits for a live holder, on the clock: a pause can take far longer than asked (an agent's process
+ *  on the Mac Studio, 2026-11-07: 20 ms took ~150 ms), and counted as 100 pauses the wait blocked for ~15 s, not 2. */
+const LOCK_BUDGET_MS = 2_000
 /** A lock directory with no owner.json, or one that names no one, is a crash (or a full disk) between mkdir and the
  *  owner write: a window of microseconds. Older than this it is debris, not a lock (daemonSpawnLock.ts does the same);
  *  left alone it made every registry write fail with "registry lock is busy" until someone removed it by hand. */
@@ -432,7 +476,8 @@ function withRegistryFileLock<T>(apply: () => T): T {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   const processIdentity = processLockIdentity(process.pid)
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+  const deadline = Date.now() + LOCK_BUDGET_MS
+  for (;;) {
     const token = randomUUID()
     let created = false
     try {
@@ -459,6 +504,7 @@ function withRegistryFileLock<T>(apply: () => T): T {
     } catch (error) {
       if (created) removeRegistryLockOwnedBy(token)
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (Date.now() >= deadline) throw new Error('registry lock is busy')
       let ownerPid = 0
       let ownerStartMarker = ''
       let ownerToken = ''
@@ -503,7 +549,6 @@ function withRegistryFileLock<T>(apply: () => T): T {
       sleepSync(LOCK_WAIT_MS)
     }
   }
-  throw new Error('registry lock is busy')
 }
 
 function rowId(row: unknown): string {
@@ -604,6 +649,23 @@ function withoutRetiredRows(stored: readonly unknown[]): { rows: unknown[]; drop
   return { rows, dropped: stored.length - rows.length, changed: cleaned.some((row, i) => row !== stored[i]) }
 }
 
+/**
+ * Swarm v3 (task #4215): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
+ * `readOnlyAsk`; nobody chose those, and a relaunch reapplies a saved mode. So the first load of a build with this clears them,
+ * once (`OWN_MODES_FILE`): full mode a person chooses for a Swarm agent afterwards is theirs and kept. Review after 2027-01-07.
+ */
+function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; cleared: number } {
+  let cleared = 0
+  const kept = rows.map((row) => {
+    const mode: unknown = row?.permissionMode
+    if (!(mode === 'buddy' || mode === 'readOnlyAsk' || (mode === 'full' && parseSwarmSkill(row.swarmSkill)))) return row
+    cleared++
+    const { permissionMode: _mode, bypassPermission: _bypass, ...own } = row
+    return own
+  })
+  return { rows: kept, cleared }
+}
+
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
 function normalizedRuntimes(raw: unknown, legacyTmuxPane?: unknown): TerminalRuntimeRef[] {
   const fromArray = Array.isArray(raw) ? raw.filter(validTerminalRuntime) : []
@@ -658,18 +720,23 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
+  const launchModel = storedLaunchModel(rawLaunchModel)
   // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
   // review), and is kept as this release keeps it (project instructions, phase 4).
   const swarmSkill = parseSwarmSkill(rawSwarmSkill)
+  const launchArgs = storedLaunchArgs(rawLaunchArgs)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
+    ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
+    ...(launchArgs ? { launchArgs } : {}),
+    ...(rawBrowser === true ? { browser: true as const } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -710,6 +777,11 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
  */
 export function parentAgentIdOf(value: unknown): string | null {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value) ? value : null
+}
+
+/** Only a non-empty array of strings is a saved flag list; anything else on disk is dropped, never launched with. */
+function storedLaunchArgs(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
 }
 
 /** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
@@ -1223,16 +1295,23 @@ class Registry {
         this.quarantine('contains a malformed v2 row')
         return
       }
-      const arr = parsed as Array<Partial<RegisteredSession>>
+      let arr = parsed as Array<Partial<RegisteredSession>>
       for (const row of arr) {
         const id = rowId(row)
         if (id) this.persistedBaseline.set(id, rowFingerprint(row))
+      }
+      // After the baseline, so the save below writes the cleared rows rather than merging the disk's back in.
+      const ownModes = !existsSync(OWN_MODES_FILE)
+      if (ownModes) {
+        const swept = withoutForcedModes(arr)
+        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) start with their owner's own permission settings again`)
+        arr = swept.rows
       }
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
         atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
       }
-      let changed = strippedRetired
+      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
@@ -1312,7 +1391,7 @@ class Registry {
             }
             if (!verified) bound = false
           } else if (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi'
-            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin') {
+            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'openclaw') {
             bound = false
             changed = true
           }
@@ -1344,7 +1423,9 @@ class Registry {
           gateway: raw.gateway === 'ori' ? 'ori' : null,
           grid: normalizedGridAssignment(raw.grid),
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
+          claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -1353,6 +1434,9 @@ class Registry {
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
+          ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
+          ...(raw.browser === true ? { browser: true as const } : {}),
+          ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
           // disk and then silently dropped by the next load — which is exactly what happened, and
@@ -1444,12 +1528,13 @@ class Registry {
         return
       }
       if (changed) this.save()
+      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
     } catch (error) {
       if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
-      }
+      } else atomicWriteJson(OWN_MODES_FILE, Date.now())
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
     }
@@ -1509,6 +1594,7 @@ class Registry {
     codexHome?: string | null
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
     hermesHome?: string | null
+    claudeHome?: string | null
     /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
     dsh?: string | null
   }):
@@ -1573,6 +1659,7 @@ class Registry {
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
+      if (input.claudeHome && !existing.claudeHome) existing.claudeHome = input.claudeHome
       if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
       if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       if (rowFingerprint(persistedRow(existing)) !== before) existing.touchedAt = Date.now()
@@ -1618,6 +1705,7 @@ class Registry {
       gridWebSearch: null,
       codexHome: input.codexHome ?? null,
       hermesHome: input.hermesHome ?? null,
+      claudeHome: input.claudeHome ?? null,
       dsh: input.dsh ?? null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
       // row cannot relaunch it as one. Fill-only, like `dsh`.
@@ -1646,6 +1734,8 @@ class Registry {
 
   /** Register a terminal route before its engine process exists. */
   openPendingAgent(input: {
+    /** The id the launch already named its session after (OpenClaw's `harness-<agentId>`); a new one otherwise. */
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -1656,7 +1746,10 @@ class Registry {
     gridLaunchRecord?: GridLaunchRecord | null
     /** What the prepared workspace's SCM needs on every relaunch — see RegisteredSession.scmLaunch. */
     scmLaunchRecord?: ScmLaunchRecord | null
+    /** The model and effort it was launched with as flags — see RegisteredSession.launchModel. */
+    launchModel?: LaunchModel | null
     codexHome?: string | null
+    claudeHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
     swarmSkill?: SwarmSkill
@@ -1677,6 +1770,8 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
+    /** Created with Browser ticked — see RegisteredSession.browser. */
+    browser?: boolean
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1685,8 +1780,9 @@ class Registry {
     const runtimes = normalizedRuntimes(input.runtimes)
     if (!runtimes.length) return null
     if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
+    const agentId = input.agentId ?? randomUUID()
+    if (this.byAgent(agentId)) return null
     const now = Date.now()
-    const agentId = randomUUID()
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: !externalResume,
@@ -1702,7 +1798,9 @@ class Registry {
       gridLaunch: input.gridLaunchRecord?.override ?? null,
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
       ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
+      ...(storedLaunchModel(input.launchModel) ? { launchModel: storedLaunchModel(input.launchModel) } : {}),
       codexHome: input.codexHome ?? null,
+      claudeHome: input.claudeHome ?? null,
       // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
       // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
       hermesHome: null,
@@ -1717,6 +1815,7 @@ class Registry {
       ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...normalizedParent(input.startedBy, input.parentAgentId),
       ...(input.guest ? { guest: input.guest } : {}),
+      ...(input.browser ? { browser: true as const } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -1899,7 +1998,9 @@ class Registry {
       || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
       // Copilot's session id is a uuid and names the directory its event stream lives in.
       || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
-      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
+      // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
+      || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
+      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
     ) return null
@@ -2033,6 +2134,13 @@ class Registry {
       // memory the moment the engine reports in. The symptom is a move back to the engine's own
       // login landing on a house default — the remembered model was there, then a hook bind ate it.
       ...(existing?.subscriptionModel ? { subscriptionModel: existing.subscriptionModel } : {}),
+      // And the model it launches with, for the same reason: a hook bind that forgot it reopened a Product Manager on its
+      // engine's own default (task #3395).
+      ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
+      // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
+      ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
+      // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
+      ...(existing?.browser ? { browser: true as const } : {}),
       defaultName: existing?.defaultName,
       transcriptPath: effectiveTranscriptPath,
       projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
@@ -2052,10 +2160,13 @@ class Registry {
       // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
       // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
       codexHome: existing?.codexHome ?? null,
+      claudeHome: existing?.claudeHome ?? null,
       // The home the gate looked this session up in, or whatever the row already knew. Carried
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
+      // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
+      ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
       ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
@@ -2174,6 +2285,50 @@ class Registry {
    * rather than mint another. `terminalHost` stays set so the exit is recognised (`releaseEngine`).
    * Refused for anything but a terminal: an agent already running one engine is never re-labelled.
    */
+  /**
+   * An archived harness back on the pane its own engine never left: the terminal row that kept the pane gives it back.
+   *
+   * A restore that could not see a pane's engine archived the harness as exited and handed its pane to a new terminal
+   * row (`retainExitedSession`), while the engine ran on: on DESKTOP-0TFH0OJ (2026-11-10) CLI 0.5.97 did that to every
+   * Hermes pane, and the harness then answered Enter with `AGENT_BUSY` for as long as its own Hermes lived. The caller
+   * has proved [processIdentity] is the archived row's own process, in this pane. The archived row keeps its id, name and
+   * conversation, and takes the terminal row's pane; the terminal row goes. The terminal row may already have adopted that
+   * engine (a build with the engine fix but not this one): a terminal-born row of the same engine, with no conversation
+   * of its own yet, gives the pane back the same way. Null, changing nothing, for any other row, an archived id that is
+   * live, or a conversation bound to another row.
+   */
+  reinstateArchived(terminalAgentId: string, saved: RegisteredSession, processIdentity: ProcessIdentity): RegisteredSession | null {
+    const terminal = this.agents.get(terminalAgentId)
+    const holder = !!terminal && (isTerminalEngine(terminal.engine)
+      || (!!terminal.terminalHost && !terminal.sessionId && terminal.engine === saved.engine))
+    if (this.writeBlocked || !terminal || !holder || isTerminalEngine(saved.engine)
+      || this.agents.has(saved.agentId) || (saved.sessionId && this.bySession(saved.sessionId))
+      || !validProcessIdentity(processIdentity)) return null
+    this.drop(terminal)
+    this.terminalAvailableAgents.delete(terminal.agentId)
+    const entry: RegisteredSession = {
+      ...saved,
+      active: true,
+      launch: { state: 'ready' },
+      processIdentity,
+      runtimes: terminal.runtimes,
+      primaryRuntimeKey: terminal.primaryRuntimeKey,
+      tmuxPane: terminal.tmuxPane,
+      touchedAt: Date.now(),
+    }
+    this.traceLaunch(entry.agentId, saved.launch, entry.launch, `reinstateArchived from ${terminal.agentId}`)
+    this.index(entry)
+    this.terminalAvailableAgents.add(entry.agentId)
+    try { this.save() } catch {
+      this.drop(entry)
+      this.terminalAvailableAgents.delete(entry.agentId)
+      this.index(terminal)
+      this.terminalAvailableAgents.add(terminal.agentId)
+      return null
+    }
+    return entry
+  }
+
   adoptEngine(agentId: string, engine: AgentEngine, processIdentity?: ProcessIdentity | null): RegisteredSession | null {
     const entry = this.agents.get(agentId)
     if (!entry || !isTerminalEngine(entry.engine) || isTerminalEngine(engine)) return null
@@ -2220,6 +2375,8 @@ class Registry {
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
+    // Its browser is the archived agent's, with that agent's logins: never the shell's.
+    if (separateShell) delete entry.browser
     this.releaseBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
@@ -2232,6 +2389,8 @@ class Registry {
     entry.gateway = null
     entry.grid = null
     entry.subscriptionModel = null
+    delete entry.launchModel
+    delete entry.launchArgs
     entry.model = null
     entry.title = null
     entry.touchedAt = Date.now()
@@ -2488,7 +2647,17 @@ class Registry {
     return true
   }
 
-  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
+  setOpenclawStateDir(agentId: string, stateDir: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'openclaw' || session.openclawStateDir === stateDir) return false
+    session.openclawStateDir = stateDir
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** An agent its person attached takes its Swarm role at restart, once; later roster reads cannot replace a saved role. */
   setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
     const session = this.agents.get(agentId)
     if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
@@ -2531,6 +2700,29 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session) return false
     session.subscriptionModel = model
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Record the model and effort [agentId]'s session relaunches with (RegisteredSession.launchModel); null forgets it. */
+  setLaunchModel(agentId: string, launchModel: LaunchModel | null): boolean {
+    const session = this.agents.get(agentId)
+    if (!session) return false
+    const stored = storedLaunchModel(launchModel)
+    if (stored) session.launchModel = stored
+    else delete session.launchModel
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */
+  setLaunchArgs(agentId: string, args: string[]): boolean {
+    const session = this.agents.get(agentId)
+    if (!session) return false
+    if (args.length) session.launchArgs = [...args]
+    else delete session.launchArgs
     session.touchedAt = Date.now()
     this.save()
     return true
@@ -3015,7 +3207,9 @@ export const registry = new Registry()
 
 function defaultProjectDisplayName(s: RegisteredSession): string {
   const folder = s.cwd ? s.cwd.split('/').filter(Boolean).pop() || s.cwd : s.projectDir
-  return `${folder} · ${(s.sessionId || s.agentId).slice(0, 4)}`
+  // Every OpenClaw key starts `agent:<agentId>:`: it is told apart by its own part (`main`, `tui-22b7208d`).
+  const key = s.engine === 'openclaw' ? OPENCLAW_KEY.exec(s.sessionId)?.[2] : undefined
+  return `${folder} · ${key ? key.slice(0, 12) : (s.sessionId || s.agentId).slice(0, 4)}`
 }
 
 /**

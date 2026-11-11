@@ -6,9 +6,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_face.dart';
-import 'package:harness_mobile/swarm/swarm_message_row.dart';
-import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -19,7 +16,7 @@ const buddyPhoto = 'https://storage.googleapis.com/avatars/wren.png?sig=1';
 
 /// The faces people and agents chose, on the screens that showed only
 /// initials: the Buddy chat, the project's tasks and team, and the chat's
-/// messages — with a person's status emoji beside their own.
+/// messages. A status an older server still sends is drawn on none.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const buddyMessages = '/api/super-tabs/$tab/conversations/buddy-me/messages';
@@ -82,6 +79,7 @@ void main() {
         part(me, 1, {
           ...person(me),
           'avatar': {'kind': 'preset', 'key': 'fox'},
+          // Which an older server still sends: no face wears it.
           'status': {'text': 'Focusing', 'emoji': '🎯', 'until': null},
         }),
       ],
@@ -174,49 +172,7 @@ void main() {
   Finder within(String key, Finder finder) =>
       find.descendant(of: find.byKey(ValueKey(key)), matching: finder);
 
-  testWidgets("the Buddy tab shows the Buddy's uploaded picture", (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1170, 2532);
-    addTearDown(tester.view.reset);
-    await pump(
-      tester,
-      const SwarmProjectPage(
-        swarmId: tab,
-        projectId: project,
-        tab: SwarmProjectTab.buddy,
-        tabs: SwarmProjectTab.homeB,
-      ),
-      buddy: true,
-    );
-    expect(
-      within('swarm-message-msg-buddy', find.byType(SwarmChatAvatar)),
-      findsOneWidget,
-    );
-    expect(asked, contains(Uri.parse(buddyPhoto)));
-  });
-
-  testWidgets("the project's tasks show each worker's chosen face", (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1170, 2532);
-    addTearDown(tester.view.reset);
-    await pump(
-      tester,
-      const SwarmProjectPage(
-        swarmId: tab,
-        projectId: project,
-        tab: SwarmProjectTab.tasks,
-        tabs: SwarmProjectTab.homeB,
-      ),
-    );
-    expect(within('swarm-task-g1', find.text('🦉')), findsOneWidget);
-    // Nobody chose one: the initial, as before.
-    expect(within('swarm-task-g2', find.text('P')), findsOneWidget);
-    expect(within('swarm-task-g2', find.text('🦉')), findsNothing);
-  });
-
-  testWidgets("a chat shows each author's face and a person's status", (
+  testWidgets("a chat shows each author's face, and no status on any", (
     tester,
   ) async {
     await pump(
@@ -225,7 +181,7 @@ void main() {
     );
     expect(within('swarm-message-msg-1', find.text('🦉')), findsOneWidget);
     expect(within('swarm-message-msg-2', find.text('🦊')), findsOneWidget);
-    expect(within('swarm-message-msg-2', find.text('🎯')), findsOneWidget);
-    expect(within('swarm-message-msg-1', find.text('🎯')), findsNothing);
+    expect(find.text('🎯'), findsNothing);
+    expect(find.bySemanticsLabel(RegExp('Focusing')), findsNothing);
   });
 }

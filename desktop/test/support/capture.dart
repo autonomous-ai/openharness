@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/terminal/terminal_typography.dart';
 
 import 'real_fonts.dart';
 
@@ -15,12 +16,24 @@ import 'real_fonts.dart';
 /// shared metric-compatible faces every regression run uses.
 Future<void> loadCaptureFonts(String? captureDir) async {
   if (captureDir == null || !Platform.isMacOS) return loadRealFonts();
-  for (final family in ['.AppleSystemUIFont', 'Roboto']) {
+  for (final (family, file) in [
+    ('.AppleSystemUIFont', 'SFNS.ttf'),
+    ('Roboto', 'SFNS.ttf'),
+    // Code in a message and terminal rows, in the Mac's default terminal font: without it they draw as Ahem's boxes.
+    (macTerminalFontFamily, 'SFNSMono.ttf'),
+  ]) {
     final bytes = ByteData.sublistView(
-      await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+      await File('/System/Library/Fonts/$file').readAsBytes(),
     );
     await (FontLoader(family)..addFont(Future.value(bytes))).load();
   }
+  // The activity marks' fallback face, as in the app: without it they draw as empty boxes.
+  await (FontLoader('Apple Symbols')..addFont(
+        File('/System/Library/Fonts/Apple Symbols.ttf')
+            .readAsBytes()
+            .then(ByteData.sublistView),
+      ))
+      .load();
   final manifest =
       jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
   for (final entry in manifest.cast<Map<String, dynamic>>()) {

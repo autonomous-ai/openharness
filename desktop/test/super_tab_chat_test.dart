@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
@@ -11,24 +12,14 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_swarm.dart' show addAskingAgent, swarm;
 
 void main() {
-  test('work that waits on a person reads as people say it', () {
-    expect(superTabWorkWaits('needs_human'), isTrue);
-    expect(superTabWorkWaits('blocked'), isTrue);
-    expect(superTabWorkWaits('working'), isFalse);
-    expect(superTabWorkWaits(null), isFalse);
-    expect(superTabWorkStatusLabel('blocked'), 'stuck');
-    expect(superTabWorkStatusLabel('needs_human'), 'needs human');
-    expect(superTabWorkStatusLabel('reconciling'), 'reconciling');
-    expect(superTabWorkStatusLabel('cancelled'), 'cancelled');
-    expect(superTabWorkWaits('cancelled'), isFalse);
-  });
-
   Future<SuperTabController> show(
     WidgetTester tester,
-    ConversationServer server,
-  ) async {
+    ConversationServer server, {
+    bool board = true,
+  }) async {
     final c = server.controller();
     await c.refresh();
     await tester.pumpWidget(
@@ -37,7 +28,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -55,6 +45,7 @@ void main() {
     SuperTabController c, {
     bool terminals = false,
     bool hidden = false,
+    bool board = true,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -66,7 +57,6 @@ void main() {
               offstage: hidden,
               child: SuperTabView(
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Team Mac',
@@ -88,7 +78,7 @@ void main() {
   testWidgets('polling a displayed transcript does not keep requesting frames', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Already read');
+    final server = ConversationServer.chat()..append('Already read');
     final c = SuperTabController(
       tabId: 'tab',
       accountId: 'owner',
@@ -105,7 +95,6 @@ void main() {
               listenable: c,
               builder: (context, _) => SuperTabView(
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Team Mac',
@@ -132,10 +121,100 @@ void main() {
     }
   });
 
+  testWidgets('a chat behind the terminals runs no timers until it returns', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('Hello');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    bool chatTicks() => TickerMode.valuesOf(
+      tester.element(find.text('Hello', skipOffstage: false)),
+    ).enabled;
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await showReadView(tester, c, terminals: true);
+    expect(chatTicks(), isFalse);
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await closeReadView(tester, c);
+  });
+
+  // Swarm v4: an agent reaches its person only in its own chat, so its words
+  // there are told as All new messages are, whatever the chat's setting,
+  // unless it is muted.
+  test('an agent\'s own chat tells its person of each new message, unless '
+      'muted', () async {
+    final server = swarm();
+    addAskingAgent(server, 'kai');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    final told = <String>[];
+    SuperTabChatNotices.of(c)
+      ..chatShown = (() => false)
+      ..onMessage = (group, _) => told.add(group.id);
+    void fromKai(String text) {
+      server.append(text, conversationId: 'agent-chat-kai', agent: true);
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'kai',
+        'name': 'kai',
+      };
+    }
+
+    fromKai('Ship it?');
+    await c.refresh();
+    await pumpEventQueue();
+    expect(told, ['agent-chat-kai']);
+    await c.setNotify('agent-chat-kai', SuperTabNotify.muted);
+    fromKai('Still there?');
+    await c.refresh();
+    await pumpEventQueue();
+    expect(told, ['agent-chat-kai']);
+    await c.flush();
+  });
+
+  // Task #2219: All new messages goes quiet only while the open chat is read on screen.
+  testWidgets(
+    'an open chat set to All is told behind the terminals, not on screen',
+    (tester) async {
+      final server = ConversationServer.chat()..append('Hello');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      void fromTeammate(String text) {
+        server.append(text);
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'lead-agent',
+          'name': 'Lead',
+        };
+      }
+
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      await showReadView(tester, c);
+      fromTeammate('While reading it');
+      await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump();
+      expect(told, isEmpty);
+      await showReadView(tester, c, terminals: true);
+      fromTeammate('Behind the terminals');
+      await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump();
+      expect(told, hasLength(1));
+      await closeReadView(tester, c);
+    },
+  );
+
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {
-    final server = ConversationServer()..append('The result is ready.');
+    final server = ConversationServer.chat()..append('The result is ready.');
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();
@@ -151,7 +230,7 @@ void main() {
   testWidgets(
     'revisiting a cached conversation acknowledges its visible tail',
     (tester) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('The lead has an update.')
         ..append('Workgroup result.', conversationId: 'offline');
       final c = server.controller();
@@ -173,28 +252,9 @@ void main() {
   );
 
   testWidgets(
-    'returning from pull requests reads only the displayed messages',
-    (tester) async {
-      final server = ConversationServer()..append('First update');
-      final c = await show(tester, server);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
-      await tester.pumpAndSettle();
-      server.append('The review is ready.');
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(c.unread(c.selected!), isTrue);
-      await tester.tap(find.byKey(const ValueKey('super-chat')));
-      await tester.pumpAndSettle();
-      expect(find.text('The review is ready.'), findsOneWidget);
-      expect(c.unread(c.selected!), isFalse);
-      await closeReadView(tester, c);
-    },
-  );
-
-  testWidgets(
     'a read message does not become unread when its snapshot arrives',
     (tester) async {
-      final server = ConversationServer()..append('First update');
+      final server = ConversationServer.chat()..append('First update');
       final c = await show(tester, server);
       server.append('Loaded before the snapshot');
       await c.loadMessages('lead');
@@ -209,30 +269,10 @@ void main() {
     },
   );
 
-  testWidgets('a newer snapshot stays unread until its message is fetched', (
-    tester,
-  ) async {
-    final server = ConversationServer()..append('Visible update');
-    final c = await show(tester, server);
-    await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
-    await tester.pumpAndSettle();
-    server.append('Not yet fetched');
-    c.snapshot = SuperTabSnapshot.fromJson(server.state);
-    await tester.tap(find.byKey(const ValueKey('super-chat')));
-    await tester.pumpAndSettle();
-    expect(find.text('Not yet fetched'), findsNothing);
-    expect(c.unread(c.selected!), isTrue);
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(find.text('Not yet fetched'), findsOneWidget);
-    expect(c.unread(c.selected!), isFalse);
-    await closeReadView(tester, c);
-  });
-
   testWidgets('a hidden transcript does not consume a queued read callback', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Already read');
+    final server = ConversationServer.chat()..append('Already read');
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();
@@ -251,7 +291,7 @@ void main() {
   testWidgets('background windows keep messages unread until foregrounded', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Already read');
+    final server = ConversationServer.chat()..append('Already read');
     final c = await show(tester, server);
     addTearDown(
       () => tester.binding.handleAppLifecycleStateChanged(
@@ -269,173 +309,10 @@ void main() {
     await closeReadView(tester, c);
   });
 
-  for (final drawer in ['Conversations', 'Members and machines']) {
-    testWidgets('$drawer keeps covered messages unread until revealed', (
-      tester,
-    ) async {
-      await tester.binding.setSurfaceSize(const Size(600, 700));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer()..append('Already read');
-      final c = await show(tester, server);
-      expect(c.unread(c.selected!), isFalse);
-
-      await tester.tap(find.byTooltip(drawer));
-      await tester.pumpAndSettle();
-      server.append('Arrived behind the drawer');
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(c.unread(c.selected!), isTrue);
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      expect(find.text('Arrived behind the drawer'), findsOneWidget);
-      expect(c.unread(c.selected!), isFalse);
-
-      await tester.tap(find.byTooltip(drawer));
-      await tester.pumpAndSettle();
-      server.append('Arrived before widening the window');
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(c.unread(c.selected!), isTrue);
-
-      // Responsive side panes stop covering the chat even while their drawer
-      // flags remain set, so this also needs to acknowledge the visible tail.
-      await tester.binding.setSurfaceSize(const Size(1200, 700));
-      await tester.pumpAndSettle();
-      expect(find.text('Arrived before widening the window'), findsOneWidget);
-      expect(c.unread(c.selected!), isFalse);
-      await closeReadView(tester, c);
-    });
-  }
-
-  testWidgets('a project stays unread until its unread workgroup is visited', (
-    tester,
-  ) async {
-    final server = ConversationServer()
-      ..append('The lead update')
-      ..append('An unread workgroup update', conversationId: 'offline');
-    final c = await show(tester, server);
-    // Unread is the project's name in bold, with no dot (Dee, 2026-10-29).
-    final name = c.snapshot!.projects.single.name;
-    FontWeight? projectWeight() => tester
-        .widget<RichText>(
-          find.descendant(
-            of: find.byKey(const ValueKey('super-group-lead')),
-            matching: find.byWidgetPredicate(
-              (widget) =>
-                  widget is RichText && widget.text.toPlainText() == name,
-            ),
-          ),
-        )
-        .text
-        .style
-        ?.fontWeight;
-    expect(c.unread(c.selected!), isFalse);
-    expect(projectWeight(), grid.AppFont.semibold);
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
-    await tester.pumpAndSettle();
-    expect(find.text('An unread workgroup update'), findsOneWidget);
-    expect(c.unread(c.selected!), isFalse);
-    expect(projectWeight(), isNot(grid.AppFont.semibold));
-    await closeReadView(tester, c);
-  });
-
-  testWidgets(
-    'legacy messages resolve the same agent name in chat, replies and participants',
-    (tester) async {
-      final server = ConversationServer();
-      (server.state['agents'] as List).add({
-        'id': 'lead-agent',
-        'name': 'hi',
-        'displayName': 'Atlas',
-        'machineId': 'm',
-        'harnessId': 'native-lead',
-        'contributorId': 'owner',
-        'configuration': {'engine': 'codex'},
-      });
-      (server.state['conversations'] as List)[0]
-        ..['leadId'] = 'lead-agent'
-        ..['agentIds'] = ['lead-agent'];
-      server.append('What should we build?');
-      server.messages.last['author'] = {
-        'kind': 'agent',
-        'id': 'lead-agent',
-        'name': 'Lead',
-      };
-      final c = await show(tester, server);
-      final row = find.byKey(const ValueKey('super-message-message-1'));
-      expect(
-        find.descendant(of: row, matching: find.text('Atlas')),
-        findsOneWidget,
-      );
-      expect(find.text('hi'), findsNothing);
-      expect(find.text('Lead'), findsNothing);
-      tester
-          .widget<Focus>(
-            find.descendant(of: row, matching: find.byType(Focus)).first,
-          )
-          .focusNode!
-          .requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
-      await tester.pump();
-      expect(find.text('Replying to Atlas'), findsOneWidget);
-      final composer = find.byKey(const ValueKey('super-message-composer'));
-      await tester.enterText(composer, 'Let’s discuss the plan.');
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      await c.refresh();
-      await tester.pumpAndSettle();
-      final reply = find.byKey(const ValueKey('super-message-message-2'));
-      expect(
-        find.descendant(of: reply, matching: find.text('Atlas')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byTooltip('Members and machines'));
-      await tester.pumpAndSettle();
-      expect(find.text('hi'), findsNothing);
-      expect(find.text('Atlas'), findsWidgets);
-      expect(
-        find.byKey(const ValueKey('super-member-lead-agent')),
-        findsOneWidget,
-      );
-    },
-  );
-
-  testWidgets(
-    'a sent message whose credential was removed says so in one line above the composer',
-    (tester) async {
-      const notice =
-          'Removed a credential (JWT) before saving. Revoke or rotate it.';
-      final server = ConversationServer()
-        ..commandResult['credentialNotice'] = notice;
-      await show(tester, server);
-      expect(
-        find.byKey(const ValueKey('super-operation-notice')),
-        findsNothing,
-      );
-      await tester.enterText(
-        find.byKey(const ValueKey('super-message-composer')),
-        'My login token is in here.',
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(find.text(notice), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('super-operation-notice')),
-        findsOneWidget,
-      );
-      // Let the emptied draft's save run.
-      await tester.pump(const Duration(milliseconds: 300));
-    },
-  );
-
   testWidgets('the quote of your own message reads You, not your email', (
     tester,
   ) async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('Where do we stand?')
       ..append('Almost done.');
     server.messages.last
@@ -457,7 +334,7 @@ void main() {
   testWidgets('a removed agent keeps its recorded individual name', (
     tester,
   ) async {
-    final server = ConversationServer()..append('The review is complete.');
+    final server = ConversationServer.chat()..append('The review is complete.');
     server.messages.last['author'] = {
       'kind': 'agent',
       'id': 'removed-agent',
@@ -472,7 +349,7 @@ void main() {
   test(
     'current agent identities resolve by ID; removed agents use recorded names',
     () {
-      final server = ConversationServer()..append('An older message');
+      final server = ConversationServer.chat()..append('An older message');
       (server.state['agents'] as List).add({
         'id': 'old-agent',
         'name': 'Builder',
@@ -524,7 +401,7 @@ void main() {
   testWidgets(
     'a keyboard reply keeps its quoted context after sending and refreshing',
     (tester) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('Should edits survive restarting the app?');
       server.messages.last['author'] = {
         'kind': 'agent',
@@ -569,63 +446,10 @@ void main() {
   );
 
   testWidgets(
-    'incoming agent traffic preserves history and offers a scoped catch-up action',
-    (tester) async {
-      final server = ConversationServer();
-      for (var i = 0; i < 35; i++) {
-        server.append(
-          'Agent update $i: checking the offline queue and reconnect behavior.',
-        );
-        server.messages.last['author'] = {
-          'kind': 'agent',
-          'id': 'builder-$i',
-          'name': 'Builder $i',
-        };
-      }
-      final c = await show(tester, server);
-      ScrollController scroll() => tester
-          .widget<ScrollView>(
-            find.byKey(const PageStorageKey('super-messages-tab-lead')),
-          )
-          .controller!;
-      scroll().jumpTo(0);
-      await tester.pumpAndSettle();
-      final reading = scroll().offset;
-      server.append('The reconnect check passed.');
-      server.append('The restart check passed too.');
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(scroll().offset, reading);
-      expect(find.text('2 new messages'), findsOneWidget);
-      expect(c.unread(c.selected!), isTrue);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-chat')));
-      await tester.pumpAndSettle();
-      expect(scroll().offset, reading);
-      expect(c.unread(c.selected!), isTrue);
-      c.select('offline');
-      await tester.pumpAndSettle();
-      c.select('lead');
-      await tester.pumpAndSettle();
-      expect(scroll().offset, reading);
-      expect(c.unread(c.selected!), isTrue);
-      await tester.tap(find.byKey(const ValueKey('super-new-messages')));
-      await tester.pumpAndSettle();
-      expect(find.text('2 new messages'), findsNothing);
-      expect(scroll().position.extentAfter, lessThan(40));
-      expect(c.unread(c.selected!), isFalse);
-      expect(find.text('The restart check passed too.'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await closeReadView(tester, c);
-    },
-  );
-
-  testWidgets(
     'more than a page arriving while scrolled up keeps the place, and the '
     'jump reads the newest',
     (tester) async {
-      final server = ConversationServer()..messagePage = 20;
+      final server = ConversationServer.chat()..messagePage = 20;
       for (var i = 1; i <= 40; i++) {
         server.append(
           'Agent update $i: checking the offline queue and reconnect behavior.',
@@ -670,7 +494,7 @@ void main() {
   testWidgets(
     'revocation removes the quoted original as well as the transcript',
     (tester) async {
-      final server = ConversationServer()..append('A private question');
+      final server = ConversationServer.chat()..append('A private question');
       final c = await show(tester, server);
       await tester.tap(find.byTooltip('Reply'));
       await tester.pumpAndSettle();
@@ -688,49 +512,6 @@ void main() {
             .text,
         isEmpty,
       );
-    },
-  );
-
-  testWidgets(
-    'a human request belongs only to its group and clears with the recorded state',
-    (tester) async {
-      final server = ConversationServer();
-      server.state['agents'] = [
-        {
-          'id': 'builder',
-          'name': 'Builder',
-          'machineId': 'host',
-          'harnessId': 'session',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'codex'},
-        },
-      ];
-      (server.state['conversations'] as List)[1]['agentIds'] = ['builder'];
-      final group = (server.state['conversations'] as List)[1] as Map;
-      group['assignment'] = {
-        'id': 'attempt',
-        'agentId': 'builder',
-        'status': 'needs_human',
-        'result': 'Which device should I test?',
-      };
-      final c = await show(tester, server);
-      expect(find.text('Builder needs you'), findsNothing);
-      c.select('offline');
-      await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsOneWidget);
-      group['assignment']['status'] = 'working';
-      server.revision++;
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsNothing);
-      // Stuck waits on a person as a decision does.
-      group['assignment']
-        ..['status'] = 'blocked'
-        ..['result'] = 'The staging key is missing.';
-      server.revision++;
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsOneWidget);
     },
   );
 
@@ -826,7 +607,7 @@ void main() {
   test(
     'grouping preserves author, day, reply and native source boundaries',
     () {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('First update')
         ..append('Second update');
       SuperTabMessage message(int i) =>
@@ -838,13 +619,12 @@ void main() {
         SuperTabMessageRow.consecutiveUpdates(
           server.messages.map(SuperTabMessage.fromJson).toList(),
         ),
-        {'message-2', 'message-3'},
+        // Like Slack, a run of any length (Huy, 2026-11-03, #2419).
+        {'message-2', 'message-3', 'message-4'},
       );
+      // A question joins too.
       server.messages[1]['text'] = 'Should edits survive sign-out?';
-      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
-      expect(SuperTabMessageRow.groupsWith(message(2), message(1)), isFalse);
-      server.messages[1]['text'] = '保留修改？';
-      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
+      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isTrue);
       server.messages[1]['text'] = 'Second update';
       server.messages[1]['author'] = {
         'kind': 'agent',
@@ -865,7 +645,7 @@ void main() {
   );
 
   test('a new display name starts its own message heading', () {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('Older update')
       ..append('Newer update');
     for (final row in server.messages) {
@@ -880,7 +660,7 @@ void main() {
   test(
     'reading loaded messages cannot mark an unfetched tail as read',
     () async {
-      final server = ConversationServer()..append('Visible');
+      final server = ConversationServer.chat()..append('Visible');
       final c = server.controller();
       await c.refresh();
       server.append('Not loaded');

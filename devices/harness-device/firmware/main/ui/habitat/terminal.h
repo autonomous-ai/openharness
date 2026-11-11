@@ -6,8 +6,7 @@
 #include <stdint.h>
 // THE FACE. One device, one size: the 466 round dial.
 //
-// This was a -D from the build for as long as there were two boards; it is a literal again now that the
-// Pro has its own firmware. Kept as a named pair rather than 466 sprinkled through the compositor,
+// Kept as a named pair rather than 466 sprinkled through the compositor,
 // because the arithmetic that reads it — chords, the rim annulus, the damage bands — is about a face
 // and not about a number.
 #define HT_WIDTH 466
@@ -29,7 +28,7 @@ typedef struct {
     int8_t ox, oy;     // ink box from the pen's x, and from the top of the line
 } ht_glyph_t;
 /*
- * A PROPORTIONAL FACE — the Focus skin's Inter (scripts/gen_focus_faces.py) and the two Montserrat icon
+ * A PROPORTIONAL FACE — Focus's Inter (scripts/gen_focus_faces.py) and the two Montserrat icon
  * glyphs copied from the LVGL firmware (scripts/gen_lvgl_assets.py). It IS an ht_font_t, as its first member, so a run
  * carries it like any other font; `first > last` is what marks it, a range no fixed-cell atlas can
  * have. A separate type rather than fields appended to ht_font_t so every fixed-cell atlas keeps its
@@ -51,8 +50,8 @@ static inline const ht_pfont_t *ht_pfont(const ht_font_t *f)
 {
     return f && f->first > f->last ? (const ht_pfont_t *)f : NULL;
 }
-extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_40;
-// The Focus skin's icon faces (lvgl_fonts.c; see assets/lvgl/SPEC.md): Montserrat cut down to a space and one
+extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28;
+// Focus's icon faces (lvgl_fonts.c; see assets/lvgl/SPEC.md): Montserrat cut down to a space and one
 // FontAwesome symbol each. Every word and number on Focus is Inter (focus_faces.h).
 extern const ht_pfont_t ht_lv_montserrat_22, ht_lv_montserrat_14;
 // FontAwesome in LVGL's Montserrat: the bell (montserrat_14) and the close cross (montserrat_22).
@@ -72,18 +71,15 @@ typedef struct { uint16_t cols; uint8_t rows, cell; const uint16_t *palette; con
     ht_cell_frame_t;
 // One cell of a frame, plain or packed (0 transparent).
 uint8_t ht_cell_at(const ht_cell_frame_t *frame, int col, int row);
-// The engines' marks in focus.c's ENGINES order: 20 px as the inbox drew them, and 27 px — LVGL's
-// own 28/20 scaling of the same 20 px art, as the header drew it. And the microphone.
-extern const ht_icon_t ht_icon_engine20[14], ht_icon_engine28[14], ht_icon_mic;
+// The engines' marks in focus.c's ENGINES order, 20 px as the inbox drew them.
+extern const ht_icon_t ht_icon_engine20[14];
 // The Focus face's 56 px marks (focus_marks.c, scripts/gen_focus_marks.py), in the same order.
 extern const ht_icon_t ht_icon_engine56[14];
-// Precomputed curved-label and larger inbox navigation glyphs.
-extern const ht_font_t ht_open_20, ht_nav_32;
+// Precomputed curved-label glyphs.
+extern const ht_font_t ht_open_20;
 extern const ht_font_t ht_open_24, ht_right_24, ht_bell_24;
 extern const uint8_t ht_mono_24_ink[224][4], ht_open_24_ink[1][4], ht_right_24_ink[1][4], ht_bell_24_ink[1][4];
-extern const uint8_t ht_mono_20_ink[224][4], ht_open_20_ink[1][4];
 extern const ht_font_t ht_right_20, ht_right_28, ht_open_28;
-extern const uint8_t ht_right_20_ink[1][4];
 // One authored outline bell in a normal terminal cell, not an emoji font.
 #define HT_BELL "\xee\x80\x80"
 #define HT_SPARK "\xee\x80\x82"
@@ -93,19 +89,11 @@ extern const uint8_t ht_right_20_ink[1][4];
 #define HT_WAVE_FIRST  0xe010u
 #define HT_WAVE_LEVELS 16
 extern const ht_font_t ht_bell_20, ht_bell_28;
-extern const ht_font_t ht_bell_footer, ht_done_28, ht_failed_28;
+extern const ht_font_t ht_done_28, ht_failed_28;
 // The voice screen: one sparkle, and six bar heights that a row of nine draws a waveform with.
 extern const ht_font_t ht_spark, ht_wave;
-// One badge per engine, from U+E020 in the order focus.c lists them. 24 px in a 38 px cell, so a
-// mark sits beside a name in ht_mono_28 without being squeezed into a letter's width.
-extern const ht_font_t ht_engine;
-#define HT_ENGINE_FIRST 0xe020u
 #define HT_DONE "\xe2\x9c\x93"
 #define HT_FAILED "\xe2\x9c\x97"
-extern const uint8_t ht_bell_20_ink[1][4];
-// The lock's dot is the only 40 px glyph used by the daily UI. Keep its exact
-// pixels without retaining the other 94 glyphs of the gallery font in flash.
-extern const ht_font_t ht_lock_dot;
 // Vietnamese, one atlas per mono size. ht_font_t carries a single contiguous range and a dense
 // 32..0x1EF9 would be 7,898 cells, so these cover 0x1EA0..0x1EF9 plus an eight-cell tail holding
 // the letters that live outside it (A-breve, D-stroke, O-horn, U-horn and their lowercase).
@@ -191,7 +179,7 @@ bool ht_cell_sprite(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *fram
 // every smaller size (the pets: one 2x drawing shown at 1x, 1.5x, 1.75x and 2x). Edges darken toward the black ground,
 // as the art's own anti-aliasing does; a pixel less than a quarter covered is left as it was.
 bool ht_cell_sprite_zoom(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *frame, unsigned zoom);
-// A rounded box — the Focus skin's pills and cards. Colours are already mixed over what they sit on.
+// A rounded box — Focus's pills and cards. Colours are already mixed over what they sit on.
 bool ht_box(ht_scene_t *scene, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border);
 // A RING ARC — a piece of a circle's band, drawn in one colour (already mixed over the ground), anti-aliased
 // across the band, hard at its two ends. The centre, radius and width are in sixteenths of a pixel; the span
@@ -243,7 +231,7 @@ extern const ht_arc_face_t ht_arc_inter_prop, ht_arc_inter_lower;
 enum { HT_ARC_SPAN = HT_ARC_COLS * HT_ARC_CELL_WIDTH };
 void ht_arc_title(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_title_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
-// The lower arc, in GeistMono (the non-Focus skins); ht_arc_status_face takes any face, like ht_arc_title_face.
+// The lower arc, in GeistMono; ht_arc_status_face takes any face, like ht_arc_title_face.
 void ht_arc_status(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_status_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
 // A smaller label on a tighter curve under the upper arc: a Swarm face's chat name under its project (design
@@ -290,8 +278,8 @@ const char *ht_take_display_line(const char **cursor, int cells, const ht_font_t
 int ht_wrap(ht_scene_t *scene, int x, int y, int width, int lines, int skip, const ht_font_t *font,
             uint16_t fg, const char *text);
 void ht_damage(const ht_scene_t *before, const ht_scene_t *after, ht_damage_t *out);
-// Output is RGB565 in THIS BOARD'S panel order — byte-swapped for the dial's CO5300 over QSPI, native
-// for the Pro's ST7703 DPI framebuffer. See panel16() in terminal.c. Buffer holds region.w * region.h.
+// Output is RGB565 in the panel's order — byte-swapped for the dial's CO5300 over QSPI. See panel16() in
+// terminal.c. Buffer holds region.w * region.h.
 void ht_raster(const ht_scene_t *scene, ht_rect_t region, uint16_t *out);
 uint32_t ht_utf8_next(const char **cursor);
 // Question/answer text must fit in full and contain glyphs available on this device.

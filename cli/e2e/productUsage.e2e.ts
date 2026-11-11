@@ -71,11 +71,12 @@ it('reports only local counters from a real turn, and the account switch stops t
   expect(sum('request_app_resume_reason_saved_state_missing')).toBe(1)
   const wire = JSON.stringify(backend.productUsage.reports)
   for (const privateValue of ['PRIVATE_', creationId, machine.machineId, machine.computerId, machine.token, agentId, cwd, 'userMessage', 'payload']) expect(wire).not.toContain(privateValue)
+  // Counted before the choice: the collector reads it as soon as it is made, which may be before this request answers.
+  const checksBefore = backend.seen.filter(x => x === 'GET /api/product-usage/settings').length
   expect((await fetch(settings, { method: 'POST', headers: d.localHeaders({ 'content-type': 'application/json', 'x-adapter-local': '1' }), body: '{"enabled":false}' })).status).toBe(200)
   const reportsBefore = backend.productUsage.reports.length
-  const checksBefore = backend.seen.filter(x => x === 'GET /api/product-usage/settings').length
   await turn()
-  await until('collector observes the off choice', () => backend!.seen.filter(x => x === 'GET /api/product-usage/settings').length > checksBefore || null, 75000)
+  await until('collector observes the off choice', () => backend!.seen.filter(x => x === 'GET /api/product-usage/settings').length > checksBefore || null, 15000)
   expect(backend.productUsage.reports).toHaveLength(reportsBefore)
   expect(d.coresStarted()).toBe(1)
 }, 240000)

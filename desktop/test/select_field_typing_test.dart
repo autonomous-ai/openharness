@@ -227,6 +227,8 @@ void main() {
     await _mount(
       tester,
       child: AppSelectField<String?>(
+        // Typeahead's path: a list past the threshold otherwise gets a search.
+        filterable: false,
         value: '0',
         options: [
           for (var i = 0; i < 40; i++)

@@ -63,7 +63,7 @@ const ACCOUNT_UNAVAILABLE = 'Harness could not reach your account to change this
 /**
  * The account's three agent experiments (lib/agentSettings.ts), kept for this computer: the copy in the data folder is
  * what every launch, `harness new` and Agent Messages read, and this is its only writer. It reads the account's
- * experiments as the core starts, at every `desk_changed` (a change to them publishes one: backend
+ * experiments as the core starts, at a `desk_changed` of revision 0 (a change to them publishes one: backend
  * routes/experimentalSettings.ts), every AGENT_SETTINGS_SYNC_MS besides, and in every answer the windows get through
  * this daemon (`/api/experimental-settings`), so a switch turned here holds here at once. Signed out it reads nothing,
  * and the copy reads as the defaults.
@@ -132,7 +132,10 @@ export function createAgentSettingsSync(deps: {
   return {
     start(): void {
       if (timer) return
-      unsubscribe = deps.onNotice((notice) => { if (notice.type === 'desk_changed') void request() })
+      // Only the experiments' own change, which publishes revision 0 (backend routes/experimentalSettings.ts): a desk operation
+      // publishes the desk's revision, and every one of them made every daemon read these again (spec 2026-11-02-poll-cost
+      // Part 4.5, 127 reads a minute in prod).
+      unsubscribe = deps.onNotice((notice) => { if (notice.type === 'desk_changed' && notice.revision === 0) void request() })
       timer = setInterval(() => { void request() }, deps.everyMs ?? AGENT_SETTINGS_SYNC_MS)
       timer.unref()
       void request()

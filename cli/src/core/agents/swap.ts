@@ -57,7 +57,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     session: RegisteredSession,
     /** The row's own pane and the backend it is on (`restartTargetOf`): a swap runs where the row is. */
     { backend, runtime }: RestartTarget,
-    launch: { native?: import('../../engines/nativeLaunch.js').NativeLaunch; env?: Record<string, string>; extraArgs?: readonly string[]; clearEnv?: readonly string[]
+    launch: { native?: import('../../engines/nativeLaunch.js').NativeLaunch; env?: Record<string, string>; extraArgs?: readonly string[]; ownerArgs?: readonly string[]; clearEnv?: readonly string[]
       /** Names the respawn takes out of what the pane was created with, on a backend with no `clearEnv()` of its own
        *  (the pty host): a retarget home's grid variables. */
       clearPaneEnv?: readonly string[] } = {},
@@ -72,12 +72,16 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
       && paneReadIdentity(byAgent(target.agentId)) === identity
     const relaunchOptions = (opts: RelaunchArgvOptions) => ({
       ...opts,
+      // A fresh start of an engine whose sessions Harness names reopens the agent's own (engineLaunch.ts `agentId`).
+      agentId: session.agentId,
       ...(launch.native ? { native: launch.native } : {}),
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
       // Plan or Accept edits would come back as Ask without it.
       ...(permissionMode ? { permissionMode } : {}),
       ...(session.cwd ? { cwd: session.cwd } : {}),
       ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
+      // The owner's own words, which the argv builder puts last (engineLaunch.ts `ownerArgs`).
+      ...(launch.ownerArgs?.length ? { ownerArgs: launch.ownerArgs } : {}),
       // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
       // same reason and against the same failure: an engine re-exec'd with the grid's variables still
       // sees whatever else the pane inherited, and picks its provider from all of it. This was the
@@ -93,7 +97,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     return {
       ...(current ? { isCurrent: current } : {}),
       prepareResume: () => prepareSessionResume(session),
-      // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
+      // The conversation the swap meant to reopen: the one a fallback to a fresh start leaves behind.
       keepAbandoned: () => keepAbandonedConversation(session),
       // Only a backend that can refuse is asked (tmux, too old for `-e`); the pty host takes any environment.
       ...(backend.respawnRefusal ? { respawnRefusal: () => backend.respawnRefusal!(launch.env ? { env: launch.env } : {}) } : {}),

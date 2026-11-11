@@ -34,9 +34,10 @@ void main() {
 
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {
-      testWidgets('composer text centers in ${brightness.name} at ${scale}x', (
-        tester,
-      ) async {
+      // anh Dee's mockup (11-07, #4529): the text sits in its pill, the mic or
+      // send beside it; the caret and the hint centre on its line.
+      testWidgets('composer text sits on its line inside the pill in '
+          '${brightness.name} at ${scale}x', (tester) async {
         final previousBrightness = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() {
@@ -44,7 +45,7 @@ void main() {
         });
         await tester.binding.setSurfaceSize(const Size(1100, 720));
         addTearDown(() => tester.binding.setSurfaceSize(null));
-        final server = ConversationServer();
+        final server = ConversationServer.chat();
         final controller = server.controller();
         await controller.refresh();
         addTearDown(controller.dispose);
@@ -63,7 +64,6 @@ void main() {
               home: Scaffold(
                 body: SuperTabView(
                   controller: controller,
-                  onInvite: () {},
                   onAddAgent: (_) {},
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Team Mac',
@@ -87,7 +87,7 @@ void main() {
           final editableRect = editor.localToGlobal(Offset.zero) & editor.size;
           final hint = find.descendant(
             of: field,
-            matching: find.text('Message #Pilot'),
+            matching: find.text('Message Lead'),
           );
           measurements[name] = {
             'surfaceHeight': rect.height,
@@ -116,12 +116,13 @@ void main() {
             });
           }
           debugPrint('Composer $name: ${measurements[name]}');
-          expect(editableRect.center.dy, closeTo(rect.center.dy, .75));
-          expect(caret.center.dy, closeTo(rect.center.dy, .75));
+          expect(editableRect.top, greaterThanOrEqualTo(rect.top));
+          expect(editableRect.bottom, lessThanOrEqualTo(rect.bottom));
+          expect(caret.center.dy, closeTo(editableRect.center.dy, .75));
           if (name == 'empty') {
             expect(
               tester.getRect(hint).center.dy,
-              closeTo(rect.center.dy, .75),
+              closeTo(editableRect.center.dy, .75),
             );
           }
         }

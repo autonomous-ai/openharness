@@ -1,5 +1,7 @@
-import type { PrismaClient, SuperTabDelivery } from '@prisma/client'
+import type { Prisma, PrismaClient, SuperTabDelivery } from '@prisma/client'
+import { readBy } from './parts/indexed.js'
 import { ms } from './parts/light.js'
+import { OPEN_DELIVERY } from './pageReads.js'
 import type { SuperTabStore } from './store.js'
 import { logger } from '../utils/logger.js'
 
@@ -21,7 +23,6 @@ export const UNCERTAIN_LIMIT_MS = 60 * 60_000
  *  answering busy (prod 10-30, v1.3.71: every person's messages to their own Buddy sat queued for 2 hours, and nothing said so). */
 export const CLAIM_FAILING_ALARM_MS = 5 * 60_000
 const SETTLE_EVERY_MS = 5 * 60_000
-const OPEN = ['queued', 'claimed', 'uncertain']
 const BATCH = 500
 
 /** Whether an open delivery can no longer move. [reachable]: its recipient may still read it there (store.ts deliveryAllowed). */
@@ -43,8 +44,8 @@ export function claimsFailing(delivery: Pick<SuperTabDelivery, 'status' | 'claim
 /** A page of open deliveries, by id. Read by their own index (status, id) with a plain match: Prisma sends `status in` as an
  *  $expr $or that no index can bound (pageReads.ts), and a pass must not read every delivery ever sent. */
 async function openDeliveries(db: PrismaClient, after: string | null): Promise<SuperTabDelivery[]> {
-  const rows = await db.superTabDelivery.aggregateRaw({ pipeline: [{ $match: { status: { $in: OPEN }, ...after ? { _id: { $gt: after } } : {} } },
-    { $sort: { _id: 1 } }, { $limit: BATCH }] }) as unknown as Array<Record<string, unknown>>
+  const rows = await readBy(db as unknown as Prisma.TransactionClient, 'SuperTabDelivery', 'settle', [{ $match: { status: { $in: [...OPEN_DELIVERY] }, ...after ? { _id: { $gt: after } } : {} } },
+    { $sort: { _id: 1 } }, { $limit: BATCH }])
   const date = (value: unknown) => value == null ? null : new Date(ms(value))
   return rows.map(({ _id, ...row }) => ({ ...row, id: _id as string, holdSince: date(row.holdSince), claimFailingSince: date(row.claimFailingSince), claimFailedAt: date(row.claimFailedAt), deliveredAt: date(row.deliveredAt),
     answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }) as unknown as SuperTabDelivery)
@@ -58,7 +59,7 @@ export async function settleStuckDeliveries(db: PrismaClient, store: Pick<SuperT
     const byTab = new Map<string, SuperTabDelivery[]>()
     for (const row of rows) byTab.set(row.tabId, [...byTab.get(row.tabId) ?? [], row])
     for (const [tabId, tabRows] of byTab) {
-      // One Swarm that cannot be read now (it is being migrated) never holds the others back.
+      // One Swarm that cannot be read now (deleted, or busy) never holds the others back.
       try { settled += await store.settleDeliveries(tabId, tabRows, now) } catch (error) {
         logger.warn('[swarm-deliveries] could not settle', { tabId, error: error instanceof Error ? error.message : String(error) })
       }

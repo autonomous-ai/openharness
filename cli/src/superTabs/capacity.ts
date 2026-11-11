@@ -6,8 +6,6 @@ import { commandAvailableInInteractiveShell, type CommandAvailability } from '..
 import { launchModelEngines } from '../lib/launchModel.js'
 import { object } from './wire.js'
 import { readCapacityDisk } from './disk.js'
-import { floorOf, heavyNeed } from './machineFit.js'
-import type { Needs } from './route.js'
 
 type Json = Record<string, unknown>
 export interface Requirements {
@@ -15,19 +13,11 @@ export interface Requirements {
   tools: string[]; devices: string[]; quotaRequired: boolean
 }
 /** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. CPU use is only a momentary
- *  reading: a busy machine would refuse every start (seen in the route e2e at 98.7%), so no cap; memory, disk and pressure gate it. */
+ *  reading: a busy machine would refuse every start (seen in an e2e run at 98.7%), so no cap; memory, disk and pressure gate it. */
 export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
-/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. Heavy
- *  work asks only the least it can run with (machineFit.ts floorOf), so a machine the route ranks later, between half the need
- *  and the need, still admits its start (Lead, 10-31); the start says it is heavy in its own `heavy` field. */
-export const startRequirements = (needs: Pick<Needs, 'tools' | 'devices' | 'heavy'>): Requirements => {
-  const need = heavyNeed(needs), floor = need ? floorOf(need) : null
-  return { ...START_REQUIREMENTS, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices,
-    ...(floor ? { memoryBytes: Math.max(START_REQUIREMENTS.memoryBytes, floor.memoryBytes), diskBytes: Math.max(START_REQUIREMENTS.diskBytes, floor.diskBytes) } : {}) }
-}
 
 /** A missing result is a completed check; an absent value or failed check is only unverified. */
-export function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {
+function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {
   if (reported === true) return null
   if (reported === false) return `Required tool missing: ${tool}.`
   const detail = typeof failure === 'string' && failure ? `${failure} ` : ''
@@ -100,7 +90,7 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
     // Both engines report the short window first and the weekly one second, so the name is by that position, kept even
     // when one is missing — unless the window says how long it is, as Codex's do (`limit_window_seconds`, the length the
     // Desktop names them by). 2026-10-24: a Codex account reported only its weekly window, first; read as its 5-hour one,
-    // the weekly read as missing, and the route never offered Codex while a Claude candidate fit.
+    // the weekly read as missing, and Codex was never offered while a Claude candidate fit.
     raw.forEach((value, index) => {
       const w = object(value), used = w.utilization ?? w.used_percentage ?? w.used_percent, length = w.limit_window_seconds
       const name = finite(length) && length > 0 ? (length >= 86_400 ? 'weekly' : '5-hour') : index === 0 ? '5-hour' : 'weekly'
@@ -109,28 +99,18 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
   }
   return { known: windows.length > 0, account: typeof reading?.account === 'string' ? reading.account : null, windows }
 }
-/** Said of an engine in a Harness Team account that spends its owner's subscription through the owner's relay: the
- *  route reads that subscription's allowance from the owner's Mac (routeCommand.ts), matching this exact sentence. */
-export const RELAYED_QUOTA = "This account runs on its owner's subscription; its allowance is read on the owner's machine."
 const VENDOR: Record<string, string> = { claude: 'Anthropic', codex: 'OpenAI' }
 /** Why [engine]'s allowance could not be read from the account reader's [reply], or null when it was. Words only: no
- *  account, token or plan. [relayed]: a Harness Team account, whose engines spend the owner's subscription through the
- *  owner's relay, so its own home holds no sign-in to read. */
-export function quotaUnknownReason(reply: Json, engine: string, relayed: boolean): string | null {
+ *  account, token or plan. A reading the CLI could not give says why itself (services/usage.ts). */
+export function quotaUnknownReason(reply: Json, engine: string): string | null {
   if (quotaOf(reply, engine, false).known) return null
   const reading = Array.isArray(reply.providers) ? reply.providers.map(object).find(r => r.provider === engine) : undefined
   const vendor = VENDOR[engine] ?? 'The vendor'
   if (!reading) return 'The allowance reader on this machine did not answer.'
-  if (reading.outcome === 'signedOut') {
-    if (relayed) return RELAYED_QUOTA
-    return typeof reading.message === 'string' && /expired/i.test(reading.message)
-      ? 'The stored sign-in has expired; it renews the next time the engine runs here.'
-      : 'No subscription sign-in is stored on this machine.'
-  }
-  if (reading.outcome !== 'answered') return `${vendor} could not be reached.`
+  if (reading.outcome === 'signedOut') return 'No subscription sign-in is stored on this machine.'
+  if (reading.outcome !== 'answered') return typeof reading.message === 'string' && reading.message ? reading.message : `${vendor} could not be reached.`
   const status = reading.httpStatus
   if (status === 429) return `${vendor} is limiting how often the allowance can be read.`
-  if (status === 401 || status === 403) return `${vendor} refused the stored sign-in.`
   if (status === 200) return `${vendor} answered without usage windows.`
   return `${vendor} answered with an error (HTTP ${finite(status) ? status : 'unknown'}).`
 }
@@ -170,6 +150,6 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
   } else if (quota.windows.some(w => w.usedPercent >= 100)) unknown.push(USED_UP_WINDOW)
   return { allowed: reasons.length === 0, reasons, unknown }
 }
-/** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead, its engine
- *  shows its usage limit, and the agent resumes when the window resets (superTabs/limitResume.ts). The route says it too. */
-export const USED_UP_WINDOW = 'The subscription has a used-up usage window: work there waits until it resets.'
+/** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead and its engine
+ *  shows its usage limit. */
+export const USED_UP_WINDOW = 'The subscription has a used-up usage window.'

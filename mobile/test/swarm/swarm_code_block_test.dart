@@ -70,7 +70,6 @@ void main() {
               SwarmMessageRow(
                 message: message,
                 name: 'River',
-                look: (picture: null, status: null),
                 role: 'PM',
                 mentions: SwarmMentions(const []),
                 grouped: false,

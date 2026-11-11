@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MACHINE_FRESH_MS, type ContributedMachine } from '../machines.js'
 import { createSuperTab, type Agent, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
-import { accrueLent, addLent, lentAgents } from './lent.js'
+import { accrueLent, addLent, lentAgents, lentProjects } from './lent.js'
 import { WEEK_MS, weekStart } from './week.js'
 
 // Monday 2026-10-26 00:00 UTC.
@@ -83,6 +83,15 @@ describe('lent agent-hours from machine readings', () => {
     expect(pool.lent).toEqual([{ week: MONDAY, busyMs: 10_000 }])
   })
 
+  it('keeps each day\'s time under the project of the task, and a task of no project under the default one', () => {
+    const inSecret = { ...task('a'), projectId: 'secret' }
+    const pool = machine(['h-a', 'h-b'], MONDAY), state = swarm(pool, [agent('a'), agent('b')], [inSecret, task('b')])
+    accrueLent(state, pool, MONDAY + 10_000)
+    expect(pool.lentDays).toEqual([{ day: MONDAY, projectId: 'secret', busyMs: 10_000 }, { day: MONDAY, projectId: 'lead', busyMs: 10_000 }])
+    expect(pool.lent).toEqual([{ week: MONDAY, busyMs: 20_000 }])
+    expect(lentProjects(state, pool, ['h-a', 'h-b'])).toEqual({ secret: 1, lead: 1 })
+  })
+
   it('adds nothing on the first reading', () => {
     const pool = machine([], 0), state = swarm(pool, [agent('a')])
     delete pool.observation
@@ -114,7 +123,8 @@ describe('lent for a report that loads no Swarm (DB 2.5)', () => {
       [['h-idle'], MONDAY + 10_000]] as const) {
       const full = scene([...running]), fast = scene([...running])
       accrueLent(full, full.machines![0]!, now)
-      addLent(fast.machines![0]!, now, lentAgents(fast, fast.machines![0]!, fast.machines![0]!.observation!.runningHarnessIds))
+      addLent(fast.machines![0]!, now, lentAgents(fast, fast.machines![0]!, fast.machines![0]!.observation!.runningHarnessIds),
+        lentProjects(fast, fast.machines![0]!, fast.machines![0]!.observation!.runningHarnessIds))
       expect(fast.machines![0]!.lent, JSON.stringify(running)).toEqual(full.machines![0]!.lent)
     }
     expect(lentAgents(scene([]), scene([]).machines![0]!, ['h-busy', 'h-idle'])).toBe(1)

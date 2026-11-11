@@ -141,18 +141,13 @@ child.on('close',(code,signal)=>{if(finished)return;finished=true;clearTimeout(d
 deadline=setTimeout(()=>{if(leaderGone||child.exitCode!==null||child.signalCode!==null)return;try{process.kill(-child.pid,'SIGKILL')}catch{}},Math.max(20,Math.min(1200000,Number(testDeadline)||1200000)));
 `
 
-export function createNativeInstallations({ directory, node = managedNodePath, dispatch = defaultDispatch, platform = process.platform }: {
-  directory: string; node?: () => string; dispatch?: (node: string, file: string, digest: string) => void; platform?: NodeJS.Platform
+export function createNativeInstallations({ directory, node = managedNodePath, dispatch = defaultDispatch }: {
+  directory: string; node?: () => string; dispatch?: (node: string, file: string, digest: string) => void
 }) {
   // Outside the claim directory: recreating or emptying that directory cannot erase its active owner.
   const authorityFile = `${directory}.authority`
   const examine = async (engine: AgentEngine, inputRecipe: EngineInstallRecipe, inputEnvironment: Record<string, string>, request: string,
     current: () => boolean, query = false): Promise<NativeInstallation | null> => {
-    // Windows: the evidence below walks POSIX paths only (NativePaths), so every read threw there and every create, a
-    // terminal's too, held at "Waiting to confirm durable engine installation ownership" (the Windows VM E2E,
-    // 2026-10-15). Installing an engine first is not carried on Windows yet (sub-project B), so no history is ever
-    // written there: a query has nothing to report, and a launch that needs an install waits with that reason.
-    if (platform === 'win32') return query ? null : hold(`${engine} is not installed. Installing engines is not supported on Windows yet: install it, then try again.`)
     try {
       if (!current()) return hold('The saved launch request changed before installation.')
       // Snapshot caller-owned objects before any yield. The fingerprint and executed bytes agree.

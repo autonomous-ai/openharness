@@ -16,7 +16,7 @@ import { NativeEvidenceBudget, nativeUnavailable } from '../engines/kit/nativeEv
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
 import { isTerminalEngine } from '../engines/types.js'
 
-export async function captureResumeIdentity(session: RegisteredSession): Promise<RegisteredSession> {
+export async function captureResumeIdentity(session: RegisteredSession, platform: NodeJS.Platform = process.platform): Promise<RegisteredSession> {
   // A shell holds no conversation; there is nothing here to capture for it.
   if (isTerminalEngine(session.engine)) return session
   const options = { codexHome: session.codexHome ?? undefined,
@@ -41,6 +41,10 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
     if (session.engine === 'pi' && !session.transcriptPath) return session
     return nativeUnavailable('the saved conversation file is unavailable')
   }
+  // Windows has neither ps nor lsof to read a live process with: a conversation there is known by its engine's hook, above, or
+  // not at all. Refused, a Stop of a session at its first prompt said "the native ps probe did not complete" and left it running
+  // (Copilot at its folder question on DESKTOP-0TFH0OJ, 2026-11-04).
+  if (platform === 'win32') return session
   const expected = session.processIdentity
   if (!expected || !session.cwd) return session
   const budget = new NativeEvidenceBudget()

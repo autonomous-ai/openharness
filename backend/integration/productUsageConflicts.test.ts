@@ -42,11 +42,14 @@ it('a fleet reporting at once is counted whole, with no report refused', async (
   const answers = await Promise.allSettled(reports.map((report, i) => usage.ingestProductUsage(`6a00000000000000000${String(i).padStart(5, '0')}`, report, now)))
   expect(answers.filter(a => a.status === 'rejected').map(a => (a as PromiseRejectedResult).reason?.code)).toEqual([])
   expect(answers.map(a => (a as PromiseFulfilledResult<unknown>).value)).toEqual(reports.map(() => ({ accepted: true })))
+  expect(await total('health_cli_collector_days')).toBeUndefined()
+  await usage.flushRelayUsage()
   expect(await total('health_cli_collector_days')).toBe(64)
   expect(await total('turns_started')).toBe(128)
   expect(await total('turns_ended')).toBe(32)
   expect(await total('breakdown:release:cli:0.4.92:turns_started')).toBe(128)
-  expect(await db.productUsageReceipt.count()).toBe(64)
+  // The 64 reports' receipts and the one receipt of the flush that wrote their totals.
+  expect(await db.productUsageReceipt.count()).toBe(65)
 }, 60000)
 
 it('a report sent again after its answer was lost counts once', async () => {
@@ -54,6 +57,7 @@ it('a report sent again after its answer was lost counts once', async () => {
   const answers = await Promise.all([1, 2, 3].map(() => usage.ingestProductUsage('6a0000000000000000000b01', report, now)))
   expect(answers).toEqual([{ accepted: true }, { accepted: true }, { accepted: true }])
   expect(await usage.ingestProductUsage('6a0000000000000000000b01', report, now)).toEqual({ accepted: true })
+  await usage.flushRelayUsage()
   expect(await total('launch_unobserved')).toBe(3)
 }, 60000)
 
@@ -66,6 +70,8 @@ it('four backend processes reporting at once still count every report', async ()
     { schemaVersion: 1, revision: 0, id: randomUUID(), day: '2026-10-28', context, counters: { queue_capped: 1 } }, now)))
   const answers = await Promise.allSettled(sent)
   expect(answers.filter(a => a.status === 'rejected').map(a => (a as PromiseRejectedResult).reason?.code)).toEqual([])
+  // Every process's sums, written at once to the same rows.
+  await Promise.all(processes.map(each => each.flushRelayUsage()))
   expect(await total('queue_capped')).toBe(192)
 }, 60000)
 

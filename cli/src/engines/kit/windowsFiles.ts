@@ -49,7 +49,7 @@ const POSIX_READ = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBL
 
 /**
  * POSIX reopens an unchanged settings file read-only for its flush. On Windows, a read-write open changes ctime even
- * without a write (measured on NTFS with Node 22.23.2), invalidating the file proof. The staged writer already
+ * without a write (machine-dependent: measured changing on a Dell x64 Win11 26200, unchanged on a UTM ARM64 Win11 26100 VM, the same on Node 22.23.2 and 24.22.2; scripts/probe-node-behavior.mjs prints it), invalidating the file proof. The staged writer already
  * flushed before rename, and Windows directory handles cannot be flushed, so do not reopen the unchanged file.
  */
 export function unchangedFlushFlags(_mode: number, platform: NodeJS.Platform = hostPlatform()): number | null {

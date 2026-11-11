@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, plainHost, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, sameData, visibilityChanged } from './commit.js'
+import { plainHost } from './write.js'
 import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {
@@ -52,6 +53,9 @@ describe('what a write tells host reads (review round 1)', () => {
     }
     expect(hostMarker('machine', machine({}, reading(1)), lent(15_000, reading(2)), none, 9)).toEqual({})
     expect(hostMarker('machine', lent(15_000), lent(30_000), none, 9)).toEqual({})
+    // The daily rows move with every reading too.
+    const days = (busyMs: number) => { const part = machine(); return { ...part, contribution: { ...part.contribution, lentDays: [{ day: 0, busyMs }] } } }
+    expect(hostMarker('machine', days(1), days(2), none, 9)).toEqual({})
   })
 
   it('moves it for a change to the machine\'s settings or ledger, and when the part is added or removed', () => {
@@ -75,10 +79,10 @@ describe('what a write tells host reads (review round 1)', () => {
 })
 
 describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
-  // Mac A lends a pool and runs agent a1; the team account B follows Mac A; Mac C runs agent c1 only.
+  // Mac A lends a pool and runs agent a1; Mac B lends a pool; Mac C runs agent c1 only.
   const swarm = () => {
     const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
-    state.machines = [{ machineId: 'A' }, { machineId: 'B', hostMachineId: 'A' }] as never
+    state.machines = [{ machineId: 'A' }, { machineId: 'B' }] as never
     state.agents = [{ id: 'a1', machineId: 'A' }, { id: 'c1', machineId: 'C' }] as never
     return state
   }
@@ -100,14 +104,13 @@ describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
     expect(tell([update('group', 'g', {})])).toEqual([])
   })
 
-  it('tells a machine whose settings changed, the Mac it follows and the team accounts that follow it, never for its reading alone', () => {
-    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
-    expect(tell([update('machine', 'B', { machineId: 'B', contribution: { hostMachineId: 'A' } }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+  it('tells a machine whose settings changed, never for its reading alone', () => {
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A'])
     expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} })])).toEqual([])
   })
 
-  it('tells nobody for touches or progress', () => {
-    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }, update('progress', 'p', {})])).toEqual([])
+  it('tells nobody for touches', () => {
+    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }])).toEqual([])
   })
 
   it('tells a machine the commit removed from the Swarm', () => {

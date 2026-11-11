@@ -6,10 +6,10 @@
  * itself: that is the models service's (services/models.ts), which runs in a process of its own
  * (docs/design/2026-10-06-core-boundary-next.md, step 7). It reads files and never spawns.
  */
-import { accessSync, constants, readFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs'
+import { join, sep, win32 } from 'node:path'
 import { env } from '../config/env.js'
-import { binaryOnPath } from './binaryOnPath.js'
+import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 
 /** The command, as it is named on PATH — the last resort of [gridBinaryPath], and the word the
  *  sign-out's own "nothing to run" sentence uses (`gridLogout.ts`). */
@@ -90,15 +90,36 @@ export function gridBinaryPath(processEnv: NodeJS.ProcessEnv = process.env, plat
  * `grid.exe`: Node cannot spawn a `.cmd` without a shell, and a shell would have to re-quote every
  * argument, so the installer's own line — `"<install>\Scripts\python.exe" -m cli %*` — is read and that
  * signed python is run directly. A `.cmd` that is not that shape is returned as it is, and fails as it did.
+ *
+ * The same for the `grid.exe` itself, which is a launcher that does nothing but start that python: it is unsigned, so Smart App
+ * Control refuses it wherever the installer did not see that (593 times in an hour on DESKTOP-0TFH0OJ, 2026-11-05, each a notice
+ * to the person that Node.js had been blocked). On a Mac nothing stands in its way; here it is stepped past, as `grid.cmd` is.
  */
 export function gridCommand(binary: string, args: readonly string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[] } {
-  if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(binary)) {
+  if (platform === 'win32') {
+    const program = binary.includes('\\') || binary.includes('/') ? binary : resolveBinaryOnPath(binary) ?? binary
+    let python: string | null | undefined
     try {
-      const python = /"([^"]+\.exe)" -m cli %\*/.exec(readFileSync(binary, 'utf8'))?.[1]
-      if (python) return { file: python, args: ['-m', 'cli', ...args] }
+      python = /\.(?:cmd|bat)$/i.test(program)
+        ? /"([^"]+\.exe)" -m cli %\*/.exec(readFileSync(program, 'utf8'))?.[1]
+        : launcherPython(program)
     } catch { /* unreadable: spawn reports it */ }
+    if (python) return { file: python, args: ['-m', 'cli', ...args] }
   }
   return { file: binary, args: [...args] }
+}
+
+/** A launcher is small; anything larger is a program of its own, not read to find out. */
+const MAX_LAUNCHER_BYTES = 1024 * 1024
+
+/** The python a pip or uv launcher `.exe` starts, named on a `#!` line near its end, when it is there to run. */
+function launcherPython(program: string): string | null {
+  if (!/\.exe$/i.test(program) || statSync(program).size > MAX_LAUNCHER_BYTES) return null
+  const bytes = readFileSync(program)
+  const at = bytes.lastIndexOf('#!')
+  if (at < 0) return null
+  const line = bytes.subarray(at + 2, at + 2 + 4096).toString('utf8').split(/[\r\n]/, 1)[0]!.replaceAll('"', '').trim()
+  return win32.basename(line).toLowerCase() === 'python.exe' && existsSync(line) ? line : null
 }
 
 /** Is there a `grid` to run at all? Asked by reading rather than by spawning, so a missing binary is

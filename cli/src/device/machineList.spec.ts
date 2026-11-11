@@ -149,6 +149,70 @@ describe('MachineListCache', () => {
 
 // The desktop app reads this same endpoint through the daemon, so an outage must leave it with the last
 // known list rather than nothing — see `machinesListWithFallback` in cli.ts.
+// Spec 2026-11-02-poll-cost Part 4.4: the fleet's own refresh may be served a list read within 45 s, and any read joins one
+// already in flight; a window's read (maxAgeMs 0) still reads, so it sees a rename or a new machine at once.
+describe('MachineListCache.refresh', () => {
+  it('serves a list younger than maxAgeMs, reads with none, and joins a read in flight', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    try {
+      const fetch = vi.fn(ok([row()]))
+      const cache = new MachineListCache(fetch, () => 'z', () => {}, DIR(), () => OWNER)
+      await cache.refresh()
+      vi.advanceTimersByTime(44_999)
+      expect(await cache.refresh({ maxAgeMs: 45_000 })).toEqual({ status: 200, body: { machines: [row()] } })
+      expect(fetch).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(1)
+      await cache.refresh({ maxAgeMs: 45_000 })
+      expect(fetch).toHaveBeenCalledTimes(2)
+      await cache.refresh({ maxAgeMs: 0 })
+      await cache.refresh()
+      expect(fetch).toHaveBeenCalledTimes(4)
+      const [a, b] = await Promise.all([cache.refresh(), cache.refresh({ maxAgeMs: 0 })])
+      expect(fetch).toHaveBeenCalledTimes(5)
+      expect(a).toBe(b)
+    } finally { vi.useRealTimers() }
+  })
+
+  // Final review: a read that began before a rename answers with the old name; asked for after it, read again.
+  it('a read that must be fresh does not take one that began before it was asked for', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    try {
+      let release!: () => void
+      const answers = [async () => { await new Promise<void>(resolve => { release = resolve }); return { status: 200, body: { machines: [row()] } } },
+        async () => ({ status: 200, body: { machines: [{ ...row(), name: 'Renamed' }] } })]
+      const fetch = vi.fn(() => answers.shift()!())
+      const cache = new MachineListCache(fetch, () => 'z', () => {}, DIR(), () => OWNER)
+      const earlier = cache.refresh()
+      vi.advanceTimersByTime(10)
+      const fresh = cache.refresh({ maxAgeMs: 0 })
+      release()
+      await earlier
+      expect((await fresh)!.body).toEqual({ machines: [{ ...row(), name: 'Renamed' }] })
+      expect(fetch).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('serves nothing held once a read failed, nor a list another account read', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    try {
+      let owner = OWNER
+      let answer: () => Promise<{ status: number; body: Record<string, unknown> }> = ok([row()])
+      const fetch = vi.fn(() => answer())
+      const cache = new MachineListCache(fetch, () => 'z', () => {}, DIR(), () => owner)
+      await cache.refresh()
+      answer = async () => { throw new Error('offline') }
+      await cache.refresh()
+      expect(await cache.refresh({ maxAgeMs: 45_000 })).toBeNull()
+      expect(fetch).toHaveBeenCalledTimes(3)
+      answer = ok([row()])
+      await cache.refresh()
+      owner = 'machine-of-user-b'
+      await cache.refresh({ maxAgeMs: 45_000 })
+      expect(fetch).toHaveBeenCalledTimes(5)
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('MachineListCache last-known-good body', () => {
   it('keeps the successful response verbatim, so a fallback cannot change the wire shape', async () => {
     const dir = DIR()

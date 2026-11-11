@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/app_shell.dart' show systemBarsFor;
 import 'package:harness_mobile/core/startup.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
-import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
+import 'package:harness_mobile/shared/theme/appearance_builder.dart';
 
 import 'sample_mode.dart';
 
@@ -25,18 +25,17 @@ class SampleApp extends StatelessWidget {
   const SampleApp({super.key});
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<AppearancePrefs>(
-    valueListenable: appearancePrefsStore,
-    builder: (context, prefs, _) {
-      // What `HarnessApp` does before it builds its theme: the palette and the type settings go
-      // on first, because the theme bakes them in.
-      grid.AppTheme.palette.value = prefs.palette;
+  Widget build(BuildContext context) => AppearanceBuilder(
+    builder: (context, prefs, palette) {
+      // What `HarnessApp` does before it builds its theme: the palette (on `AppTheme` already,
+      // from [AppearanceBuilder]) and the type settings go on first, because the theme bakes them
+      // in.
       grid.AppTheme.fonts.apply(
         uiFamily: prefs.uiFamily,
         uiScale: prefs.uiSize / grid.AppFont.uiSizeDefault,
         codeSize: grid.AppFont.codeSize,
       );
-      final brightness = prefs.palette.brightness;
+      final brightness = palette.brightness;
       grid.AppTheme.brightness.value = brightness;
       return MaterialApp(
         title: 'Harness sample',

@@ -24,7 +24,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -39,7 +38,7 @@ void main() {
 
   /// [count] notes in the Lead chat; the last one replies to [replyTo].
   ConversationServer chat(int count, {required String replyTo}) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= count; i++) {
       server.append('Note $i');
     }
@@ -258,55 +257,6 @@ void main() {
 
   /// [count] notes in the Lead chat; the first is a [kind] row the chat
   /// hides, and the last replies to it.
-  ConversationServer hiddenOriginal(int count, String kind) {
-    final server = ConversationServer()..append('Hidden $kind');
-    server.messages.last['source'] = {'kind': kind};
-    for (var i = 2; i <= count; i++) {
-      server.append('Note $i');
-    }
-    server.messages.last['replyTo'] = 'message-1';
-    return server;
-  }
-
-  Future<void> expectHiddenQuote(WidgetTester tester, String reply) async {
-    // Its read lands after the first frames.
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Hidden'), findsNothing);
-    expect(
-      find.descendant(
-        of: quoteIn(reply),
-        matching: find.text(
-          'The original message is no longer in this conversation.',
-        ),
-      ),
-      findsOneWidget,
-    );
-  }
-
-  testWidgets('a quote of a loaded waiting notice keeps it hidden', (
-    tester,
-  ) async {
-    await show(tester, hiddenOriginal(60, 'delivery-hold'));
-    await expectHiddenQuote(tester, 'message-60');
-  });
-
-  testWidgets('a quote of a waiting notice not loaded keeps it hidden', (
-    tester,
-  ) async {
-    final c = await show(tester, hiddenOriginal(250, 'delivery-hold'));
-    expect(c.hasOlder('lead'), isTrue);
-    await expectHiddenQuote(tester, 'message-250');
-  });
-
-  testWidgets('a quote of an update request not loaded keeps it hidden', (
-    tester,
-  ) async {
-    final c = await show(tester, hiddenOriginal(250, 'update-request'));
-    expect(c.hasOlder('lead'), isTrue);
-    await expectHiddenQuote(tester, 'message-250');
-  });
-
   testWidgets('a quote whose original was deleted says so', (tester) async {
     await show(tester, chat(60, replyTo: 'message-gone'));
     // Its read lands after the first frames.
@@ -315,9 +265,7 @@ void main() {
     expect(
       find.descendant(
         of: quoteIn('message-60'),
-        matching: find.text(
-          'The original message is no longer in this conversation.',
-        ),
+        matching: find.text('Original message removed'),
       ),
       findsOneWidget,
     );
@@ -327,10 +275,7 @@ void main() {
     await show(tester, chat(60, replyTo: 'message-gone'));
     await tester.tap(quoteIn('message-60'));
     await tester.pumpAndSettle();
-    expect(
-      note('The original message is no longer in this conversation.'),
-      findsOneWidget,
-    );
+    expect(note('Original message removed'), findsOneWidget);
     expect(row('message-60').hitTestable(), findsOneWidget);
     expect(find.byKey(const ValueKey('super-reply-back')), findsNothing);
   });
@@ -359,10 +304,7 @@ void main() {
     await tester.tap(quoteIn('message-60'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Private plan'), findsNothing);
-    expect(
-      note('The original message is no longer in this conversation.'),
-      findsOneWidget,
-    );
+    expect(note('Original message removed'), findsOneWidget);
   });
 
   testWidgets('a failed page read says so and stops', (tester) async {

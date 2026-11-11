@@ -173,6 +173,9 @@ abstract final class AppPalette {
   static Color get swarmAccent => AppTheme.surfacePalette.accent;
   // Shared with the native search field for a continuous input/results surface.
   static Color get swarmSearchSurface => AppTheme.surfacePalette.search;
+  // The Swarm's project sidebar: the workspace color, or a palette's own
+  // (Plum's plum). Its ink is `SidebarInk`'s.
+  static Color get swarmSidebar => AppTheme.surfacePalette.sidebar;
   // Getters, not consts: a light palette brings its own panel and card.
   static Color get agentEntrySurface =>
       AppTheme.pick(AppTheme.surfacePalette.panel, const Color(0xff101113));
@@ -383,10 +386,14 @@ abstract final class AppPalette {
   static Color get onboardingTagline =>
       AppTheme.pick(const Color(0xFF7D5A2C), const Color(0xFFD4A574));
 
+  // A palette may bring its own three grays (Plum, Night, Cloud, Storm); the
+  // rest share these ramps.
   static Color get textPrimary =>
+      AppTheme.surfacePalette.text ??
       AppTheme.pick(const Color(0xFF1A1A18), const Color(0xFFF5F5F5));
 
   static Color get textSecondary =>
+      AppTheme.surfacePalette.muted ??
       AppTheme.pick(const Color(0xFF62615B), const Color(0xFFA8A8A2));
 
   /// Meta text and hints. Light is #7A7973, not the #8E8D86 it was: that one
@@ -395,7 +402,13 @@ abstract final class AppPalette {
   /// 3.49 / 3.51 on the two workspaces, and stays 1.42:1 apart from
   /// [textSecondary] so the three steps still read as three.
   static Color get textFaint =>
-      AppTheme.pick(const Color(0xFF7A7973), const Color(0xFF6E6E68));
+      AppTheme.surfacePalette.faint ?? textFaintFor(isDark: AppTheme.isDark);
+
+  /// [textFaint] for a theme being built, whose brightness need not be the
+  /// current one. Every field's placeholder is this color.
+  static Color textFaintFor({required bool isDark}) =>
+      AppTheme.paletteFor(isDark ? Brightness.dark : Brightness.light).faint ??
+      (isDark ? const Color(0xFF6E6E68) : const Color(0xFF7A7973));
 
   /// The page a document is drawn on, and the ink on it.
   ///
@@ -465,10 +478,13 @@ abstract final class AppPalette {
 /// [buildAppTheme] needs the values *before* the global brightness is the one
 /// being built for — see the note at its `scrollbarTheme`. The getters below read
 /// these same four, so there is one set of numbers rather than two that can drift.
-const Color _scrollThumbLight = Color(0xFF787878);
-const Color _scrollThumbDark = Color(0xFF686868);
-const Color _scrollThumbHoverLight = Color(0xFF5E5E5E);
-const Color _scrollThumbHoverDark = Color(0xFF8A8A8A);
+///
+/// Translucent, so one thumb takes the tone of whatever it runs over, a menu or
+/// a page, rather than sitting on it as a foreign gray.
+const Color _scrollThumbLight = Color(0x59000000);
+const Color _scrollThumbDark = Color(0x47FFFFFF);
+const Color _scrollThumbHoverLight = Color(0x80000000);
+const Color _scrollThumbHoverDark = Color(0x70FFFFFF);
 
 /// Surface tokens for the app's chrome — the sidebar's rows, the composer card,
 /// a recessed list column. Depth comes from a hairline rim and a soft shadow; the
@@ -601,6 +617,89 @@ abstract final class AppSurface {
       ),
     ],
   );
+}
+
+/// The Swarm sidebar's ink (task #3006).
+///
+/// A theme may draw its sidebar darker than the page around it — Plum's is
+/// plum with white text in an otherwise white app. The tokens above follow
+/// one global brightness and cannot tell the sidebar from the page, so the
+/// sidebar's widgets read their ink here instead: inside [SidebarInk.scope]
+/// on such a theme they get the sidebar's own, anywhere else (the same row
+/// widgets on another page, or any theme without a sidebar of its own) the
+/// page's ordinary tokens.
+class SidebarInk extends InheritedWidget {
+  const SidebarInk._({required super.child});
+
+  /// Marks [child] as the Swarm sidebar, and gives text and icons that pick
+  /// no color of their own the sidebar's ink.
+  static Widget scope({required Widget child}) {
+    final palette = AppTheme.surfacePalette;
+    if (!palette.hasSidebarInk) return SidebarInk._(child: child);
+    return SidebarInk._(
+      child: IconTheme.merge(
+        data: IconThemeData(color: palette.sidebarInk),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(color: palette.sidebarInk),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  /// The default text style of a Material drawn as the sidebar: the theme's,
+  /// in the sidebar's ink when it has its own (a Material sets its own
+  /// default style, which would hide [scope]'s).
+  static TextStyle? textStyle(BuildContext context) => switch (_own(context)) {
+    final palette? => Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(color: palette.sidebarInk),
+    null => null,
+  };
+
+  static HarnessPalette? _own(BuildContext context) {
+    final palette = AppTheme.surfacePalette;
+    return palette.hasSidebarInk &&
+            context.dependOnInheritedWidgetOfExactType<SidebarInk>() != null
+        ? palette
+        : null;
+  }
+
+  /// The sidebar's inks, for code that draws only the sidebar.
+  static HarnessPalette? get _sidebarOwn =>
+      AppTheme.surfacePalette.hasSidebarInk ? AppTheme.surfacePalette : null;
+  static Color get ink => _sidebarOwn?.sidebarInk ?? AppPalette.textPrimary;
+  static Color get inkMuted => switch (_sidebarOwn) {
+    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
+    null => AppPalette.textSecondary,
+  };
+  static Color get hover => _sidebarOwn?.sidebarHover ?? AppSurface.hoverFill;
+  static Color get selected =>
+      _sidebarOwn?.sidebarSelected ?? AppSurface.selectedFill;
+
+  /// The same, for a widget that is drawn in the sidebar and elsewhere: the
+  /// sidebar's inside [scope], the page's outside it.
+  static Color foreground(BuildContext context) =>
+      _own(context)?.sidebarInk ?? AppPalette.textPrimary;
+
+  static Color muted(BuildContext context) => switch (_own(context)) {
+    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
+    null => AppPalette.textSecondary,
+  };
+
+  /// A disabled control's ink: the sidebar's own at half strength on a
+  /// sidebar with its own ink, else the page's faint.
+  static Color faint(BuildContext context) =>
+      _own(context)?.sidebarInk?.withValues(alpha: .5) ?? AppPalette.textFaint;
+
+  static Color hoverFill(BuildContext context) =>
+      _own(context)?.sidebarHover ?? AppSurface.hoverFill;
+
+  static Color selectedFill(BuildContext context) =>
+      _own(context)?.sidebarSelected ?? AppSurface.selectedFill;
+
+  @override
+  bool updateShouldNotify(SidebarInk oldWidget) => false;
 }
 
 /// Translucent Codex-like chrome surfaces used behind a backdrop blur (the
@@ -766,7 +865,9 @@ abstract final class AppGlass {
 /// use [styleFor] and the consts; everywhere else use [style] and the getters.
 abstract final class AppMenu {
   static const Color fillLight = Color(0xFFFFFFFF);
-  static const Color fillDark = Color(0xFF262626);
+
+  /// One step above the page (#282828), so a panel lifts off what it opens over.
+  static const Color fillDark = Color(0xFF2E2E2E);
   static Color get fill => AppTheme.pick(fillLight, fillDark);
 
   /// The panel's rim — the same hairline [AppGlass.hair] resolves to, stated as
@@ -845,7 +946,7 @@ abstract final class AppCard {
 
   // card surface
   static Color get base =>
-      AppTheme.pick(const Color(0xFFFFFFFF), const Color(0xFF1E1E1E));
+      AppTheme.pick(const Color(0xFFFFFFFF), const Color(0xFF2E2E2E));
 
   // recessed inner box / list tile
   static Color get inset =>
@@ -947,12 +1048,16 @@ ThemeData buildAppTheme({
           onPrimary: Colors.white,
           secondary: AppPalette.accent,
           surface: AppTheme.paletteFor(brightness).background,
-          onSurface: const Color(0xFFF5F5F5),
-          onSurfaceVariant: const Color(0xFFA8A8A2),
+          onSurface:
+              AppTheme.paletteFor(brightness).text ?? const Color(0xFFF5F5F5),
+          onSurfaceVariant:
+              AppTheme.paletteFor(brightness).muted ?? const Color(0xFFA8A8A2),
           surfaceContainerHighest: AppTheme.paletteFor(brightness).card,
           outline: const Color(0x14FFFFFF),
           outlineVariant: const Color(0x14FFFFFF),
-          error: const Color(0xFFFF7068),
+          error:
+              AppTheme.paletteFor(brightness).errorInk ??
+              const Color(0xFFFF7068),
         )
       : ColorScheme.light(
           primary: AppPalette.accent,
@@ -962,14 +1067,17 @@ ThemeData buildAppTheme({
           // the dark scheme's does.
           surface: AppTheme.paletteFor(brightness).background,
           onSurface: AppTheme.paletteFor(brightness).foreground,
-          onSurfaceVariant: const Color(0xFF62615B),
+          onSurfaceVariant:
+              AppTheme.paletteFor(brightness).muted ?? const Color(0xFF62615B),
           // The field fill. Not the card, which is pure white on both light
           // palettes: a white field in a white dialog has no edge at all. The
           // panel tone is the step the old light theme's #F3F3F2 was.
           surfaceContainerHighest: AppTheme.paletteFor(brightness).panel,
           outline: const Color(0x0F000000),
           outlineVariant: const Color(0x0F000000),
-          error: const Color(0xFFB3261E),
+          error:
+              AppTheme.paletteFor(brightness).errorInk ??
+              const Color(0xFFB3261E),
         );
   final scheme = highContrast
       ? baseScheme.copyWith(
@@ -1040,10 +1148,12 @@ ThemeData buildAppTheme({
       // another name, and §2 allows exactly one of those.
       trackColor: WidgetStateProperty.all(Colors.transparent),
       trackBorderColor: WidgetStateProperty.all(Colors.transparent),
-      // 6px, radius 3 — a thin capsule rather than the 8px slab, which at this
-      // contrast would read as a chrome element competing with the rows.
-      thickness: WidgetStateProperty.all(6),
-      radius: const Radius.circular(3),
+      // 3px, one clear of the edge: it runs inside the 6px gutter every menu row
+      // and list keeps, so it never covers a row's fill or text.
+      thickness: WidgetStateProperty.all(3),
+      crossAxisMargin: 1,
+      mainAxisMargin: 4,
+      radius: const Radius.circular(1.5),
       // The thumb is only meaningful while there is more list than pane, and
       // fading it in on scroll keeps a short list from wearing furniture.
       thumbVisibility: WidgetStateProperty.all(false),
@@ -1121,15 +1231,8 @@ ThemeData buildAppTheme({
     iconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 18),
     iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
-        side: WidgetStateProperty.resolveWith(
-          (states) => BorderSide(
-            width: highContrast ? 2 : 1.5,
-            color:
-                !states.contains(WidgetState.disabled) &&
-                    states.contains(WidgetState.focused)
-                ? (isDark ? AppDesktop.focusDark : scheme.primary)
-                : Colors.transparent,
-          ),
+        side: WidgetStatePropertyAll(
+          BorderSide(width: highContrast ? 2 : 1.5, color: Colors.transparent),
         ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
@@ -1171,11 +1274,7 @@ ThemeData buildAppTheme({
       // (The typed text is set on the field via
       // [kFieldTextStyle]; `InputDecorationTheme` has no `style` of its own, so
       // a field's own text can't be themed globally here.)
-      // 75% in light: at 70% the hint sat at 2.999:1 on Mist's panel-toned
-      // fill; this is 3.29 (Mist) / 3.29 (Paper). Dark keeps 70% (3.99:1).
-      hintStyle: _fieldTextStyle(
-        scheme.onSurfaceVariant.withValues(alpha: isDark ? 0.7 : 0.75),
-      ),
+      hintStyle: _fieldTextStyle(AppPalette.textFaintFor(isDark: isDark)),
       // Material builds a field for a phone: its default padding, plus the 48px
       // touch target it gives a prefixIcon, rendered this 48 tall next to a 32px
       // button. That's what these constraints exist to hold back.
@@ -1204,10 +1303,8 @@ ThemeData buildAppTheme({
       ),
       border: _fieldBorder(scheme.outline),
       enabledBorder: _fieldBorder(scheme.outline),
-      focusedBorder: _fieldBorder(
-        isDark ? AppDesktop.focusDark : scheme.primary,
-        width: highContrast ? 2 : 1.5,
-      ),
+      // No colored focus line: a focused field has its caret.
+      focusedBorder: _fieldBorder(scheme.outline),
       errorBorder: _fieldBorder(scheme.error),
       focusedErrorBorder: _fieldBorder(
         scheme.error,
@@ -1381,12 +1478,15 @@ abstract final class AppControl {
 
   /// The minimum height keeps normal-size controls compact. Vertical padding
   /// lets enlarged system text grow the capsule without touching its rim.
+  ///
+  /// One side padding for every button kind: at 14 and 10 a primary, a capsule
+  /// and a dialog button of the same height each held their text differently.
   static const EdgeInsets padding = EdgeInsets.symmetric(
-    horizontal: 14,
+    horizontal: 12,
     vertical: 6,
   );
   static const EdgeInsets paddingSmall = EdgeInsets.symmetric(
-    horizontal: 10,
+    horizontal: 12,
     vertical: 6,
   );
 
@@ -1401,8 +1501,8 @@ abstract final class AppControl {
   ///
   /// Only for `.icon` constructors; a text-only button stays on [paddingSmall].
   static const EdgeInsets paddingSmallIcon = EdgeInsets.only(
-    left: 12,
-    right: 10,
+    left: 14,
+    right: 12,
   );
 
   // — the same numbers, grown with the user's UI size —
@@ -1437,19 +1537,20 @@ abstract final class AppDesktop {
   static const double dialogRadius = 20;
   static const double dialogElevation = 16;
   static const Color shadow = Color(0x3D000000);
+
   static const double menuRadius = 16;
   static const double rowRadius = 10;
   static const double fieldRadius = 10;
   static const double paneRadius = 10;
   static const double tabRadius = 10;
   static const double tabShoulder = 8;
-  static const double tabTopInset = 6;
+  static const double tabTopInset = 0;
 
   /// A tab's ×: the pane close button's 28pt square target, centred on the
-  /// tab's body (the 40pt row less [tabTopInset]) with one 3pt gap above,
+  /// tab's body (the 40pt row less [tabTopInset]) with one 6pt gap above,
   /// below, and to the body's straight right side, [tabShoulder] in.
   static const double tabCloseSize = 28;
-  static const double tabCloseInset = tabShoulder + 3;
+  static const double tabCloseInset = tabShoulder + 6;
   static const double tabMinWidth = 128;
   static const double tabMaxWidth = 256;
   static const double tabBarTrailingInset = 12;
@@ -1457,6 +1558,15 @@ abstract final class AppDesktop {
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
+
+  /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the text
+  /// [composerTop] below the top and [composerSide] in from each side, and
+  /// [composerRowGap] between the text and the row of actions under it. A
+  /// rounded pill, as iMessage's (anh Dee's mockup, 11-07, #4529).
+  static const double composerRadius = 20;
+  static const double composerTop = 12;
+  static const double composerSide = groupGap;
+  static const double composerRowGap = 12;
 
   /// Between one sidebar row and the next (design system: Geometry).
   static const double listRowGap = 2;
@@ -1466,6 +1576,33 @@ abstract final class AppDesktop {
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;
+
+  /// A chat or thread message's face: round at 28, as every other avatar
+  /// (anh Dee, 11-07, #4467; was Slack's 36 rounded square).
+  static const double messageAvatarSize = 28;
+
+  /// A chat bubble's text from its edges (anh Dee's mockup, 11-07, #4529).
+  static const EdgeInsets bubblePadding = EdgeInsets.symmetric(
+    horizontal: 12,
+    vertical: 7,
+  );
+
+  /// A chat card's content from its edges: a little more than a bubble's.
+  static const EdgeInsets chatCardPadding = EdgeInsets.fromLTRB(14, 10, 14, 10);
+
+  /// A centered chat time: a pause's room above it, its line's below.
+  static const EdgeInsets chatTimePadding = EdgeInsets.only(top: 12, bottom: 4);
+
+  /// A small line under or beside a bubble (a fold's More, a line's status)
+  /// from it.
+  static const double bubbleNoteGap = 4;
+
+  /// A group chat's name over its first bubble: in from the bubble's edge as
+  /// its text is, and close above it.
+  static const EdgeInsets bubbleNamePadding = EdgeInsets.only(
+    left: 12,
+    bottom: 2,
+  );
   static const double formWidth = 460;
   static const double focusWidth = 1.5;
 
@@ -1483,6 +1620,16 @@ abstract final class AppDesktop {
   static const lightVeil = Color(0xF2FFFFFF);
   static Color veil(Brightness brightness) =>
       brightness == Brightness.dark ? darkVeil : lightVeil;
+
+  /// The chat's picture viewer: a see-through dark veil in both appearances,
+  /// as a picture reads best on dark (River, 11-04), and the ink and control
+  /// fills drawn on it. The one exception to [veil]
+  /// (desktop-design-system.md).
+  static const mediaVeil = Color(0xF2000000);
+  static const mediaInk = Color(0xFFFFFFFF);
+  static const mediaInkMuted = Color(0xB3FFFFFF);
+  static const mediaControl = Color(0x26FFFFFF);
+  static const mediaControlHover = Color(0x40FFFFFF);
 }
 
 /// Desktop feedback is visible on the next frame. Keep these shared names so
@@ -1696,16 +1843,9 @@ WidgetStateProperty<BorderSide> _controlRim(
   bool highContrast = false,
 }) => WidgetStateProperty.resolveWith((states) {
   final disabled = states.contains(WidgetState.disabled);
-  final focused = states.contains(WidgetState.focused) && !disabled;
   return BorderSide(
     width: highContrast ? 2 : 1.5,
-    color: focused
-        ? filled
-              ? scheme.onPrimary
-              : scheme.brightness == Brightness.dark
-              ? AppDesktop.focusDark
-              : scheme.primary
-        : filled
+    color: filled
         ? Colors.transparent
         : scheme.onSurface.withValues(
             alpha: disabled

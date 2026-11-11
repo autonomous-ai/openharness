@@ -10,14 +10,10 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/sharing.dart';
-import 'package:harness/super_tabs/view.dart';
-import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
-import 'super_tab_machines_test.dart' show openMachineDetails;
 import 'swarm_sharing_test.dart' show SwarmSharingServer;
 import 'support/capture.dart';
-import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the screenshots there.
@@ -238,72 +234,19 @@ void main() {
         Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
-            width: 280,
-            child: SuperTabMachines(
-              controller: c,
-              embedded: true,
-              onAddAgent: (_) {},
-            ),
+            width: 900,
+            child: SuperTabMachines(controller: c, onAddAgent: (_) {}),
           ),
         ),
       );
       final row = find.byKey(const ValueKey('super-machine-mbp'));
       await tester.longPress(row);
       await tester.pumpAndSettle();
-      // Codex's mark is a picture decoded off the frame: wait for it before photographing, as the app shows it.
-      await tester.runAsync(
-        () => precacheImage(
-          AssetImage(engineIdentity('codex').asset!),
-          tester.element(find.byType(EngineMark).first),
-        ).timeout(const Duration(seconds: 10)),
-      );
+      await tester.tap(find.text('Details'));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, '1-machine-details-$theme');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
-    }, skip: shots == null);
-
-    testWidgets('person profile ($theme)', (tester) async {
-      final swarm = humansSwarm();
-      final dee = (swarm.leaderboard!['people'] as List).first as Map;
-      (dee['details'] as Map)['shipped'] = [
-        for (final title in [
-          'Bug: machine last-seen time has not been written since Oct 14',
-          'Stability 2.3: remove the expensive loops — terminal long-poll, 5 s socket re-checks, skip paging',
-          "Bug: viewing another person's agent terminal in a Swarm is unreliable",
-          'Main is red: 48 team-session tests fail after the GitHub approvals change',
-          'Stability 2.2 + 2.6: per-pod Swarm cache keyed by version',
-          'Hotfix: prod DB at 100% CPU, message deliveries read scans the whole Swarm',
-          'Stability 2.4: deliver work over the daemon socket, poll only as a 30 s fallback',
-          'Web app reconnect loop: one user reconnects ~3,250 times an hour',
-        ])
-          {
-            'title': title,
-            'prUrl': 'https://github.com/autonomous-ai/openharness/pull/1',
-          },
-      ];
-      final c = swarm.controller(
-        account: 'peer',
-        initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
-      );
-      addTearDown(c.dispose);
-      await c.refresh();
-      await _pump(
-        tester,
-        brightness,
-        SuperTabView(
-          controller: c,
-          onInvite: () {},
-          onAddAgent: (_) {},
-          onOpenTerminal: (_) {},
-          machineName: (_) => 'Mac Studio',
-        ),
-        size: const Size(1300, 1000),
-      );
-      await tester.tap(find.byKey(const ValueKey('super-person-peer')));
-      await tester.pumpAndSettle();
-      await captureWindow(tester, shots, '2-person-profile-$theme');
-      await tester.pumpWidget(const SizedBox());
     }, skip: shots == null);
 
     testWidgets('project details ($theme)', (tester) async {
@@ -366,7 +309,7 @@ void main() {
         tester,
         brightness,
         SizedBox(
-          width: 300,
+          width: 900,
           height: 400,
           child: SuperTabMachines(
             controller: c,
@@ -375,77 +318,12 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.byTooltip('Add machine'));
+      await tester.tap(find.byKey(const ValueKey('super-manage-add-machine')));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, '6-add-machine-$theme');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
     }, skip: shots == null);
-
-    // As memory allows, the mockup's own state; At most at 160% text; and At most beside a long name.
-    for (final (name, stored, scale) in [
-      ('2x 4090 Rig', 96, 1.0),
-      ('2x 4090 Rig', 8, 1.6),
-      ('autonomous-code-vm-01.c.autonomous-code.internal', 8, 1.0),
-    ]) {
-      testWidgets('machine settings $stored at ${scale}x ($theme)', (
-        tester,
-      ) async {
-        final f = SuperTabLaunchFixture();
-        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-        f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
-            .copyWith(name: name);
-        f.connection.server.state['machines'] = [
-          {
-            'machineId': 'm',
-            'name': name,
-            'contributorId': 'owner',
-            'maxAgents': stored,
-            'observation': {
-              'receivedAt': DateTime.now().millisecondsSinceEpoch,
-              'resources': {
-                'memoryUsedBytes': 40 * 1024 * 1024 * 1024,
-                'memoryTotalBytes': 192 * 1024 * 1024 * 1024,
-              },
-            },
-          },
-        ];
-        final c = await f.app.superTabs.open(tabId);
-        await c.refresh();
-        // The window's own text size, so the dialog's route is scaled too.
-        tester.platformDispatcher.textScaleFactorTestValue = scale;
-        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-        await _pump(
-          tester,
-          brightness,
-          SizedBox(
-            width: 300,
-            height: 400,
-            child: SuperTabMachines(
-              controller: c,
-              app: f.app,
-              onAddAgent: (_) {},
-            ),
-          ),
-        );
-        await openMachineDetails(
-          tester,
-          find.byKey(const ValueKey('super-machine-m')),
-        );
-        await tester.tap(find.widgetWithText(TextButton, 'Configure'));
-        await tester.pumpAndSettle();
-        expect(tester.takeException(), isNull);
-        final label = name.length > 12 ? 'long-name' : 'agents-$stored';
-        await captureWindow(
-          tester,
-          shots,
-          '7-machine-settings-$label-${(scale * 100).round()}-$theme',
-        );
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        c.dispose();
-      }, skip: shots == null);
-    }
   }
 }

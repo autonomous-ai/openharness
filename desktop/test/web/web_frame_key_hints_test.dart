@@ -11,6 +11,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/web/parts/terminal_fonts.dart';
+import 'package:harness/web/update/web_update_host.dart';
 import 'package:harness/web/web_entry.dart';
 import 'package:harness/widgets/key_hints.dart';
 
@@ -60,6 +61,27 @@ void main() {
     expect(find.text('Return Practice'), findsNothing);
     // The frame started the workspace's download, which waits for the terminal
     // font a test browser never sends: let its grace run out.
+    await tester.pump(terminalFontsGrace);
+  });
+
+  // A page held open across a release says so (task #2185).
+  testWidgets('the web frame watches for a newer release', (tester) async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    addTearDown(app.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: MaterialApp(
+          builder: (context, child) => appFrame(child!),
+          home: const SizedBox.shrink(),
+        ),
+      ),
+    );
+    expect(find.byType(WebUpdateHost), findsOneWidget);
     await tester.pump(terminalFontsGrace);
   });
 }

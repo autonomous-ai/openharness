@@ -16,6 +16,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { DaemonWebSocket, daemonFetch, daemonSocketPath } from './localDaemon.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -51,21 +52,21 @@ export function dataDir(env = process.env) {
  * The same function, by the same name, is in every Store package that talks to the daemon.
  */
 export function localCredentialHeaders(env = process.env) {
+  // Where a socket can be, and on Windows, where the daemon's pipe is the way, nothing carries the credential: a holder of the
+  // TCP port would hear it (localDaemon.mjs; on Windows the Team account's daemon can hold it from boot, audit W1).
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return {};
   const dir = dataDir(env);
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-  // Windows reports every file as 0o666 and every folder as 0o777, so the mode checks below would always refuse
-  // the credential the daemon wrote; there its protection is the profile folder's ACL (cli hookAuth.ts).
-  const posixModes = process.platform !== 'win32';
   const opened = [];
   try {
     const folder = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     opened.push(folder);
     const where = fstatSync(folder);
-    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (posixModes && (where.mode & 0o022) !== 0)) return {};
+    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (where.mode & 0o022) !== 0) return {};
     const file = openSync(join(dir, 'hook-credential'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     opened.push(file);
     const stat = fstatSync(file);
-    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (posixModes && (stat.mode & 0o777) !== 0o600)) return {};
+    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (stat.mode & 0o777) !== 0o600) return {};
     const value = readFileSync(file, 'utf8').trim();
     return /^[A-Za-z0-9_-]{43}$/.test(value) ? { 'X-Harness-Local': value } : {};
   } catch {
@@ -80,7 +81,9 @@ const CREDENTIAL_REFUSED = "Harness refused this process's local credential. Run
 
 /** Whether the daemon behind a bridge socket that would not open refused the credential: a WebSocket
  *  cannot report the 401, so the same headers are shown once over plain HTTP, which can. */
-async function credentialRefused(url, headers) {
+async function credentialRefused(url, headers, env = process.env) {
+  // Over the socket or the pipe no credential is shown, and the port may be anyone's: there is nothing to ask it.
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return false;
   try {
     const answer = await fetch(url.replace(/^ws:/, 'http:'), { headers, signal: AbortSignal.timeout(2000) });
     await answer.body?.cancel();
@@ -93,7 +96,8 @@ async function credentialRefused(url, headers) {
 async function call(method, path, { body, timeoutMs = 15_000, env = process.env } = {}) {
   let res;
   try {
-    res = await fetch(new URL(path, daemonBase(env)), {
+    res = await daemonFetch(new URL(path, daemonBase(env)), {
+      env,
       method,
       headers: { 'x-adapter-local': '1', ...localCredentialHeaders(env), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -202,7 +206,7 @@ function sessionsFor(WebSocketImpl) {
 function openSession(machineId, { env, WebSocketImpl, timeoutMs, forceReconnect = false }) {
   const byMachine = sessionsFor(WebSocketImpl);
   let socket, url, headers;
-  try { url = bridgeUrl(env); headers = localCredentialHeaders(env); socket = new WebSocketImpl(url, { headers }); }
+  try { url = bridgeUrl(env); headers = localCredentialHeaders(env); socket = new WebSocketImpl(url, { headers, env }); }
   catch { return Promise.reject({ ok: false, error: DOWN }); }
   const session = { socket, waiters: new Map(), heartbeat: null };
   const fail = (answer) => {
@@ -226,7 +230,7 @@ function openSession(machineId, { env, WebSocketImpl, timeoutMs, forceReconnect 
     })); });
     socket.addEventListener('error', () => {
       if (opened) { settle(reject, { ok: false, error: DOWN }); fail({ ok: false, error: DOWN }); return; }
-      refusal = credentialRefused(url, headers).then(refused => {
+      refusal = credentialRefused(url, headers, env).then(refused => {
         const answer = { ok: false, error: refused ? CREDENTIAL_REFUSED : DOWN };
         settle(reject, answer); fail(answer);
       });
@@ -281,7 +285,7 @@ function ask(session, timeoutMs) {
   });
 }
 
-export async function listHarnesses(machineId, { timeoutMs = 20_000, env = process.env, WebSocketImpl = globalThis.WebSocket } = {}) {
+export async function listHarnesses(machineId, { timeoutMs = 20_000, env = process.env, WebSocketImpl = DaemonWebSocket } = {}) {
   if (!WebSocketImpl) return { ok: false, error: 'Node 22 or newer is required to read a machine roster.' };
   const byMachine = sessionsFor(WebSocketImpl);
   const existing = byMachine.get(machineId);

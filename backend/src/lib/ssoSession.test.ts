@@ -24,6 +24,7 @@ const fakes = vi.hoisted(() => {
       redis.set(key, value); return 'OK'
     }),
     get: vi.fn(async (key: string) => redis.get(key) ?? null),
+    mget: vi.fn(async (...keys: string[]) => keys.map((key) => redis.get(key) ?? null)),
     del: vi.fn(async (key: string) => (redis.delete(key) ? 1 : 0)),
     // The lock's compare-and-delete (lib/ssoSession.ts RELEASE_SCRIPT).
     eval: vi.fn(async (_script: string, _n: number, key: string, owner: string) => (redis.get(key) === owner && redis.delete(key) ? 1 : 0)),
@@ -141,6 +142,7 @@ vi.mock('./sso.js', async (importOriginal) => {
 
 import { clearSsoProfileCache, authenticateAccessToken, resetSsoBreakers, SsoAuthError } from './ssoAuth.js'
 import { refreshHarnessSession, revokeHarnessSession } from './harnessSession.js'
+import { harnessAuthCache } from './harnessAuthCache.js'
 import { decryptMachineCredential } from './machineCredential.js'
 import { SSO_OUTAGE_GRACE_MS, SSO_RECHECK_MS, ensureHarnessSessionExpiry, ssoAccessTokenFor } from './ssoSession.js'
 import { authRoutes } from '../routes/auth.js'
@@ -169,6 +171,7 @@ beforeEach(async () => {
   fakes.sso.live.clear(); fakes.sso.rotate = true; fakes.sso.down = false; fakes.sso.calls = 0; fakes.sso.counter = 0; fakes.sso.gate = null
   fakes.setFailCreate(false)
   clearSsoProfileCache()
+  harnessAuthCache.clear()
   // The profile service's circuit (lib/ssoAuth.ts) is shared: tests that fail it on purpose must not open it for the next.
   resetSsoBreakers()
   vi.clearAllMocks()
@@ -358,6 +361,20 @@ describe('the hourly SSO re-check', () => {
     expect(Date.now() - start).toBeLessThan(2 * HOUR)
   })
 
+  it('an SSO refusal ends a sign-in this pod remembers at once (#3041)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.now()
+    const { refreshToken } = await harnessSignIn()
+    vi.setSystemTime(start + SSO_RECHECK_MS - 1)
+    const last = String((await refresh(refreshToken)).body.data!.token)
+    // Remembered by this pod a moment before the re-check.
+    expect(await me(last)).toBe(200)
+    fakes.sso.live.clear()
+    vi.setSystemTime(start + SSO_RECHECK_MS + 1)
+    expect((await refresh(refreshToken)).status).toBe(401)
+    expect(await me(last)).toBe(401)
+  })
+
   it('SSO being down keeps people signed in, for seven days from the last good check', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const start = Date.now()
@@ -525,13 +542,6 @@ describe('signing out', () => {
     expect(fakes.sessions[0]!.ssoRefresh ?? null).toBeNull()
   })
 
-  it('a session naming no computer cannot turn one into a team machine without its machine key', async () => {
-    const { data } = await signIn(ASK_COMPUTER)
-    const res = await app.inject({ method: 'POST', url: '/api/auth/handoff', headers: { authorization: `Bearer ${String(data.token)}` },
-      payload: { kind: 'team', computerId: 'a1b2c3d4e5f60718' } })
-    expect(res.statusCode).toBe(403)
-    expect(res.json().error.code).toBe('HANDOFF_NOT_ALLOWED')
-  })
 })
 
 describe('billing, which still needs an SSO access token', () => {

@@ -11,6 +11,8 @@ import { mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { IsolatedDaemon, until as untilDaemon } from './daemon.js'
 import { LocalClient } from './client.js'
+import { forgetGroup, watchGroup } from './reaper.js'
+import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 
 const exec = promisify(execFile)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -36,9 +38,12 @@ async function freePort(): Promise<number> {
   return port
 }
 
-async function until(label: string, check: () => Promise<boolean>, ms = 45_000): Promise<void> {
+/** A wait that cannot end well: thrown by a check, it ends the wait at once instead of being tried again. */
+class WaitEnded extends Error {}
+
+async function until(label: string, check: () => Promise<boolean>, ms = 120_000): Promise<void> {
   const deadline = Date.now() + ms
-  while (!await check().catch(() => false)) {
+  while (!await check().catch(error => { if (error instanceof WaitEnded) throw error; return false })) {
     if (Date.now() > deadline) throw new Error(`Timed out: ${label}`)
     await new Promise(r => setTimeout(r, 200))
   }
@@ -66,6 +71,8 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   const mongo = await MongoMemoryReplSet.create({
     binary: { ...(process.env.HARNESS_E2E_MONGOD ? { systemBinary: process.env.HARNESS_E2E_MONGOD } : {}) },
     replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' },
+    // mongod's own start, which a Mac under load takes longer than the library's 10 s for.
+    instanceOpts: [{ launchTimeout: 120_000 }],
   })
   stops.push(() => mongo.stop())
   const redis = new RedisMemoryServer({ binary: {
@@ -90,15 +97,22 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
     HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }
   t = Date.now()
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'],
-    { cwd: join(repo, 'backend'), env, timeout: 60_000 })
+    { cwd: join(repo, 'backend'), env, timeout: 180_000 })
   log(`db push ${Date.now() - t}ms`)
   t = Date.now()
   const logPath = join(mkdtempSync(join(tmpdir(), 'spike-backend-')), 'backend.log')
   const logFd = openSync(logPath, 'a')
+  // Ended by the worker's reaper should the worker go without stopping it (reaper.ts): one killed run's backend was
+  // still running 1.5 days later (2026-11-11).
   const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
-    cwd: join(repo, 'backend'), stdio: ['ignore', logFd, logFd],
+    cwd: join(repo, 'backend'), stdio: ['ignore', logFd, logFd], ...ownProcessGroup(),
     env: { ...env, PORT: String(port), PORT_APP_PROXY: String(proxyPort), BACKEND_INSTANCE_ID: 'spike-0' } })
-  // Wait for the exit, with a SIGKILL after 5 s (as IsolatedDaemon.stop does), before Mongo and Redis go.
+  if (child.pid) {
+    watchGroup(child.pid)
+    // Whatever it started goes with it.
+    child.once('exit', () => { IsolatedDaemon.killGroup(child); forgetGroup(child.pid!) })
+  }
+  // Wait for the exit, with a SIGKILL after 5 s, before Mongo and Redis go.
   stops.push(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return
     const exited = new Promise<void>(done => child.once('exit', () => done()))
@@ -109,7 +123,12 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   })
   const url = `http://127.0.0.1:${port}`
   try {
-    await until('backend health', async () => (await fetch(`${url}/api/health`)).ok)
+    // A backend that died while starting (a bad migration, a missing setting) fails at once, not at the deadline. Ready, not
+    // only alive: /api/health answers before its Redis is connected, and a first request then failed (COMPUTER_LOCK_UNAVAILABLE).
+    await until('backend readiness', async () => {
+      if (child.exitCode !== null || child.signalCode !== null) throw new WaitEnded(`the backend exited (${child.exitCode ?? child.signalCode}) while starting`)
+      return (await fetch(`${url}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok
+    })
   } catch (error) {
     throw new Error(`${(error as Error).message}; backend log ${logPath}:\n${readFileSync(logPath, 'utf8').slice(-2000)}`)
   }
@@ -133,13 +152,15 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
 
 /** An isolated daemon signed in as `a` against `backend`, with a client on its account machine. The daemon is
  *  closed by backend.stop(), also when this throws after creating it. `before` runs once its folders exist and before
- *  it starts: a test that changes what the daemon finds on its PATH (shared tabs' `gh`) does it there. */
+ *  it starts: a test that changes what the daemon finds on its PATH (shared tabs' `gh`) does it there. `submissionGate` makes
+ *  its fake engines keep every prompt they were typed, in `submitted-prompts` of the daemon's root. */
 export async function signIn(backend: RealBackend, a: Account, env: Record<string, string> = {},
-  before?: (daemon: IsolatedDaemon) => void | Promise<void>): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
+  before?: (daemon: IsolatedDaemon) => void | Promise<void>, options: { submissionGate?: boolean } = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
   const computerId = randomUUID()
   const r = await backend.api(a, '/api/machines/resolve-computer', 'POST', { computerId, label: a.name })
+  if (r.status !== 200) throw new Error(`Sign-in of ${a.name} refused: ${r.status} ${JSON.stringify(r.body)}`)
   const machineId = r.body.data.machine.machineId as string
-  const daemon = await IsolatedDaemon.create({ env: {
+  const daemon = await IsolatedDaemon.create({ ...(options.submissionGate ? { submissionGate: true } : {}), env: {
     ADAPTER_COMPUTER_ID: computerId, BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.url,
     HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', ...env } })
   owned.get(backend)?.push(daemon)

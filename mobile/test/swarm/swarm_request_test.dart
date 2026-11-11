@@ -20,8 +20,9 @@ import 'swarm_fixture.dart' show changes, firstLoad, groupData, me, tab;
 
 /// How the phone reaches the Swarm: a read goes straight to the backend with
 /// the phone's own sign-in, as the web build's does, and on through a machine
-/// when that says nothing of the person. A command, and a read going on, is
-/// forwarded by one of the account's own machines with its session
+/// when that says nothing of the person. A command uses the phone too, with
+/// a machine fallback for unavailable transport. These fixtures have no write
+/// credentials, so their commands are forwarded by an account machine with its session
 /// (`super_tabs`, `action: backend` in cli/src/superTabs/service.ts). The tests
 /// outside the first group have no sign-in to read with (`FakeApi.swarmRead`),
 /// so their reads all go on through the machines.
@@ -53,14 +54,17 @@ void main() {
       expect(await rig.app.swarmRequest('GET', path), {'tabs': <Object>[]});
     });
 
-    test('a value of null is an answer, not a reason to ask a machine', () async {
-      final rig = await signedInWith({'m': []});
-      addTearDown(rig.app.dispose);
-      rig.api.onSwarmRead = (_) async => null;
+    test(
+      'a value of null is an answer, not a reason to ask a machine',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.api.onSwarmRead = (_) async => null;
 
-      expect(await rig.app.swarmRequest('GET', path), isNull);
-      expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
-    });
+        expect(await rig.app.swarmRequest('GET', path), isNull);
+        expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+      },
+    );
 
     test('its query goes with it', () async {
       final rig = await signedInWith({'m': []});
@@ -72,21 +76,24 @@ void main() {
       expect(rig.api.swarmReads, ['/api/super-tabs/t/changes?cursor=c1']);
     });
 
-    test('a command never does: a machine forwards it', () async {
-      final rig = await signedInWith({'m': []});
-      addTearDown(rig.app.dispose);
-      rig.api.onSwarmRead = (_) async => fail('a command is not a read');
-      rig.conn('m').answers['super_tabs'] = (_) => forwarded({'result': {}});
+    test(
+      'without phone write credentials a machine forwards a command',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.api.onSwarmRead = (_) async => fail('a command is not a read');
+        rig.conn('m').answers['super_tabs'] = (_) => forwarded({'result': {}});
 
-      await rig.app.swarmRequest(
-        'POST',
-        '/api/super-tabs/t/commands',
-        body: {'operationId': 'op'},
-      );
+        await rig.app.swarmRequest(
+          'POST',
+          '/api/super-tabs/t/commands',
+          body: {'operationId': 'op'},
+        );
 
-      expect(rig.api.swarmReads, isEmpty);
-      expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));
-    });
+        expect(rig.api.swarmReads, isEmpty);
+        expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));
+      },
+    );
 
     for (final (code, status) in const [
       ('FORBIDDEN', 403),
@@ -98,7 +105,8 @@ void main() {
         final rig = await signedInWith({'m': []});
         addTearDown(rig.app.dispose);
         rig.api.onSwarmRead = (_) async => throw refusal(code, status);
-        rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+        rig.conn('m').answers['super_tabs'] = (_) =>
+            forwarded('from a machine');
 
         await expectLater(
           rig.app.swarmRequest('GET', path),
@@ -126,7 +134,8 @@ void main() {
         final rig = await signedInWith({'m': []});
         addTearDown(rig.app.dispose);
         rig.api.onSwarmRead = (_) async => throw failure;
-        rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+        rig.conn('m').answers['super_tabs'] = (_) =>
+            forwarded('from a machine');
 
         expect(await rig.app.swarmRequest('GET', path), 'from a machine');
         expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));

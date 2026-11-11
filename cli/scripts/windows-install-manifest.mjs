@@ -9,7 +9,7 @@
  * (B5). It publishes nothing.
  *
  *   node scripts/windows-install-manifest.mjs --out <dir> --cli-dir dist --pty-dir <dir> \
- *     --node-zip node-v22.23.2-win-arm64.zip --version 0.3.120 [--pty-version 0.3.120]
+ *     --node-zip node-v24.22.2-win-arm64.zip --version 0.3.120 [--pty-version 0.3.120]
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -19,7 +19,7 @@ import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 
 /** The payload's files, as install.ps1 ($HarnessPtyFiles) and publish-pty-payload.sh (FILES) name them. */
-export const PTY_FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']
+export const PTY_FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe']
 const NODE_ZIP = /^node-(v\d+\.\d+\.\d+)-win-(x64|arm64)\.zip$/
 /** What ptyHost/launch.ts currentPtyVersion accepts as a version folder. */
 const PTY_VERSION = /^\d+(\.\d+)*$/

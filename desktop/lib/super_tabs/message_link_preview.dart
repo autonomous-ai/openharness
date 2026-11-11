@@ -4,6 +4,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'message_link.dart';
 import 'model.dart';
+import 'voice_length.dart';
 
 /// What a message link points at, for a reader. Anything the reader may not
 /// read, or that is gone, is the same [unavailable]: it gives no title, author
@@ -110,9 +111,10 @@ class _Preview extends StatelessWidget {
         ),
         const SizedBox(height: 2),
         Text(
-          message.text.trim().isEmpty
-              ? 'Attachment'
-              : message.text.replaceAll(RegExp(r'\s+'), ' '),
+          switch (superTabQuoteText(message)) {
+            final said when said.trim().isEmpty => 'Attachment',
+            final said => said.replaceAll(RegExp(r'\s+'), ' '),
+          },
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: DesktopChrome.metadata(),

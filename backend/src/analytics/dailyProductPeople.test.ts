@@ -20,3 +20,11 @@ it('reports DAU per day and retention cells with numerator, denominator and imma
   expect(p.retention.working.find(c => c.day === '2026-10-11')!.d1).toEqual({ returned: 3, percent: 75 })
   expect(p.retention.new.find(c => c.day === '2026-10-11')!.d1).toEqual({ returned: 0, percent: null }) // no denominator
 })
+
+it('shows hosting apart from working, and says what working now means', () => {
+  const p = dailyProductPeople([r('2026-10-11', 'people_active', 10), r('2026-10-11', 'people_working', 4), r('2026-10-11', 'people_hosting', 3)],
+    3, new Date('2026-10-14T01:00:00Z'))
+  expect(p.daily.find(d => d.day === '2026-10-11')).toMatchObject({ working: 4, hosting: 3 })
+  expect(p.definitions.working).toMatch(/own session/)
+  expect(p.definitions.hosting).toMatch(/Swarm agent/)
+})

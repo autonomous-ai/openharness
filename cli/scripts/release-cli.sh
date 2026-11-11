@@ -55,7 +55,7 @@ for arg in "$@"; do
     --allow-older) ALLOW_OLDER=1 ;;
     --notes-file) want_notes_file=1 ;;
     --notes-file=*) NOTES_FILE="${arg#*=}" ;;
-    -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "ERROR unknown flag: $arg" >&2; exit 1 ;;
     *) NEW_VER="$arg" ;;
   esac

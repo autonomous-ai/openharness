@@ -26,11 +26,14 @@ import { permissionModeApproves } from './engineLaunch.js'
  * mode itself; this only settles the yes/no the engines without a mode table launch with.
  */
 export async function bypassPermissionFor(
-  session: Pick<RegisteredSession, 'permissionMode' | 'bypassPermission'>,
+  session: Pick<RegisteredSession, 'permissionMode' | 'bypassPermission' | 'swarmSkill'>,
   probeLive: () => Promise<boolean>,
 ): Promise<boolean> {
   if (session.permissionMode) return permissionModeApproves(session.permissionMode)
   if (session.bypassPermission !== undefined) return session.bypassPermission
+  // A Swarm agent's mode is its person's choice, or none (task #4215). One Harness started in full mode, cleared since,
+  // still runs with that flag until it relaunches: read back, it would come back in Auto, which nobody chose.
+  if (session.swarmSkill) return false
   return probeLive()
 }
 
@@ -54,14 +57,17 @@ export class AgentRestartCoordinator {
   }
   forget(agentId: string): void { this.revisions.delete(agentId) }
   operation(agentId: string): string | undefined { return this.jobs.get(agentId)?.operation }
-  private readonly jobs = new Map<string, { operation: string; cancelled: boolean; result: Promise<RestartAgentReply> }>()
+  private readonly jobs = new Map<string, { operation: string; variant: string; cancelled: boolean; result: Promise<RestartAgentReply> }>()
 
-  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>, operation = 'restart'): Promise<RestartAgentReply> {
+  /** [variant] tells apart two asks of the same operation that must not share one launch: the launch words a restart
+   *  was given. Only the same variant joins a running one; any other is refused, never answered by a launch that did
+   *  not carry its words. */
+  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>, operation = 'restart', variant = ''): Promise<RestartAgentReply> {
     const existing = this.jobs.get(agentId)
-    if (existing) return existing.operation === operation ? existing.result
+    if (existing) return existing.operation === operation && existing.variant === variant ? existing.result
       : Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'Another lifecycle operation is changing this harness.' })
     if (this.revisions.has(agentId)) this.revisions.set(agentId, ++this.sequence)
-    const job = { operation, cancelled: false, result: null! as Promise<RestartAgentReply> }
+    const job = { operation, variant, cancelled: false, result: null! as Promise<RestartAgentReply> }
     const current = () => !job.cancelled && this.jobs.get(agentId) === job
     job.result = Promise.resolve().then(async () => {
       if (!current()) return { ok: false, error: 'AGENT_CHANGED' } as const
@@ -113,6 +119,9 @@ export interface RestartAgentDeps {
    * ordering only, never allowed to fail the restart; implementations swallow their own errors.
    */
   stopConflictingJob?: () => Promise<void>
+  /** A [continueInFork] move, once the old writer is stopped: makes the fork ready for its destination and returns its
+   *  id, which the relaunch then resumes. A failure falls back to the plain fork: the conversation still continues. */
+  prepareFork?: () => Promise<string>
   buildArgv: (opts: RelaunchArgvOptions) => string[]
   /** Why the relaunch [buildArgv] would build is refused on this platform (a Windows batch-file engine whose arguments
    *  cmd.exe would read, lib/windows/launch.ts), asked before anything is stopped; null when it is not. */
@@ -174,9 +183,16 @@ export async function restartAgent(
   if (!current()) return changed
   if (resumeSessionId && deps.stopConflictingJob) await deps.stopConflictingJob()
   if (!current()) return changed
+  let preparedFork: string | null = null
+  if (resumeSessionId && session.continueInFork && deps.prepareFork) {
+    try { preparedFork = await deps.prepareFork() } catch (error) {
+      deps.log(`[restart] ${session.engine} could not prepare the move, continuing in a plain fork: ${error instanceof Error ? error.message : error}`)
+    }
+    if (!current()) return changed
+  }
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null
-    const argv = deps.buildArgv({ bypassPermission, ...(withResume ? reopen(resumeSessionId) : {}) })
+    const argv = deps.buildArgv({ bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) })
     const spawned = await deps.respawn(argv)
     if (!current()) return null
     if (!spawned.ok) {

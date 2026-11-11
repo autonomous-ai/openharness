@@ -5,7 +5,7 @@
  * Typed in a tile, it lists the account's other machines, takes one with ↑/↓ and Enter, creates a
  * `terminal` agent there through the daemon's loopback socket (the daemon relays to the other machine
  * the way it does for the desktop), then asks the daemon to tell the window: `remote_terminal_handoff`
- * names this tile by its tmux pane — `$TMUX_PANE`, the one fact a shell has about itself — and the
+ * names this tile by its pane — `$TMUX_PANE`, or `$HARNESS_PANE` on Windows, the one fact a shell has about itself — and the
  * window swaps the tile to the new agent and ends this shell.
  *
  * Only a Harness tile qualifies. Another terminal app, or a tmux of the user's own, has no tile for
@@ -14,11 +14,11 @@
  * an offline machine is listed but cannot be taken: there is nothing there to open a shell on.
  */
 import { randomUUID } from 'node:crypto'
-import { localCredentialHeaders } from './lib/localCredential.js'
+import { openLocalWs } from './lib/localTransport.js'
 import { env } from './config/env.js'
 import { emitKeypressEvents } from 'node:readline'
 import { WebSocket } from 'ws'
-import { TMUX_PANE_RE } from './lib/terminalHandoff.js'
+import { HANDOFF_PANE_RE } from './lib/terminalHandoff.js'
 
 export interface RemoteMachineChoice {
   machineId: string
@@ -40,7 +40,7 @@ export function orderForPicker(choices: RemoteMachineChoice[]): RemoteMachineCho
 }
 
 export interface RemoteCommandDeps {
-  /** `process.env.TMUX_PANE` — set by tmux in every pane, `%N`. */
+  /** The shell's own pane (`sendPane`): `%N` in tmux, `<instance>:%N` in a Windows pty host. */
   tmuxPane: string | undefined
   /** This machine's id, from the SSO session; null when not signed in. */
   localMachineId: string | null
@@ -59,7 +59,7 @@ export interface RemoteCommandDeps {
   output: NodeJS.WriteStream & { isTTY?: boolean }
   error: (line: string) => void
   /** Test seam: what opens a loopback socket. */
-  connect?: (url: string) => LoopbackSocket
+  connect?: (url: string, headers: Record<string, string>) => LoopbackSocket
 }
 
 /** The slice of `ws.WebSocket` the loopback client uses — a test stands one in. */
@@ -148,9 +148,10 @@ export class LoopbackClient {
   private readonly socket: LoopbackSocket
   private readonly opened: Promise<void>
 
-  constructor(url: string, connect: (url: string) => LoopbackSocket = (target) =>
-    new WebSocket(target, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }) as unknown as LoopbackSocket) {
-    this.socket = connect(url)
+  /** To the daemon on [port]: its socket, or on Windows its pipe, never the port (lib/localTransport.ts `openLocalWs`). */
+  constructor(port: number, connect: (url: string, headers: Record<string, string>) => LoopbackSocket = (target, headers) =>
+    new WebSocket(target, { headers }) as unknown as LoopbackSocket, dataDir: string = env.ADAPTER_DATA_DIR) {
+    this.socket = openLocalWs(dataDir, port, connect)
     this.opened = new Promise((resolve, reject) => {
       this.socket.on('open', () => resolve())
       this.socket.on('error', (error) => reject(new LoopbackError('DAEMON_UNREACHABLE', error.message)))
@@ -225,13 +226,9 @@ export class LoopbackClient {
   }
 }
 
-export function loopbackUrl(port: number): string {
-  return `ws://127.0.0.1:${port}/api/local-ws`
-}
-
 /** A `terminal` agent on [machineId], created the way the desktop's ⌘⇧T creates one: at home. */
 export async function openRemoteTerminal(deps: Pick<RemoteCommandDeps, 'port' | 'connect'>, machineId: string): Promise<string> {
-  const client = new LoopbackClient(loopbackUrl(deps.port), deps.connect)
+  const client = new LoopbackClient(deps.port, deps.connect)
   try {
     await client.select(machineId)
     const created = await client.rpc('agent_create', { engine: 'terminal', bypassPermission: false })
@@ -249,7 +246,7 @@ export async function handoffTerminal(
   localMachineId: string,
   handoff: { tmuxPane: string; machineId: string; agentId: string },
 ): Promise<{ fromAgentId: string; windows: number }> {
-  const client = new LoopbackClient(loopbackUrl(deps.port), deps.connect)
+  const client = new LoopbackClient(deps.port, deps.connect)
   try {
     await client.select(localMachineId)
     const reply = await client.rpc('remote_terminal_handoff', handoff, 10_000)
@@ -290,8 +287,8 @@ async function linkNow(deps: RemoteCommandDeps, choice: RemoteMachineChoice): Pr
 /** Exit code: 0 when the tile was handed over (or the person cancelled), 1 otherwise. */
 export async function remoteCommand(deps: RemoteCommandDeps): Promise<number> {
   const { tmuxPane, output, error } = deps
-  if (!tmuxPane || !TMUX_PANE_RE.test(tmuxPane)) {
-    error('`harness remote` runs inside a Harness terminal tile (⌘⇧T, or New Harness ▸ Terminal).')
+  if (!tmuxPane || !HANDOFF_PANE_RE.test(tmuxPane)) {
+    error('`harness remote` runs inside a Harness terminal tile (New Harness ▸ Terminal).')
     error('Open one and run it there.')
     return 1
   }

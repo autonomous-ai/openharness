@@ -50,7 +50,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Test Mac',
@@ -87,8 +86,8 @@ void main() {
   );
 
   testWidgets('a quick line under my own line joins it while it sends and '
-      'after, at one height apart from its delivery line', (tester) async {
-    final server = ConversationServer()..append('Earlier line');
+      'after, its bubble the same height', (tester) async {
+    final server = ConversationServer.chat()..append('Earlier line');
     server.messages.last['createdAt'] = DateTime.now()
         .toUtc()
         .toIso8601String();
@@ -98,23 +97,27 @@ void main() {
 
     await type(tester, 'Quick follow-up');
     expect(grouped(tester, 'Quick follow-up'), isTrue);
-    final height = tester.getSize(rowOf('Quick follow-up')).height;
+    Finder bubble() => find.ancestor(
+      of: find.text('Quick follow-up'),
+      matching: find.byKey(const ValueKey('swarm-bubble')),
+    );
+    final height = tester.getSize(bubble()).height;
 
     post.complete();
     await tester.pumpAndSettle();
     expect(c.outgoing('lead'), isEmpty);
     expect(grouped(tester, 'Quick follow-up'), isTrue);
-    // The confirmed latest line of mine adds its delivery line below; the
-    // line itself, with no avatar or name, keeps the height it had.
-    final receipt = tester.getSize(find.byType(SuperTabMessageReceipt)).height;
-    expect(tester.getSize(rowOf('Quick follow-up')).height - receipt, height);
+    // Its status line under the bubble becomes the delivery line; the bubble
+    // keeps its height (#4529).
+    expect(find.byType(SuperTabMessageReceipt), findsOneWidget);
+    expect(tester.getSize(bubble()).height, height);
     await close(tester, c);
   });
 
   testWidgets('a quick line that was not sent keeps its name and actions', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Earlier line');
+    final server = ConversationServer.chat()..append('Earlier line');
     server.messages.last['createdAt'] = DateTime.now()
         .toUtc()
         .toIso8601String();
@@ -137,7 +140,7 @@ void main() {
   testWidgets('while a line sends only its text is dimmed; Sending… stays '
       'readable', (tester) async {
     final post = Completer<void>();
-    final c = controller(ConversationServer(), hold: () => post);
+    final c = controller(ConversationServer.chat(), hold: () => post);
     await show(tester, c);
     await type(tester, 'On its way');
     expect(find.text('Sending…'), findsOneWidget);
@@ -150,7 +153,7 @@ void main() {
 
   testWidgets('scrolling to the end reads through the last message, not a '
       'line still sending', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= 40; i++) {
       server.append('Update $i: checking the offline queue and reconnect.');
     }
@@ -186,7 +189,7 @@ void main() {
 
   testWidgets('text left unsent when the window closed reads Not sent · '
       'Retry · Delete', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     final gate = Completer<void>();
     final first = controller(server, hold: () => gate);
     await first.refresh();

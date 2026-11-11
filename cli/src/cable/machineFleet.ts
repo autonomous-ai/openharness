@@ -10,6 +10,7 @@ import type { ReviewedAnswer } from './questionInbox.js'
 // round trip, a failure mode and an audience — for nothing.
 import type { CableAgent } from './cableSession.js'
 import type { RecentTurn } from './cableHost.js'
+import type { Tier } from '../lib/notifyTier.js'
 
 /** One of the owner's machines, as the fleet knows it. The local row is added by the host, not here. */
 /**
@@ -43,7 +44,9 @@ export class FleetError extends Error {
 
 /** A card from an attached machine, already translated into the dial's four kinds. */
 export type FleetEvent =
-  | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent?: boolean; update?: string }
+  | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent?: boolean; update?: string
+      /** A summary's tier, as that machine's recaps decided it (services/recaps.ts): the dial follows it. */
+      tier?: Tier }
   | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown }
   | { machineId: string; kind: 'questionClosed'; agentId: string; requestId: string }
   | { machineId: string; kind: 'state'; state: FleetMachine['state'] }

@@ -7,6 +7,7 @@
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
+import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { externalResumePending } from '../../lib/externalResume.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
@@ -19,12 +20,12 @@ import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { primaryRuntime } from '../../lib/terminalRuntime.js'
+import { primaryRuntime, sameProcessIdentity, sameTerminalPlacement, terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
 
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
-    'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
+    'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'reinstateArchived' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
     | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
     | 'terminalAvailable' | 'setTerminalAvailable'>
   attachDsh: (session: RegisteredSession) => void
@@ -39,7 +40,9 @@ export interface DiscoveryDeps {
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   stopHeartbeat: (sessionId: string) => void
   retainExitedSession: (agent: RegisteredSession, announce: boolean) => void
-  stoppedAgents: Pick<StoppedAgentStore, 'finishResume'>
+  stoppedAgents: Pick<StoppedAgentStore, 'finishResume' | 'list' | 'remove' | 'resumeReservedAt'>
+  /** The app: a terminal row that gave its pane back to an archived harness is gone, and names it as its successor. */
+  send: (frame: { type: string; payload: Record<string, unknown> }) => void
   /** Whether restore did not get to this agent this boot (it did not run, or could not look at its row):
    *  its missing pane is then one never rebuilt, not one closed. */
   restoreDegraded: (agentId: string) => boolean
@@ -50,9 +53,46 @@ export interface DiscoveryDeps {
 export function createDiscoveryHandlers({
   registry, attachDsh, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
-  stoppedAgents, restoreDegraded, terminals,
+  stoppedAgents, send, restoreDegraded, terminals,
 }: DiscoveryDeps) {
+  /**
+   * The archived harness whose own engine process this is, in this same pane: archived as exited by a restore that
+   * could not see it (registry.ts `reinstateArchived`), its pane left to [terminal]. Pid and start time are the
+   * proof; a new engine typed into that shell is another process and stays the terminal's own.
+   */
+  /** Each row and process is looked up in the archive once: an adopted row is observed on every pass. */
+  const looked = new Set<string>()
+  const firstLook = (row: RegisteredSession, observed: DiscoveredTerminalAgent): boolean => {
+    const key = `${row.agentId}\u0000${observed.processIdentity.pid}\u0000${observed.processIdentity.startMarker}`
+    if (looked.has(key)) return false
+    if (looked.size >= 4096) looked.clear()
+    looked.add(key)
+    return true
+  }
+  const archivedOwner = (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): RegisteredSession | undefined => {
+    let archived: RegisteredSession[]
+    try { archived = stoppedAgents.list() } catch (error) {
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${error instanceof Error ? error.message : error}`)
+      return undefined
+    }
+    return archived.find((saved) => saved.engine === observed.engine
+      && sameProcessIdentity(saved.processIdentity, observed.processIdentity)
+      && saved.runtimes.some((runtime) => terminal.runtimes.some((own) => sameTerminalPlacement(runtime, own)))
+      && stoppedAgents.resumeReservedAt(saved.agentId) === null)
+  }
+  /**
+   * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
+   * processTable.ts), so a pane running one is OpenClaw's agent only once its screen shows the TUI: the footer it draws
+   * under its composer (engines/openclaw/contract.ts). Asked before a pane is taken for OpenClaw, never of a row that
+   * is OpenClaw's already, so an overlay over the footer cannot make a running agent look gone.
+   */
+  const showsOpenclaw = async (observed: DiscoveredTerminalAgent): Promise<boolean> => {
+    const runtime = observed.runtimes.find((candidate) => terminalRouteKey(candidate) === observed.primaryRuntimeKey) ?? observed.runtimes[0]
+    const read = runtime ? await terminals.backendFor(runtime)?.capture(runtime).catch(() => null) : null
+    return read?.state === 'succeeded' && readOpenclawScreen(read.value).footer !== null
+  }
   const onDiscovered = async (observed: DiscoveredTerminalAgent): Promise<void> => {
+    if (observed.engine === 'openclaw' && !await showsOpenclaw(observed)) return
     const launching = observed.runtimes
       .map((runtime) => registry.byRuntimeEngine(runtime, observed.engine))
       .find((entry) => entry?.launch?.state !== 'ready')
@@ -92,12 +132,30 @@ export function createDiscoveryHandlers({
   }
   const onObserved = async (observed: DiscoveredTerminalAgent, current: RegisteredSession): Promise<void> => {
     if (externalResumePending(current.externalResume)) return
+    if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
     // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
     // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.
     const gridMoved = observed.grid !== undefined
       && !sameGridAssignment(current.grid ?? null, observed.grid)
     const wasLaunching = current.launch?.state !== undefined && current.launch.state !== 'ready'
+    // Not typed in: the engine of the harness this pane belonged to never stopped. It comes back under its own id
+    // and name, and the terminal tile moves to it; nothing is restarted. Also when the terminal row has adopted that
+    // engine already (a build with the engine fix but not this one), as long as no conversation is bound to it.
+    const holder = !isTerminalEngine(observed.engine) && (isTerminalEngine(current.engine)
+      || (!!current.terminalHost && !current.sessionId && current.engine === observed.engine))
+    const owner = holder && firstLook(current, observed) ? archivedOwner(current, observed) : undefined
+    const revived = owner ? registry.reinstateArchived(current.agentId, owner, observed.processIdentity) : null
+    if (revived) {
+      try { stoppedAgents.remove(revived.agentId) } catch (error) {
+        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${error instanceof Error ? error.message : error}`)
+      }
+      console.log(`[discovery] ${sid(revived.agentId)} back from the archive · its ${observed.engine} never stopped`
+        + ` · ${observed.primaryRuntimeKey} · terminal ${sid(current.agentId)} gone`)
+      send({ type: 'agent_deleted', payload: { agentId: current.agentId, successor: revived.agentId } })
+      announceSession(revived)
+      return onObserved(observed, revived)
+    }
     // Somebody typed an engine into a terminal. The row becomes that engine's agent — same id,
     // same pane — and from here on is handled exactly like one the app launched: bound by its
     // hooks, watched for turns, listed on the dial. `adopted` makes the announce below
@@ -113,12 +171,15 @@ export function createDiscoveryHandlers({
     // that did not yet) learns it here, before any pane recreation ever needs it.
     // `observed.engine`, not `current.engine`: for a terminal that just adopted one, the row's
     // engine was `terminal` a line ago, which has no bypass flag and would read every launch as "no".
-    registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
+    // Not a Swarm agent's (task #4215): its mode is the one its person chose, or none. One Harness started in full mode
+    // before then still runs with that flag until it relaunches, and read back the relaunch would skip permissions again.
+    const own = !current.swarmSkill
+    if (own) registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
     // And the exact MODE, fill-only: a row that recorded one at create is authoritative, and one
     // that never did (adopted from a terminal, written by an older build, created by a path that
     // passes no mode) learns it from the same argv — so its restart brings back
     // `--dangerously-skip-permissions`, not the auto mode `bypassPermission` alone would pick.
-    if (!current.permissionMode) {
+    if (own && !current.permissionMode) {
       const mode = permissionModeFromArgv(observed.engine, observed.args)
       if (mode) registry.setPermissionMode(current.agentId, mode)
     }

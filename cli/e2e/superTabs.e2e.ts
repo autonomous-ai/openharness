@@ -8,8 +8,8 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { object } from '../src/superTabs/wire.js'
 import { retainedHarnesses } from '../src/superTabs/retention.js'
+import { startAgent } from '../src/superTabs/start.js'
 import { screenFor } from '../src/engines/screens.js'
-import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -40,71 +40,28 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const agents: Array<Record<string, any>> = []
   const starts = new Map<string, Record<string, any>>()
   const posts: Array<Record<string, any>> = []
-  const tasks: Array<Record<string, any>> = []
   const pending = new Map<string, Record<string, any>>()
   const assignments: Array<Record<string, string>> = []
   const stopReceipts: Array<Record<string, any>> = []
-  const nativeContexts = new Map<string, Record<string, any>>()
-  const nativeRecords = new Map<string, Record<string, any>>()
-  const nativeSends: Array<Record<string, any>> = []
-  let loseNativeReply = true
   let revision = 0, allowed = true, deliveryReads = 0
   const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify([ME.machineId, harnessId])).digest('hex').slice(0, 24)
   relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}/pools`) return { data: [] }
     if (path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: assignments }
+    if (path === `/api/super-tabs/hosts/${ME.machineId}/terminal`) return { data: [] }
     if (path.endsWith('/stopped')) { stopReceipts.push(body); assignments.length = 0; return { data: { confirmed: true } } }
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: allowed ? agents.map(agent => ({ tabId: TAB, agent, stopRequested: agent.workDecision === 'stop', observers: [] })) : [] }
     if (!allowed) return { status: 403, error: { code: 'FORBIDDEN', message: 'The contribution was withdrawn.' } }
-    if (path === `/api/super-tabs/${TAB}/native` && method === 'POST') {
-      const agent = agents.find(a => a.id === body.agentId)!
-      const contextId = body.operationId
-      nativeContexts.set(contextId, { contextId, tabId: TAB, conversationId: body.conversationId,
-        machineId: ME.machineId, harnessId: agent.harnessId, lastEventId: null })
-      return { data: { contextId } }
-    }
-    if (path.startsWith(`/api/super-tabs/${TAB}/native/`)) {
-      const contextId = path.split('/').at(-1)!, context = nativeContexts.get(contextId)!
-      if (method === 'GET') return { data: context }
-      nativeSends.push({ ...body, contextId })
-      const eventId = createHash('sha256').update(JSON.stringify(['native-event', contextId, body.turnId, body.kind])).digest('hex').slice(0, 24)
-      if (nativeRecords.has(eventId)) expect(nativeRecords.get(eventId)).toEqual({ ...body, contextId })
-      else {
-        expect(body.previousEventId).toBe(context.lastEventId)
-        nativeRecords.set(eventId, { ...body, contextId }); context.lastEventId = eventId
-      }
-      if (loseNativeReply) { loseNativeReply = false; return { status: 503, error: { code: 'BACKEND_UNAVAILABLE', message: 'Lost fixture reply' } } }
-      return { data: { eventId } }
-    }
     if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents, conversations: [] } } }
     if (path === `/api/super-tabs/${TAB}/conversations/feature/messages`) {
       expect(agents.some(agent => agent.id === url.searchParams.get('asAgentId'))).toBe(true)
       return { data: { messages: [{ id: url.searchParams.get('messageId'), text: 'Should the offline queue survive restart?' }] } }
     }
-    if (path.startsWith(`/api/super-tabs/${TAB}/starts/`)) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const command = object(body.command)
-      if (command.type === 'agent.start') {
-        const startId = `start-${body.operationId}`
-        if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request: command.request, dispatched: false, harnessId: null })
-        return { data: { result: { startId } } }
-      }
       if (command.type === 'agent.stopLease') return { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } }
-      const start = starts.get(String(command.startId))
-      if (command.type === 'agent.startDispatch') {
-        if (start!.dispatched) throw new Error('Duplicate dispatch')
-        start!.dispatched = true
-      } else if (command.type === 'agent.started') {
-        start!.harnessId = command.harnessId
-        const id = idFor(String(command.harnessId))
-        if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration,
-          ...(command.startedSession ? { startedSession: { ...object(command.startedSession), creationId: start!.creationId } } : {}) })
-        return { data: { result: { agentId: id } } }
-      } else if (command.type === 'conversation.create') {
-        tasks.push(body)
-        if (command.task) return { status: 400, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } }
-      } else if (command.type === 'message.send') posts.push(command)
+      if (command.type === 'message.send') posts.push(command)
       else if (command.type === 'agent.configuration') {
         const agent = agents.find(a => a.id === body.asAgentId)!
         if ((agent.configurationVersion ?? null) !== command.previousVersion) throw new Error('Stale configuration')
@@ -117,7 +74,6 @@ it('starts either engine once, posts to its captured group and delivers shared i
         expect(agents[index]).toMatchObject({ workDecision: 'stop', releaseId: command.releaseId })
         agents.splice(index, 1)
       }
-      else if (command.type === 'agent.startFailed') start!.error = command.error
       else throw new Error(`Unexpected command ${command.type}`)
       revision++
       return { data: { result: {} } }
@@ -135,6 +91,8 @@ it('starts either engine once, posts to its captured group and delivers shared i
         value.claimId = body.claimId
         return { data: { message: value.message } }
       }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value.status = body.uncertain ? 'uncertain' : 'delivered'
       value.receipt = body.receipt
       return { data: {} }
@@ -155,29 +113,43 @@ it('starts either engine once, posts to its captured group and delivers shared i
       print: text => { answer = JSON.parse(text) } })
     return { code, answer }
   }
-  const task = { goal: 'Keep drafts', changes: 'Persist edits', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
-  const taskCommand = { type: 'conversation.create', title: 'Drafts', task, checks: [{ description: 'Draft survives restart', independent: false }] }
-  expect((await run(['command', 'missing-task', JSON.stringify({ ...taskCommand, task: undefined })])).answer).toMatchObject({ error: 'TASK_REQUIRED' })
-  expect(tasks).toHaveLength(0)
-  const defined = await run(['command', 'define-task', JSON.stringify(taskCommand)])
-  expect(defined.code, JSON.stringify(defined.answer)).toBe(0)
-  expect(tasks).toHaveLength(2)
-  expect(tasks[0]).toMatchObject({ operationId: 'define-task', command: { task } })
-  expect(tasks[1].operationId).toBe('define-task')
-  expect(tasks[1].command).not.toHaveProperty('task')
-  for (const part of ['Goal:', 'Changes:', 'Constraints:', 'Owns:', 'Keep drafts', 'cli/src/superTabs']) expect(tasks[1].command.brief).toContain(part)
+  // What the Swarm answers a host's start commands (superTabs/machines.ts runs them itself): its record of the start, and the agent it joins.
+  const startReceipt = (command: Record<string, any>) => {
+    const start = starts.get(String(command.startId))!
+    if (command.type === 'agent.startDispatch') {
+      if (start.dispatched) throw new Error('Duplicate dispatch')
+      start.dispatched = true
+    } else if (command.type === 'agent.started') {
+      start.harnessId = command.harnessId
+      const id = idFor(String(command.harnessId))
+      if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration,
+        ...(command.startedSession ? { startedSession: { ...object(command.startedSession), creationId: start.creationId } } : {}) })
+      return { result: { agentId: id } }
+    } else if (command.type === 'agent.startFailed') start.error = command.error
+    else throw new Error(`Unexpected start command ${command.type}`)
+    revision++
+    return { result: {} }
+  }
+  // A start the Swarm queued for this machine, run as its host runs one: the native creation on this daemon, and the receipts the
+  // Swarm would take. The same start again resumes the same native receipt.
+  async function startHere(startId: string, request: Record<string, unknown>) {
+    if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request, dispatched: false, harnessId: null })
+    const answer = await startAgent({ tabId: TAB, startId }, async input => ({ ok: true,
+      value: input.action === 'startStatus' ? structuredClone(starts.get(startId)) : startReceipt(object(input.command)) }), where)
+    return { code: answer.error ? 1 : 0, answer }
+  }
   for (const engine of ['claude', 'codex']) {
     const request = { conversationId: 'feature', machineId: ME.machineId, engine, name: `Builder ${engine}`,
-      cwd, worktree: false, permissionMode: 'auto', requirements: { memoryBytes: 0, diskBytes: 1,
+      cwd, worktree: false, requirements: { memoryBytes: 0, diskBytes: 1,
         maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false } }
-    let started = await run(['start', engine, JSON.stringify(request)])
+    let started = await startHere(`start-${engine}`, request)
     if (started.answer.error === 'START_PENDING') started = await until('native creation to finish', async () => {
-      const result = await run(['resume', `start-${engine}`])
+      const result = await startHere(`start-${engine}`, request)
       return result.answer.error === 'START_PENDING' ? null : result
     }, 60_000, 500)
     expect(started.code, JSON.stringify(started.answer)).toBe(0)
     expect(started.answer.harnessId).toBeTruthy()
-    const same = await run(['start', engine, JSON.stringify(request)])
+    const same = await startHere(`start-${engine}`, request)
     expect(same.answer.harnessId).toBe(started.answer.harnessId)
     const target = idFor(started.answer.harnessId)
     const posted = await run(['post', 'feature', `${engine} ready`, `hello-${engine}`], target)
@@ -231,55 +203,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
       const config = agents.find(a => a.id === target)?.configuration
       return config?.model === model && config.effort === 'high' || null
     }, 20_000, 250)
-    // The same route as Desktop: authenticated conversation context, host
-    // preparation, then bytes typed into the real native terminal stream.
-    const contextId = `native-${engine}-context-fixture`
-    expect(await client.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
-      body: { operationId: contextId, conversationId: 'feature', agentId: target } })).toMatchObject({ value: { contextId } })
-    expect(await client.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId }))
-      .toMatchObject({ ok: true, inputContext: contextId })
-    const openId = `terminal-${engine}`, terminal = client.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === openId)
-    client.send('terminal_open', { requestId: openId, protocolVersion: 3, agentId: started.answer.harnessId,
-      cols: 100, rows: 30, inputContext: contextId })
-    const streamId = (await terminal).payload!.streamId as string
-    await client.waitForBinary(frame => frame.streamId === streamId && frame.kind === TerminalBinaryKind.keyframe)
-    const intervention = `native-intervention-${engine}`
-    client.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from(intervention) })
-    client.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
-    await until('native prompt and answer in the correct conversation', () => {
-      const rows = [...nativeRecords.values()].filter(row => row.contextId === contextId)
-      return rows.length >= 2 ? rows : null
-    }, 30_000, 100)
-    const observed = [...nativeRecords.values()].filter(row => row.contextId === contextId)
-    expect(observed.map(row => row.kind)).toEqual(['prompt', 'answer'])
-    expect(observed[0]!.text).toBe(intervention)
-    expect(observed[1]!.text).toContain(intervention)
-    expect(observed[0]!.turnId).toBe(observed[1]!.turnId)
-    const composed = `native-composed-intervention-${engine}`
-    client.send('message', { agentId: started.answer.harnessId, content: composed, inputContext: contextId })
-    await until('composed native input to retain the same conversation context', () => {
-      const rows = [...nativeRecords.values()].filter(row => row.contextId === contextId)
-      return rows.length >= 4 ? rows : null
-    }, 30_000, 100)
-    const composedRows = [...nativeRecords.values()].filter(row => row.contextId === contextId).slice(2)
-    expect(composedRows.map(row => row.kind)).toEqual(['prompt', 'answer'])
-    expect(composedRows[0]!.text).toBe(composed)
-    expect(composedRows[1]!.text).toContain(composed)
-    client.send('terminal_close', { streamId })
-    const unknownId = `unattributed-${engine}`
-    const unknownReady = client.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === unknownId)
-    client.send('terminal_open', { requestId: unknownId, protocolVersion: 3, agentId: started.answer.harnessId, cols: 100, rows: 30 })
-    const unknownStream = (await unknownReady).payload!.streamId as string
-    await client.waitForBinary(frame => frame.streamId === unknownStream && frame.kind === TerminalBinaryKind.keyframe)
-    const privateInput = `unattributed-intervention-${engine}`
-    client.sendBinary({ kind: TerminalBinaryKind.input, streamId: unknownStream, seq: 0, compressed: false, bytes: Buffer.from(privateInput) })
-    client.sendBinary({ kind: TerminalBinaryKind.input, streamId: unknownStream, seq: 1, compressed: false, bytes: Buffer.from('\r') })
-    await until('an explicit gap instead of guessed attribution', () => [...nativeRecords.values()].some(row => row.contextId === contextId && row.kind === 'gap') || null, 20_000, 100)
-    expect([...nativeRecords.values()].some(row => String(row.text).includes(privateInput))).toBe(false)
-    expect(readFileSync(join(d.dataDir, 'super-tabs', `native-${ME.machineId}.json`), 'utf8')).not.toContain(privateInput)
-    client.send('terminal_close', { streamId: unknownStream })
   }
-  expect(nativeSends.length).toBeGreaterThan(nativeRecords.size)
   // The backend survived, but this host has no local intent/receipt. It must
   // surface the missing evidence without creating a new claim or typing again.
   const orphan = { id: 'delivery-without-journal', status: 'claimed', claimId: 'original-claim', receipt: '',
@@ -291,19 +215,20 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const reads = deliveryReads
   await until('further host polls without replay', () => deliveryReads > reads + 3 || null, 10_000, 250)
   expect(readFileSync(join(d.root, 'submitted-prompts'), 'utf8')).not.toContain('do-not-replay-without-journal')
-  const refused = await run(['start', 'refused-config', JSON.stringify({
+  const refusedRequest = {
     conversationId: 'feature', machineId: ME.machineId, engine: 'claude', name: 'Refused builder',
     cwd, worktree: false, codexHome: join(d.root, 'unused-codex-home'), requirements: { memoryBytes: 0, diskBytes: 1,
       maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false },
-  })])
+  }
+  const refused = await startHere('start-refused-config', refusedRequest)
   expect(refused.code, JSON.stringify(refused.answer)).toBe(1)
   expect(refused.answer).toMatchObject({ error: 'START_FAILED', detail: expect.stringContaining('codexHome') })
-  expect(starts.get('start-refused-config')!.error).toContain('before starting an agent')
+  expect(starts.get('start-refused-config')!.error).toContain('codexHome is only valid for codex')
   const creationId = starts.get('start-refused-config')!.creationId
   expect(await client.request('agent_create_status', { creationId })).toMatchObject({ creationId, state: 'cancelled' })
   // Even a delayed valid create cannot revive the cancelled request.
   expect(await client.request('agent_create', { engine: 'claude', cwd, creationId }, 30_000)).toMatchObject({ creationId, state: 'cancelled' })
-  expect((await run(['resume', 'start-refused-config'])).answer).toMatchObject({ error: 'START_FAILED' })
+  expect((await startHere('start-refused-config', refusedRequest)).answer).toMatchObject({ error: 'START_FAILED' })
   const listed = await client.request('agents_list')
   expect(listed.agents).toHaveLength(3)
   const worker = listed.agents.find((a: Record<string, any>) => a.id === starts.get('start-claude')!.harnessId)
@@ -326,12 +251,6 @@ it('starts either engine once, posts to its captured group and delivers shared i
     return row?.status === 'active' && row.sessionId === worker.sessionId ? row : null
   }, 60_000, 250)
   expect(resumed.id).toBe(worker.id)
-  const reopenContext = 'native-resumed-worker-context'
-  expect(await client.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
-    body: { operationId: reopenContext, conversationId: 'feature', agentId: idFor(worker.id) } }))
-    .toMatchObject({ ok: true, value: { contextId: reopenContext } })
-  expect(await client.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId: reopenContext }))
-    .toMatchObject({ ok: true, inputContext: reopenContext })
   // Two callers see the same free memory. Only one may reserve most of it,
   // even though neither has started its native process yet.
   const capacity = await client.request('super_tabs', { action: 'capacity', cwd })
@@ -405,7 +324,7 @@ it.each(['reported', 'legacy'] as const)('Change agent keeps its member and deli
     if (path.includes('/deliveries')) {
       if (method === 'GET') return { data: path.endsWith('/deliveries') ? rebinds && delivery.status !== 'delivered' ? [delivery] : [] : delivery }
       if (body.type === 'claim') delivery.claimId = body.claimId
-      else delivery.status = body.uncertain ? 'uncertain' : 'delivered'
+      else if (body.type !== 'hold') delivery.status = body.uncertain ? 'uncertain' : 'delivered'
       return { data: { message: { id: 'replacement-message', conversationId: 'feature', author: { name: 'Fixture human' }, text: `verify-switched-${mode}` } } }
     }
     throw new Error(`Unexpected request ${method} ${path}`)

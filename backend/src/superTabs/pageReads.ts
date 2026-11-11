@@ -1,7 +1,5 @@
 import type { Prisma, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
-import { routingRow } from './buddies.js'
 import { ms } from './parts/light.js'
-import type { ReactionRow } from './reactions.js'
 import { agentOnly, stableId, type Author } from './model.js'
 import { readBy } from './parts/indexed.js'
 import { prismaRow } from './rawRows.js'
@@ -11,12 +9,6 @@ type Transaction = Prisma.TransactionClient
 // A page's rows are read by a plain {tabId, messageId: {$in}} match. Prisma sends `messageId: { in }` as an $expr $or: Mongo
 // cannot bound an index by it, and on 2026-10-28 each page read scanned every delivery of its Swarm (prod at 100% CPU).
 // Each read here uses its tabId+messageId index and examines only the rows it returns (integration/superTabIndexes.test.ts).
-
-/** The reactions on one page of messages. */
-export async function pageReactions(tx: Transaction, tabId: string, messageIds: string[]): Promise<ReactionRow[]> {
-  return await tx.superTabReaction.aggregateRaw({ pipeline: [{ $match: { tabId, messageId: { $in: messageIds } } },
-    { $project: { _id: 0, messageId: 1, emoji: 1, actorKind: 1, actorId: 1 } }] }) as unknown as ReactionRow[]
-}
 
 export type PageDelivery = Pick<SuperTabDelivery, 'id' | 'messageId' | 'agentId' | 'status' | 'receipt' | 'holdReason' | 'holdSince'
   | 'claimFailingSince' | 'claimFailures' | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>
@@ -84,7 +76,7 @@ export async function compactedDelivery(tx: Transaction, tabId: string, agentId:
   return document && stored?.deliveryId === deliveryId ? compactedRow(document, agentId, stored) : null
 }
 
-/** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
+/** The deliveries a host is still told about, and a cancel ends (the rest are answered, cancelled or confirmed). */
 export const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 
 /** An agent's open deliveries, oldest first and each conversation's tied rows in its order: one indexed read, and the tied
@@ -146,24 +138,52 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
 }
 
 /**
+ * Up to `limit` messages before `edge`, newest first, as the client `tx` holds them, or null when it does not hold the row
+ * at `edge` yet: an older page read on a secondary (task #2970). One read of `sequence <= edge`, so the row the reader
+ * pages from and the rows before it come from one member at once. A member that holds the edge holds every row before it:
+ * a Swarm's messages are numbered in the write that stores them, one write at a time, and a secondary reads whole applied
+ * writes. More than one row at the edge's sequence (one command's rows from before the store by parts) is left to the
+ * primary, as is an edge with no row, so a page never skips a row the primary has.
+ */
+export async function heldPast(tx: Transaction, at: { tabId: string; conversationId: string; thread?: string }, edge: MessageEdge,
+  limit: number): Promise<SuperTabMessage[] | null> {
+  const rows = (await readBy(tx, 'SuperTabMessage', at.thread ? 'thread' : 'sequence', [
+    { $match: { tabId: at.tabId, conversationId: at.conversationId, ...at.thread ? { thread: at.thread } : {}, sequence: { $lte: edge.sequence } } },
+    { $sort: { sequence: -1, _id: -1 } }, { $limit: limit + 1 }])).map(row => prismaRow<SuperTabMessage>('SuperTabMessage', row))
+  const atEdge = rows.filter(m => m.sequence === edge.sequence)
+  if (atEdge.length !== 1 || (edge.id !== undefined && atEdge[0]!.id !== edge.id)) return null
+  return rows.filter(m => m.sequence < edge.sequence)
+}
+
+/**
  * The messages of one conversation with these ids, by the id index: what a page's rows name as their thread or reply-to but
  * the page does not hold (store.ts messages), so what this reader may see of them can be checked. Named, not Prisma's `id in`,
  * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).
  */
 export async function messagesById(tx: Transaction, tabId: string, conversationId: string, ids: string[]):
-  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession' | 'author' | 'buddyProject'>>> {
+  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'author'>>> {
   if (!ids.length) return []
-  // Its author too: a project session of a person's one Buddy chat reads only its person's words and its own (buddySessions.ts).
   const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId, conversationId } },
-    { $project: { source: 1, recipientIds: 1, thread: 1, buddySession: 1, author: 1, buddyProject: 1 } }])
+    { $project: { source: 1, recipientIds: 1, thread: 1, author: 1 } }])
   return rows.map(row => {
-    const { id, source, recipientIds, thread, buddySession, author, buddyProject } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
-    return { id, source, recipientIds, thread: thread ?? null, buddySession: buddySession ?? null, author, buddyProject: buddyProject ?? null }
+    const { id, source, recipientIds, thread, author } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
+    return { id, source, recipientIds, thread: thread ?? null, author }
   })
 }
 
+/**
+ * The stored rows with these ids, whichever Swarm or conversation holds them: what a machine report's or a Lead poll's time
+ * check compares its notices with before it writes them (store.ts writeMessages keepStored). A plain `_id` match through the id
+ * index; Prisma's `id: { in }` sent it as `$expr` (8% of the slow message reads in Ken's log of 11-04, ~1 s for 101 rows).
+ */
+export async function storedMessages(tx: Transaction, ids: string[]): Promise<Array<{ id: string; tabId: string; conversationId: string; source: unknown }>> {
+  if (!ids.length) return []
+  const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids } } }, { $project: { tabId: 1, conversationId: 1, source: 1 } }])
+  return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string, source: row.source ?? null }))
+}
+
 /** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
-const LEAD_COPY_KINDS = new Set<unknown>(['work-lost', 'work-resumed'])
+const LEAD_COPY_KINDS = new Set<unknown>(['work-lost'])
 
 /** Of `rows`, the task chat copies stored before #2177 marked them (liveness.ts leadNoticeRows) whose project chat copy
  *  reached the Lead: that same notice, so read by no one either (re-check of #2177). A copy whose Lead copy reached no one,
@@ -183,15 +203,12 @@ export async function deliveredCopies(tx: Transaction, tabId: string, rows: Read
   return new Set(copies.filter(row => reached.has(stableId(row.id, 'lead'))).map(row => row.id))
 }
 
-/** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root.
- *  `count`: how many of the thread's rows this one stands for (pageThreads); a row without it is one. */
-export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean
-  count?: number
-  /** A reply in a Buddy thread session's thread (buddySessions.ts), which the main Buddy never counts. */
-  session?: boolean }
+/** `count`: how many of the thread's rows this one stands for (pageThreads); a row without it is one. */
+export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean
+  count?: number }
 
-/** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly, routingRow). */
-interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null }
+/** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly). */
+interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean }
 /** One row of a part, by its place in the thread. */
 interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
 /** What the database sums up of some threads' rows (threadFacet), as it returns it: the same whoever reads. */
@@ -209,14 +226,22 @@ export interface ThreadFacet {
  * still examines each of the threads' rows.
  */
 export async function threadFacet(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
+  // No $sort: it makes the planner walk the conversation's sequence index instead.
+  return summed(tx, 'thread', { tabId, conversationId, thread: { $in: roots } })
+}
+
+/** threadFacet of the rows `ids` alone, read by `_id`: what a reply's rows add to their threads' summaries (foldReplies). */
+async function rowsFacet(tx: Transaction, tabId: string, conversationId: string, ids: string[]): Promise<ThreadFacet> {
+  return summed(tx, 'id', { _id: { $in: ids }, tabId, conversationId })
+}
+
+async function summed(tx: Transaction, index: 'thread' | 'id', match: Prisma.InputJsonObject): Promise<ThreadFacet> {
   const root = { $eq: ['$_id', '$thread'] }
   const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly',
-    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' },
-    session: { $eq: ['$buddySession', true] } }
+    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' } }
   // (sequence, id) lead each place, so the database's min and max order rows as threadReplies sorts them (ids are ASCII).
   const place = { s: '$sequence', i: '$_id', at: '$createdAt', author: '$author' }
-  // No $sort: it makes the planner walk the conversation's sequence index instead.
-  const [found] = await readBy(tx, 'SuperTabMessage', 'thread', [{ $match: { tabId, conversationId, thread: { $in: roots } } },
+  const [found] = await readBy(tx, 'SuperTabMessage', index, [{ $match: match },
     { $facet: {
       parts: [{ $group: { _id: part, count: { $sum: 1 }, oldest: { $min: place }, newest: { $max: place },
         // A root is its part's only row: what deliveredCopies reads of it.
@@ -239,7 +264,7 @@ export async function threadReplies(tx: Transaction, tabId: string, { parts, men
   const row = (key: ThreadPart, at: ThreadPlace) => {
     let kept = rows.get(at.i)
     if (!kept) rows.set(at.i, kept = { thread: key.thread, id: at.i, author: at.author, mentions: [], sequence: at.s, createdAt: new Date(ms(at.at)),
-      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), ...(key.session ? { session: true } : {}), count: 0, slots: [] })
+      agentOnly: hidden(key), count: 0, slots: [] })
     return kept
   }
   for (const p of parts) {
@@ -258,20 +283,38 @@ export async function threadReplies(tx: Transaction, tabId: string, { parts, men
  * left out here too.
  */
 export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
-  if (!await threadsBackfilled(tx, tabId)) return threadReplies(tx, tabId, await threadFacet(tx, tabId, conversationId, roots))
-  const stored = await readBy(tx, 'SuperTabThread', 'id', [{ $match: { _id: { $in: roots }, tabId, conversationId } },
-    { $project: { parts: 1, mentions: 1 } }]) as unknown as ThreadFacet[]
+  return threadsAcross(tx, tabId, roots.map(root => ({ conversationId, root })))
+}
+
+/** pageThreads for threads of one Swarm: the summaries of all of them by root id
+ *  in one read, each counted only in the Swarm and conversation named for it; threadFacet per conversation before the backfill.
+ *  Matched by `_id` alone, so no other index of the collection (tabId, conversationId) can serve it and walk a Swarm's every
+ *  summary. */
+async function threadsAcross(tx: Transaction, tabId: string, threads: ReadonlyArray<{ conversationId: string; root: string }>): Promise<ThreadReply[]> {
+  if (!threads.length) return []
+  if (!await threadsBackfilled(tx, tabId)) {
+    const byChat = new Map<string, string[]>()
+    for (const t of threads) byChat.set(t.conversationId, [...byChat.get(t.conversationId) ?? [], t.root])
+    const facets = []
+    for (const [conversationId, roots] of byChat) facets.push(await threadFacet(tx, tabId, conversationId, roots))
+    return threadReplies(tx, tabId, { parts: facets.flatMap(f => f.parts), mentions: facets.flatMap(f => f.mentions) })
+  }
+  const named = new Set(threads.map(t => `${t.conversationId}\u0000${t.root}`))
+  const stored = (await readBy(tx, 'SuperTabThread', 'id', [{ $match: { _id: { $in: [...new Set(threads.map(t => t.root))] } } },
+    { $project: { tabId: 1, conversationId: 1, parts: 1, mentions: 1 } }]) as unknown as Array<ThreadFacet & { _id: string; tabId: string; conversationId: string }>)
+    .filter(t => t.tabId === tabId && named.has(`${t.conversationId}\u0000${t._id}`))
   return threadReplies(tx, tabId, { parts: stored.flatMap(t => t.parts), mentions: stored.flatMap(t => t.mentions) })
 }
 
 /**
  * Rewrites the summaries of the threads rooted at `roots` in one conversation from their rows now: one document per thread
- * with a reply, as threadFacet gives it. Run in the transaction that inserts a reply (refreshReplies), so a summary holds what
- * its rows do: two replies at once write the same document, and one of their transactions runs again.
+ * with a reply, as threadFacet gives it, and none for a thread left with no reply. Run in the transaction that inserts a reply
+ * (refreshReplies) or deletes one, so a summary holds what its rows do: two replies at once write the same document, and one
+ * of their transactions runs again.
  */
-export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<void> {
-  if (!roots.length) return
-  const { parts, mentions } = await threadFacet(tx, tabId, conversationId, roots)
+export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
+  if (!roots.length) return { parts: [], mentions: [] }
+  const facet = await threadFacet(tx, tabId, conversationId, roots), { parts, mentions } = facet
   const updatedAt = { $date: new Date().toISOString() }
   const updates = roots.flatMap(root => {
     const own = parts.filter(p => p._id.thread === root)
@@ -281,17 +324,74 @@ export async function refreshThreads(tx: Transaction, tabId: string, conversatio
   })
   // Raw, so the stored parts read back as the $facet returns them, dates as dates.
   if (updates.length) await tx.$runCommandRaw({ update: 'SuperTabThread', updates: updates as unknown as Prisma.InputJsonArray })
+  // A thread whose last reply was deleted (messageEdits.ts) has no summary left.
+  const empty = roots.filter(root => !parts.some(p => p._id.thread === root && !p._id.root))
+  if (empty.length) await tx.$runCommandRaw({ delete: 'SuperTabThread', deletes: [{ q: { _id: { $in: empty }, tabId, conversationId }, limit: 0 }] as unknown as Prisma.InputJsonArray })
+  return facet
 }
 
-/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads). A row that is its own
+/** A part's or tag's key by value, whatever its fields' order: the database groups by the whole key. */
+const keyOf = (key: unknown): string => JSON.stringify(key, (_, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+  ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value)
+/** Places in the order the database's $min and $max give them: by sequence, then id, then a tag's slot. */
+const before = (a: ThreadPlace, b: ThreadPlace) => Number(a.s) - Number(b.s) || (a.i < b.i ? -1 : a.i > b.i ? 1 : 0) || (a.slot ?? 0) - (b.slot ?? 0)
+
+/** A thread's summary with the rows `added` sums up folded in, as threadFacet gives every row of both: each part's count adds,
+ *  its oldest row is the older and its newest the newer; each person's first tag in a part is the earlier. */
+export function foldFacet(stored: ThreadFacet, added: ThreadFacet): ThreadFacet {
+  const parts = new Map(stored.parts.map(p => [keyOf(p._id), { ...p }]))
+  for (const p of added.parts) {
+    const kept = parts.get(keyOf(p._id))
+    if (!kept) parts.set(keyOf(p._id), { ...p })
+    else Object.assign(kept, { count: kept.count + p.count, oldest: before(p.oldest, kept.oldest) < 0 ? p.oldest : kept.oldest,
+      newest: before(p.newest, kept.newest) > 0 ? p.newest : kept.newest })
+  }
+  const mentions = new Map(stored.mentions.map(m => [keyOf(m._id), { ...m }]))
+  for (const m of added.mentions) {
+    const kept = mentions.get(keyOf(m._id))
+    if (!kept || before(m.first, kept.first) < 0) mentions.set(keyOf(m._id), { ...m })
+  }
+  return { parts: [...parts.values()], mentions: [...mentions.values()] }
+}
+
+/**
+ * Folds the rows `ids`, just inserted in this transaction and replying in threads of one conversation, into those threads'
+ * stored summaries (foldFacet): it reads each summary by root id and only the new rows by `_id`, never the threads' other
+ * rows, so a reply in a 500-reply thread examines a few documents, not 500 (task #2974). A thread with no summary yet (its
+ * first reply, or a Swarm not backfilled) is counted whole once (refreshThreads). Two replies at once both write the same
+ * summary, so one transaction meets a write conflict and runs again, reading the summary the other committed. Answers the
+ * threads' whole facets, as refreshThreads does.
+ */
+export async function foldReplies(tx: Transaction, tabId: string, conversationId: string,
+  rows: ReadonlyArray<{ id: string; thread: string }>): Promise<ThreadFacet> {
+  const roots = [...new Set(rows.map(row => row.thread))]
+  const stored = new Map((await readBy(tx, 'SuperTabThread', 'id', [{ $match: { _id: { $in: roots } } },
+    { $project: { tabId: 1, conversationId: 1, parts: 1, mentions: 1 } }]) as unknown as Array<ThreadFacet & { _id: string; tabId: string; conversationId: string }>)
+    .filter(t => t.tabId === tabId && t.conversationId === conversationId).map(t => [t._id, t]))
+  const whole = await refreshThreads(tx, tabId, conversationId, roots.filter(root => !stored.has(root)))
+  const folding = rows.filter(row => stored.has(row.thread))
+  if (!folding.length) return whole
+  const added = await rowsFacet(tx, tabId, conversationId, folding.map(row => row.id))
+  const updatedAt = { $date: new Date().toISOString() }
+  const folded = [...new Set(folding.map(row => row.thread))].map(root => {
+    const summary = stored.get(root)!
+    return { root, ...foldFacet(summary, { parts: added.parts.filter(p => p._id.thread === root), mentions: added.mentions.filter(m => m._id.thread === root) }) }
+  })
+  // Raw, as refreshThreads writes it: the stored parts read back as the $facet returns them, dates as dates.
+  await tx.$runCommandRaw({ update: 'SuperTabThread', updates: folded.map(({ root, parts, mentions }) =>
+    ({ q: { _id: root, tabId, conversationId }, u: { $set: { parts, mentions, updatedAt } } })) as unknown as Prisma.InputJsonArray })
+  return { parts: [...whole.parts, ...folded.flatMap(f => f.parts)], mentions: [...whole.mentions, ...folded.flatMap(f => f.mentions)] }
+}
+
+/** Folds the rows `rows`, just inserted, into the summaries of the threads they reply in (foldReplies). A row that is its own
  *  thread's root, or has none (written before threads), changes no summary. */
 export async function refreshReplies(tx: Transaction, tabId: string,
   rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<void> {
-  const roots = new Map<string, Set<string>>()
+  const replies = new Map<string, Array<{ id: string; thread: string }>>()
   for (const row of rows) {
-    if (row.thread && row.thread !== row.id) roots.set(row.conversationId, (roots.get(row.conversationId) ?? new Set()).add(row.thread))
+    if (row.thread && row.thread !== row.id) replies.set(row.conversationId, [...replies.get(row.conversationId) ?? [], { id: row.id, thread: row.thread }])
   }
-  for (const [conversationId, threads] of roots) await refreshThreads(tx, tabId, conversationId, [...threads])
+  for (const [conversationId, list] of replies) await foldReplies(tx, tabId, conversationId, list)
 }
 
 /** How long this process trusts what it last read of a Swarm's backfill marker. */

@@ -11,12 +11,14 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
+import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
 import 'swarm_reader.dart';
 
 /// The chat menu's Notifications rows (the desktop's chat menu, Slack's
 /// channel notifications): one per [SwarmNotify], the reader's own setting
 /// for chat [chatId] ticked (✓), kept on every device of theirs. A tap sets it
-/// ([swarmSetNotify]).
+/// ([swarmSetNotify]). A project's channel has no Muted
+/// ([SwarmReader.notifyOf]).
 PhoneSheetSection swarmNotifySection(
   BuildContext context,
   SwarmReader reader,
@@ -27,21 +29,23 @@ PhoneSheetSection swarmNotifySection(
     caption: 'Notifications',
     actions: [
       for (final level in SwarmNotify.values)
-        PhoneSheetAction(
-          icon: level == now
-              ? LucideIcons.check300
-              : switch (level) {
-                  SwarmNotify.all => LucideIcons.bellRing300,
-                  SwarmNotify.mentions => LucideIcons.atSign300,
-                  SwarmNotify.muted => LucideIcons.bellOff300,
-                },
-          label: level.label,
-          // The sheet draws no icons: the one set says so at its end.
-          value: level == now ? '✓' : null,
-          valueColor: AppPalette.textPrimary,
-          onTap: () =>
-              unawaited(swarmSetNotify(context, reader, chatId, level)),
-        ),
+        if (level != SwarmNotify.muted ||
+            reader.snapshot?.isProjectLead(chatId) != true)
+          PhoneSheetAction(
+            icon: level == now
+                ? LucideIcons.check300
+                : switch (level) {
+                    SwarmNotify.all => LucideIcons.bellRing300,
+                    SwarmNotify.mentions => LucideIcons.atSign300,
+                    SwarmNotify.muted => LucideIcons.bellOff300,
+                  },
+            label: level.label,
+            // The sheet draws no icons: the one set says so at its end.
+            value: level == now ? '✓' : null,
+            valueColor: AppPalette.textPrimary,
+            onTap: () =>
+                unawaited(swarmSetNotify(context, reader, chatId, level)),
+          ),
     ],
   );
 }
@@ -100,7 +104,10 @@ Future<void> showSwarmNotifySheet(
   try {
     await showPhoneSheet(
       context,
-      title: reader.snapshot?.conversation(chatId)?.title ?? '',
+      // An old Buddy chat's stored title is only the Buddy's default name.
+      title: swarmIsOldBuddyChat(reader, chatId)
+          ? 'Old chat'
+          : reader.snapshot?.conversation(chatId)?.title ?? '',
       onShown: (route) {
         sheet = route;
         onShown?.call(route);
@@ -117,8 +124,9 @@ Future<void> showSwarmNotifySheet(
   }
 }
 
-/// At the end of a chat's header: ⋮, whose sheet holds Rename and Archive
-/// where the person may ([swarmChatManage]) and the chat's Notifications
+/// At the end of a chat's header: ⋮, whose sheet holds Find in chat where
+/// the chat's page offers it ([onFind]), Rename and Archive where the person may
+/// ([swarmChatManage]) and the chat's Notifications
 /// ([swarmNotifySection]), as the desktop's chat menu does for every chat a
 /// person reads, a viewer's too. Nothing while the chat is not
 /// known. The sheet goes once the chat can no longer be read — access lost,
@@ -128,10 +136,15 @@ class SwarmChatMenuButton extends StatefulWidget {
     super.key,
     required this.reader,
     required this.chatId,
+    this.onFind,
   });
 
   final SwarmReader reader;
   final String chatId;
+
+  /// Opens find in the chat (swarm_chat_find.dart); null offers no Find in
+  /// chat.
+  final VoidCallback? onFind;
 
   @override
   State<SwarmChatMenuButton> createState() => _SwarmChatMenuButtonState();
@@ -188,8 +201,15 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     widget.chatId,
     onShown: (route) => _sheet = route,
     // Rename and Archive where the desktop's chat menu has them.
-    actions: () =>
-        swarmChatManageActions(context, widget.reader, widget.chatId),
+    actions: () => [
+      if (widget.onFind case final find?)
+        PhoneSheetAction(
+          icon: LucideIcons.search300,
+          label: 'Find in chat',
+          onTap: find,
+        ),
+      ...swarmChatManageActions(context, widget.reader, widget.chatId),
+    ],
   ).whenComplete(() => _sheet = null);
 
   @override

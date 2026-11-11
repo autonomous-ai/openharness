@@ -2,6 +2,7 @@ import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { agentFrame } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
 import type { RegisteredSession } from './registry.js'
@@ -25,6 +26,34 @@ describe('agentFrame', () => {
     const row = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
     expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ sessionId: 's1', status: 'active', identityHold: row.identityHold })
+  })
+  // A named state is the person's to read and act on; the daemon's own waits (above) are not.
+  it('says a named state for a person, and nothing for a hold that is only the daemon waiting', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    const held = { ...session(null), engine: 'openclaw' as const, identityHold: OPENCLAW_STATES.noGateway }
+    expect(await agentFrame(held, context)).toMatchObject({ namedState: OPENCLAW_STATES.noGateway, identityHold: OPENCLAW_STATES.noGateway })
+    const waiting = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
+    expect(await agentFrame(waiting, context)).not.toHaveProperty('namedState')
+    expect(await agentFrame(session(null), context)).not.toHaveProperty('namedState')
+  })
+  // Null is a real answer: a push without the key would leave a window showing a wait that ended.
+  it('says what a message to it waits for, read as the frame is built, and null when nothing', async () => {
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).waitingFor).toBeNull()
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, waitingFor: () => 'engine' })).waitingFor).toBe('engine')
+  })
+  // Absent is a real answer here: an agent without Browser has no browser, and the panel draws nothing for it.
+  it('browser field present only when the context has it', async () => {
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).not.toHaveProperty('browser')
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser: undefined })).not.toHaveProperty('browser')
+    const browser = { state: 'setup' as const, step: 'building' }
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser })).browser).toEqual(browser)
+  })
+  it('says its name was not chosen by a person when nobody renamed it, whatever its session title says', async () => {
+    const row = { ...session(null), title: 'cd /Users/macbookpro/projects/lamp' }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(frame).toHaveProperty('nameChosen', false)
+    // The name it shows is the title, which is why the flag is needed.
+    expect(frame.name).toContain('cd /Users')
   })
   it('carries only the owning machine’s cached token snapshot, including a measured zero', async () => {
     const context = { selectedModel: null, terminalAvailable: true }
@@ -151,6 +180,12 @@ describe('agentFrame', () => {
     expect(frame).toHaveProperty('bypassPermission', null)
     expect(frame).toHaveProperty('namedAgent', null)
     expect(frame).not.toHaveProperty('agent')
+  })
+
+  it('carries the owner\'s extra launch flags only when it has some', async () => {
+    const withArgs = { ...session(null), launchArgs: ['--chrome'] }
+    expect(await agentFrame(withArgs, { selectedModel: null, terminalAvailable: true })).toMatchObject({ launchArgs: ['--chrome'] })
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).not.toHaveProperty('launchArgs')
   })
 
   // The global "last used" order. Null — never an absent key — until an app opens the agent: a push

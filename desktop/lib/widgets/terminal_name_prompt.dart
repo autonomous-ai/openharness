@@ -188,13 +188,16 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
                     focusNode: _input,
                     readOnly: _saving,
                     maxLength: widget.maxLength,
-                    style: DesktopChrome.text(size: 14),
+                    style: DesktopChrome.text(size: 13),
                     cursorColor: DesktopChrome.accent,
                     textAlignVertical: TextAlignVertical.center,
                     textInputAction: TextInputAction.done,
                     decoration: InputDecoration(
                       hintText: widget.fieldLabel,
-                      hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                      hintStyle: DesktopChrome.text(
+                        size: 13,
+                        color: DesktopChrome.hint,
+                      ),
                       counterText: '',
                       suffixText:
                           widget.maxLength != null &&

@@ -220,6 +220,11 @@ class Agent {
   final bool terminalAvailable;
   final String? terminalUnavailableReason;
 
+  /// What stops this agent that only the person can fix, in the daemon's words (`namedState`:
+  /// `OpenClaw Gateway is not running. Start it with openclaw gateway.`). Null when nothing does,
+  /// and from an older daemon.
+  final String? namedState;
+
   /// The conversation's token count as its machine last measured it — input, output and cached
   /// input together. Null from a daemon that does not report usage.
   final int? tokensUsed;
@@ -293,6 +298,7 @@ class Agent {
     this.launchDetail,
     this.terminalAvailable = false,
     this.terminalUnavailableReason,
+    this.namedState,
     this.tokensUsed,
     this.tokensUpdatedAt,
     this.outputStats,
@@ -368,6 +374,7 @@ class Agent {
           ? null
           : _safeLabel(terminalMap['reason']) ??
                 'terminal unavailable (no verified terminal pane)',
+      namedState: _safeDetail(j['namedState']),
       tokensUsed: tokens,
       tokensUpdatedAt: tokens != null && usage is Map
           ? _safeTime(usage['updatedAt'])
@@ -423,6 +430,7 @@ class Agent {
     launchDetail: launchDetail,
     terminalAvailable: terminalAvailable,
     terminalUnavailableReason: terminalUnavailableReason,
+    namedState: namedState,
     tokensUsed: tokensUsed,
     tokensUpdatedAt: tokensUpdatedAt,
     outputStats: outputStats,
@@ -589,6 +597,7 @@ class AgentProject {
     required this.cwd,
     this.root,
     this.remote,
+    this.repository,
     this.branch,
     this.worktree = false,
     this.branchPending = false,
@@ -597,6 +606,11 @@ class AgentProject {
   final String cwd;
   final String? root;
   final String? remote;
+
+  /// The repository [remote] stands for when its host is an SSH alias
+  /// (`gh-work/acme/games` for `github.com/acme/games`), as the daemon reports
+  /// it (desktop `AgentProject.repository`, #2476); null when [remote] is it.
+  final String? repository;
   final String? branch;
   final bool worktree;
 
@@ -690,6 +704,7 @@ class AgentProject {
       cwd: cwd,
       root: field('root'),
       remote: field('remote'),
+      repository: field('repository'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
       branchPending: raw['branchPending'] == true,

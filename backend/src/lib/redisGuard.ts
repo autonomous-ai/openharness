@@ -18,6 +18,13 @@ export function guardRedisCommands(redis: Redis, breaker: CircuitBreaker): void 
   const send = redis.sendCommand.bind(redis)
   redis.sendCommand = ((command: Command, stream?: unknown, node?: unknown) => {
     if (stream || redis.status !== 'ready') return (send as (c: Command, s?: unknown, n?: unknown) => unknown)(command, stream, node)
+    // Closed, as nearly always: send it and count its outcome from its own promise, which saves `run`'s async frame and
+    // promises on every command. Open or half open, `run` decides whether it may go at all.
+    if (breaker.state() === 'closed') {
+      send(command)
+      command.promise.then(() => breaker.success(), (err: unknown) => breaker.failure(err))
+      return command.promise
+    }
     breaker.run(() => {
       send(command)
       return command.promise

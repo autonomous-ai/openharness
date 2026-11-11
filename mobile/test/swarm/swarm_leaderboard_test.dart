@@ -55,6 +55,110 @@ void main() {
       expect(kim.medianAskToShipMs, isNull);
       expect(kim.medianAnswerMs, isNull);
       expect(kim.streakDays, 0);
+      expect(kim.details, isNull, reason: 'a server before details');
+    });
+
+    test("keeps a person's details in the order the backend sends", () {
+      final details = SwarmScore.fromJson({
+        ...scoreData('a', points: 9, rank: 1),
+        'details': {
+          'shipped': [
+            {
+              'title': 'Phone: the board shows details',
+              'prUrl': 'https://github.com/o/r/pull/2',
+              'mergedAt': 2,
+            },
+            {'title': 'Desktop: one count', 'prUrl': 'http://x.dev/pull/1'},
+          ],
+          'unblocked': [
+            {
+              'title': 'Which sign-in page ships first?',
+              'conversationId': 'c1',
+              'kind': 'decision',
+              'waitedMinutes': 96,
+            },
+          ],
+          'lent': [
+            {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 12.5},
+            {'machineName': 'build-box', 'busyHours': 7},
+          ],
+        },
+      }).details!;
+
+      expect(details.shipped.map((s) => s.title), [
+        'Phone: the board shows details',
+        'Desktop: one count',
+      ]);
+      expect(
+        details.shipped.first.link,
+        Uri.parse('https://github.com/o/r/pull/2'),
+      );
+      expect(details.shipped.last.link, Uri.parse('http://x.dev/pull/1'));
+      expect(details.unblocked.single.title, 'Which sign-in page ships first?');
+      expect(details.unblocked.single.waitedMinutes, 96);
+      // The machine as it calls itself, without .local; a whole number of
+      // hours reads as one.
+      expect(details.lent.map((l) => (l.machineName, l.busyHours)), [
+        ('MACs-Mac-Studio', 12.5),
+        ('build-box', 7.0),
+      ]);
+    });
+
+    test('a detail without a title or a web link, or of another type, is '
+        'left out or kept as text', () {
+      final details = SwarmScore.fromJson({
+        ...scoreData('a', points: 1, rank: 1),
+        'details': {
+          'shipped': [
+            {'title': '', 'prUrl': 'https://x.dev/pull/1'},
+            {'prUrl': 'https://x.dev/pull/2'},
+            {'title': 'A file', 'prUrl': 'file:///etc/hosts'},
+            {'title': 'A script', 'prUrl': 'javascript:alert(1)'},
+            {'title': 'An app', 'prUrl': 'x-harness://open'},
+            {'title': 'No host', 'prUrl': 'https:pull/3'},
+            {'title': 'No link'},
+            'not a map',
+          ],
+          'unblocked': [
+            {'title': 'Asked', 'waitedMinutes': 'long'},
+            {'waitedMinutes': 4},
+          ],
+          'lent': [
+            {'machineName': '', 'busyHours': 2},
+            {'machineName': '.local', 'busyHours': 'many'},
+          ],
+        },
+      }).details!;
+
+      expect(details.shipped.map((s) => (s.title, s.link)), [
+        ('A file', null),
+        ('A script', null),
+        ('An app', null),
+        ('No host', null),
+        ('No link', null),
+      ]);
+      expect(details.unblocked.map((u) => (u.title, u.waitedMinutes)), [
+        ('Asked', 0),
+      ]);
+      // A name that is only the suffix stays whole.
+      expect(details.lent.map((l) => (l.machineName, l.busyHours)), [
+        ('.local', 0.0),
+      ]);
+
+      final empty = SwarmScore.fromJson({
+        ...scoreData('b', points: 0, rank: 2),
+        'details': {'shipped': 'none', 'lent': null},
+      }).details!;
+      expect(empty.shipped, isEmpty);
+      expect(empty.unblocked, isEmpty);
+      expect(empty.lent, isEmpty);
+      expect(
+        SwarmScore.fromJson({
+          ...scoreData('c', points: 0, rank: 3),
+          'details': ['not', 'a', 'map'],
+        }).details,
+        isNull,
+      );
     });
   });
 
@@ -127,6 +231,33 @@ void main() {
       expect(swarmDuration(3 * 3600000 + 6 * 60000), '3.1 h');
     });
 
+    test("a person's points with the time before beside them", () {
+      SwarmScore score(int points, int? before, {String? period}) =>
+          SwarmScore.fromJson({
+            ...scoreData('a', points: points, rank: 1),
+            'prevWeekPoints': ?before,
+          }, period: period);
+      expect(
+        swarmPersonPoints(score(21, 15, period: '7d')),
+        '21 points in the last 7 days · 15 the 7 days before',
+      );
+      expect(swarmPersonPoints(score(1, 0)), '1 point this week · 0 last week');
+      // Last 30d has no comparison.
+      expect(
+        swarmPersonPoints(score(30, null, period: '30d')),
+        '30 points in the last 30 days',
+      );
+    });
+
+    test('how long an answer waited and a machine was busy', () {
+      expect(swarmWaited(6), 'waited 6 min');
+      expect(swarmWaited(96), 'waited 1.6 h');
+      expect(swarmWaited(0), 'waited 0 min');
+      expect(swarmBusy(12.5), '12.5 h busy');
+      expect(swarmBusy(7), '7 h busy');
+      expect(swarmBusy(0.1), '6 min busy');
+    });
+
     test('lent time in whole agent-hours', () {
       expect(swarmHours(0), 0);
       expect(swarmHours(40 * 3600000), 40);
@@ -171,10 +302,115 @@ void main() {
 
       await read.refresh();
 
-      expect(fake.paths, [path]);
+      expect(fake.paths, ['$path&period=7d']);
       expect(read.loading, isFalse);
       expect(read.board!.people.first.personId, 'diego');
       expect(read.week, isNull);
+    });
+
+    group('the rolling periods', () {
+      Map<String, dynamic> period(String name, {int shipped = 19}) => {
+        ...leaderboardData(shipped: shipped),
+        'period': {'name': name, 'start': 1, 'end': 2},
+      };
+      const older = SuperTabFailure(
+        'VALIDATION',
+        'Unrecognized key',
+        statusCode: 400,
+      );
+
+      test('reads Last 7d first, and another period by name', () async {
+        final fake = FakeSwarm()
+          ..routes['$path&period=7d'] = ((_) => period('7d'))
+          ..routes['$path&period=30d'] = (_) => period('30d', shipped: 40);
+        final read = reader(fake);
+        await read.refresh();
+        expect(read.period, '7d');
+        expect(read.board!.period, '7d');
+
+        final told = <SwarmLeaderboard?>[];
+        read.addListener(() => told.add(read.board));
+        final shown = read.showPeriod('30d');
+        expect(read.board, isNull, reason: "another period's numbers");
+        await shown;
+        expect(told.first, isNull);
+        expect(fake.paths.last, '$path&period=30d');
+        expect(read.board!.shipped, 40);
+      });
+
+      test(
+        'a server before periods keeps the weeks, after one refusal',
+        () async {
+          final fake = FakeSwarm()
+            ..routes['$path&period=7d'] = ((_) => throw older)
+            ..routes[path] = (_) => leaderboardData();
+          final read = reader(fake);
+          await read.refresh();
+          expect(read.period, isNull);
+          expect(read.error, isNull);
+          expect(read.board!.shipped, isNot(0));
+          await read.refresh();
+          expect(fake.paths, ['$path&period=7d', path, path]);
+        },
+      );
+
+      test('a failed first read leaves the periods on, and recovers', () async {
+        var fail = true;
+        final fake = FakeSwarm()
+          ..routes[path] = (_) => fail
+              ? throw const SuperTabFailure('OFFLINE', 'No computer answered.')
+              : period('7d');
+        final read = reader(fake);
+        await read.refresh();
+        expect(read.period, '7d');
+        expect(read.error, 'No computer answered.');
+        fail = false;
+        await read.refresh();
+        expect(read.period, '7d');
+        expect(read.board!.period, '7d');
+        expect(read.error, isNull);
+      });
+
+      test('an answer for the period left behind is not shown, a refusal '
+          'included', () async {
+        final slow = Completer<Object?>(), refused = Completer<Object?>();
+        final fake = FakeSwarm()
+          ..routes['$path&period=7d'] = ((_) => slow.future)
+          ..routes['$path&period=24h'] = ((_) => refused.future)
+          ..routes['$path&period=30d'] = (_) => period('30d', shipped: 40);
+        final read = reader(fake);
+        final first = read.refresh();
+        final second = read.showPeriod('24h');
+        await read.showPeriod('30d');
+        slow.complete(period('7d', shipped: 1));
+        refused.completeError(older);
+        await first;
+        await second;
+        expect(read.board!.shipped, 40);
+        expect(read.period, '30d', reason: 'a stale refusal changes nothing');
+      });
+
+      test('says the period in words, and no comparison for Last 30d', () {
+        final week = SwarmLeaderboard.fromJson(period('7d'));
+        final score = week.people.first;
+        expect(score.spanName, 'in the last 7 days');
+        expect(score.earlierName, 'the 7 days before');
+        expect(swarmPersonWeek(score).first.$2, contains('in the last 7 days'));
+        expect(swarmPeriodEarlier('24h'), 'the 24 hours before');
+        expect(swarmPeriodEarlier('30d'), isNull);
+        final old = SwarmLeaderboard.fromJson(leaderboardData()).people.first;
+        expect(old.spanName, 'this week');
+      });
+
+      test('says a trend against the time before', () {
+        final score = SwarmLeaderboard.fromJson({
+          ...period('24h'),
+          'people': [
+            {'personId': 'a', 'points': 9, 'rank': 1, 'prevWeekPoints': 4},
+          ],
+        }).people.first;
+        expect(swarmTrend(score), 'up 5 from the 24 hours before');
+      });
     });
 
     test('another week clears the board until its own read lands', () async {
@@ -199,11 +435,13 @@ void main() {
 
     test('an answer for the week left behind is not shown', () async {
       final slow = Completer<Object?>();
+      var reads = 0;
       final fake = FakeSwarm()
-        ..routes[path] = ((_) => slow.future)
+        ..routes[path] = ((_) => reads++ == 0 ? leaderboardData() : slow.future)
         ..routes['$path&week=$lastWeek'] = (_) =>
             leaderboardData(week: lastWeek, shipped: 11);
       final read = reader(fake);
+      await read.refresh();
       final first = read.refresh();
 
       await read.showWeek(lastWeek);
@@ -282,6 +520,98 @@ void main() {
         async.elapse(const Duration(minutes: 10));
         expect(fake.paths, hasLength(2), reason: 'none after it is gone');
       });
+    });
+  });
+
+  group('Brought: the machines a person brought (contributor view, #2444)', () {
+    final now = DateTime.utc(2026, 11, 3, 12);
+    SwarmScore score(Object? brought) => SwarmScore.fromJson({
+      'personId': 'ken',
+      'points': 13,
+      'rank': 1,
+      'shipped': {'count': 1},
+      'unblocked': {'count': 0, 'agentMs': 0},
+      'lent': {'machines': 1, 'agentMs': 31 * 3600000},
+      'streakDays': 0,
+      'details': {'brought': ?brought},
+    });
+
+    test('the week lines keep Lent and never Brought: Brought comes only '
+        'with the details, and the details sheet shows it', () {
+      final lines = swarmPersonWeek(
+        score([
+          {
+            'machineId': 'studio',
+            'machineName': 'Mac Studio',
+            'shipped': 5,
+            'busyHours': 31,
+            'subscriptions': <Object>[],
+          },
+        ]),
+      );
+      expect(lines.map((l) => l.$1), contains('Lent'));
+      expect(lines.map((l) => l.$1), isNot(contains('Mac Studio')));
+      expect(lines.map((l) => l.$1), isNot(contains('Brought')));
+    });
+
+    test("a subscription's week in the desktop's words: used · resets in", () {
+      final resets = now
+          .add(const Duration(days: 3, hours: 2))
+          .millisecondsSinceEpoch;
+      final read = score([
+        {
+          'machineId': 'studio',
+          'machineName': 'Mac Studio',
+          'shipped': 5,
+          'busyHours': 31,
+          'subscriptions': [
+            {'engine': 'claude', 'usedPercent': 38, 'resetsAt': resets},
+            {'engine': 'codex', 'usedPercent': 12, 'resetsAt': null},
+            {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+          ],
+        },
+      ]);
+      expect(swarmBroughtSubscriptions(read.brought!.single, now), [
+        ('Claude', '38% used · resets in 3d'),
+        ('Codex', '12% used'),
+        ('Codex', 'not read yet'),
+      ]);
+    });
+
+    test('names a machine without .local and leaves out one with no name, '
+        'with the details\' lists read beside it', () {
+      final read = SwarmScore.fromJson({
+        'personId': 'ken',
+        'points': 13,
+        'rank': 1,
+        'shipped': {'count': 1},
+        'unblocked': {'count': 0, 'agentMs': 0},
+        'lent': {'machines': 1, 'agentMs': 0},
+        'streakDays': 0,
+        'details': {
+          'shipped': [
+            {'title': 'Ship it', 'prUrl': 'https://example.com/pr/1'},
+          ],
+          'unblocked': <Object>[],
+          'lent': <Object>[],
+          'brought': [
+            {'machineName': 'MACs-Mac-Studio.local', 'shipped': 2},
+            {'machineName': '', 'shipped': 1},
+          ],
+        },
+      });
+      expect(read.brought!.map((m) => m.machineName), ['MACs-Mac-Studio']);
+      expect(read.details!.shipped.single.title, 'Ship it');
+      expect(
+        swarmBroughtSummary(read.brought!.single),
+        '2 shipped · 0 h for others',
+      );
+      expect(swarmBroughtSubscriptions(read.brought!.single, now), isEmpty);
+    });
+
+    test('keeps Lent from a server before Brought', () {
+      final lines = swarmPersonWeek(score(null));
+      expect(lines.map((l) => l.$1), contains('Lent'));
     });
   });
 }

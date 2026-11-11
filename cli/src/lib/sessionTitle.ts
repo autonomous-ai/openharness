@@ -26,6 +26,9 @@ const ENGINE_TITLES: ReadonlySet<string> = new Set([
   'command code', 'devin', 'amp', 'kilo code', 'grok', 'github copilot', 'copilot cli', 'antigravity',
 ])
 
+/** OpenClaw's title line, `openclaw tui - <gateway> - agent <id> - session <key>`: its own, and it names a Gateway. */
+const OPENCLAW_TITLE = /^openclaw tui - /i
+
 /** OpenCode (and Kilo, its fork) put their short name in front: "OC | Greeting". */
 const OPENCODE_PREFIX = /^(?:oc|opencode|kilo)\s+\|\s+/i
 
@@ -47,7 +50,7 @@ export function namingTitle(
     : title.trim().replace(OPENCODE_PREFIX, '').trim()
   if (!cleaned) return null
   const lower = cleaned.toLowerCase()
-  if (ENGINE_TITLES.has(lower)) return null
+  if (ENGINE_TITLES.has(lower) || OPENCLAW_TITLE.test(cleaned)) return null
   if (context.cwd && lower === basename(context.cwd).toLowerCase()) return null
   if (context.defaultName && lower === context.defaultName.toLowerCase()) return null
   return cleaned

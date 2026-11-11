@@ -3,7 +3,7 @@ import { appendFile, mkdtemp, mkdir, readFile, rm, realpath, symlink, writeFile 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { agentProject, canonicalRepository, createAgentProjectReader, type AgentProject } from './agentProject.js'
+import { agentProject, aliasRepository, canonicalRepository, createAgentProjectReader, type AgentProject } from './agentProject.js'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
@@ -258,5 +258,59 @@ describe('owning-machine project metadata', () => {
     expect(calls).toBe(1051)
     finish()
     await Promise.all([first, ...rest])
+  })
+})
+
+describe('the repository an SSH host alias stands for (task #2476)', () => {
+  /** ssh -G's answer for each alias; an unknown name resolves to itself, as ssh does. */
+  const resolver = (hosts: Record<string, string>) => vi.fn(async (alias: string) => hosts[alias] ?? alias)
+
+  it('reads an alias as the host it names, GitHub\'s SSH host as GitHub', async () => {
+    const resolve = resolver({ 'gh-work': 'GitHub.com', 'github.com-work': 'github.com', 'gh-443': 'ssh.github.com', gitserver: 'git.example.com' })
+    expect(await aliasRepository('git@gh-work:Acme/Api.git', resolve)).toBe('github.com/acme/api')
+    expect(await aliasRepository('ssh://git@gh-work/Acme/Api.git', resolve)).toBe('github.com/acme/api')
+    expect(await aliasRepository('git@github.com-work:Acme/Api.git', resolve)).toBe('github.com/acme/api')
+    expect(await aliasRepository('git@gh-443:Acme/Api.git', resolve)).toBe('github.com/acme/api')
+    expect(await aliasRepository('ssh://git@ssh.github.com:443/Acme/Api.git', resolve)).toBe('github.com/acme/api')
+    expect(await aliasRepository('git@gitserver:Team/Api.git', resolve)).toBe('git.example.com/Team/Api')
+  })
+
+  it('is nothing when the remote names its real host, or no host at all', async () => {
+    const resolve = resolver({ 'gh-work': 'github.com' })
+    for (const raw of [null, '', 'git@github.com:Acme/Api.git', 'https://github.com/acme/api', 'https://gh-work/acme/api',
+      'git://gh-work/acme/api', 'git@unknown-alias:acme/api.git', '/srv/git/api.git', 'file:///srv/git/api.git']) {
+      expect(await aliasRepository(raw, resolve), String(raw)).toBeNull()
+    }
+    // Only ssh reads ~/.ssh/config: an https or git:// host is never asked, and github.com never is.
+    expect(resolve.mock.calls.map(([alias]) => alias)).toStrictEqual(['unknown-alias'])
+  })
+
+  it('never asks ssh about a name it could read as an option, and survives ssh failing', async () => {
+    const resolve = vi.fn(async () => { throw new Error('ssh missing') })
+    expect(await aliasRepository('ssh://git@-oProxyCommand=x/acme/api', resolve)).toBeNull()
+    expect(resolve).not.toHaveBeenCalled()
+    expect(await aliasRepository('git@gh-work:acme/api.git', resolve)).toBeNull()
+  })
+
+  it('reports it beside the remote for a checkout cloned through an alias', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-v2-alias-')); roots.push(root)
+    // An ssh on PATH that answers -G as a configuration with `Host harness-test-gh-work` / `HostName github.com` would.
+    const bin = join(root, 'bin'); await mkdir(bin)
+    await writeFile(join(bin, 'ssh'), '#!/bin/sh\n[ "$2" = harness-test-gh-work ] && echo "hostname github.com" || echo "hostname $2"\n', { mode: 0o755 })
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+    try {
+      const repo = (name: string, origin: string) => {
+        const path = join(root, name)
+        execFileSync('git', ['init', '-q', '-b', 'main', path])
+        execFileSync('git', ['-C', path, 'remote', 'add', 'origin', origin])
+        return path
+      }
+      expect(await agentProject(repo('work', 'git@harness-test-gh-work:Acme/Api.git'), 100))
+        .toMatchObject({ remote: 'harness-test-gh-work/Acme/Api', repository: 'github.com/acme/api' })
+      // An alias no configuration names resolves to itself: the report keeps the remote alone.
+      const plain = await agentProject(repo('plain', 'git@harness-test-no-such-alias:Acme/Api.git'), 100)
+      expect(plain).toMatchObject({ remote: 'harness-test-no-such-alias/Acme/Api' })
+      expect(plain).not.toHaveProperty('repository')
+    } finally { vi.unstubAllEnvs() }
   })
 })

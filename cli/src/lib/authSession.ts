@@ -15,9 +15,6 @@ export interface AuthSession {
    *  billing's Autonomous service does not take; grid does, through the Harness backend —
    *  autonomous-grid ADR 0046); absent or `sso` — the browser. */
   method?: 'sso' | 'qr'
-  /** `team`: a Harness Team sign-in (cli/src/team/), which runs this computer's own daemon and its Swarm agents and
-   *  reaches none of the account's other computers. Absent: a computer's ordinary sign-in. */
-  kind?: 'team'
   /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
    *  A refresh has to name the same one. Absent is the backend's configured client. */
   clientId?: SsoClientId
@@ -76,7 +73,6 @@ function parse(raw: string): AuthSession | null {
       computerId: value.computerId,
       ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
       ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
-      ...(value.kind === 'team' ? { kind: 'team' as const } : {}),
       ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
@@ -89,8 +85,8 @@ function parse(raw: string): AuthSession | null {
  *  made (ms) — the device key log lets a sign-in start its file over only shortly after it was made. */
 export const newSignInEpoch = (now = Date.now()): string => `${randomBytes(16).toString('hex')}@${now}`
 
-/** How a `signInEpoch` given to a session from before epochs existed starts: nobody saw that sign-in
- *  being made here, so the device key log may take its file over for it but never starts one over. */
+/** How a `signInEpoch` given to a session from before epochs existed starts: nobody saw that sign-in made by hand here, so
+ *  the device key log may take its file over for it but never starts one over. */
 export const ADOPTED_SIGN_IN = 'adopted:'
 
 /** Give a session from before epochs existed one (`ADOPTED_SIGN_IN`), under the refresh lock so a
@@ -212,6 +208,24 @@ export function updateAuthSession(change: (latest: AuthSession) => AuthSession |
   })
 }
 
+/**
+ * A machine id the backend named for the sign-in [startedUnder] (its `signInEpoch` when the lookup began), merged into the
+ * newest session only if that is still the same sign-in. A lookup can outlive a sign-out and a new sign-in, and its answer is
+ * the old account's machine: dropped, as a later lookup finds the new one. A refresh keeps the epoch, so it keeps the answer. A
+ * session from before epochs may only have been given one meanwhile (adopted): still that sign-in. The newest session; null
+ * when there is none, or it is marked signed out.
+ */
+export function recordMachineId(machineId: string, startedUnder: string | undefined): Promise<AuthSession | null> {
+  return updateAuthSession((latest) => !sameSignIn(latest, startedUnder) || latest.machineId === machineId
+    ? null : { ...latest, machineId, updatedAt: Date.now() })
+}
+
+/** Whether [latest] is still the sign-in a lookup started under ([recordMachineId]). */
+export function sameSignIn(latest: AuthSession, startedUnder: string | undefined): boolean {
+  if (latest.signInEpoch === startedUnder) return true
+  return startedUnder === undefined && signInOf(latest.signInEpoch)?.adopted === true
+}
+
 /** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
  *  and each ask must not be a refresh request. */
 const RETRY_FIRST_MS = 60_000
@@ -303,9 +317,9 @@ type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number 
 export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: hostname().slice(0, 80) })
 
 /** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
- *  session already (`hnr_`, `htr_`) renews as one, and a QR or team sign-in is a session of its own kind. */
+ *  session already (`hnr_`) renews as one, and a QR sign-in is a session of its own kind. */
 export function asksForHarnessSession(session: AuthSession): boolean {
-  return session.kind !== 'team' && session.method !== 'qr' && !/^(hnr|htr)_/.test(session.refreshToken ?? '')
+  return session.method !== 'qr' && !session.refreshToken?.startsWith('hnr_')
 }
 
 /**
@@ -453,7 +467,7 @@ export class AuthSessionManager {
     })
   }
 
-  async updateMachineId(machineId: string): Promise<void> {
-    await updateAuthSession((current) => current.machineId === machineId ? null : { ...current, machineId, updatedAt: Date.now() })
+  async updateMachineId(machineId: string, startedUnder: string | undefined): Promise<void> {
+    await recordMachineId(machineId, startedUnder)
   }
 }

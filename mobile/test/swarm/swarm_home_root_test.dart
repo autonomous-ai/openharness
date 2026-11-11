@@ -29,7 +29,8 @@ void main() {
       derived: derived,
       head: headData(
         projects: [
-          for (var i = 0; i < 10; i++)
+          // One line each since 2026-11-03: ten fit on the phone now.
+          for (var i = 0; i < 20; i++)
             {
               'id': 'project-$i',
               'name': 'Project $i',
@@ -107,9 +108,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  // Home's list, not its tiles, which scroll sideways.
   Finder homeList() => find.descendant(
     of: find.byType(SwarmPage),
-    matching: find.byType(Scrollable),
+    matching: find.byWidgetPredicate(
+      (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+    ),
   );
 
   double offset(WidgetTester tester) =>

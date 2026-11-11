@@ -83,6 +83,29 @@ it('uses the real service wrapper and process runner by default without connecti
   handle.stop()
 })
 
+// The host posts an agent's answer when its turn ends: the core tells this process each live end, which names the turn by its
+// prompt, and the answer's text is asked of the core, which has it as the turn was said (core/turns/ends.ts).
+it('hears each turn end the core tells it, and asks the core for the answer of the turn it names', async () => {
+  const t = setup()
+  const ends: unknown[] = []
+  t.api().turns.onEnd(end => { ends.push(end) })
+  const end = { agentId: 'one', sessionId: 's1', aborted: false, prompt: 'a'.repeat(32), turnId: 3 }
+  t.wire().onEvent!({ kind: 'turn_end', event: end })
+  expect(ends).toEqual([end])
+  const query = vi.fn(async (name: string, payload: Record<string, unknown>) => name === 'turn_answer' ? { answer: payload.sessionId === 's1' ? 'Shipped.' : null } : {})
+  t.wire().onConnected!({ query })
+  expect(await t.api().turns.answerOf(end)).toBe('Shipped.')
+  expect(query).toHaveBeenCalledWith('turn_answer', { sessionId: 's1', prompt: end.prompt, turnId: 3 })
+  expect(await t.api().turns.answerOf({ ...end, sessionId: 's2' })).toBeNull()
+  t.process.stop()
+})
+
+it('has no answer to give while the core is away', async () => {
+  const t = setup()
+  await expect(t.api().turns.answerOf({ sessionId: 's1', prompt: 'a'.repeat(32), turnId: 3 })).rejects.toThrow('Core disconnected')
+  t.process.stop()
+})
+
 // Stability roadmap 2.4: the server's word that work waits reaches the host in this process as the core's notice.
 it('hands the account\'s notices the core tells it to the host, and nothing else', () => {
   const t = setup()

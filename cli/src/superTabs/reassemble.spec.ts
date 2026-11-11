@@ -34,10 +34,11 @@ describe('the old Swarm state, rebuilt from parts', () => {
 
   it('counts a group a Lead summarized in its project progress, and carries the request it last made', () => {
     const first = readFixture<FirstLoad>('parts-lead')
-    first.progress[0].data = { since: 5, summarizedFloor: 213800, summarized: { [FIXTURE.workGroup]: 214020 },
+    first.progress![0]!.data = { since: 5, summarizedFloor: 213800, summarized: { [FIXTURE.workGroup]: 214020 },
       requestedFloor: 213700, requested: { [FIXTURE.workGroup]: 214030, [FIXTURE.doneGroup]: 213990 }, requestedAt: 6, requestMessageId: 'r1' }
+    // An older server's request message id is no longer read.
     expect(list(reassemble(storeOf(first)).projects)[0].progress)
-      .toEqual({ since: 5, dirtyRevision: 214033, summarizedRevision: 214020, requestedRevision: 214030, requestedAt: 6, requestMessageId: 'r1' })
+      .toEqual({ since: 5, dirtyRevision: 214033, summarizedRevision: 214020, requestedRevision: 214030, requestedAt: 6 })
   })
 
   it('shows a usage limit while it lasts', async () => {
@@ -46,25 +47,35 @@ describe('the old Swarm state, rebuilt from parts', () => {
     expect(list(reassemble(storeOf(first)).agents)[1].limitedUntil).toBe('2026-10-26T12:00:00.000Z')
   })
 
-  it('shows the role on Custom skills, none when its kind has no role there, and no role elsewhere', () => {
+  // The custom role sets go with backend S18: an older backend's derived role is shown on no agent, whatever its project's skills.
+  it('shows no role on any agent, whatever its project\'s skills', () => {
     const first = readFixture<FirstLoad>('parts-lead')
     const project = list((first.head!.data as Json).projects)[0]
-    project.skillMode = 'custom'
     project.skillSet = 'custom'
-    first.derived.agents![FIXTURE.leadId].roleId = 'lead-role'
-    expect(list(reassemble(storeOf(first)).agents).map(a => a.roleId)).toEqual(['lead-role', null])
-    const plain = readFixture<FirstLoad>('parts-lead')
-    ;(plain.agents[0].data as Json).roleId = 'left-from-custom'
-    expect(list(reassemble(storeOf(plain)).agents)[0]).not.toHaveProperty('roleId')
+    Object.assign(first.derived.agents![FIXTURE.leadId]!, { roleId: 'lead-role' })
+    for (const agent of list(reassemble(storeOf(first)).agents)) expect(agent).not.toHaveProperty('roleId')
   })
 
-  it('gives a person their waiting mentions, and a Swarm from before projects no progress', () => {
+  // Backend S11 (#3827): the count of a person's waiting tags is gone (a message still names whom it tags), and nothing
+  // here read it; an older backend's is left out.
+  it('gives no count of waiting tags, and a Swarm from before projects no progress', () => {
     const first = readFixture<FirstLoad>('parts-builder')
-    first.derived.mentionsWaiting = 2
+    Object.assign(first.derived, { mentionsWaiting: 2 })
     delete (first.head!.data as Json).projects
     first.progress = [] as PartEnvelope[]
     const state = reassemble(storeOf(first))
-    expect(state.mentionsWaiting).toBe(2)
+    expect(state).not.toHaveProperty('mentionsWaiting')
     expect(state).not.toHaveProperty('projects')
+  })
+
+  // Task #3384: the status read shows each project's pulse (asks the PM owes, who works), on the project, and none from an
+  // older server.
+  it('lays each project\'s pulse on that project, and none when the read sends none', () => {
+    const first = readFixture<FirstLoad>('parts-lead')
+    const projects = (state: Json) => list(state.projects)
+    expect(projects(reassemble(storeOf(first)))[0]).not.toHaveProperty('pulse')
+    const pulse = { pmId: 'pm', asks: { count: 1, oldestAt: 1, personId: 'p', list: [] } }
+    first.derived.pulse = { '5000000000000000000000aa': pulse }
+    expect(projects(reassemble(storeOf(first)))[0]!.pulse).toEqual(pulse)
   })
 })

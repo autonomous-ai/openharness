@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
+import { agentTmpRoot } from './agentTmp.js'
 import { tempRoots, within, withinRoots } from './pathContainment.js'
 
 let root: string
@@ -52,4 +53,10 @@ it('honours the folder-browser opt-out', async () => {
 it('names both temp directories, because macOS has a private one and agents still write /tmp', () => {
   expect(tempRoots()).toContain(tmpdir())
   expect(tempRoots()).toContain('/tmp')
+})
+
+it('adds the owner\'s agents\' private temporary folder where they have one, as the daemon\'s own tmpdir is not it', () => {
+  vi.mocked(agentTmpRoot).mockReturnValueOnce('/data/agent-tmp')
+  expect(tempRoots()).toEqual([tmpdir(), '/tmp', '/data/agent-tmp'])
+  expect(tempRoots()).toEqual([tmpdir(), '/tmp'])
 })

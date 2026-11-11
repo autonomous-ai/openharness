@@ -5,24 +5,34 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_projects.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the PR's pictures there.
 final _shots = Platform.environment['PERSONAL_PROJECTS_SHOTS'];
 
-/// A pane's agent, in a checkout of [remote] (none for a folder).
-Agent _agent(String id, {String? remote, String cwd = '/work/x'}) => Agent(
+/// A pane's agent, in a checkout of [remote] (none for a folder), which
+/// stands for [repository] when its host is an SSH alias.
+Agent _agent(
+  String id, {
+  String? remote,
+  String? repository,
+  String cwd = '/work/x',
+}) => Agent(
   id: id,
   name: 'Agent $id',
   engine: 'codex',
@@ -32,6 +42,7 @@ Agent _agent(String id, {String? remote, String cwd = '/work/x'}) => Agent(
     cwd: cwd,
     root: remote == null ? null : cwd,
     remote: remote,
+    repository: repository,
   ),
 );
 
@@ -60,8 +71,13 @@ TerminalPane _pane(String machineId, String agentId) =>
     TerminalPane(id: _paneIds++, machineId: machineId, agentId: agentId);
 
 /// A desk tab of the person's, holding [panes] in this order.
-Swarm _tab(AppNotifier app, String id, List<TerminalPane> panes) {
-  final tab = Swarm(id: id, name: id)..panes.addAll(panes);
+Swarm _tab(
+  AppNotifier app,
+  String id,
+  List<TerminalPane> panes, {
+  String? name,
+}) {
+  final tab = Swarm(id: id, name: name ?? id)..panes.addAll(panes);
   app.swarms.add(tab);
   return tab;
 }
@@ -81,6 +97,10 @@ Future<SuperTabController> _personal(
   SuperTabLaunchFixture f, {
   List<String> people = const ['owner'],
 }) async {
+  // These panes are this computer's: Personal's sync of other machines has no part here.
+  for (final state in f.app.machineStates.values) {
+    state.localOnly = true;
+  }
   f.connection.server.state
     ..['name'] = 'Personal'
     ..['ownerId'] = 'owner'
@@ -183,6 +203,69 @@ void main() {
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
   }
 
+  for (final brightness in Brightness.values) {
+    testWidgets('pictures of a Personal project leaving the list once its '
+        'panes close (task #3042), in ${brightness.name}', (tester) async {
+      if (_shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(2560, 1440);
+      addTearDown(tester.view.reset);
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      c.select(
+        c.snapshot!.projects
+            .firstWhere((p) => p.name == 'web')
+            .leadConversationId,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: PaneGrid(notifier: f.app, swarmMode: true),
+                onAddAgent: (_) {},
+                onNewProject: () {},
+                onNewSwarm: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(
+        tester,
+        _shots,
+        'personal-panes-open-${brightness.name}',
+      );
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.notifyListeners();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(
+        tester,
+        _shots,
+        'personal-panes-closed-${brightness.name}',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  }
+
   group('a repo is one string on every computer', () {
     test('ssh, https, case, user, port and .git are the same repo', () {
       const forms = [
@@ -197,14 +280,54 @@ void main() {
       }
     });
 
+    test('the daemon\'s own form, host/owner/repo, is that repo too', () {
+      // What every agent reports as its project's remote (cli agentProject.ts
+      // canonicalRepository): no scheme, no user, no .git.
+      for (final form in [
+        'github.com/acme/api',
+        'GitHub.com/Acme/Api',
+        'github.com/acme/api/',
+      ]) {
+        expect(normalizedRemote(form), 'github.com/acme/api', reason: form);
+      }
+      expect(
+        normalizedRemote('example.com:2222/Org/App'),
+        'example.com/org/app',
+      );
+      expect(
+        normalizedRemote('gitlab.com/team/sub/api'),
+        'gitlab.com/team/sub/api',
+      );
+    });
+
+    test('a remote through an SSH host alias is a repo too (task #2476)', () {
+      // A second GitHub account's clone (`git@gh-work:acme/api.git`, #2525):
+      // the daemon reports its alias as the host, with no dot in it.
+      expect(normalizedRemote('gh-work/acme/api'), 'gh-work/acme/api');
+      expect(normalizedRemote('GH-Work/Acme/Api'), 'gh-work/acme/api');
+      expect(normalizedRemote('gitserver:2222/team/api'), 'gitserver/team/api');
+      // `Host github.com-work` is the other common way to name one.
+      expect(
+        normalizedRemote('github.com-work/acme/api'),
+        'github.com-work/acme/api',
+      );
+      expect(normalizedRemote('git@gh-work:Acme/Api.git'), 'gh-work/acme/api');
+    });
+
     test('a folder or nothing is no repo', () {
       for (final form in [
         null,
         '',
         '/srv/git/api.git',
+        '/srv/api',
         './api',
+        '../api',
+        '.hidden/api',
         'file:///srv/git/api.git',
         r'C:\repos\api',
+        r'C:\api',
+        'C:/repos/api',
+        'c/api',
       ]) {
         expect(normalizedRemote(form), isNull, reason: form);
       }
@@ -216,7 +339,6 @@ void main() {
       expect(id, isNot(contains('acme')));
       expect(id, personalProjectOperation('github.com/acme/api'));
       expect(id, isNot(personalProjectOperation('github.com/other/api')));
-      expect(personalProjectOperation(kScratchRepo), 'personal-scratch');
     });
 
     test('two repos of one name have long names that tell them apart', () {
@@ -227,21 +349,20 @@ void main() {
   });
 
   group('the person\'s panes, by repo', () {
-    test('every pane joins its repo whatever tab it is in, in tab order', () {
-      final f = SuperTabLaunchFixture();
-      final p = _desk(f);
-      final panes = personalPanes(f.app);
-      expect([for (final e in panes) e.pane], [p.api, p.folder, p.web, p.api2]);
-      expect(
-        [for (final e in panes) e.repo],
-        [
-          'github.com/acme/api',
-          kScratchRepo,
-          'github.com/acme/web',
-          'github.com/acme/api',
-        ],
-      );
-    });
+    test(
+      'every pane in a repo joins it whatever tab it is in, in tab order',
+      () {
+        final f = SuperTabLaunchFixture();
+        final p = _desk(f);
+        final panes = personalPanes(f.app);
+        // The folder has no repo: it is in no project.
+        expect([for (final e in panes) e.pane], [p.api, p.web, p.api2]);
+        expect(
+          [for (final e in panes) e.repo],
+          ['github.com/acme/api', 'github.com/acme/web', 'github.com/acme/api'],
+        );
+      },
+    );
 
     test('a pane twice in the tabs counts once, where it is first', () {
       final f = SuperTabLaunchFixture();
@@ -267,7 +388,9 @@ void main() {
         _machine(f.app, 'team', sessionKind: 'team').agents = [
           _agent('t1', remote: 'git@github.com:acme/team.git'),
         ];
-        f.app.machineStates['m']!.agents = [_agent('n1')];
+        f.app.machineStates['m']!.agents = [
+          _agent('n1', remote: 'git@github.com:acme/api.git'),
+        ];
         _tab(f.app, 'mixed', [
           _pane('kims', 'k1'),
           _pane('team', 't1'),
@@ -279,7 +402,9 @@ void main() {
 
     test('a Swarm tab\'s panes are not the person\'s tabs', () {
       final f = SuperTabLaunchFixture();
-      f.app.machineStates['m']!.agents = [_agent('n1')];
+      f.app.machineStates['m']!.agents = [
+        _agent('n1', remote: 'git@github.com:acme/api.git'),
+      ];
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
       f.app.activeSwarm.panes.add(_pane('m', 'n1'));
       expect(personalPanes(f.app), isEmpty);
@@ -287,53 +412,76 @@ void main() {
   });
 
   group('Personal\'s projects', () {
-    test(
-      'each repo, and # scratch, is made once as a private project',
-      () async {
-        final f = SuperTabLaunchFixture();
-        _desk(f);
-        final c = await _personal(f);
-        await PersonalProjects.of(f.app).sync(c);
-        final creates = _commands(f);
-        expect(
-          [for (final p in creates) p['operationId']],
-          [
-            personalProjectOperation('github.com/acme/api'),
-            'personal-scratch',
-            personalProjectOperation('github.com/acme/web'),
-          ],
-        );
-        expect(
-          [for (final p in creates) p['command']['name']],
-          ['api', 'scratch', 'web'],
-        );
-        expect(
-          creates.every((p) => p['command']['visibility'] == 'private'),
-          isTrue,
-        );
-        final names = [for (final p in c.snapshot!.projects) p.name];
-        expect(names, containsAll(['api', 'scratch', 'web']));
+    test('each repo is made once as a private project, and a pane with no repo makes none', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final creates = _commands(f);
+      expect(
+        [for (final p in creates) p['operationId']],
+        [
+          personalProjectOperation('github.com/acme/api'),
+          personalProjectOperation('github.com/acme/web'),
+        ],
+      );
+      expect([for (final p in creates) p['command']['name']], ['api', 'web']);
+      expect(
+        creates.every((p) => p['command']['visibility'] == 'private'),
+        isTrue,
+      );
+      final names = [for (final p in c.snapshot!.projects) p.name];
+      expect(names, containsAll(['api', 'web']));
+      expect(names, isNot(contains('one')));
 
-        // Again: nothing.
-        await PersonalProjects.of(f.app).sync(c);
-        expect(_commands(f), hasLength(3));
+      // Again: nothing.
+      await PersonalProjects.of(f.app).sync(c);
+      expect(_commands(f), hasLength(2));
 
-        // The app restarted on the same computer: what it kept, no request.
-        final restarted = SuperTabLaunchFixture();
-        restarted.store.values.addAll(f.store.values);
-        restarted.connection.server.state
-          ..clear()
-          ..addAll(f.connection.server.state);
-        _desk(restarted);
-        final rc = await _personal(restarted);
-        await PersonalProjects.of(restarted.app).sync(rc);
-        expect(_commands(restarted), isEmpty);
-        expect(
-          PersonalProjects.of(restarted.app).knownForTest('owner', tabId),
-          PersonalProjects.of(f.app).knownForTest('owner', tabId),
-        );
-      },
-    );
+      // The app restarted on the same computer: what it kept, no request.
+      final restarted = SuperTabLaunchFixture();
+      restarted.store.values.addAll(f.store.values);
+      restarted.connection.server.state
+        ..clear()
+        ..addAll(f.connection.server.state);
+      _desk(restarted);
+      final rc = await _personal(restarted);
+      await PersonalProjects.of(restarted.app).sync(rc);
+      expect(_commands(restarted), isEmpty);
+      expect(
+        PersonalProjects.of(restarted.app).knownForTest('owner', tabId),
+        PersonalProjects.of(f.app).knownForTest('owner', tabId),
+      );
+    });
+
+    test('panes whose agents report the daemon\'s own remote form get repo projects', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.machineStates['m']!.agents = [
+        _agent('n1', remote: 'github.com/acme/api', cwd: '/w/api'),
+        _agent('n2', remote: 'github.com/acme/web', cwd: '/w/web'),
+      ];
+      _machine(f.app, 'laptop').agents = [
+        _agent('n1', remote: 'github.com/acme/api', cwd: '/x/api-copy'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'n1'), _pane('m', 'n2')]);
+      _tab(f.app, 'two', [_pane('laptop', 'n1')]);
+      expect(
+        [for (final e in personalPanes(f.app)) e.repo],
+        ['github.com/acme/api', 'github.com/acme/web', 'github.com/acme/api'],
+      );
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      expect(
+        [for (final p in _commands(f)) p['operationId']],
+        [
+          personalProjectOperation('github.com/acme/api'),
+          personalProjectOperation('github.com/acme/web'),
+        ],
+      );
+      final names = [for (final p in c.snapshot!.projects) p.name];
+      expect(names, containsAll(['api', 'web']));
+      expect(names, isNot(contains('scratch')));
+    });
 
     test('nothing is sent of a pane but its project\'s name', () async {
       final f = SuperTabLaunchFixture();
@@ -519,6 +667,28 @@ void main() {
       expect(PersonalProjects.of(f.app).knownForTest('owner', tabId), isEmpty);
     });
 
+    test('a refused rename of two repos of one name is logged by its code, not the repo', () async {
+      final lines = <String>[];
+      final previous = appLog;
+      appLog = _Recorder(lines);
+      addTearDown(() => appLog = previous);
+      final f = SuperTabLaunchFixture();
+      f.app.machineStates['m']!.agents = [
+        _agent('n1', remote: 'git@github.com:acme/api.git'),
+        _agent('n2', remote: 'git@github.com:kim/api.git'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'n1'), _pane('m', 'n2')]);
+      final c = await _personal(f);
+      f.connection.server.unknownCommand = (command) =>
+          command['type'] == 'project.rename';
+      await PersonalProjects.of(f.app).sync(c);
+      expect(lines.where((l) => l.contains('VALIDATION_ERROR')), isNotEmpty);
+      for (final line in lines) {
+        expect(line, isNot(contains('acme')), reason: line);
+        expect(line, isNot(contains('kim')), reason: line);
+      }
+    });
+
     test('two repos of one name become two projects told apart', () async {
       final f = SuperTabLaunchFixture();
       f.app.machineStates['m']!.agents = [
@@ -573,6 +743,39 @@ void main() {
       expect(project['name'], 'Backend');
     });
 
+    test('an agent of Your Team works in its own pane\'s repo: where its tasks are read', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      (f.connection.server.state['agents'] ??= <dynamic>[]).addAll([
+        for (final (machine, harness) in [('laptop', 'n1'), ('m', 'n2')])
+          {
+            'id': 'agent-$harness',
+            'projectId': 'lead',
+            'name': harness,
+            'displayName': harness,
+            'machineId': machine,
+            'harnessId': harness,
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+            'kind': 'regular',
+            'myAgent': true,
+          },
+      ]);
+      await c.refresh();
+      final projects = PersonalProjects.of(f.app);
+      SuperTabAgent agent(String id) => c.snapshot!.agent(id)!;
+      expect(
+        projects.agentRepository(c, agent('agent-n1')),
+        'github.com/acme/api',
+      );
+      // Notes, in a folder: no repo, no tasks.
+      expect(projects.agentRepository(c, agent('agent-n2')), isNull);
+      // Never outside the person's own Personal Swarm.
+      c.accessRevoked = true;
+      expect(projects.agentRepository(c, agent('agent-n1')), isNull);
+    });
+
     test('a pane whose repo changes moves to that repo\'s project', () async {
       final f = SuperTabLaunchFixture();
       final p = _desk(f);
@@ -582,7 +785,7 @@ void main() {
           .firstWhere((p) => p.name == name)
           .leadConversationId;
       final projects = PersonalProjects.of(f.app);
-      expect(projects.panesFor(c, lead('scratch')), [p.folder]);
+      expect(projects.panesFor(c, lead('web')), [p.web]);
 
       // The folder becomes a checkout of the web app.
       f.app.machineStates['m']!.agents = [
@@ -591,7 +794,6 @@ void main() {
               ? _agent('n2', remote: 'git@github.com:acme/web.git')
               : a,
       ];
-      expect(projects.panesFor(c, lead('scratch')), isEmpty);
       expect(projects.panesFor(c, lead('web')), [p.folder, p.web]);
     });
 
@@ -610,91 +812,397 @@ void main() {
       f.app.swarms.removeWhere((s) => s.id == 'one');
       expect(PersonalProjects.of(f.app).panesFor(c, api), [p.api2]);
       await PersonalProjects.of(f.app).sync(c);
-      expect(_commands(f), hasLength(3));
+      expect(_commands(f), hasLength(2));
     });
   });
 
-  group('[term]', () {
-    testWidgets(
-      'shows the very panes the tabs hold, and the tabs stay as they are',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(1280, 800));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        final f = SuperTabLaunchFixture();
-        final p = _desk(f);
-        p.api
-          ..composerVisible = true
-          ..watchOnly = false;
-        late SuperTabController c;
-        c = await _personal(f);
-        await PersonalProjects.of(f.app).sync(c);
-        final one = f.app.swarms.firstWhere((s) => s.id == 'one');
-        final two = f.app.swarms.firstWhere((s) => s.id == 'two');
-        final before = (
-          one: [...one.panes],
-          two: [...two.panes],
-          closed: f.app.closedHistory.length,
+  group('panes with no repo, and repos through an SSH alias', () {
+    test('panes with a repo join the repo\'s project, whatever tab; a folder joins none', () {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final keys = {for (final e in personalPanes(f.app)) e.pane: e.repo};
+      expect(keys[p.api], 'github.com/acme/api');
+      expect(keys[p.api2], 'github.com/acme/api');
+      expect(keys[p.web], 'github.com/acme/web');
+      expect(keys, isNot(contains(p.folder)));
+    });
+
+    test('a pane on an SSH alias clone joins its repo (task #2476)', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.machineStates['m']!.agents = [
+        _agent('a1', remote: 'gh-work/acme/api', cwd: '/w/api'),
+        _agent('f1', cwd: '/w/notes'),
+      ];
+      _machine(f.app, 'laptop').agents = [
+        _agent('a2', remote: 'gh-work/acme/api', cwd: '/x/api'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'a1'), _pane('m', 'f1')]);
+      _tab(f.app, 'two', [_pane('laptop', 'a2')]);
+      expect(
+        [for (final e in personalPanes(f.app)) e.repo],
+        ['gh-work/acme/api', 'gh-work/acme/api'],
+      );
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      expect([for (final p in _commands(f)) p['command']['name']], ['api']);
+      final api = c.snapshot!.projects
+          .firstWhere((p) => p.name == 'api')
+          .leadConversationId;
+      // Both panes, in two tabs on two computers, are the one project's.
+      expect(
+        [
+          for (final p in PersonalProjects.of(f.app).panesFor(c, api))
+            p.agentId,
+        ],
+        ['a1', 'a2'],
+      );
+    });
+
+    test('the repo an alias stands for is the one project on every computer (task #2476)', () async {
+      final f = SuperTabLaunchFixture();
+      // This Mac cloned it through `Host gh-work`; the laptop straight from GitHub.
+      f.app.machineStates['m']!.agents = [
+        _agent(
+          'a1',
+          remote: 'gh-work/acme/api',
+          repository: 'github.com/acme/api',
+          cwd: '/w/api',
+        ),
+        // A repository that is no remote is not believed: the remote stands.
+        _agent('a3', remote: 'gh-work/acme/web', repository: '/srv/web'),
+      ];
+      _machine(f.app, 'laptop').agents = [
+        _agent('a2', remote: 'github.com/acme/api', cwd: '/x/api'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'a1'), _pane('m', 'a3')]);
+      _tab(f.app, 'two', [_pane('laptop', 'a2')]);
+      expect(
+        [for (final e in personalPanes(f.app)) e.repo],
+        ['github.com/acme/api', 'gh-work/acme/web', 'github.com/acme/api'],
+      );
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      expect(
+        [for (final p in _commands(f)) p['operationId']],
+        [
+          personalProjectOperation('github.com/acme/api'),
+          personalProjectOperation('gh-work/acme/web'),
+        ],
+      );
+    });
+
+    test('the daemon\'s repository is read with the project', () {
+      final project = AgentProject.fromJson({
+        'name': 'api',
+        'cwd': '/w/api',
+        'root': '/w/api',
+        'remote': 'gh-work/acme/api',
+        'repository': 'github.com/acme/api',
+      })!;
+      expect(project.repository, 'github.com/acme/api');
+      expect(
+        project,
+        isNot(
+          AgentProject.fromJson({
+            'name': 'api',
+            'cwd': '/w/api',
+            'root': '/w/api',
+            'remote': 'gh-work/acme/api',
+          }),
+        ),
+      );
+      // An older daemon sends none.
+      expect(
+        AgentProject.fromJson({'name': 'x', 'cwd': '/x'})!.repository,
+        isNull,
+      );
+    });
+  });
+
+  group('the empty chat of a project with panes (task #2376)', () {
+    Future<void> show(WidgetTester tester, SuperTabLaunchFixture f) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: const Text('Native terminals'),
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+    }
+
+    Future<void> close(
+      WidgetTester tester,
+      SuperTabLaunchFixture f,
+      SuperTabController c,
+    ) async {
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    }
+
+    testWidgets('says how many panes the project has, and opens them', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final code = c.snapshot!.projects.firstWhere((p) => p.name == 'api');
+      c.select(code.leadConversationId);
+      await show(tester, f);
+      expect(find.text('2 panes in this project'), findsOneWidget);
+      // An empty chat says nothing (rule 7, #4465).
+      expect(find.textContaining('Discuss the plan'), findsNothing);
+      await tester.tap(find.text('Show panes'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(c.groupTerminalsOpen(code.leadConversationId), isTrue);
+      final swarm = f.app.swarms.firstWhere((s) => s.superTabId == tabId);
+      expect(swarm.panes, [p.api, p.api2]);
+      await close(tester, f, c);
+    });
+
+    testWidgets('one pane is one pane', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      c.select(
+        c.snapshot!.projects
+            .firstWhere((p) => p.name == 'web')
+            .leadConversationId,
+      );
+      await show(tester, f);
+      expect(find.text('1 pane in this project'), findsOneWidget);
+      await close(tester, f, c);
+    });
+
+    testWidgets('a project with no panes keeps today\'s empty chat', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      // The Personal Swarm's first project holds none of the person's panes.
+      final first = c.snapshot!.projects.firstWhere(
+        (p) => p.name == 'Pilot' || p.name == 'Personal',
+      );
+      c.select(first.leadConversationId);
+      await show(tester, f);
+      expect(find.textContaining('panes in this project'), findsNothing);
+      expect(find.text('Show panes'), findsNothing);
+      // An empty chat says nothing (rule 7, #4465).
+      expect(find.textContaining('Discuss the plan'), findsNothing);
+      await close(tester, f, c);
+    });
+  });
+
+  // Huy, 11-05 (task #3042): every pane of a repo closed, its project
+  // leaves the list; its chat stays; a pane of it opening brings it back.
+  group('a project with no panes leaves the list', () {
+    SuperTabProject named(SuperTabController c, String name) =>
+        c.snapshot!.projects.firstWhere((p) => p.name == name);
+
+    List<Map<String, dynamic>> removals(SuperTabLaunchFixture f) => [
+      for (final post in f.connection.server.posts)
+        if ((post['command'] as Map?)?['type'] case final String type
+            when type.contains('delete') || type.contains('archive'))
+          Map<String, dynamic>.from(post),
+    ];
+
+    test('closing every pane of a repo hides its project, and a pane of it '
+        'opening shows it again with its chat', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api'), web = named(c, 'web');
+      expect(projects.hidden(c, api.id), isFalse);
+
+      final one = f.app.swarms.firstWhere((s) => s.id == 'one');
+      final two = f.app.swarms.firstWhere((s) => s.id == 'two');
+      one.panes.remove(p.api);
+      // One of its panes is still open, on the laptop.
+      expect(projects.hidden(c, api.id), isFalse);
+      two.panes.remove(p.api2);
+      expect(projects.hidden(c, api.id), isTrue);
+      expect(projects.hidden(c, web.id), isFalse);
+
+      // Its chat is kept: nothing was deleted or archived on the server.
+      expect(removals(f), isEmpty);
+      expect(c.snapshot!.conversation(api.leadConversationId), isNotNull);
+
+      two.panes.add(p.api2);
+      expect(projects.hidden(c, api.id), isFalse);
+      expect(projects.panesFor(c, api.leadConversationId), [p.api2]);
+    });
+
+    test('the list works out every hidden project in one pass, with the same '
+        'answer as asking each (review of #3073)', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api');
+      // The Swarm's own first project names no repository: it hides throughout.
+      expect(projects.hiddenIn(c), {'lead'});
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      expect(projects.hiddenIn(c), {'lead', api.id});
+      for (final project in c.snapshot!.projects) {
+        expect(
+          projects.hidden(c, project.id),
+          projects.hiddenIn(c).contains(project.id),
+          reason: project.name,
         );
-        final api = c.snapshot!.projects
-            .firstWhere((p) => p.name == 'api')
-            .leadConversationId;
-        c.select(api);
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: ListenableBuilder(
-                listenable: f.app,
-                builder: (_, _) => SuperTabWorkspace(
+      }
+      // A machine with one of the panes not listed yet: no repo's project hides.
+      f.app.machineStates['m']!
+        ..agentsListedOnce = false
+        ..agentLoadStatus = AgentLoadStatus.loading;
+      expect(projects.hiddenIn(c), {'lead'});
+    });
+
+    test('nothing hides while a machine with one of the panes has not listed '
+        'its agents yet', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api');
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      // The laptop just came back and has not said what runs there: its
+      // pane may well be the api's.
+      f.app.machineStates['laptop']!
+        ..agents = const []
+        ..agentsListedOnce = false
+        ..agentLoadStatus = AgentLoadStatus.loading;
+      expect(projects.hidden(c, api.id), isFalse);
+      f.app.machineStates['laptop']!
+        ..agents = [_agent('n1', remote: 'https://github.com/acme/api')]
+        ..agentsListedOnce = true
+        ..agentLoadStatus = AgentLoadStatus.loaded;
+      expect(projects.hidden(c, api.id), isFalse);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      expect(projects.hidden(c, api.id), isTrue);
+    });
+
+    test('a project made by hand, and any project of a Team Swarm, never '
+        'hides', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final server = f.connection.server.state;
+      (server['projects'] ??= [
+        projectFixture('lead', 'Personal', 'lead'),
+      ]).add(projectFixture('by-hand', 'Notes', 'chat-by-hand'));
+      (server['conversations'] as List).add({
+        ...conversationFixture('chat-by-hand', 'Lead'),
+        'projectId': 'by-hand',
+      });
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      f.app.swarms.removeWhere((s) => s.id == 'one' || s.id == 'two');
+      expect(projects.hidden(c, named(c, 'api').id), isTrue);
+      expect(projects.hidden(c, 'by-hand'), isFalse);
+
+      final team = SuperTabLaunchFixture();
+      _desk(team);
+      final tc = await _personal(team, people: const ['owner', 'kim']);
+      expect(PersonalProjects.of(team.app).hidden(tc, 'lead'), isFalse);
+    });
+
+    testWidgets('the list leaves it out, but keeps it while its chat is open', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final api = named(c, 'api'), web = named(c, 'web');
+      final redraw = ValueNotifier(0);
+      addTearDown(redraw.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: Listenable.merge([f.app, c, redraw]),
+              builder: (_, _) => SizedBox(
+                width: 260,
+                child: ProjectSidebar(
+                  controller: c,
                   app: f.app,
-                  canvas: const Text('Native terminals'),
-                  onAddAgent: (_) {},
+                  onSelect: c.select,
                 ),
               ),
             ),
           ),
-        );
-        for (var i = 0; i < 10; i++) {
-          await tester.pump(const Duration(milliseconds: 20));
-        }
-        expect(find.byTooltip('Group terminals (2)'), findsOneWidget);
-        await tester.tap(find.byTooltip('Group terminals (2)'));
-        for (var i = 0; i < 20; i++) {
-          await tester.pump(const Duration(milliseconds: 20));
-        }
-        final swarm = f.app.swarms.firstWhere((s) => s.superTabId == tabId);
-        expect(swarm.panes, hasLength(2));
-        expect(identical(swarm.panes[0], p.api), isTrue);
-        expect(identical(swarm.panes[1], p.api2), isTrue);
-        expect(one.panes, before.one);
-        expect(two.panes, before.two);
-        expect(p.api.composerVisible, isTrue);
-        expect(p.api.watchOnly, isFalse);
-        expect(p.api.inputContext, isNull);
-        // No Swarm terminal sharing was asked for.
-        expect(
-          f.connection.server.posts.where(
-            (post) => post['conversationId'] != null && post['agentId'] != null,
-          ),
-          isEmpty,
-        );
+        ),
+      );
+      await tester.pump();
+      Finder row(SuperTabProject project) =>
+          find.byKey(ValueKey('super-project-${project.id}'));
+      expect(row(api), findsOneWidget);
 
-        // Back to the chat: the Swarm view lets them go, the tabs keep them.
-        c.selectTerminal(api, null);
-        for (var i = 0; i < 20; i++) {
-          await tester.pump(const Duration(milliseconds: 20));
-        }
-        expect(swarm.panes, isEmpty);
-        expect(one.panes, before.one);
-        expect(two.panes, before.two);
-        expect(f.app.allPanes, containsAll([p.api, p.api2]));
-        expect(f.app.closedHistory, hasLength(before.closed));
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        f.app.superTabs.dispose();
-        await tester.pump();
-      },
-    );
+      c.select(api.leadConversationId);
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      redraw.value++;
+      await tester.pump();
+      // Open now: it stays until the person goes elsewhere.
+      expect(row(api), findsOneWidget);
 
+      c.select(web.leadConversationId);
+      redraw.value++;
+      await tester.pump();
+      expect(row(api), findsNothing);
+      expect(row(web), findsOneWidget);
+      expect(
+        superTabSidebarOrder(c, app: f.app),
+        isNot(contains(api.leadConversationId)),
+      );
+
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.add(p.api2);
+      redraw.value++;
+      await tester.pump();
+      expect(row(api), findsOneWidget);
+      expect(
+        superTabSidebarOrder(c, app: f.app),
+        contains(api.leadConversationId),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    });
+  });
+
+  group('[term]', () {
     testWidgets(
       'closing a tab while [term] shows its pane leaves one recently closed '
       'entry, the tab\'s',
@@ -801,3 +1309,17 @@ void main() {
 
 int _projectCount(SuperTabLaunchFixture f) =>
     (f.connection.server.state['projects'] as List? ?? const []).length;
+
+class _Recorder implements AppLog {
+  _Recorder(this.lines);
+  final List<String> lines;
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$level $category $message ${error ?? ''}');
+}

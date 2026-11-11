@@ -4,7 +4,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHookServer, type HookServerHandlers, chooseHookAgent, hookFiredAt, knownTranscriptFor } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFiredAt, knownTranscriptFor } from './hookServer.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
@@ -373,6 +373,107 @@ describe('process-owned hook server', () => {
   })
 })
 
+// Hermes 0.22+ runs every session's hooks in one shared gateway, so a hook names the gateway's pane: on DESKTOP-0TFH0OJ
+// (2026-11-09) `p2-0.5.80:%2002`, the first Hermes pane, for a conversation typed in `%2005`. The pane a session was
+// opened from is frozen with its policy in Hermes' store, from the client's `terminal.client_env_passthrough` names.
+describe('a Hermes hook from its shared gateway', () => {
+  const FC = 'local-fc37402fa0f9bc03c97ab45ce86220a06510ce9e8fced80fb9ed2a39324ce67a'
+  const DESKTOP = 'local-d199d58e8da30774bce4db24f350f2c05b7142a62dc92ed6df8f4d68a85eb6fd'
+  const GATEWAY_PANE = { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2002' }
+  /** Hermes 0.22.7's two tables, as much of them as is read: the session's row and its frozen policy. */
+  const store = (rows: Array<[string, Record<string, string> | null]>) => {
+    const { DatabaseSync } = (process as unknown as { getBuiltinModule(name: string): unknown }).getBuiltinModule('node:sqlite') as {
+      DatabaseSync: new (path: string) => { exec(sql: string): void; close(): void }
+    }
+    mkdirSync(env.HERMES_HOME, { recursive: true })
+    rmSync(join(env.HERMES_HOME, 'state.db'), { force: true })
+    const db = new DatabaseSync(join(env.HERMES_HOME, 'state.db'))
+    const quote = (text: string) => `'${text.replaceAll('\'', '\'\'')}'`
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT); CREATE TABLE state_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      ${rows.map(([id, clientEnv]) => `INSERT INTO sessions VALUES (${quote(id)}, 'local');
+        INSERT INTO state_meta VALUES (${quote(`gateway.local_policy.v1:${id}`)},
+          ${quote(JSON.stringify({ session_id: id, policy: { client_env_json: clientEnv && JSON.stringify(clientEnv), source: 'cli' } }))});`).join('\n')}`)
+    db.close()
+  }
+  const hook = (base: string, headers: Record<string, string>, sessionId: string) => fetch(`${base}/api/hook/session-start`, {
+    method: 'POST', headers, body: JSON.stringify({ engine: 'hermes', sessionId, hookEvent: 'on_session_start', runtimeHints: [GATEWAY_PANE], callerPid: 500 }),
+  })
+
+  it('is resolved by the pane its session was opened from, that pane alone the evidence', async () => {
+    store([[FC, { HARNESS_PANE: 'p2-0.5.80:%2005', PATH: 'C:\\Windows' }]])
+    const resolveHookAgent = vi.fn(async () => null)
+    const hookViaSharedProcess = vi.fn(async () => true)
+    const { base, headers } = await start({ resolveHookAgent, hookViaSharedProcess })
+    expect((await hook(base, headers, FC)).status).toBe(200)
+    expect(hookViaSharedProcess).toHaveBeenCalledWith({ engine: 'hermes', callerPid: 500 })
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'hermes', tmuxPane: undefined, runtimeHints: [{ backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2005' }],
+      callerPid: 500, bySessionPane: true, onWait: expect.any(Function),
+    })
+  })
+
+  it('is ignored, and says why, when its session names no pane (the Desktop app\'s, or a plain terminal\'s)', async () => {
+    store([[DESKTOP, null]])
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent, hookViaSharedProcess: async () => true })
+    const response = await hook(base, headers, DESKTOP)
+    expect(await response.json()).toEqual({ ignored: true, reason: 'hermes_gateway_session_has_no_pane' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
+  it('leaves a hook its pane\'s own Hermes ran as it came (Hermes 0.21 and older)', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent, hookViaSharedProcess: async () => false })
+    await hook(base, headers, FC)
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimeHints: [GATEWAY_PANE] }))
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.not.objectContaining({ bySessionPane: true }))
+  })
+})
+
+describe('the pane a Hermes client environment names', () => {
+  it.each([
+    ['a pty host pane', { HARNESS_PANE: 'p2-0.5.80:%2005' }, { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2005' }],
+    ['a tmux pane, ahead of a pty host pane it runs in', { TMUX_PANE: '%7', HARNESS_PANE: 'p2:%1' }, { backend: 'tmux', paneId: '%7' }],
+    ['nothing for no pane', { PATH: '/bin' }, null],
+    ['nothing for a malformed tmux pane', { TMUX_PANE: '7' }, null],
+    ['nothing for a malformed pty host pane', { HARNESS_PANE: '%2005' }, null],
+  ])('%s', (_name, clientEnv, pane) => {
+    expect(clientEnvPane(JSON.stringify(clientEnv))).toEqual(pane)
+  })
+
+  it.each([[null], [''], ['not json'], ['[]'], [42]])('nothing for a stored value that is not a map: %s', (value) => {
+    expect(clientEnvPane(value)).toBeNull()
+  })
+})
+
+describe('the account name proxy', () => {
+  it('passes the signed-in person\'s new name on only with the local header, body and answer verbatim', async () => {
+    const update = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { user: { id: 'u1', name: 'Elvis' }, echo: body } } }))
+    const { base } = await start({ onAuthMeUpdate: update })
+    const refused = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{"name":"Elvis"}' })
+    expect(refused.status).toBe(403)
+    expect(update).not.toHaveBeenCalled()
+
+    const saved = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":"Elvis"}' })
+    expect(saved.status).toBe(200)
+    expect(((await saved.json()) as { data: unknown }).data).toEqual({ user: { id: 'u1', name: 'Elvis' }, echo: { name: 'Elvis' } })
+    expect(update).toHaveBeenCalledWith({ name: 'Elvis' })
+
+    const bad = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
+    expect(bad.status).toBe(400)
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers a refusal as the backend gave it, so the app can say why', async () => {
+    const { base } = await start({
+      onAuthMeUpdate: async () => ({ status: 400, body: { success: false, error: { code: 'INVALID_NAME', message: 'Use 1 to 60 characters, with no hidden ones.' } } }),
+    })
+    const response = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":" "}' })
+    expect(response.status).toBe(400)
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe('INVALID_NAME')
+  })
+})
+
 describe('the desk proxy', () => {
   it('reads the desk ungated and writes its ops only with the local header, body passed through', async () => {
     const ops = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { revision: 2, tabs: [], echo: body } } }))
@@ -479,21 +580,14 @@ describe('Super Tab attachment pass-through', () => {
 
   // A profile picture goes the same way (Desktop's Upload picture…); before this, the daemon answered 404 and Desktop
   // showed only "Could not upload the file".
-  it('hands an avatar picture to the pass-through, guarded the same way', async () => {
-    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
-      let bytes = 0
-      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ path, bytes }))
-    })
+  // The profile picture route went with the v3 people screens (backend #3892): the daemon passes no picture through.
+  it('passes no avatar picture through', async () => {
+    const forward = vi.fn()
     const { base } = await start({ onSuperTabAttachment: forward })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
-    expect((await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
-      headers: { ...headers, origin: 'https://untrusted.example' }, body: 'x' })).status).toBe(403)
+    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'picture' })
+    expect(r.status).not.toBe(200)
     expect(forward).not.toHaveBeenCalled()
-    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST', headers, body: 'picture' })
-    expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
   })
 
   // Files over 10 MB go straight to storage (contract of group 1604): the daemon asks the backend for the link and says the
@@ -615,7 +709,7 @@ describe('account Experimental settings proxy', () => {
     const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
     const kept = await post(newer)
     expect(kept.status).toBe(200)
-    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('6')
+    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('9')
     expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
       counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
     expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
@@ -628,7 +722,7 @@ describe('account Experimental settings proxy', () => {
     ] as const) {
       const response = await post(refused, h)
       expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
-      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('6')
+      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('9')
       expect(await response.text()).not.toContain('PRIVATE_CANARY')
     }
     expect(send).toHaveBeenCalledOnce()
@@ -1147,6 +1241,110 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     expect(mutation).not.toHaveBeenCalled()
   },
 )
+
+describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
+  const call = (port: number, path: string, headers: Record<string, string>, method = 'GET') =>
+    fetch(`http://127.0.0.1:${port}${path}`, { method, headers, ...(method === 'POST' ? { body: '{}' } : {}) })
+
+  const serve = async (peerAccount: () => Promise<boolean | 'unanswered'>) => {
+    const started = await startHookServer(0, {
+      onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus: async () => ({ supported: true, secretDetail: 'x' }),
+      onAutonomousDeviceRequest: async () => ({ status: 200, body: { ok: true } }),
+    }, { peerAccount })
+    return { port: started.port, close: () => new Promise<void>((resolve) => { started.server.closeAllConnections(); started.server.close(() => resolve()) }) }
+  }
+  const credential = () => readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-credential'), 'utf8').trim()
+  const hookToken = () => readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-token'), 'utf8').trim()
+
+  it('the credential opens nothing for a caller of another account', async () => {
+    const asked = vi.fn(async () => false)
+    const { port, close } = await serve(asked)
+    try {
+      const secret = credential()
+      expect((await call(port, '/api/machines', { 'X-Harness-Local': secret })).status).toBe(401)
+      expect((await call(port, '/api/machines', { Authorization: `Bearer ${secret}` })).status).toBe(401)
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': secret })).json()).not.toHaveProperty('secretDetail')
+      expect((await call(port, '/api/autonomous-device/status', { Authorization: `Bearer ${secret}` })).status).toBe(403)
+      expect(asked).toHaveBeenCalled()
+    } finally { await close() }
+  })
+
+  it('the credential works for a caller of this account', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': credential() })).json()).toHaveProperty('secretDetail')
+      expect((await call(port, '/api/autonomous-device/status', { Authorization: `Bearer ${credential()}` })).status).toBe(200)
+    } finally { await close() }
+  })
+
+  // A lookup that gave no answer is not kept on the socket (lib/peerAccount.ts): both checks asking it waited a slow lsof out twice.
+  it('asks who is calling once for a request whose hook token and credential both match', async () => {
+    const asked = vi.fn(async () => true)
+    const { port, close } = await serve(asked)
+    try {
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': credential(), 'X-Harness-Local': credential() }, 'POST')).status).not.toBe(401)
+      expect(asked).toHaveBeenCalledOnce()
+    } finally { await close() }
+  })
+
+  // Decided 2026-11-11: a lookup that gave no answer in time is not a refusal. The client is told to ask again.
+  it('answers a secret whose caller could not be looked up in time with a retryable 503, and health and status as before', async () => {
+    const { port, close } = await serve(async () => 'unanswered')
+    try {
+      for (const [path, headers, method] of [['/api/machines', { 'X-Harness-Local': credential() }, 'GET'],
+        ['/api/hook/session-start', { 'x-harness-hook-token': hookToken() }, 'POST'], ['/api/autonomous-device/status', { Authorization: `Bearer ${credential()}` }, 'GET']] as const) {
+        const reply = await call(port, path, headers, method)
+        expect(reply.status, path).toBe(503)
+        expect(reply.headers.get('retry-after')).toBe('1')
+        expect(await reply.json()).toMatchObject({ error: 'PEER_LOOKUP_UNANSWERED' })
+      }
+      expect((await call(port, '/api/health', { 'X-Harness-Local': credential() })).status).toBe(200)
+      // A status probe still finds the daemon there: its public status, as without the credential.
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': credential() })).json()).not.toHaveProperty('secretDetail')
+    } finally { await close() }
+  })
+
+  it('a wrong credential never makes the daemon ask who is calling', async () => {
+    const asked = vi.fn(async () => true)
+    const { port, close } = await serve(asked)
+    try {
+      expect((await call(port, '/api/machines', { 'X-Harness-Local': 'w'.repeat(43) })).status).toBe(401)
+      expect(asked).not.toHaveBeenCalled()
+    } finally { await close() }
+  })
+
+  it('the hook token opens the hook routes and nothing else', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      const token = hookToken()
+      expect(token).not.toBe(credential())
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': token }, 'POST')).status).not.toBe(401)
+      const shown: Array<Record<string, string>> = [{ 'X-Harness-Local': token }, { Authorization: `Bearer ${token}` }, { 'x-harness-hook-token': token }]
+      for (const headers of shown) {
+        expect((await call(port, '/api/machines', headers)).status).toBe(401)
+        expect(await (await call(port, '/api/status', headers)).json()).not.toHaveProperty('secretDetail')
+        expect((await call(port, '/api/autonomous-device/status', headers)).status).toBe(403)
+      }
+    } finally { await close() }
+  })
+
+  it('a hook token or credential opens no hook route for a caller of another account', async () => {
+    const { port, close } = await serve(async () => false)
+    try {
+      for (const secret of [hookToken(), credential()]) {
+        expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+        expect((await call(port, '/api/hook/session-end', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+      }
+    } finally { await close() }
+  })
+
+  it('an engine plugin loaded before the hook token keeps reporting with the credential', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': credential() }, 'POST')).status).not.toBe(401)
+    } finally { await close() }
+  })
+})
 
 describe('the loopback port wants this OS user\'s local credential', () => {
   // Another OS user's process reaches 127.0.0.1 too — a guest's harness running as its own user

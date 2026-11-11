@@ -74,6 +74,8 @@ export class MachineListCache {
   private lastWrittenContent = ''
   private lastWrittenAt = 0
   private readonly listeners = new Set<(body: Record<string, unknown> | null) => void>()
+  /** The read in flight, which every refresh meanwhile shares. */
+  private reading: Promise<{ status: number; body: Record<string, unknown> } | null> | null = null
 
   constructor(
     private readonly fetchMachines: () => Promise<{ status: number; body: Record<string, unknown> }>,
@@ -136,8 +138,32 @@ export class MachineListCache {
    * Never throws. A daemon that cannot reach the backend still has one machine that works perfectly — the
    * one on the other end of the cable — so an outage downgrades `source` and keeps the last known rows
    * rather than emptying the wheel.
+   *
+   * `maxAgeMs`: a list this session read that recently is answered as it is (spec 2026-11-02-poll-cost Part 4.4: the
+   * fleet's own refresh, every daemon with a dial reading every minute). None, the default, always reads: a window that
+   * re-reads after a rename or `machines_changed` must see it. Either way a read already in flight is shared.
    */
-  async refresh(): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  async refresh(options: { maxAgeMs?: number } = {}): Promise<{ status: number; body: Record<string, unknown> } | null> {
+    const asked = Date.now()
+    if (this.source === 'backend' && this.lastBody && this.bodyOwner === this.owner() && asked - this.fetchedAt < (options.maxAgeMs ?? 0)) {
+      return { status: 200, body: this.lastBody }
+    }
+    // A read that must be fresh (no maxAgeMs: after a rename or `machines_changed`) never takes one that began before it was
+    // asked for, which may hold the old list (final review); it waits for that one and reads again.
+    if (this.reading && !options.maxAgeMs && this.readingSince < asked) {
+      await this.reading.catch(() => null)
+      if (this.reading && this.readingSince >= asked) return this.reading
+    }
+    if (!this.reading) {
+      this.readingSince = Date.now()
+      this.reading = this.read().finally(() => { this.reading = null })
+    }
+    return this.reading
+  }
+  /** When the read in flight began. */
+  private readingSince = 0
+
+  private async read(): Promise<{ status: number; body: Record<string, unknown> } | null> {
     const owner = this.owner()
     let res: { status: number; body: Record<string, unknown> }
     try {

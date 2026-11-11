@@ -9,11 +9,6 @@ const permissionModes = {
   acceptEdits: ['--permission-mode', 'acceptEdits'],
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
-  // A Buddy's (superTabs/start.ts): what its folder's guard does not allow is refused, never asked (lib/buddyGuard.ts).
-  // It reads only its folder's settings and starts no MCP server: a hook or server a teammate commits to the project ran
-  // in a Buddy's folder with its person's credentials, guard or not (Claude Code 2.1.312, tried; Lead, 10-29).
-  // Harness's own hooks are copied into those settings (lib/swarmSkills.ts).
-  buddy: ['--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'],
   full: ['--dangerously-skip-permissions'],
 }
 export const launch: EngineLaunch = {
@@ -43,13 +38,15 @@ export const launch: EngineLaunch = {
     format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
   },
   /**
-   * "WARNING: Claude Code running in Bypass Permissions mode … Yes, I accept", the first time `--dangerously-skip-permissions`
-   * runs: a Swarm Lead on the Mac Studio sat there before its first turn (2026-10-26). Accepting writes
-   * `skipDangerousModePermissionPrompt: true` to the user settings, "Whether the user has accepted the bypass permissions
-   * mode dialog" in its settings schema, and the key its own message tells people to add (2.1.310; with it set the
-   * dialog is not shown, tried with the binary).
+   * "Welcome to Claude Code … Choose the text style", then its notes, the first time it runs on a machine: finishing them
+   * writes `hasCompletedOnboarding: true` to `.claude.json`, beside the folder trust (the Harness Team relay records the same
+   * key, team/relay.ts). The theme left unpicked is Claude Code's default; picked on the phone setting up the computer, it is
+   * kept as `theme` in the same file, one of its text styles (2.1.318's screen: Dark mode, Light mode, …).
    */
-  bypassAcceptance: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json', key: 'skipDangerousModePermissionPrompt' },
+  onboarding: {
+    home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, file: '.claude.json', key: 'hasCompletedOnboarding',
+    theme: { key: 'theme', values: ['dark', 'light'] },
+  },
   /**
    * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
    * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
@@ -82,6 +79,15 @@ export const launch: EngineLaunch = {
     instruction: 'When you create or update a pull request, its body must include this exact line once, near the end and '
       + 'after any other attribution line: `{line}` It says another agent started this session in Harness. Do not add it '
       + 'to commit messages.',
+  },
+  /**
+   * Harness's status line, which records the rate limits Claude Code reports to it and then shows the person's own
+   * (kit/statusLine.ts). Theirs is read from the files Claude Code reads it from, a later one over an earlier.
+   */
+  statusLine: {
+    home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json',
+    folder: ['.claude/settings.json', '.claude/settings.local.json'],
+    key: 'statusLine', type: 'command', args: ['--settings', '{settings}'],
   },
   // Recorded with the rest of the system prompt on the conversation's first request and kept on every resume
   // (`--system-prompt-snapshot`, on by default), so it is given at each launch and read once.

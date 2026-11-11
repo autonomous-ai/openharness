@@ -37,9 +37,30 @@ pub fn instance_name(protocol: u32, version: &str) -> String {
     }
 }
 
-/// This build's instance.
+/// This build's instance, plus an optional tag from the environment: a guest's host runs in another account's home
+/// with the same binary, so without its own tag its instance, and every pane route keyed by it, would be the owner's
+/// (docs/superpowers/specs/2026-11-05-windows-guests-design.md). The task that starts a guest host sets it; every
+/// other host leaves it unset, and keeps the plain name.
+pub const INSTANCE_TAG_VAR: &str = "HARNESS_PTY_INSTANCE_TAG";
+
+/// The tag [INSTANCE_TAG_VAR] names, when it is one: `[A-Za-z0-9-]{1,16}`, so it stays safe in a file name, a pipe
+/// name, a socket path and `HARNESS_PANE`. Anything else is ignored (the host keeps its own instance).
+fn instance_tag() -> Option<String> {
+    let tag = std::env::var(INSTANCE_TAG_VAR).ok()?;
+    let good = (1..=16).contains(&tag.len())
+        && tag
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    good.then_some(tag)
+}
+
+/// This build's instance, with the tag a guest host's task gave it.
 pub fn current() -> String {
-    instance_name(PROTOCOL, VERSION)
+    let base = instance_name(PROTOCOL, VERSION);
+    match instance_tag() {
+        Some(tag) => format!("{base}-{tag}"),
+        None => base,
+    }
 }
 
 /// `<run_dir>/pty-host-<instance>.<ext>`.
@@ -86,7 +107,28 @@ mod tests {
 
     #[test]
     fn current_is_this_builds_instance() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         assert_eq!(current(), instance_name(PROTOCOL, VERSION));
+    }
+
+    // The tag is process-global (an environment variable), so the tests that read it take turns.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_tag_names_a_guest_hosts_instance_apart_and_an_unusable_one_is_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let base = instance_name(PROTOCOL, VERSION);
+        // A guest host runs the same binary in its own account: its tag keeps its instance, and every route keyed by
+        // it, apart from the owner's.
+        unsafe { std::env::set_var(INSTANCE_TAG_VAR, "gu0123456789ab") };
+        assert_eq!(current(), format!("{base}-gu0123456789ab"));
+        // A tag is a file name, a pipe name and a socket path: anything else is no tag at all.
+        for bad in ["bad tag", "gu_0123456789ab", "", "x".repeat(17).as_str()] {
+            unsafe { std::env::set_var(INSTANCE_TAG_VAR, bad) };
+            assert_eq!(current(), base, "{bad:?}");
+        }
+        unsafe { std::env::remove_var(INSTANCE_TAG_VAR) };
+        assert_eq!(current(), base);
     }
 
     #[test]

@@ -7,6 +7,8 @@
 // run out: the name is followed, a 10 px gap on, by "· <Super Tab>" (ph_sb_22, #8EA3BD, centred on the name's line), the line is the question as asked,
 // and in place of the timer a still bar fills the whole inset (no track): amber #FFB340 with a #6A4A1C edge for a decision, red #FF5C5C with a
 // #6A2626 edge and the name in #FF8F8F for a stuck agent. The glue keeps it up until it is swiped away, the question closes or Notices opens.
+// A Swarm chat's notice (an entry with `tab`; mockup pro-swarm-parity 1D) takes the same name line, the Lead's project then "· <Swarm name>" (Swarm gone from the
+// model: no tag), the Lead's engine logo, and the normal running timer. The hit is the same POD_A_BANNER; the glue opens that Lead on a tap.
 // One POD_A_BANNER hit over the card (the glue opens Notices on a tap, a swipe up dismisses it). At most 9 runs.
 #include <stdio.h>
 #include <string.h>
@@ -32,22 +34,24 @@ int ph_toast(pod_out_frame_t *f, const pod_model_t *m, const pod_unread_t *u, ui
         const int e = 1000 - (int)((long)q * q * q / 1000000);
         y = FROM_Y + (TY - FROM_Y) * e / 1000;
     }
-    const pod_agent_t *a = pod_model_find(m, u->agent);
+    const pod_swarm_t *sw = u->tab[0] ? pod_model_swarm(m, u->tab) : NULL;
+    const int lj = sw ? pod_model_lead_index(sw, u->agent) : -1;
+    const pod_agent_t *a = u->tab[0] ? NULL : pod_model_find(m, u->agent);   // a Swarm notice's `agent` is a Lead's id, not a roster row
     const pod_attention_t attn = u->ask ? pod_model_attention(m, a) : POD_ATTN_NONE;   // a Super Tab's question: the toast stays
     const bool stuck = attn == POD_ATTN_STUCK;
     ht_pro_rect_aa(s, TX, y, TW, TH, TR, C(attn == POD_ATTN_NONE ? PH_TOAST_EDGE : stuck ? STUCK_EDGE : DECIDE_EDGE));
     ht_pro_rect_aa(s, TX + EDGE, y + EDGE, TW - 2 * EDGE, TH - 2 * EDGE, TR - EDGE, C(PH_TOAST_FILL));
-    ph_engine_logo(s, TX + PAD + (SLOT - LOGO) / 2, y + (TH - LOGO) / 2, LOGO, a ? a->engine : NULL, PH_TOAST_FILL);
+    ph_engine_logo(s, TX + PAD + (SLOT - LOGO) / 2, y + (TH - LOGO) / 2, LOGO, a ? a->engine : lj >= 0 ? sw->leads[lj].engine : NULL, PH_TOAST_FILL);
     const int tx = TX + PAD + SLOT + GAP, tw = TX + TW - PAD - tx;
     const char *name = a && a->name[0] ? a->name : u->name[0] ? u->name : "Agent";
     char line[160];
     ph_first_sentence(line, sizeof line, u->text);
     if (!line[0]) snprintf(line, sizeof line, "%s", u->kind == POD_UNREAD_FAILED ? "Failed" : "Done");
-    if (attn == POD_ATTN_NONE) {
+    if (attn == POD_ATTN_NONE && !sw) {
         ph_text(s, tx, y + 42, tw, &ph_sb_26, PH_TOAST_NAME, name);
-    } else {   // "name · Super Tab": the name keeps at least half the line; the Super Tab takes what is left, cut with an ellipsis
+    } else {   // "name · Super Tab" (a Swarm's notice: "project · Swarm"): the name keeps at least half the line; the tag takes what is left, cut with an ellipsis
         char tag[SUPER_TAB_MAX + 4];
-        snprintf(tag, sizeof tag, "\xc2\xb7 %s", a->super_tab);
+        snprintf(tag, sizeof tag, "\xc2\xb7 %s", sw ? sw->name : a->super_tab);
         const int tagw = ht_pro_width(&ph_sb_22, tag), want = ht_pro_width(&ph_sb_26, name);
         int nw = tw - TAG_GAP - tagw;
         if (nw < tw / 2) nw = tw / 2;

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:harness_mobile/terminal/terminal_look.dart';
+
 import 'find_row.dart';
 import 'tty.dart';
 import 'tty_controls.dart';
@@ -59,12 +61,13 @@ Future<T?> showNewAgentChooser<T extends Object>(
   String? title,
   bool autofocusSearch = false,
 }) => showModalBottomSheet<T>(
-  context: context,
+  // The app's sheet even from a terminal's `+` — see [TerminalLook.outside].
+  context: TerminalLook.outside(context),
   useRootNavigator: true,
   useSafeArea: true,
   isScrollControlled: true,
   showDragHandle: true,
-  backgroundColor: Tty.of(context).ground,
+  backgroundColor: Tty.of(TerminalLook.outside(context)).ground,
   constraints: BoxConstraints(
     maxHeight: MediaQuery.sizeOf(context).height * 0.85,
   ),

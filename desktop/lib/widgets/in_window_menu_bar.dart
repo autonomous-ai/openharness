@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -13,6 +15,7 @@ import '../screens/swarm_menu_bus.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import 'engine_identity.dart';
+import '../shared/widgets/app_icon_button.dart';
 import 'terminal_edit_actions.dart';
 
 /// Runs one app-menu action — the same strings the macOS application menu
@@ -20,17 +23,46 @@ import 'terminal_edit_actions.dart';
 /// `_RootShellState.runAppMenuAction`.
 typedef AppMenuActionHandler = Future<void> Function(String action);
 
+/// Where the app-menu actions go when the widget drawing them has no shell in
+/// reach. The shell installs its switch here at startup; the compact bar in the
+/// workspace tab strip (a child of the workspace screen, not of the shell's own
+/// Column) dispatches through it, so one switch still serves every surface —
+/// AppKit's menu bar, the Linux strip and the Windows button. Cleared when the
+/// shell goes away; null in a test that never mounted one.
+AppMenuActionHandler? appMenuActionSink;
+
+/// The compact button's natural width: 8px of padding on each side plus its
+/// 16px glyph. The tab strip reserves at least this much, because two cells of
+/// the 13px bar font are narrower than it on Windows — and a narrower slot does
+/// not overflow, it squashes the glyph silently (10px at a 26px slot, nothing
+/// at 16).
+const double appMenuButtonWidth = 32;
+
 /// The app's commands as an in-window menu bar.
 ///
 /// On macOS the commands live in the native menu bar: the application menu's
 /// own rows and View's font rows are installed in MainFlutterWindow.swift,
 /// and File, Edit's Find rows, View's workspace rows and History are built by
-/// SwarmTitlebar.swift from the `harness/swarm_tabs` payloads. Linux and Windows have no native menu bar to hand any of
-/// that to, so this draws the same menus in the window instead: the state
-/// comes off [SwarmMenuBus] (what Swift would have received), the rows
-/// dispatch back through the same handler the macOS channel delivers to, and
-/// the application-menu commands fire the same action strings through
-/// [onAction].
+/// SwarmTitlebar.swift from the `harness/swarm_tabs` payloads.
+///
+/// Linux and Windows have no native menu bar to hand any of that to, so this
+/// widget draws the same menus itself. Two shapes, one set of rows:
+///
+/// - **Linux: the strip** ([compact] false). On GNOME it IS the title bar, so it
+///   carries the menus, the drag area and the window buttons; under a window
+///   manager's own caption it is a 30px strip of menus. [LinuxTitleBar] says
+///   which. Windows used to draw this strip too, under its OS caption; it no
+///   longer does (desktop/design/windows-app-menu.md). The shell still mounts
+///   it on Windows for the screens that have no tab strip — sign-in, setup, the
+///   tour — and the workspace's tab strip draws the compact bar instead.
+/// - **Windows: [compact]**, one ☰ whose panel groups the same seven menus. The
+///   button lives at the left of the workspace tab strip, the row the window's
+///   own controls sit in, because two stacked bars was the legacy shape.
+///
+/// Either way the state comes off [SwarmMenuBus] (what Swift would have
+/// received), the rows dispatch back through the same handler the macOS channel
+/// delivers to, and the application-menu commands fire the same action strings
+/// through [onAction] or [appMenuActionSink].
 ///
 /// The tab strip and the title-bar buttons are not here: on Linux and Windows Flutter
 /// draws those itself, as it does anywhere AppKit is not drawing them. Two
@@ -42,8 +74,9 @@ typedef AppMenuActionHandler = Future<void> Function(String action);
 /// test can force the bar on without caring which OS the host is. Widget
 /// tests at large keep the bar off by default: it is window chrome — on macOS
 /// it costs the layout nothing at all — and pane-geometry assertions should
-/// not depend on whether a Linux or Windows build is drawing it. Windows keeps
-/// its native caption (spec §2.9), so there the bar is a strip under it.
+/// not depend on whether a Linux build is drawing it. Windows keeps its native
+/// caption (spec §2.9): the compact button is drawn by the workspace's tab
+/// strip there, not by this widget's default visibility.
 /// Who draws the Linux window's title bar — decided by the runner
 /// (`my_application.cc`) and handed over as `HARNESS_LINUX_TITLE_BAR`.
 enum LinuxTitleBar {
@@ -97,13 +130,21 @@ enum EditMenuTarget { textField, terminal, none }
 class InWindowMenuBar extends StatefulWidget {
   const InWindowMenuBar({
     super.key,
-    required this.onAction,
+    this.onAction,
     this.state,
     this.visible,
     this.onQuit,
+    this.compact = false,
   });
 
-  final AppMenuActionHandler onAction;
+  /// Where a row's app-menu action goes. Omitted by the compact bar: it is
+  /// built by the workspace's tab strip, which has no handle on the shell, so
+  /// it falls back to [appMenuActionSink].
+  final AppMenuActionHandler? onAction;
+
+  /// One ☰ and a sectioned panel instead of the strip. Windows uses this now
+  /// that its menu row is gone (desktop/design/windows-app-menu.md).
+  final bool compact;
 
   /// How Quit Harness quits: the platform's own path unless a test passes
   /// its own.
@@ -191,15 +232,52 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   /// and a margin for the screen edge; past that a menu really does scroll.
   MenuStyle get _panelStyle {
     final height = MediaQuery.sizeOf(context).height;
-    return grid.AppMenu.style(maxHeight: height - 36 - 24);
+    // The compact panel hangs off a button inside the 40px tab strip, so that
+    // is the air it must keep above itself; 36 is the strip it replaced, which
+    // is not the row it opens from.
+    return grid.AppMenu.style(
+      maxHeight: height - (widget.compact ? 40 : 36) - 24,
+    );
+  }
+
+  /// The compact panel's open tab.
+  String _compactTab = 'Harness';
+
+  /// What a compact row is when it has nothing to offer: no disabled rows and
+  /// no "nothing here" lines in a menu someone opens to act.
+  static const Widget _absent = SizedBox.shrink();
+
+  /// [rows] as a compact panel draws them: rows that aren't offered gone, a
+  /// heading gone with its rows, and a divider only between two groups.
+  List<Widget> _tidy(List<Widget> rows) {
+    final groups = <List<Widget>>[[]];
+    for (final row in rows) {
+      if (row is AppMenuDivider) {
+        groups.add([]);
+      } else if (!identical(row, _absent)) {
+        groups.last.add(row);
+      }
+    }
+    final kept = groups
+        .where((group) => group.any((row) => row is! _MenuLabelRow))
+        .toList();
+    return [
+      for (final (index, group) in kept.indexed) ...[
+        if (index > 0) const AppMenuDivider(),
+        ...group,
+      ],
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.compact) return _buildCompact(context);
     // RuntimePlatform: false in a browser, where `dart:io` Platform throws.
-    final visible =
-        widget.visible ??
-        ((RuntimePlatform.isLinux || RuntimePlatform.isWindows) && !kUnderTest);
+    //
+    // Linux only. On GNOME this strip IS the title bar. On Windows it was a
+    // second bar under the OS caption, and those commands moved into the tab
+    // strip's ☰ (desktop/design/windows-app-menu.md).
+    final visible = widget.visible ?? (RuntimePlatform.isLinux && !kUnderTest);
     if (!visible) return const SizedBox.shrink();
     grid.AppTheme.watch(context);
     // The full set of menus outgrows a narrow window; a menubar that scrolls
@@ -278,6 +356,109 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
           ),
           const _WindowButtons(),
         ],
+      ),
+    );
+  }
+
+  /// The compact bar: one menu button that opens one panel, the sections as
+  /// tabs across its top and the open tab's rows under them. A click changes
+  /// the tab. Window has no tab here: the caption's own buttons are its rows.
+  Widget _buildCompact(BuildContext context) {
+    // Somebody must own the app actions: the host's handler, or the shell's
+    // sink. Without either the panel would open onto rows that do nothing.
+    assert(
+      widget.onAction != null || appMenuActionSink != null,
+      'InWindowMenuBar(compact: true) needs onAction or appMenuActionSink',
+    );
+    grid.AppTheme.watch(context);
+    final controller = _controllers.putIfAbsent('app-menu', MenuController.new);
+    final isOpen = identical(_openMenu, controller);
+    final sections = <(String, List<Widget>)>[
+      ('Harness', _buildHarnessMenu()),
+      ('File', _buildFileMenu()),
+      ('Edit', _buildEditMenu()),
+      // View reads the window's full-screen state as it opens, as the strip does.
+      ('View', _buildViewMenu()),
+      ('History', _buildHistoryMenu()),
+      ('Help', _buildHelpMenu()),
+    ];
+    final tabs = [
+      for (final (label, rows) in sections)
+        if (_tidy(rows) case final shown when shown.isNotEmpty) (label, shown),
+    ];
+    final open =
+        tabs.where((tab) => tab.$1 == _compactTab).firstOrNull ?? tabs.first;
+    return _menuFocusRegion(
+      AppDropdown(
+        controller: controller,
+        // The tabs' row and the longest rows' labels and hints, both whole.
+        width: math.min(420, MediaQuery.sizeOf(context).width - 24),
+        // The window less the tab strip it hangs from and a margin.
+        maxHeight: MediaQuery.sizeOf(context).height - 40 - 24,
+        consumeOutsideTap: false,
+        searchScope: open.$1,
+        onOpen: () {
+          setState(() => _openMenu = controller);
+          _readFullScreen();
+        },
+        onClose: () {
+          if (identical(_openMenu, controller)) {
+            setState(() => _openMenu = null);
+          }
+        },
+        // The panel takes focus as it opens, so Escape and the menu keys
+        // reach MenuAnchor's own bindings with the pointer never having left
+        // the button. Without this the panel opened with focus on the button
+        // and Escape did nothing.
+        header: _menuFocusRegion(
+          Focus(
+            autofocus: true,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(6, 1, 6, 1),
+                  child: Wrap(
+                    spacing: 2,
+                    runSpacing: 2,
+                    children: [
+                      for (final (label, _) in tabs)
+                        AppTabPill(
+                          tapKey: Key(
+                            'app-menu-section-${label.toLowerCase()}',
+                          ),
+                          label: label,
+                          selected: label == open.$1,
+                          onTap: () => setState(() => _compactTab = label),
+                        ),
+                    ],
+                  ),
+                ),
+                const AppMenuDivider(),
+              ],
+            ),
+          ),
+        ),
+        children: [for (final row in open.$2) _menuFocusRegion(row)],
+        // A plain glyph with no rim and no capsule: the same quiet icon the
+        // opposite end of this row uses, on the 32-point target the icon
+        // system gives an independently clickable control. The TextButton this
+        // replaced inherited the app's capsule button style, so the button read
+        // as a bordered pill sitting in the tab strip.
+        child: AppIconButton(
+          key: const Key('app-menu-button'),
+          icon: AppIcons.galleryVerticalEnd,
+          tooltip: 'Menu',
+          selected: isOpen,
+          onPressed: () {
+            // Read at press time: the button does not rebuild between a panel
+            // closing and the click that reopens it.
+            final wasOpen = controller.isOpen;
+            _closeAll();
+            if (!wasOpen) controller.open();
+          },
+        ),
       ),
     );
   }
@@ -374,6 +555,7 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
         icon: AppIcons.copyPlus,
         label: 'Clone Harness',
         action: 'cloneAgent',
+        enabled: widget.compact ? _state.enabled && _state.canFind : null,
       ),
       _swarmRow(
         key: 'menu-bar-restart-agent',
@@ -656,31 +838,35 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
           );
         },
       ),
-      const AppMenuDivider(),
-      _swarmRow(
-        key: 'menu-bar-notifications',
-        icon: AppIcons.bell,
-        label: 'Harnesses Needing Input…',
-        action: 'notifications',
-      ),
-      _swarmRow(
-        key: 'menu-bar-machines',
-        icon: AppIcons.server,
-        label: 'Machines',
-        action: 'machineList',
-      ),
-      _swarmRow(
-        key: 'menu-bar-models',
-        icon: AppIcons.cpu,
-        label: 'Models',
-        action: 'models',
-      ),
-      _swarmRow(
-        key: 'menu-bar-machine-monitor',
-        icon: AppIcons.activity,
-        label: 'Machine Monitor',
-        action: 'manageMachines',
-      ),
+      // Places the compact menu leaves out: the status bar, the sidebar's
+      // Activity and Manage are each already one click away.
+      if (!widget.compact) ...[
+        const AppMenuDivider(),
+        _swarmRow(
+          key: 'menu-bar-notifications',
+          icon: AppIcons.bell,
+          label: 'Harnesses Needing Input…',
+          action: 'notifications',
+        ),
+        _swarmRow(
+          key: 'menu-bar-machines',
+          icon: AppIcons.server,
+          label: 'Machines',
+          action: 'machineList',
+        ),
+        _swarmRow(
+          key: 'menu-bar-models',
+          icon: AppIcons.cpu,
+          label: 'Models',
+          action: 'models',
+        ),
+        _swarmRow(
+          key: 'menu-bar-machine-monitor',
+          icon: AppIcons.activity,
+          label: 'Machine Monitor',
+          action: 'manageMachines',
+        ),
+      ],
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-toggle-viewer',
@@ -716,7 +902,8 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   bool _fullScreen = false;
 
   Future<void> _readFullScreen() async {
-    if (kUnderTest && widget.visible != null) return;
+    // No test host has a window to ask; a real one always does.
+    if (kUnderTest) return;
     final full = await windowManager.isFullScreen();
     if (mounted && full != _fullScreen) setState(() => _fullScreen = full);
   }
@@ -865,7 +1052,9 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
     // Every action row takes `actionsEnabled` from the state, the way the
     // native menu's validateMenuItem does; a row that passes its own flag
     // means BOTH must hold.
-    if (!(enabled ?? _state.enabled)) return _label(label, note: note);
+    if (!(enabled ?? _state.enabled)) {
+      return widget.compact ? _absent : _label(label, note: note);
+    }
     return AppMenuItem(
       key: Key(key),
       icon: icon,
@@ -880,7 +1069,7 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
         if (swarm) {
           swarmMenuBus.receive(MethodCall(action, args));
         } else {
-          widget.onAction(action);
+          (widget.onAction ?? appMenuActionSink)?.call(action);
         }
       },
     );
@@ -901,7 +1090,7 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
       trailing: _hint(action),
       onPressed: () {
         _closeAll();
-        widget.onAction(action);
+        (widget.onAction ?? appMenuActionSink)?.call(action);
       },
     );
   }
@@ -1013,7 +1202,7 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   // A disabled row: an empty state, a provider with no reading behind it, a
   // command the current pane cannot take.
   Widget _label(String text, {String? note, bool faint = false}) =>
-      _MenuLabelRow(text, note: note, faint: faint);
+      widget.compact ? _absent : _MenuLabelRow(text, note: note, faint: faint);
 }
 
 /// Marks both the strip and its overlay, which is outside the strip's tree.

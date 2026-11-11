@@ -224,9 +224,7 @@ class _StatusStyleChoice extends StatelessWidget {
                 side: WidgetStateProperty.resolveWith(
                   (states) => BorderSide(
                     width: 1.5,
-                    color: states.contains(WidgetState.focused)
-                        ? DesktopChrome.accent
-                        : highContrast && selected
+                    color: highContrast && selected
                         ? DesktopChrome.foreground.withValues(alpha: .45)
                         : Colors.transparent,
                   ),

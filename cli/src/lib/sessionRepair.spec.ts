@@ -1,7 +1,8 @@
 import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
+import { darwinProcessImages } from '../testing/darwinProcessImages.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -547,13 +548,9 @@ describe('session repair — a Codex process names its own rollout', () => {
   })
 
   it('does not give a starting process the only sibling rollout before its own file opens', async () => {
-    if (process.platform === 'darwin') {
-      // Native source tests explicitly supply the same verified artifact as the bundle.
-      // A missing helper is itself a held identity, never a permissive ps/lsof fallback.
-      const artifact = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
-      expect(artifact, 'Build the private Darwin helper for native integration tests').toBeTruthy()
-      vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', readFileSync(artifact!, 'utf8'))
-    }
+    // Native source tests supply the helper the bundle embeds: a missing one is itself a held identity, never a
+    // permissive ps/lsof fallback.
+    if (process.platform === 'darwin') vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', darwinProcessImages())
     const profile = tempRoot()
     const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
     writeCodexRollout(profile, sibling, CWD, Date.now())
@@ -594,10 +591,7 @@ describe('session repair — a Codex process names its own rollout', () => {
   })
 
   it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
-    if (process.platform === 'darwin') {
-      expect(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT, 'Build the private Darwin helper for native integration tests').toBeTruthy()
-      vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', readFileSync(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT!, 'utf8'))
-    }
+    if (process.platform === 'darwin') vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', darwinProcessImages())
     const profile = tempRoot()
     const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000006'
     const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
@@ -1040,6 +1034,87 @@ describe('hermes repair across profile homes', () => {
     expect(await find()).toMatchObject({ sessionId: SID_PROFILE, hermesHome: childHome })
     execFileSync('sqlite3', [join(home, 'state.db'), "UPDATE sessions SET started_at = 'invalid';"])
     await expect(find()).rejects.toThrow('invalid discovery evidence')
+  })
+
+  // Hermes 0.23's unified runtime: `local-<sha256>` ids, source='local', the creating surface in created_source.
+  const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+  /** A Hermes 0.23 store (with created_source) holding [id, source, created_source] rows started in CWD. */
+  function unifiedHome(root: string, rows: Array<[string, string, string | null]>, created = true): string {
+    mkdirSync(root, { recursive: true })
+    const at = Math.trunc(STARTED_AT / 1000) + 5
+    execFileSync('sqlite3', [join(root, 'state.db'),
+      `CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT, started_at REAL${created ? ', created_source TEXT' : ''});`
+      + rows.map(([id, source, surface]) => `INSERT INTO sessions VALUES ('${id}','${source}','${CWD}',${at}`
+        + `${created ? `,${surface === null ? 'NULL' : `'${surface}'`}` : ''});`).join('')])
+    return root
+  }
+  const findUnified = async (rows: Array<[string, string, string | null]>, created = true) => {
+    const { findLiveSession } = await loadWithHome(unifiedHome(tempRoot(), rows, created))
+    return findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true })
+  }
+
+  t.each(['cli', 'tui'])('binds a unified-runtime session its %s created', async surface => {
+    await expect(findUnified([[local(1), 'local', surface]])).resolves.toMatchObject({ sessionId: local(1) })
+  })
+
+  t('never binds, nor refuses the store for, a local row another surface or a sub-agent created', async () => {
+    const others: Array<[string, string, string | null]> = [[local(2), 'local', 'acp'], [local(3), 'local', 'gui'],
+      [local(4), 'local', 'kanban'], [local(5), 'subagent', null], [local(6), 'subagent', 'cli']]
+    await expect(findUnified(others)).resolves.toBeNull()
+    await expect(findUnified([[local(1), 'local', 'cli'], ...others])).resolves.toMatchObject({ sessionId: local(1) })
+  })
+
+  /** Run [work] with the clock [seconds] after the fixture rows started (STARTED_AT + 5s). */
+  async function at<T>(seconds: number, work: () => Promise<T>): Promise<T> {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(STARTED_AT + 5_000 + seconds * 1000)
+    try { return await work() } finally { vi.useRealTimers() }
+  }
+
+  t('waits while a fresh local row\'s creator is not stamped, rather than binding a sibling', async () => {
+    await at(1, async () => {
+      for (const unset of ['unknown', null, '']) {
+        await expect(findUnified([[local(1), 'local', 'cli'], [local(2), 'local', unset]])).resolves.toBeNull()
+      }
+      await expect(findUnified([[local(1), 'local', 'cli'], [local(2), 'local', 'acp']])).resolves.toMatchObject({ sessionId: local(1) })
+    })
+  })
+
+  t('stops waiting for a creator that was never stamped, so it cannot hold the folder for good', async () => {
+    // An auxiliary-usage insert writes created_source='unknown', and nothing but the creator's own writes repairs it.
+    await at(29, async () => {
+      await expect(findUnified([[local(1), 'local', 'cli'], [local(2), 'local', 'unknown']])).resolves.toBeNull()
+    })
+    await at(31, async () => {
+      for (const unset of ['unknown', null, '']) {
+        await expect(findUnified([[local(1), 'local', 'cli'], [local(2), 'local', unset]])).resolves.toMatchObject({ sessionId: local(1) })
+      }
+      // A stale unstamped row alone is no pane's own: nothing to bind, and nothing refused.
+      await expect(findUnified([[local(2), 'local', 'unknown']])).resolves.toBeNull()
+      await expect(findUnified([[SID_DEFAULT, 'cli', null], [local(2), 'local', 'unknown']])).resolves.toMatchObject({ sessionId: SID_DEFAULT })
+    })
+  })
+
+  t('reads a store holding both shapes, as a 0.23 store does after resuming an older session', async () => {
+    // hermes_state_local_migration.py `bind_legacy_target`: a resumed session keeps its old id and label.
+    await expect(findUnified([[SID_DEFAULT, 'cli', null]])).resolves.toMatchObject({ sessionId: SID_DEFAULT })
+    await expect(findUnified([[SID_DEFAULT, 'cli', null], [local(1), 'local', 'acp']])).resolves.toMatchObject({ sessionId: SID_DEFAULT })
+    await expect(findUnified([[SID_DEFAULT, 'cli', null], [local(1), 'local', 'cli']])).resolves.toBeNull() // two: ambiguous
+  })
+
+  t('reads a store from before created_source as before: a local row is no pane\'s own', async () => {
+    await expect(findUnified([[SID_DEFAULT, 'cli', null]], false)).resolves.toMatchObject({ sessionId: SID_DEFAULT })
+    await expect(findUnified([[local(1), 'local', null]], false)).resolves.toBeNull()
+    await expect(findUnified([[SID_DEFAULT, 'cli', null], [local(1), 'local', null]], false)).resolves.toMatchObject({ sessionId: SID_DEFAULT })
+  })
+
+  t('skips the other id shapes Hermes stores (bg_, cron_, room_, api_, run_) before checking an id', async () => {
+    // hermes_state_ids.py SESSION_ID_RECOGNIZERS: none is a pane's session, and none may refuse the store.
+    const others: Array<[string, string, string | null]> = [['bg_0123abcd', 'tool', null], ['cron_job_1', 'cron', null],
+      ['room_abc', 'gateway', null], ['api_0123', 'api', null], ['run_0123', 'local', 'kanban'], ['bg_pending', 'local', 'unknown']]
+    await expect(findUnified([[local(1), 'local', 'cli'], ...others])).resolves.toMatchObject({ sessionId: local(1) })
+    // A pane's own source with an id Harness cannot read is still refused, as before.
+    await expect(findUnified([['run_0123', 'local', 'cli']])).rejects.toThrow('invalid conversation id')
   })
 })
 

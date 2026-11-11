@@ -273,12 +273,13 @@ class _LinkMachineScreenState extends State<LinkMachineScreen> {
                                   autocorrect: false,
                                   textInputAction: TextInputAction.done,
                                   textAlignVertical: TextAlignVertical.center,
-                                  style: DesktopChrome.text(),
+                                  style: DesktopChrome.text(size: 13),
                                   decoration: InputDecoration(
                                     hintText:
                                         'Remote password for $machineName',
                                     hintStyle: DesktopChrome.text(
-                                      color: DesktopChrome.muted,
+                                      size: 13,
+                                      color: DesktopChrome.hint,
                                     ),
                                     suffixIconConstraints: const BoxConstraints(
                                       minWidth: 40,

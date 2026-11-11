@@ -14,16 +14,15 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 export interface TerminalHandoffRequest {
   /** The pane `harness remote` was typed in: tmux's `%N`, which names a tmux pane only, or a pty host pane's
-   *  `<instance>:%N` (`$HARNESS_PANE`), which today's `harness remote` does not send yet (`handoffAgentId`). */
+   *  `<instance>:%N` (`$HARNESS_PANE`, on Windows). */
   tmuxPane: string
   /** The machine the new terminal is on, and the agent it is there. */
   machineId: string
   agentId: string
 }
 
-export const TMUX_PANE_RE = /^%\d{1,9}$/
 /** What the daemon accepts as the handoff's pane: tmux's `%N`, or a pty host pane's `<instance>:%N`. */
-const HANDOFF_PANE_RE = new RegExp(`^(?:${PTY_HOST_INSTANCE_SOURCE}:)?%\\d{1,9}$`)
+export const HANDOFF_PANE_RE = new RegExp(`^(?:${PTY_HOST_INSTANCE_SOURCE}:)?%\\d{1,9}$`)
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 
 /** The request as the wire may carry it — bounded, printable ids, a real pane id — or null. */

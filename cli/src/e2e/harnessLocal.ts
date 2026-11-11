@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { env } from '../config/env.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
+import { daemonFetch, localWsTarget } from '../lib/localTransport.js'
 import type { GridOverride } from './gridSwitchDriver.js'
 
 const execFileP = promisify(execFile)
@@ -28,7 +29,7 @@ export function localHeaders(): Record<string, string> {
 }
 
 export function daemonUrl(): string {
-  return `ws://127.0.0.1:${daemonPort()}/api/local-ws`
+  return localWsTarget(env.ADAPTER_DATA_DIR, daemonPort()).url
 }
 
 /**
@@ -39,7 +40,7 @@ export function daemonUrl(): string {
  */
 export async function machineId(): Promise<string> {
   if (process.env.HARNESS_MACHINE_ID) return process.env.HARNESS_MACHINE_ID
-  const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/status`, { headers: localHeaders(), signal: AbortSignal.timeout(3_000) })
+  const res = await daemonFetch(env.ADAPTER_DATA_DIR, daemonPort())(`http://127.0.0.1:${daemonPort()}/api/status`, { headers: localHeaders(), signal: AbortSignal.timeout(3_000) })
   if (!res.ok) throw new Error(`daemon /api/status answered ${res.status} — is \`harness\` running on port ${daemonPort()}?`)
   const status = (await res.json()) as { machineId?: unknown; credentialRequired?: unknown }
   // The public answer: this process could not show the credential (another OS user, or another data folder).

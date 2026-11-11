@@ -5,6 +5,7 @@ import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOve
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import type { AdoptSwarmSkill } from '../api.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 /** What a harness held for its Swarm role says in its pane, in the person's words. */
 export const SWARM_ROLE_HELD = 'Waiting for the Swarm to confirm this agent\'s role. It starts by itself once the Swarm answers.'
@@ -15,21 +16,26 @@ interface RestoreLaunchDeps {
   downgradedPermission(entry: RegisteredSession, native?: LaunchOverrides['native']): Promise<{ permissionMode?: string | null; bypassPermission?: boolean; nativeHold?: string }>
   prepareSessionResume(entry: RegisteredSession): void
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
-  launch(entry: RegisteredSession, opts: { resumeSessionId?: string }, overrides: LaunchOverrides,
+  launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
-  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
+   *  Swarm is off. */
   adoptSwarmSkill?: AdoptSwarmSkill
 }
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
   return async (given, { current, prepare, ...opts }) => {
+    // A guest's harness is never relaunched this way: every relaunch builds an owner's launch, which would run
+    // the guest's conversation as the owner, with the owner's keys (core/guestPolicy.ts GUEST_HARNESS_REFUSAL).
+    // On Windows the pane also belonged to the guest's own host, whose task may be gone.
+    if (given.guest) return { error: GUEST_HARNESS_REFUSAL.error, detail: GUEST_HARNESS_REFUSAL.detail }
     if (externalResumePending(given.externalResume)) return { held: 'search', holdScope: 'workspace',
       detail: given.launch?.state === 'held' ? given.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(given.cwd)
     if (missing) return missing
-    // An older Swarm session comes back with its role, or waits for it: boot restore and a host move relaunched an old
-    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). A held one waits in
-    // its pane, and the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
+    // An agent its person attached comes back with its Swarm role, or waits for it: boot restore and a host move relaunched a
+    // Swarm member with no saved role as an ordinary session (security review 1 of #2255). A held one waits in its pane, and
+    // the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
     let entry = given
     const looked = await deps.adoptSwarmSkill?.lookup?.(given, current)
     if (looked !== undefined) {
@@ -72,7 +78,9 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): this row fails
     // alone. Thrown, it ended the whole pass ("restore skipped") on every start.
     let launched: RestoreLaunch
-    try { launched = await deps.launch(entry, opts, built.overrides, permission) } catch (error) {
+    // The row's id goes with the launch: an engine whose sessions Harness names reopens the agent's own when it resumes
+    // none (engineLaunch.ts `agentId`).
+    try { launched = await deps.launch(entry, { ...opts, agentId: entry.agentId }, built.overrides, permission) } catch (error) {
       const { error: code, detail } = windowsLaunchRefusal(error)
       return { error: code, detail }
     }

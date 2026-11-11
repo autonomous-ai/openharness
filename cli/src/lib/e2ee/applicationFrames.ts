@@ -3,7 +3,7 @@
  * do not send these frames; older targets answer UNSUPPORTED before any command is attempted.
  *
  * ONE place for every extension: the grid fleet RPCs (#90), harness sharing (`SHARE_*`), CLI-to-CLI
- * viewer forwarding (`VIEWER_DOWN_TYPES`, #85), the pair brain's machine-to-machine `PAIR_*` and the phone's
+ * viewer forwarding (`VIEWER_DOWN_TYPES`, #85), an agent browser's stream (`AGENT_BROWSER_*_TYPES`), the pair brain's machine-to-machine `PAIR_*` and the phone's
  * individual art (`PLATE_*`). A type listed in none of these travels plaintext, and
  * the two callers (relayClient's wrap, backendSocket's unwrap and reply) must agree — they used to
  * spell the union inline, in three places, and merging two of these features meant merging the spelling.
@@ -18,6 +18,12 @@ import { ROUTE_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcRes
 // The ones the core reads too, to dispatch a request and name its reply, live with its other frame rules
 // (lib/relayFrames.ts), which load no cipher; this stays the one place every extension is listed.
 export { ROUTE_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcResultType }
+
+/** An agent browser's stream (core/browserStreams.ts): JSON control beside its binary `browser` kind. Pairwise sealed
+ * both ways, so the relay routes them by type and connection and never sees the agent, the stream or the reason.
+ * Not `browser_open`: that is a pane's BROWSER shim opening a URL (agentClient/openUrl.ts). */
+export const AGENT_BROWSER_DOWN_TYPES = new Set(['agent_browser_open', 'agent_browser_ack', 'agent_browser_close'])
+export const AGENT_BROWSER_UP_TYPES = new Set(['agent_browser_open_result', 'agent_browser_close'])
 
 const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'grid_fleet_cancel',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])
@@ -38,6 +44,12 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // a guest may start a harness (the owner's folders).
   'shared_machines', 'guest_folders',
   'super_tabs',
+  // An agent's instructions file (services/projects.ts), read and saved from the owner's other computers: what the person
+  // wrote there is theirs, so the relay sees none of it, in either direction.
+  'agent_instructions_read', 'agent_instructions_write',
+  // An agent's browser from the owner's other computers (services/agentBrowser.ts): its settings carry the proxy and its
+  // password, a proxy test's answer the proxy's exit address.
+  'agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
   'browser_callback', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))
@@ -74,6 +86,7 @@ export function admitRelayedPairFrame(frame: { type?: unknown; payload?: unknown
 }
 export const encryptDownFrame = (type: string): boolean =>
   isEncryptedDownType(type) || MACHINE_REQUESTS.has(type) || FLEET_REQUESTS.has(type) || SHARE_REQUEST_TYPES.has(type) || VIEWER_DOWN_TYPES.has(type)
+  || AGENT_BROWSER_DOWN_TYPES.has(type)
   || PAIR_REQUESTS.has(type) || type === PLATE_REQUEST || AGENT_MESSAGES_REQUEST_TYPES.has(type)
 /** Client→daemon requests that older daemons took in the clear and no longer do. A client seals them
  * only for a daemon whose e2e_welcome says `strictDown` — an older one would never open the envelope
@@ -111,4 +124,4 @@ const SEALED_REPLIES = new Set([
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)
   || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT || type === PLATE_RESULT || AGENT_MESSAGES_RESULT_TYPES.has(type)
-  || SEALED_REPLIES.has(type)
+  || SEALED_REPLIES.has(type) || AGENT_BROWSER_UP_TYPES.has(type)

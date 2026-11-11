@@ -12,6 +12,7 @@ import 'debug_filter_bar.dart';
 import 'debug_log_tile.dart';
 import 'debug_paths_card.dart';
 import 'debug_toolbar.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// Settings ▸ Debug — the app's own log, as this session still holds it.
 ///
@@ -205,7 +206,7 @@ class _DebugSectionState extends State<DebugSection> {
 
   Widget _list(bool nothingLogged, List<LogEntry> visible) {
     if (visible.isNotEmpty) {
-      return ListView.separated(
+      return LaidOutListView.separated(
         itemCount: visible.length,
         separatorBuilder: (_, _) => const SizedBox(height: 6),
         itemBuilder: (context, i) => DebugLogTile(entry: visible[i]),

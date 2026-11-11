@@ -15,8 +15,6 @@ class LeadMachine {
     this.inSwarm = true,
     this.own = true,
     this.native = true,
-    this.team = false,
-    this.teamEngines,
     this.engineRefusals = const {},
     this.owner,
   });
@@ -31,28 +29,16 @@ class LeadMachine {
   /// Manager on another machine of theirs, as before.
   final bool inSwarm;
 
-  /// One of the person's own machines. Another person's runs the Product
-  /// Manager only in its Mac's Harness Team account ([team]).
+  /// One of the person's own machines.
   final bool own;
 
   /// This Desktop starts the Product Manager itself, on a machine of the
   /// person's it is connected to; otherwise the Swarm starts it there.
   final bool native;
 
-  /// It runs in that machine's Harness Team account.
-  final bool team;
-
-  /// The engines it runs in that Mac's Harness Team account, as the server
-  /// decided (backend leadStart.ts leadChoices); the others run on the Mac
-  /// itself. Null from a server that does not say: then [team] holds for all.
-  final Set<String>? teamEngines;
-
   /// Whose machine it is, for a teammate's (its menu row wears their
   /// avatar); null for the person's own.
   final SuperTabPerson? owner;
-
-  /// It runs with [engine] in that Mac's Harness Team account.
-  bool inTeam(String engine) => teamEngines?.contains(engine) ?? team;
 
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.
@@ -200,7 +186,6 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
     free <= 0
         ? 'No agents free'
         : '$free ${free == 1 ? 'agent' : 'agents'} free',
-    if (free > 0 && machine.team) 'Team account',
     if (free > 0 && machine.has(repository)) 'Has repo',
     if (free > 0 && machine.maySleep) 'May sleep',
   ].join(' · ');

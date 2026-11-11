@@ -11,6 +11,11 @@ const create = vi.hoisted(() => vi.fn())
 vi.mock('./prisma.js', () => ({
   prisma: { user: { findUnique, update, create } },
 }))
+// An update moves the person's sign-in epoch in Redis (lib/harnessAuthCache.ts), which these tests do not run.
+vi.mock('./harnessAuthCache.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./harnessAuthCache.js')>()),
+  signInsChanged: vi.fn(async () => {}),
+}))
 
 import { authenticateAccessToken, clearSsoProfileCache } from './ssoAuth.js'
 

@@ -14,6 +14,7 @@ import '../finder_models.dart';
 import 'finder_change_row.dart';
 import 'finder_click.dart';
 import 'finder_dialogs.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// The Changes half of the sidebar, Orca's Source Control list: Conflicts
 /// first, then Changes, Staged Changes and Untracked Files, each with its
@@ -47,13 +48,10 @@ class _FinderChangesViewState extends State<FinderChangesView> {
       message: 'This folder isn’t in a Git repository.',
       compact: true,
     ),
-    FinderLoaded(:final value?) when value.changes.isEmpty => const EmptyState(
-      icon: AppIcons.gitBranch,
-      title: 'No changes',
-      message: 'Everything here matches the last commit.',
-      compact: true,
-    ),
-    FinderLoaded(:final value?) => ListView(
+    // An empty list shows nothing.
+    FinderLoaded(:final value?) when value.changes.isEmpty =>
+      const SizedBox.shrink(),
+    FinderLoaded(:final value?) => LaidOutListView(
       key: const ValueKey('finder-changes'),
       padding: const EdgeInsets.symmetric(vertical: 4),
       children: [
@@ -101,7 +99,7 @@ class _FinderChangesViewState extends State<FinderChangesView> {
 
   Widget _row(GitChanges repository, GitChange change) {
     final area = change.area;
-    final path = p.join(repository.root, change.path);
+    final path = repository.pathOf(change);
     return FinderChangeRow(
       key: ValueKey('finder-change-${area.name}-${change.path}'),
       change: change,

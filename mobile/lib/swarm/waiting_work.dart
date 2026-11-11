@@ -1,25 +1,48 @@
 import 'model.dart';
 
 /// One piece of work waiting on the reader: its worker needs a person or is
-/// stuck.
+/// stuck, or waits at a prompt in its terminal ([atPrompt], task #3029).
 class SwarmWaitingWork {
-  SwarmWaitingWork(this.conversation, this.project, this.snapshot);
+  SwarmWaitingWork(
+    this.conversation,
+    this.project,
+    this.snapshot, {
+    this.promptAgentId,
+    this.requested = false,
+  });
   final SuperTabConversation conversation;
   final SuperTabProject project;
   final SuperTabSnapshot snapshot;
 
-  /// `needs_human` or `blocked`.
-  String get status => conversation.assignment!['status'] as String;
+  /// The reader also asked for this task (its requester): its stuck or
+  /// needs-you notice is posted only then, so a person in many projects is not
+  /// told of every task in them (anh Dee, 2026-11-09). The list and the badge
+  /// do not read it.
+  final bool requested;
+
+  /// The agent at a prompt in its terminal, when that is what waits.
+  final String? promptAgentId;
+
+  /// Whether its agent waits at a prompt in its terminal, whatever its status.
+  bool get atPrompt => promptAgentId != null;
+
+  /// `needs_human` or `blocked`; `prompt` for an agent at a prompt.
+  String get status =>
+      atPrompt ? 'prompt' : conversation.assignment!['status'] as String;
 
   /// The worker's name.
-  String get agentName =>
-      snapshot.agentName(conversation.assignment!['agentId'] as String? ?? '');
+  String get agentName => snapshot.agentName(
+    promptAgentId ?? conversation.assignment!['agentId'] as String? ?? '',
+  );
 
   /// What the worker wrote with the status: its question, or why it is stuck.
-  String? get question => switch (conversation.assignment!['result']) {
-    final String text when text.trim().isNotEmpty => text.trim(),
-    _ => null,
-  };
+  /// At a prompt, it says so: the prompt itself is in its terminal.
+  String? get question => atPrompt
+      ? 'Waiting at a prompt in its terminal'
+      : switch (conversation.assignment!['result']) {
+          final String text when text.trim().isNotEmpty => text.trim(),
+          _ => null,
+        };
 }
 
 /// Each conversation's partner, the person its work needs (`partnerId`, named
@@ -35,7 +58,8 @@ Map<String, String> swarmPartners(Map<String, dynamic> state) => {
 /// is stuck, and the reader is who it waits on — the conversation's partner
 /// when it has one, else the project's owner (Lead's ruling, 2026-10-27). A
 /// decision or tag asked of a person by name reaches them on its own
-/// (`SwarmAsks`), so it is never counted here for anyone else.
+/// (`SwarmAsks`), so it is never counted here for anyone else. Whether the
+/// reader asked for it too is [SwarmWaitingWork.requested].
 ///
 /// The one place this rule lives: when people's areas reach the phone, the
 /// owner gives way to whoever covers the area here.
@@ -58,7 +82,23 @@ List<SwarmWaitingWork> swarmWaitingWork(
       if (superTabWorkWaits(conversation.assignment?['status']))
         if (snapshot.projectById(conversation.projectId) case final project?)
           if ((partners[conversation.id] ?? project.ownerId) == accountId)
-            SwarmWaitingWork(conversation, project, snapshot),
+            SwarmWaitingWork(
+              conversation,
+              project,
+              snapshot,
+              requested: conversation.requesterId == accountId,
+            ),
+    // An agent at a prompt in a task of the reader's: the backend chose them
+    // (the task's requester, or the device machine's owner), so no rule here.
+    for (final wait in snapshot.promptsWaiting)
+      if (snapshot.conversation(wait.conversationId) case final conversation?)
+        if (snapshot.projectById(conversation.projectId) case final project?)
+          SwarmWaitingWork(
+            conversation,
+            project,
+            snapshot,
+            promptAgentId: wait.agentId,
+          ),
   ]);
   _kept[snapshot] = (accountId: accountId, partners: partners, work: work);
   return work;

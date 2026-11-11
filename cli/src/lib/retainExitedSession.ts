@@ -30,7 +30,8 @@ export interface RetainExitedSessionDeps {
   invalidateTerminalControl(agentId: string): void
   forgetInput(agentId: string): void
   forgetRelaunch?(sessionId: string): void
-  detachDsh(agentId: string): void
+  /** The agent no longer runs here: its DSH viewer and its browser let go (core/main.ts `agentEnded`). */
+  ended(agentId: string): void
   syncRecapPool(): void
   warn(message: string, error: unknown): void
 }
@@ -43,7 +44,7 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
     deps.invalidateTerminalControl(entry.agentId)
     deps.forgetInput(entry.agentId)
     deps.forgetRelaunch?.(entry.sessionId)
-    deps.detachDsh(entry.agentId)
+    deps.ended(entry.agentId)
     // END THE VIEWS OF THE AGENT THAT JUST ENDED: moved to the shell that keeps its pane, or closed,
     // the way a stop closes them, when there is none.
     //

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { fetchDefaultBranch, harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
@@ -169,6 +170,64 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(new Set(branches).size).toBe(2)
     expect(await readFile(join(repo, 'src', 'value'), 'utf8')).toBe('my uncommitted work')
     expect(await git('branch', '--show-current')).toBe('main')
+  })
+
+  describe('concurrent starts take turns per repository', () => {
+    const log = () => join(root, 'worktree-adds.log')
+    /** git as the daemon runs it, writing `start <repo>` and `end <repo>` around each `worktree add` and `branch -m`. With
+     *  PEER_WAIT set, each waits (at most PEER_WAIT times 50 ms) until another has started, so two that run at once are seen to. */
+    beforeEach(async () => {
+      const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+      const bin = join(root, 'bin')
+      await mkdir(bin)
+      await writeFile(join(bin, 'git'), `#!/bin/sh
+case " $* " in *" worktree add "*|*" branch -m "*)
+  repo=; prev=; for arg in "$@"; do [ "$prev" = -C ] && repo=$arg; prev=$arg; done
+  echo "start $repo" >> '${log()}'
+  if [ -n "$PEER_WAIT" ]; then i=0; while [ "$(grep -c '^start' '${log()}')" -lt 2 ] && [ $i -lt "$PEER_WAIT" ]; do sleep 0.05; i=$((i+1)); done; fi
+  '${realGit}' "$@"; code=$?
+  echo "end $repo" >> '${log()}'
+  exit $code;;
+esac
+exec '${realGit}' "$@"
+`, { mode: 0o755 })
+      vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+    })
+    const lines = async () => (await readFile(log(), 'utf8')).trim().split('\n')
+
+    // 2026-11-11: two adds at once in one repository, and one read the other's half-written .git/worktrees/<name> ("fatal:
+    // failed to read .../commondir"), exit 128, WORKTREE_FAILED. Starts that draw the same made-up name both start, too.
+    it('all start, on distinct branches, one worktree add at a time', async () => {
+      const harnesses = join(root, 'harnesses')
+      const paths = await Promise.all(Array.from({ length: 4 }, () =>
+        prepareGitProject(repo, { root: harnesses, worktree: true, ref: 'refs/heads/feature', pick: () => 0 })))
+      const branches = await Promise.all(paths.map(current))
+      expect(new Set(branches)).toEqual(new Set(['amber-badger', 'amber-badger-2', 'amber-badger-3', 'amber-badger-4']))
+      for (const branch of branches) expect(await git('config', '--get', `branch.${branch}.harness`)).toBe('placeholder')
+      for (const path of paths) expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('feature')
+      expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end', 'start', 'end', 'start', 'end'])
+    })
+
+    it('with a branch named after its session, in turn', async () => {
+      const harnesses = join(root, 'harnesses')
+      const made = await prepareGitProject(repo, { root: harnesses, worktree: true, pick: () => 0 })
+      await rm(log())
+      vi.stubEnv('PEER_WAIT', '100')
+      const [named] = await Promise.all([nameBranchAfterSession(made, 'Fix the login page'),
+        prepareGitProject(repo, { root: harnesses, worktree: true, branchName: 'other' })])
+      expect(named).toBe('login')
+      expect(await git('config', '--get', 'branch.other.harness')).toBe('created')
+      expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end'])
+    })
+
+    it('in different repositories at once', async () => {
+      vi.stubEnv('PEER_WAIT', '100')
+      const other = join(root, 'other')
+      await exec('git', ['clone', '--quiet', repo, other])
+      const harnesses = join(root, 'harnesses')
+      await Promise.all([repo, other].map(source => prepareGitProject(source, { root: harnesses, worktree: true, branchName: 'both' })))
+      expect((await lines()).map(line => line.split(' ')[0])).toEqual(['start', 'start', 'end', 'end'])
+    })
   })
 
   it('makes up a two-word branch no branch uses, in a folder named for it, grouped by repository', async () => {
@@ -434,35 +493,6 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       expect(await swarmStart()).toBe('pushed')
     })
 
-    it('fetches nothing for another person\'s Swarm start: its host fetched with the app\'s token, and the worktree starts from that', async () => {
-      const before = await inClone('rev-parse', 'refs/remotes/origin/main')
-      await pushToOrigin('pushed')
-      // The daemon's own git setup is never asked: offline, the worktree starts from what the checkout has.
-      const offline = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-1', fromDefaultBranch: true, offline: true }, options())
-      expect(await readFile(join(offline, 'src', 'value'), 'utf8')).toBe('main')
-      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).toBe(before)
-      // Only the daemon sets it: a client cannot ask for it.
-      expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default', offline: true })).not.toHaveProperty('offline')
-      // The host's fetch, with the environment it is given in place of the daemon's.
-      const env = { ...process.env, GIT_CONFIG_PARAMETERS: `'harness.fixture'='yes'` }
-      expect(await fetchDefaultBranch(managed, env)).toBe(true)
-      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
-      const folder = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-2', fromDefaultBranch: true, offline: true }, options())
-      expect(await readFile(join(folder, 'src', 'value'), 'utf8')).toBe('pushed')
-    })
-
-    it('a host\'s fetch does nothing outside a checkout or without a default branch, and says when it could not fetch', async () => {
-      expect(await fetchDefaultBranch('relative/path', process.env)).toBe(false)
-      expect(await fetchDefaultBranch(join(root, 'nowhere'), process.env)).toBe(false)
-      const local = join(root, 'no-remote')
-      await mkdir(local)
-      await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
-      await exec('git', ['-C', local, ...identity, 'commit', '-q', '--allow-empty', '-m', 'initial'])
-      expect(await fetchDefaultBranch(local, process.env)).toBe(false)
-      await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
-      expect(await fetchDefaultBranch(managed, process.env)).toBe(false)
-    })
-
     it('starts from the branch it is given, not the default one', async () => {
       await pushToOrigin('pushed')
       expect(await swarmStart({ branchBase: undefined, branchRef: 'refs/remotes/origin/feature' })).toBe('feature')
@@ -610,18 +640,25 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
         vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
       })
       afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
-      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends after
-       *  [seconds] by touching `ended`. */
-      const leftBehind = async (seconds: number) => {
+      /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends once
+       *  [wait] (shell) returns by touching `ended`. */
+      const leftBehind = async (wait: string) => {
         const hooks = join(root, 'hooks')
         await mkdir(hooks)
-        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(sleep ${seconds}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
+        await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\n(${wait}; : > '${join(root, 'ended')}') &\nexit 0\n`, { mode: 0o755 })
         await git('config', 'core.hooksPath', hooks)
       }
 
       it('waits for what git left running to end before it looks at the checkout, and says taskkill failed', async () => {
-        const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-        await leftBehind(2)
+        // What git left ends 0.3 s after the start has given up on stopping it, however long git took under load: a
+        // fixed 2 s from the hook left 1 s between it and the start's own wait, and a slow checkout on a loaded Mac used
+        // that up. Still after the timeout, so a start that stopped waiting for git's stderr would read it unfinished.
+        // Bounded (30 s), so a test that fails first leaves nothing running.
+        const stopped = join(root, 'stop-failed')
+        const said = vi.spyOn(console, 'error').mockImplementation((...line: unknown[]) => {
+          if (String(line[0]).startsWith('[worktree] could not stop git')) writeFileSync(stopped, '')
+        })
+        await leftBehind(`n=0; while [ ! -e '${stopped}' ] && [ $n -lt 600 ]; do sleep 0.05; n=$((n + 1)); done; sleep 0.3`)
         const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
         expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
         expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
@@ -630,7 +667,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
       it('removes nothing while something git started may still be writing', async () => {
         const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-        await leftBehind(8)
+        await leftBehind('sleep 8')
         await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'still-running', worktreeTimeout: 1_500 }))
           .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
         await expect(readFile(join(root, 'ended'))).rejects.toThrow()

@@ -1,9 +1,13 @@
 import type { AgentEngine } from '../engines/types.js'
 import type { PaneInspection } from '../engines/facets/screen.js'
 import { inspectPane, stripAnsi } from '../engines/kit/pane.js'
+import { inspectOpenclawPane } from '../engines/openclaw/runtimeProfile.js'
 import { parsePiFooterProfile } from '../engines/pi/runtimeProfile.js'
 const PI_FOOTER_BUDGET = /\d+(?:\.\d+)?%\s*\/\s*\S+/
-export function inspectRuntimePane(engine: AgentEngine, capture: string): PaneInspection { return engine === 'pi' ? inspectPiPane(capture) : inspectPane(engine, capture) }
+export function inspectRuntimePane(engine: AgentEngine, capture: string): PaneInspection {
+  if (engine === 'openclaw') return inspectOpenclawPane(capture)
+  return engine === 'pi' ? inspectPiPane(capture) : inspectPane(engine, capture)
+}
 function inspectPiPane(capture: string): PaneInspection {
   const lines = stripAnsi(capture).split('\n').map((line) => line.replace(/\s+$/, ''))
   const text = lines.join('\n')

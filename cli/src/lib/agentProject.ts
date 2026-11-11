@@ -3,7 +3,9 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { isGitHubHost, safeSshAlias } from './githubRepository.js'
 import { insideGitCheckout } from './gitProject.js'
+import { resolveHost } from './sshHosts.js'
 
 const exec = promisify(execFile)
 export type AgentProject = {
@@ -11,6 +13,9 @@ export type AgentProject = {
   cwd: string
   root: string | null
   remote: string | null
+  /** The repository [remote] stands for when its host is an SSH alias (`git@gh-work:acme/api` is `github.com/acme/api`),
+   *  so the same repo is one project on every computer (task #2476). Absent when [remote] names its real host. */
+  repository?: string
   branch: string | null
   /** Inside a linked worktree rather than the repository's own checkout. */
   worktree?: true
@@ -33,6 +38,40 @@ export function canonicalRepository(raw: string | null): string | null {
     const port = url.port === defaultPort ? '' : url.port
     return `${host}${port ? `:${port}` : ''}/${path}`
   } catch { return null }
+}
+
+/** What `ssh -G` said each alias names, for five minutes: every agent's folder is read again each minute, and a
+ *  person's SSH configuration rarely changes. At most 64 names are kept. */
+const hostCache = new Map<string, { at: number; value: Promise<string | null> }>()
+function cachedHost(alias: string): Promise<string | null> {
+  const now = Date.now()
+  const found = hostCache.get(alias)
+  if (found && now - found.at < 5 * 60_000) return found.value
+  const value = resolveHost(alias)
+  hostCache.delete(alias)
+  hostCache.set(alias, { at: now, value })
+  if (hostCache.size > 64) hostCache.delete(hostCache.keys().next().value!)
+  return value
+}
+
+/** The repository an SSH remote's host alias stands for, in [canonicalRepository]'s form: `git@gh-work:Acme/Api.git`
+ *  is `github.com/acme/api` when `Host gh-work` has `HostName github.com`, and GitHub's SSH host `ssh.github.com` is
+ *  GitHub. Null when the remote names its real host, is not ssh (only ssh reads ~/.ssh/config), or ssh cannot say. A
+ *  name ssh could read as an option is never asked. */
+export async function aliasRepository(raw: string | null, resolve: (alias: string) => Promise<string | null> = cachedHost): Promise<string | null> {
+  const remote = canonicalRepository(raw)
+  if (!raw || !remote) return null
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(raw.trim())?.[1]?.toLowerCase()
+  if (scheme !== undefined && scheme !== 'ssh') return null
+  const slash = remote.indexOf('/')
+  const host = remote.slice(0, slash).replace(/:\d+$/, '')
+  if (host === 'github.com' || !safeSshAlias(host)) return null
+  let named: string | null
+  try { named = (await resolve(host))?.toLowerCase() ?? null } catch { return null }
+  if (!named) return null
+  const target = isGitHubHost(named) ? 'github.com' : named
+  // The alias's port, if any, is the configuration's business, not the repository's.
+  return target === host ? null : canonicalRepository(`ssh://${target}${remote.slice(slash)}`)
 }
 
 /** Bounded subprocesses, no shell, network, or repository mutation. */
@@ -133,8 +172,9 @@ async function inspect(cwd: string): Promise<AgentProject> {
     const { remote, pending } = await projectConfig(cwd, branch)
     // A linked worktree is named for its repository, not its folder.
     const main = common && basename(common) === '.git' ? dirname(resolve(root, common)) : root
+    const repository = await aliasRepository(remote)
     return {
-      name: basename(main), cwd, root, remote: canonicalRepository(remote), branch,
+      name: basename(main), cwd, root, remote: canonicalRepository(remote), ...(repository ? { repository } : {}), branch,
       ...(main !== root ? { worktree: true as const } : {}), ...(pending ? { branchPending: true as const } : {}),
     }
   } finally {

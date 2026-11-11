@@ -50,7 +50,7 @@ for arg in "$@"; do
     --minor) DO_MINOR=1 ;;
     --website-only) WEBSITE_ONLY=1 ;;
     --allow-older) ALLOW_OLDER=1 ;;
-    -h|--help) sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "ERROR unknown flag: $arg" >&2; exit 1 ;;
     *) NEW_VER="${arg#v}" ;;
   esac

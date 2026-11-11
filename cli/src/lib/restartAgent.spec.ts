@@ -44,6 +44,26 @@ describe('restartAgent', () => {
     expect(d.calls).toEqual(['holdOpen', 'terminate', 'prepareResume', 'buildArgv', 'respawn', 'waitForProcess'])
   })
 
+  it('resumes the prepared fork of a moved conversation, once its writer has stopped', async () => {
+    const seen: unknown[] = []
+    const d = deps({ buildArgv: (opts) => { seen.push(opts); return ['codex'] } })
+    const prepareFork = vi.fn(async () => { seen.push(d.calls.includes('terminate')); return 'prepared' })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1', continueInFork: true }, false, { ...d, prepareFork })
+    expect(outcome.ok).toBe(true)
+    expect(seen).toEqual([true, { bypassPermission: false, resumeSessionId: 'prepared' }])
+  })
+
+  it('continues the moved conversation in a plain fork when preparing it fails', async () => {
+    const seen: unknown[] = []
+    const logs: string[] = []
+    const d = deps({ buildArgv: (opts) => { seen.push(opts); return ['codex'] } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1', continueInFork: true }, false,
+      { ...d, log: (message) => logs.push(message), prepareFork: async () => { throw new Error('grid is down') } })
+    expect(outcome.ok).toBe(true)
+    expect(seen.at(-1)).toEqual({ bypassPermission: false, forkSessionId: 's1' })
+    expect(logs.join()).toContain('grid is down')
+  })
+
   it('never prepares history while the old writer may still be alive', async () => {
     const prepareResume = vi.fn()
     const d = deps({ terminate: async () => 'failed', prepareResume })
@@ -291,6 +311,22 @@ describe('restart cancellation', () => {
     expect(coordinator.revision('next observed')).toBe(before + 1)
   })
 
+  // Asked with other launch words, a second restart would be answered by the first's launch and its words would be lost
+  // (or, saved beside it, differ from what launched): it is refused instead, and only the same words join.
+  it('joins an overlapping restart only when it asks for the same launch words, and refuses one that asks for others', async () => {
+    const coordinator = new AgentRestartCoordinator()
+    let finish!: () => void
+    const handler = vi.fn(async () => { await new Promise<void>((resolve) => { finish = resolve }); return { ok: false, error: 'fixture' } as const })
+    const first = coordinator.run('a', handler, 'restart', '["--chrome"]')
+    expect(coordinator.run('a', handler, 'restart', '["--chrome"]')).toBe(first)
+    expect(await coordinator.run('a', handler, 'restart', '["--other"]')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(await coordinator.run('a', handler, 'restart')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(coordinator.operation('a')).toBe('restart')
+    finish()
+    await first
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
   it('joins overlapping restarts but leaves other agents independent', async () => {
     const coordinator = new AgentRestartCoordinator()
     const initial = coordinator.revision('a')
@@ -367,5 +403,16 @@ describe('bypassPermissionFor', () => {
     expect(live).not.toHaveBeenCalled()
     await expect(bypassPermissionFor({}, live)).resolves.toBe(true)
     expect(live).toHaveBeenCalledTimes(1)
+  })
+
+  // Swarm v3 (task #4215): a Swarm agent's mode is its person's choice, or none. One Harness started in full mode, cleared
+  // since, still runs with that flag: read back, its restart or retarget came back in Auto, which nobody chose.
+  it('never asks a Swarm agent\'s live process: with no mode it relaunches approving nothing', async () => {
+    const live = probe()
+    const swarmSkill = { role: 'coordinator' as const, key: 'swarm-lead' }
+    await expect(bypassPermissionFor({ swarmSkill }, live)).resolves.toBe(false)
+    expect(live).not.toHaveBeenCalled()
+    // The mode its person chose still counts.
+    await expect(bypassPermissionFor({ swarmSkill, permissionMode: 'full' }, live)).resolves.toBe(true)
   })
 })

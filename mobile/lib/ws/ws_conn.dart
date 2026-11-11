@@ -69,6 +69,7 @@ class WsRequestFailure implements Exception {
     required this.code,
     this.detail,
     this.hold,
+    this.message,
   });
 
   /// The frame that carried the refusal — `agent_create_result`, say.
@@ -84,6 +85,10 @@ class WsRequestFailure implements Exception {
   /// A code naming why the peer holds the request, when it sends one — `PROGRAM_REPLACED` from a
   /// Change agent handoff. A code, never words to show: the caller picks its own sentence.
   final String? hold;
+
+  /// The sentence a refusal carries for a person to read, when the peer sends one: `os_device`'s
+  /// "That is not the computer's password.", say (CLI osDevice.ts).
+  final String? message;
 
   @override
   String toString() => detail == null || detail!.isEmpty
@@ -939,12 +944,14 @@ class WsConn {
         // on a machine that is not the one in front of them.
         final detail = payload['detail'];
         final hold = payload['hold'];
+        final said = payload['message'];
         pending.completer.completeError(
           WsRequestFailure(
             responseType: message['type'] as String? ?? 'unknown_result',
             code: '${payload['error']}',
             detail: detail is String && detail.isNotEmpty ? detail : null,
             hold: hold is String && hold.isNotEmpty ? hold : null,
+            message: said is String && said.isNotEmpty ? said : null,
           ),
         );
       } else {
@@ -1001,6 +1008,11 @@ class WsConn {
     // File paths and media contents are user data, not frame diagnostics.
     'agent_read_file',
     'agent_read_file_result',
+    // An agent's instructions: the person's own words, and the file they are in.
+    'agent_instructions_read',
+    'agent_instructions_read_result',
+    'agent_instructions_write',
+    'agent_instructions_write_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',

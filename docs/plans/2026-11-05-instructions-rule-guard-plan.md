@@ -1,0 +1,122 @@
+# An instructions save can't silently drop a person's rule (task #3151) — plan
+
+> Written by writing-plans and implemented by its Engineer test first (test-driven-development), as the project's
+> instructions describe. No Execution Handoff.
+
+**Goal:** A project's PM can no longer drop a person's rule, or the "(person, date)" that says who gave it, on its own
+judgment. The server refuses such an `instructions.save` and lists each dropped rule and its person. The save goes through
+when that person makes it, or when it names that person's own approval message for each drop. The person is then told in
+one private line.
+
+**Architecture:** Pure check in `instructionsDiff.ts` (`attributedRules`, `droppedRules`) over the items the chat-line
+diff already parses. `commands.ts` `instructions.save` runs it against the base revision the store already reads, and
+judges approvals from `context.approvals`, which the store loads by id. Notices reuse `person.tell`'s path (the person's
+one Buddy chat and their older project Buddy chat). `pmSchedule.ts` text changes.
+
+**Tech Stack:** TypeScript, zod, vitest, the backend's command reducer (`applyCommand`) and Prisma store.
+
+**Spec:** task #3151 (Ken, 11-05, from lamp): revision 70 → 71 dropped Leo's "promote back within the hour" rule and the
+"(0xken15, 4 Nov)" attribution of a rule it kept, with no check.
+
+## Global Constraints
+
+- No new settings. No new stored data: the check reads the two texts the save already holds.
+- Attributions parsed robustly: names and usernames, `2026-11-04`, `11-04`, `4 Nov`, `Nov 4`, several people
+  (`Ken and Dee`, `Ken, Dee`, `Ken, 11-02; Dee, 11-03`), a note after the date (`Ken, 2026-11-04: ...`), honorifics
+  (`anh Dee`).
+- A rule reworded with the same person and the same meaning passes. Can't tell → refuse and list it.
+- Swarm code stays out of `cli/src/core`. Temp files only in `mktemp -d` folders.
+
+## Design
+
+- growth: no new collection. One boolean on the project's schedule (`tidyPending`), cleared by the next coordinator save.
+  Each revision row embeds its dropped lines (at most 500 of 400 characters), deleted with the row (last 50 kept).
+- concurrency: N/A because it runs inside the save's existing transaction and revision check.
+- read cost: one indexed read of the named approval messages (by id, at most 20), only when a save names them.
+- scale: 64 KB documents (~1,000 items): segments × items word-set compare, well under a millisecond per save at today's
+  size, under 50 ms at 10x. Warns first: save latency on the instructions route.
+- compatibility: `approvals` is optional; an older CLI's save without it is checked the same way and refused with the list,
+  which its PM reads as text. `rule.set` only appends, so it can't drop a rule.
+- migration + rollback: none; reverting the code removes the check.
+- audience: the server enforces it; the person's identity comes from the sender or the stored message's author, never the
+  caller's word.
+- identity: approval is the stored message's author (a person, own words, no source), never `askedBy`.
+- failure: a refusal names every dropped rule and its person; never a silent pass.
+- platforms: server only.
+
+## Review Focus
+
+- False negatives: can a real drop or meaning change pass as a "reword" (negation, numbers)?
+- False positives on ordinary tidies (merge of two rules, reflowed lines, renumbered steps, moved sections).
+- Approval: only that person's own message counts; a Buddy's line, an agent's, `askedBy` or another person's don't.
+
+## Task 1: Parse attributed rules and find the dropped ones
+
+**Files:** `backend/src/superTabs/instructionsDiff.ts`, `backend/src/superTabs/instructionsDiff.test.ts`
+
+**Interfaces:**
+```ts
+export interface AttributedRule { text: string; people: string[]; attribution: string }
+export interface DroppedRule extends AttributedRule { why: 'removed' | 'unattributed' | 'changed' }
+export function attributedRules(text: string): AttributedRule[]
+export function droppedRules(before: string, after: string): DroppedRule[]
+```
+
+- [ ] Failing tests: parse `(Ken, 2026-11-02)`, `(0xken15, 4 Nov)`, `(Scholes, 11-04)`, `(anh Dee, 2026-11-04)`,
+  `(Ken, 2026-11-04: note)`, `(Ken and Dee, 11-03)`, two clauses with `;`, a heading's attribution; ignore
+  `(design, Identity)`, `(measured 2026-11-02 on the Mac Studio)`, `(Ken)`.
+- [ ] Failing tests: removed rule → `removed`; same text without its attribution → `unattributed`; merge of two rules with
+  both attributions → none; reflow/renumber/move → none; light reword with same person → none; a negation or number
+  change → `changed`.
+- [ ] Implement: segments of each item end at an attribution; content-word coverage (≥ 0.75) plus equal polarity words
+  and numbers decide a reword.
+
+## Task 2: Refuse the save, accept approvals, tell the person
+
+**Files:** `backend/src/superTabs/commands.ts`, `backend/src/superTabs/store.ts`, `backend/src/superTabs/instructions.test.ts`
+
+**Interfaces:** `instructions.save` gains `approvals?: string[]` (message ids, at most 20). `CommandContext.approvals?:
+{ id; author: Author; source: boolean }[]`. Refusal `INSTRUCTIONS_RULES_DROPPED` (409) with `details.dropped:
+[{ rule, people, why }]`.
+
+- [ ] Failing tests (the task's checks): a drop is refused listing it; an attribution-only drop is refused; a merge keeping
+  both attributions is accepted; a drop approved by the rule's person goes through and that person gets one private
+  line; the person saving it themselves needs no approval; `askedBy`, another person's or an agent's message don't
+  approve.
+- [ ] Implement in `commands.ts`; the store loads the approval messages and the approvers' Buddy chats.
+
+## Task 3: The PM's built-in text and the daily tidy
+
+Ken's additions through River (11-05), part of this task: (4) every wake tells the PM to reread the whole instructions
+before its jobs (about 7-9k tokens a wake, 20-30 wakes a day, accepted); (5) after the tidy's save the PM compares it with
+the previous revision; (6) the tidy leaves the 30-minute wake for its own daily message at 23:00 local, beside the nightly
+reflection; (7) it counts only when a save follows, and the next day's message says when it was skipped; (8) the PM sorts
+every dropped line as merged, expired or a person's rule that is gone, restores or asks about the last, and lists them in
+the save's summary.
+
+**Files:** `backend/src/superTabs/pmSchedule.ts`, `projects.ts` (`schedule.tidyPending`), `commands.ts` (a coordinator
+save completes a pending tidy), `store.ts` (the poll sends the tidy), their tests.
+
+**Interfaces:** `tidyRequest(state, target, now): ScheduledTidy | null`, `recordTidy(project, tidy)`,
+`tidySaved(project, revision)`, `tidyMessageId(tabId, projectId, day)`. `ScheduleJob` loses `'tidy'`.
+
+- [ ] Failing tests: the teaching and schedule text say never to drop or weaken a person's rule on the PM's own judgment;
+  every wake opens with the reread line; the wake never carries the tidy; the tidy comes alone in the 23:00 hour, once a
+  day, when the instructions changed; it stays pending until the coordinator saves, and the next one says it was skipped;
+  its text sorts dropped lines into the three kinds and checks the save against the previous revision.
+- [ ] Implement.
+
+## Task 4: The History keeps every dropped line (River, 11-05)
+
+#3101 removes the instruction-change line from the chat, so the chat no longer shows removed lines. Each revision keeps
+the lines its save dropped, each with its kind and who gave it, and the summary only counts them ("3 merged, 1 expired").
+
+**Files:** `ruleGuard.ts` (`droppedLines`), `instructionsDiff.ts` (`removedItems`, `keptIn`), `commands.ts`
+(`instructions.save.dropped`), `instructions.ts` (`InstructionsWrite.dropped`), `instructionsStore.ts`, `store.ts`
+(`instructionRevision` returns `dropped`), `prisma/schema.prisma` (`SuperTabInstructionsRevision.dropped Json?`).
+
+- [ ] Failing tests: the save's effect lists every removed item with its kind (a person's rule dropped with approval is
+  `rule` whatever the PM called it; the PM's kind; else `merged` when its words are in one remaining line; else
+  `unsorted`) and its people; the History read returns it; a revision from before reads none.
+- [ ] Implement. Embedded in the revision row (read together, bounded: at most 500 lines of 400 characters), removed with
+  it.

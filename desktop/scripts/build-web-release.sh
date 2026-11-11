@@ -18,7 +18,8 @@ source_commit="$(git rev-parse HEAD)"
 api_url='https://harness-api.autonomous.ai'
 "${FLUTTER_BIN:-flutter}" build web --release --no-wasm-dry-run \
   --no-web-resources-cdn --base-href=/harness-web/ \
-  --output=build/web-release --build-name="$version"
+  --output=build/web-release --build-name="$version" \
+  --dart-define=HARNESS_BUILD_VERSION="$version"
 
 # lucide_icons_flutter lists seven fonts and the browser fetches every one on first load, but
 # the app draws only weight 400 (lib/shared/theme/app_icons.dart): the other six are 1.5 MB

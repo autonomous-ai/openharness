@@ -11,7 +11,7 @@ const secret = s.state.conversations.find(c => c.id === s.secretGroup)!
 const person = (id: string): Author => ({ kind: 'person', id, name: id, membershipGeneration: 'gen' })
 const agent = (id: string): Author => ({ kind: 'agent', id, name: id, membershipGeneration: 'gen' })
 const reply = (thread: string, id: string, sequence: number, author: Author, extra: Partial<ThreadReply> = {}): ThreadReply =>
-  ({ thread, id, author, mentions: [], sequence, createdAt: new Date(NOW + sequence), agentOnly: false, routing: false, ...extra })
+  ({ thread, id, author, mentions: [], sequence, createdAt: new Date(NOW + sequence), agentOnly: false, ...extra })
 
 describe('thread summaries', () => {
   // One row per message, as the inbox read passes them (#2256): a 500-reply thread where every 25th reply is an agent-only

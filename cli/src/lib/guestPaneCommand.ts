@@ -1,18 +1,17 @@
 /**
  * What a tmux pane runs for a guest's harness (docs/plans/2026-10-19-guest-machine-sharing-plan.md): the
  * engine as the guest's own OS user, through the guest helper (guestAccounts.ts), in the guest's workspace,
- * spending the owner's subscription through the relay (subscriptionRelay.ts). Nothing of the owner's goes
- * in: no launch script, no PATH, no HOME, no key — the helper starts the engine with `env -i` and only the
- * variables passed here.
+ * on the guest's own sign-in and settings: nothing spends the owner's subscription (anh Dee, 2026-11-07). An
+ * engine the guest has not signed in shows its own sign-in. Nothing of the owner's goes in: no launch script,
+ * no PATH, no HOME, no key — the helper starts the engine with `env -i` and only the variables passed here.
  *
  * The pane itself is the owner's. Before it hands over it asks the helper whether the guest has the engine,
  * and when not installs it as the guest, in that pane, so the guest watches it happen the first time rather
  * than waiting on a create that says nothing for a minute.
  */
 import { GUEST_HELPER_PATH, guestRunCommand, type GuestAccount } from './guestAccounts.js'
-import { claudeRelayEnv, codexRelayArgs, codexRelayEnv } from './subscriptionRelay.js'
 
-/** The engines a guest's harness runs: the two whose subscription the relay can spend. */
+/** The engines a guest's harness runs. */
 export type GuestLaunchEngine = 'claude' | 'codex'
 export const GUEST_LAUNCH_ENGINES: readonly string[] = ['claude', 'codex'] satisfies readonly GuestLaunchEngine[]
 
@@ -37,9 +36,6 @@ export const GUEST_PANE_BOOTSTRAP = [
 export interface GuestPaneInput {
   account: GuestAccount
   engine: GuestLaunchEngine
-  /** The relay's base, `http://127.0.0.1:<port>`, and this harness's token for it. */
-  relayUrl: string
-  token: string
   bypassPermission: boolean
   /** The engine's flags for the permission mode the guest chose (Ask first, Auto-approve, …), in place of the
    *  all-or-nothing [bypassPermission]: Auto-approve is not Skip all checks. */
@@ -52,23 +48,28 @@ export interface GuestPaneInput {
   /** The owner's LANG, so the guest's terminal reads text as the owner's does. */
   lang?: string
   helperPath?: string
+  /** Where the pane is made; `process.platform` when absent. Windows has no helper: its pane is made by the guest's own host. */
+  platform?: NodeJS.Platform
 }
 
-/** The pane's argv and the variables to set on it (`tmux new-session -e`), which the helper passes on. */
+/**
+ * The pane's argv and the variables to set on it (`tmux new-session -e`), which the helper passes on.
+ *
+ * On Windows the pane is created by the guest's own `harness-pty` host (lib/windows/guestHostBackend.ts), so the
+ * process is already the guest's: there is no helper, no install check and no `sudo`, and the argv is the engine
+ * itself, with nothing added. The engine must be installed for that account (the guest's own PATH).
+ */
 export function guestPaneCommand(input: GuestPaneInput): { argv: string[]; env: Record<string, string> } {
-  const { account, engine, relayUrl, token } = input
+  const { account, engine } = input
   const helperPath = input.helperPath ?? GUEST_HELPER_PATH
   const approve = input.permissionFlags ? [...input.permissionFlags] : input.bypassPermission ? [APPROVE_ALL[engine]] : []
   // A message that starts with `-` is still a message, not one of the engine's options.
   const first = !input.prompt ? [] : input.prompt.startsWith('-') ? ['--', input.prompt] : [input.prompt]
-  const engineArgv = engine === 'claude' ? ['claude', ...approve, ...first] : ['codex', ...codexRelayArgs(relayUrl), ...approve, ...first]
-  const env = {
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    LANG: input.lang || 'en_US.UTF-8',
-    ...(engine === 'claude' ? claudeRelayEnv(relayUrl, token) : codexRelayEnv(token)),
-  }
+  const engineArgv = [engine, ...approve, ...first]
+  const env = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: input.lang || 'en_US.UTF-8' }
   const cwd = input.cwd ?? account.workspace
+  // The guest's own host makes this pane as the guest: the engine runs directly (no helper, and nothing of the owner's).
+  if ((input.platform ?? process.platform) === 'win32') return { argv: engineArgv, env: {} }
   const run = guestRunCommand(account.user, cwd, env, engineArgv, helperPath)
   return {
     argv: ['/bin/sh', '-c', GUEST_PANE_BOOTSTRAP, 'harness-guest', helperPath, account.user, cwd, engine, ...run.argv],

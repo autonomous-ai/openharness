@@ -37,12 +37,12 @@ class RailSectionHeader extends StatelessWidget {
     AppTheme.watch(context);
     final text = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
+      // As the workspace sidebar's headings read ("Projects").
       child: Text(
-        label.toUpperCase(),
-        semanticsLabel: label,
-        style: AppType.monoMeta(
-          color: AppPalette.textFaint,
-          fontWeight: AppFont.medium,
+        label,
+        style: AppType.caption(
+          color: AppPalette.textSecondary,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );

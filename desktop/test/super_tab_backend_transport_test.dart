@@ -2,7 +2,6 @@
 // browser asks the backend itself, with its own sign-in, instead of relaying
 // through one of the person's machines. Run against a real local HTTP server,
 // so the header, the body and the backend's envelope are the real ones.
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,15 +10,12 @@ import 'package:harness/api/access_token_source.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
-import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/backend_transport.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 
-import 'super_tab_activity_test.dart' show reply;
-import 'super_tab_attention_test.dart' show projectServer, unreadThread;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
@@ -131,11 +127,11 @@ void main() {
         'success': true,
         'data': {'format': 2, 'tabs': []},
       };
-      final value = await transport('GET', '/api/super-tabs/list?mentions=1');
+      final value = await transport('GET', '/api/super-tabs/list?after=abc');
       expect(value, {'format': 2, 'tabs': []});
       final sent = backend.requests.single;
       expect(sent.method, 'GET');
-      expect(sent.path, '/api/super-tabs/list?mentions=1');
+      expect(sent.path, '/api/super-tabs/list?after=abc');
       expect(sent.headers['authorization'], 'Bearer browser-token');
       expect(sent.headers['x-autonomous-env'], 'test');
     },
@@ -146,7 +142,7 @@ void main() {
       'operationId': 'op-1',
       'command': {
         'type': 'message.send',
-        'conversationId': 'buddy',
+        'conversationId': 'agent-chat',
         'text': 'hi',
       },
     };
@@ -252,7 +248,6 @@ void main() {
       ('POST', '/api/super-tabs/tab1/native/ctx1'),
       ('POST', '/api/super-tabs/tab1/terminal/r1'),
       ('GET', '/api/super-tabs/tab1/costs'),
-      ('GET', '/api/super-tabs/workspaces'),
       ('GET', '/api/super-tabs/grids'),
       ('GET', '/api/super-tabs/routing-policy'),
       ('POST', '/api/super-tabs/routing-policy'),
@@ -298,6 +293,24 @@ void main() {
       ('POST', '/api/super-tabs/hosts/m1/starts/tab1/s1'),
       ('POST', '/api/super-tabs/hosts/m1/readings'),
       ('GET', '/api/super-tabs/hosts/m1/assignments'),
+      // Swarm v3's tags, decisions, reminders, Activity and followed threads: no screen reads them now.
+      ('GET', '/api/super-tabs/tab1/mentions?state=waiting'),
+      ('GET', '/api/super-tabs/tab1/decisions?state=open'),
+      ('GET', '/api/super-tabs/tab1/reminders'),
+      ('GET', '/api/super-tabs/tab1/activity'),
+      ('POST', '/api/super-tabs/tab1/activity/read'),
+      ('GET', '/api/super-tabs/tab1/threads'),
+      ('GET', '/api/super-tabs/tab1/inbox'),
+      ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/follow'),
+      ('POST', '/api/super-tabs/tab1/conversations/c1/messages/m1/reminder'),
+      // A Lead's routing decision, costs, attempts, project instructions and rules (v3; the backend answers 404).
+      ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
+      ('GET', '/api/super-tabs/tab1/conversations/c1/attempts'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/rules'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/machine-rules'),
     ]) {
       final failure = await refusal(
         transport(method, path),
@@ -310,19 +323,16 @@ void main() {
 
   test('every Swarm route the web uses goes to the backend', () async {
     const routes = [
-      ('GET', '/api/super-tabs/list?mentions=1&after=abc'),
+      ('GET', '/api/super-tabs/list?after=abc'),
       ('GET', '/api/super-tabs/invitations'),
       ('POST', '/api/super-tabs'),
       ('GET', '/api/super-tabs/tab1/parts'),
       ('GET', '/api/super-tabs/tab1/changes?cursor=c%3D1'),
       ('POST', '/api/super-tabs/tab1/commands'),
-      ('GET', '/api/super-tabs/tab1/mentions?state=waiting'),
-      ('GET', '/api/super-tabs/tab1/decisions?state=open'),
-      ('GET', '/api/super-tabs/tab1/leaderboard'),
+      ('GET', '/api/super-tabs/tab1/shipping'),
       ('GET', '/api/super-tabs/tab1/sharing'),
       ('POST', '/api/super-tabs/tab1/sharing'),
       ('GET', '/api/super-tabs/tab1/routing-policy'),
-      ('POST', '/api/super-tabs/tab1/routing-policy'),
       ('GET', '/api/super-tabs/tab1/groups?dormant=1&projectId=p1'),
       ('GET', '/api/super-tabs/tab1/groups/g1'),
       ('GET', '/api/super-tabs/tab1/conversations/c1/messages?before=5'),
@@ -336,21 +346,11 @@ void main() {
       ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/read'),
       ('GET', '/api/super-tabs/tab1/projects/p1/github'),
       ('POST', '/api/super-tabs/tab1/projects/p1/github/approve'),
-      ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
-      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
-      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
-      ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
       ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
       ('POST', '/api/super-tabs/tab1/join'),
       ('GET', '/api/super-tabs/tab1/join/preview'),
       ('POST', '/api/super-tabs/tab1/native'),
-      // Activity, Threads, Follow, per-chat notifications (#2434, #2453) and
-      // the owner's deleted Swarms (#2457).
-      ('GET', '/api/super-tabs/tab1/activity'),
-      ('POST', '/api/super-tabs/tab1/activity/read'),
-      ('GET', '/api/super-tabs/tab1/threads'),
-      ('GET', '/api/super-tabs/tab1/inbox'),
-      ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/follow'),
+      // Per-chat notifications (#2434, #2453) and the owner's deleted Swarms (#2457).
       ('POST', '/api/super-tabs/tab1/conversations/c1/notifications'),
       ('GET', '/api/super-tabs/deleted'),
     ];
@@ -530,27 +530,17 @@ void main() {
     () async {
       final paths = swarmPathsInSource(
         Directory('lib'),
-        // Uploads post a form straight through ApiClient, never this transport.
-        skip: const {
-          'lib/super_tabs/attachment_upload.dart',
-          'lib/super_tabs/avatar_upload.dart',
-        },
+        // An upload posts a form straight through ApiClient, never this transport.
+        skip: const {'lib/super_tabs/attachment_upload.dart'},
       );
       // The walk finds what it should, so a broken walk cannot pass.
-      expect(paths.length, greaterThan(40));
+      expect(paths.length, greaterThan(20));
       expect(
         paths,
         containsAll([
-          '/api/super-tabs/1/activity',
-          '/api/super-tabs/1/activity/read',
-          '/api/super-tabs/1/threads',
-          '/api/super-tabs/1/inbox',
-          '/api/super-tabs/1/conversations/1/threads/1/follow',
+          '/api/super-tabs/1/conversations/1/threads/1/read',
           '/api/super-tabs/1/conversations/1/notifications',
           '/api/super-tabs/deleted',
-          '/api/super-tabs/1/projects/1/instructions/revisions/1',
-          '/api/super-tabs/list?1',
-          '/api/super-tabs/1/projects/1/github?refresh=1',
         ]),
       );
       final refused = <String>[];
@@ -562,14 +552,10 @@ void main() {
         }
       }
       expect(refused, isEmpty, reason: 'refused before sending on the web');
-      for (final file in [
-        'lib/super_tabs/attachment_upload.dart',
-        'lib/super_tabs/avatar_upload.dart',
-      ]) {
-        final source = File(file).readAsStringSync();
-        expect(source, isNot(contains('request(')), reason: file);
-        expect(source, contains('postForm('), reason: file);
-      }
+      final upload = File('lib/super_tabs/attachment_upload.dart')
+          .readAsStringSync();
+      expect(upload, isNot(contains('request(')));
+      expect(upload, contains('postForm('));
     },
   );
 
@@ -611,156 +597,21 @@ void main() {
   }
 
   group('on the web, through the backend', () {
-    test('Activity lists replies to the reader, and leaving it marks them '
-        'read on the backend', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [reply('r1')],
-        'more': false,
-      };
-      final c = await webSwarm(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(activity.error, isNull);
-      expect(activity.supported, isTrue);
-      expect(activity.items.map((i) => i.id), ['r1']);
-      activity.opened();
-      await settle();
-      activity.closed();
-      await settle();
-      expect(server.activityReadPosts, hasLength(1));
-      expect(
-        sent(),
-        containsAll([
-          'GET /api/super-tabs/tab/activity',
-          'POST /api/super-tabs/tab/activity/read',
-        ]),
-      );
-    });
-
-    test(
-      'Activity that failed its first read recovers on the next change',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activityStatus = 503;
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await webSwarm(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        expect(activity.error, isNotNull);
-        expect(activity.items, isEmpty);
-        server.activityStatus = 0;
-        server.append('Something else changed');
-        await c.refresh();
-        await settle();
-        expect(activity.error, isNull);
-        expect(activity.items.map((i) => i.id), ['r1']);
-      },
-    );
-
-    test('Activity drops its rows when access goes, and an answer on its way '
-        'shows nothing', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [reply('r1')],
-        'more': false,
-      };
-      final c = await webSwarm(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(activity.items, hasLength(1));
-      server.holdActivity = Completer();
-      unawaited(activity.load());
-      await settle();
-      c.revokeAccess('Removed from this Swarm.');
-      expect(activity.items, isEmpty);
-      server.holdActivity!.complete();
-      await settle();
-      expect(activity.items, isEmpty);
-      expect(activity.count, 0);
-    });
-
-    test(
-      'Threads lists followed threads, and Follow is kept on the backend',
-      () async {
-        final server = projectServer();
-        server.followedThreads = {
-          'unread': [
-            unreadThread('message-1', 2),
-            // A chat this reader does not have: never shown on its word.
-            unreadThread('message-9', 3, conversationId: 'elsewhere'),
-          ],
-          'read': [],
-          'more': false,
-        };
-        final c = await webSwarm(server);
-        final attention = SuperTabAttention.of(c);
-        await attention.load();
-        expect(attention.error, isNull);
-        expect(attention.followSupported, isTrue);
-        expect(attention.unread.map((t) => t.rootId), ['message-1']);
-        expect(sent(), contains('GET /api/super-tabs/tab/threads'));
-        expect(sent(), isNot(contains('GET /api/super-tabs/tab/inbox')));
-        expect(
-          await attention.setFollow(attention.unread.single, false),
-          isTrue,
-        );
-        expect(server.followPosts, [
-          {'conversationId': 'lead', 'root': 'message-1', 'follow': false},
-        ]);
-        // Access gone: no Follow is sent at all. (A kept Follow reads the
-        // list again first.)
-        await settle();
-        final thread = attention.unread.single;
-        backend.requests.clear();
-        c.revokeAccess('Removed from this Swarm.');
-        expect(await attention.setFollow(thread, true), isFalse);
-        await settle();
-        expect(backend.requests, isEmpty);
-      },
-    );
-
-    test(
-      'Threads on a backend before followed threads reads its inbox',
-      () async {
-        final server = projectServer();
-        server.followedThreads = null;
-        server.inbox = {
-          'threads': [unreadThread('message-1', 2)],
-          'latest': null,
-          'more': false,
-        };
-        final c = await webSwarm(server);
-        final attention = SuperTabAttention.of(c);
-        await attention.load();
-        expect(attention.error, isNull);
-        expect(attention.followSupported, isFalse);
-        expect(attention.unread.map((t) => t.rootId), ['message-1']);
-        expect(sent(), contains('GET /api/super-tabs/tab/inbox'));
-      },
-    );
-
     test('a chat\'s notifications are kept on the backend; a refused one goes '
         'back, and a chat this Swarm does not list sends nothing', () async {
-      final server = projectServer();
+      final server = swarm();
       final c = await webSwarm(server);
-      expect(await c.setNotify('lead', SuperTabNotify.muted), isTrue);
+      expect(await c.setNotify('offline', SuperTabNotify.muted), isTrue);
       expect(server.notifyPosts, [
-        {'conversationId': 'lead', 'notify': 'muted'},
+        {'conversationId': 'offline', 'notify': 'muted'},
       ]);
-      expect(c.notifyOf('lead'), SuperTabNotify.muted);
+      expect(c.notifyOf('offline'), SuperTabNotify.muted);
       server.failNotify = true;
-      expect(await c.setNotify('lead', SuperTabNotify.all), isFalse);
-      expect(c.notifyOf('lead'), SuperTabNotify.muted);
+      expect(await c.setNotify('offline', SuperTabNotify.all), isFalse);
+      expect(c.notifyOf('offline'), SuperTabNotify.muted);
       backend.requests.clear();
       expect(
-        await c.setNotify('someone-else-buddy', SuperTabNotify.all),
+        await c.setNotify('someone-elses-chat', SuperTabNotify.all),
         isFalse,
       );
       expect(backend.requests, isEmpty);

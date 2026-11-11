@@ -11,8 +11,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/folder_zip.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/state/harness_attachments.dart';
+import 'package:path/path.dart' as p;
 
 import 'support/super_tab_fixture.dart';
 
@@ -26,9 +28,11 @@ void main() {
   setUp(() => root = Directory.systemTemp.createTempSync('swarm-folder-drop'));
   tearDown(() => root.deleteSync(recursive: true));
 
-  /// A real folder under [root], so the drop can tell it from a file.
+  /// A real folder under [root], so the drop can tell it from a file. Its
+  /// path is this computer's own, as a drop gives it: on Windows a `/` in it
+  /// would end up in the name a dropped file is attached by.
   Directory folder(String name) =>
-      Directory('${root.path}/$name')..createSync();
+      Directory(p.join(root.path, name))..createSync();
 
   /// The chat's one agent runs on [machineId]; this computer is `here`.
   Future<SuperTabController> open(
@@ -39,7 +43,7 @@ void main() {
     // needs no scaling on any host.
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetDevicePixelRatio);
-    server = ConversationServer();
+    server = ConversationServer.chat();
     (server.state['agents'] as List).add({
       'id': 'lead-agent',
       'name': 'Lead',
@@ -61,7 +65,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Test Mac',
@@ -139,6 +142,26 @@ void main() {
     for (final file in c.attachments('lead').files) file.name,
   ];
 
+  test('a Windows path goes in as it is, its backslashes its own, and in '
+      'quotes only for a space or a shell character', () {
+    expect(
+      folderPathText(r'C:\Users\RUNNER~1\AppData\docs', isWindows: true),
+      r'C:\Users\RUNNER~1\AppData\docs',
+    );
+    expect(
+      folderPathText(r'C:\Users\me\my notes', isWindows: true),
+      r'"C:\Users\me\my notes"',
+    );
+    expect(
+      folderPathText(r'C:\work\cost$HOME', isWindows: true),
+      r'"C:\work\cost$HOME"',
+    );
+    expect(
+      folderPathText(r'/work/back\slash', isWindows: false),
+      r'"/work/back\\slash"',
+    );
+  });
+
   testWidgets('a dropped folder puts its path at the cursor', (tester) async {
     final controller = await open(tester);
     final docs = folder('docs');
@@ -193,7 +216,7 @@ void main() {
     tester,
   ) async {
     final controller = await open(tester);
-    final log = File('${root.path}/trace.log')..writeAsStringSync('boom');
+    final log = File(p.join(root.path, 'trace.log'))..writeAsStringSync('boom');
     await tester.enterText(composer, 'Here');
 
     await drop(tester, [log.path], until: () => names(controller).isNotEmpty);
@@ -207,7 +230,7 @@ void main() {
     tester,
   ) async {
     final controller = await open(tester);
-    final log = File('${root.path}/trace.log')..writeAsStringSync('boom');
+    final log = File(p.join(root.path, 'trace.log'))..writeAsStringSync('boom');
     final src = folder('src');
 
     await drop(
@@ -330,6 +353,50 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets('a zip that lands while an input method composes takes its '
+      'path out once composing ends', (tester) async {
+    final controller = await open(tester, machineId: 'studio');
+    final src = folder('src');
+    File('${src.path}/main.dart').writeAsStringSync('void main() {}');
+    await tester.enterText(composer, 'Look at');
+    await drop(tester, [
+      src.path,
+    ], until: () => field(tester).text.contains(src.path));
+
+    await tester.tap(find.text('Attach as zip'));
+    await tester.pump();
+    // Telex is composing `à` when the zip lands (task #3245).
+    await tester.tap(composer);
+    await tester.pump();
+    final typed = 'Look at ${src.path} à';
+    final composing = TextEditingValue(
+      text: typed,
+      selection: TextSelection.collapsed(offset: typed.length),
+      composing: TextRange(start: typed.length - 1, end: typed.length),
+    );
+    tester.testTextInput.updateEditingValue(composing);
+    await tester.pump();
+    await settle(tester, () => names(controller).isNotEmpty);
+
+    expect(names(controller), ['src.zip']);
+    expect(
+      field(tester).value,
+      composing,
+      reason: 'the zip replaces nothing under the marked text',
+    );
+
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: typed,
+        selection: TextSelection.collapsed(offset: typed.length),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(field(tester).text, 'Look at à');
+    expect(controller.draft('lead'), 'Look at à');
+    await close(tester, controller);
+  });
+
   testWidgets('a folder over the attachment limit is not zipped, and its '
       'path stays', (tester) async {
     final controller = await open(tester, machineId: 'studio');
@@ -402,8 +469,10 @@ void main() {
   testWidgets('two folders of one name are both attached, the second '
       'numbered', (tester) async {
     final controller = await open(tester, machineId: 'studio');
-    final first = Directory('${root.path}/a/src')..createSync(recursive: true);
-    final second = Directory('${root.path}/b/src')..createSync(recursive: true);
+    final first = Directory(p.join(root.path, 'a', 'src'))
+      ..createSync(recursive: true);
+    final second = Directory(p.join(root.path, 'b', 'src'))
+      ..createSync(recursive: true);
     File('${first.path}/one.txt').writeAsStringSync('1');
     File('${second.path}/two.txt').writeAsStringSync('2');
     await drop(tester, [
@@ -468,45 +537,53 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('a path a shell would read differently goes in quoted, its '
-      'quotes, dollars, backticks and backslashes escaped', (tester) async {
-    final controller = await open(tester);
-    final quoted = folder('my "notes"'),
-        dollar = folder(r'cost$HOME'),
-        tick = folder('run`date`'),
-        slash = folder(r'back\slash'),
-        apostrophe = folder("it's");
-    final r = root.path;
+  testWidgets(
+    'a path a shell would read differently goes in quoted, its '
+    'quotes, dollars, backticks and backslashes escaped',
+    (tester) async {
+      final controller = await open(tester);
+      final quoted = folder('my "notes"'),
+          dollar = folder(r'cost$HOME'),
+          tick = folder('run`date`'),
+          slash = folder(r'back\slash'),
+          apostrophe = folder("it's");
+      final r = root.path;
 
-    await drop(tester, [
-      quoted.path,
-      dollar.path,
-      tick.path,
-      slash.path,
-      apostrophe.path,
-    ], until: () => field(tester).text.contains('it'));
+      await drop(tester, [
+        quoted.path,
+        dollar.path,
+        tick.path,
+        slash.path,
+        apostrophe.path,
+      ], until: () => field(tester).text.contains('it'));
 
-    expect(
-      field(tester).text,
-      '"$r/my \\"notes\\"" "$r/cost\\\$HOME" "$r/run\\`date\\`" '
-      '"$r/back\\\\slash" "$r/it\'s" ',
-    );
-    await close(tester, controller);
-  });
+      expect(
+        field(tester).text,
+        '"$r/my \\"notes\\"" "$r/cost\\\$HOME" "$r/run\\`date\\`" '
+        '"$r/back\\\\slash" "$r/it\'s" ',
+      );
+      await close(tester, controller);
+    },
+    // macOS and Linux names: a Windows name cannot hold `"`, and `\` is its
+    // separator. The Windows rule is the unit test above. (testWidgets takes
+    // no skip reason, only a bool.)
+    skip: Platform.isWindows,
+  );
 
-  testWidgets('Attach as zip takes out a path it escaped', (tester) async {
+  testWidgets('Attach as zip takes out a path it quoted', (tester) async {
     final controller = await open(tester, machineId: 'studio');
-    final quoted = folder('my "notes"');
-    File('${quoted.path}/a.txt').writeAsStringSync('a');
+    // Escaped on macOS and Linux, quoted alone on Windows.
+    final quoted = folder(r'cost$HOME');
+    File(p.join(quoted.path, 'a.txt')).writeAsStringSync('a');
     await tester.enterText(composer, 'See');
     await drop(tester, [
       quoted.path,
-    ], until: () => field(tester).text.contains('notes'));
+    ], until: () => field(tester).text.contains('cost'));
 
     await tester.tap(find.text('Attach as zip'));
     await settle(tester, () => names(controller).isNotEmpty);
 
-    expect(names(controller), ['my "notes".zip']);
+    expect(names(controller), [r'cost$HOME.zip']);
     expect(field(tester).text, 'See ');
     await close(tester, controller);
   });

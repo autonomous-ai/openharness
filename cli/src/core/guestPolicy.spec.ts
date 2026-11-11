@@ -9,7 +9,7 @@ describe('what a guest may ask', () => {
   const verdict = (type: string, payload: Record<string, unknown> = {}, guest = 'kim@acme.io') => guestVerdict(type, payload, guest, guestOf)
 
   it('may list and start its own harnesses, and use its terminals', () => {
-    for (const type of ['agents_list', 'agent_create', 'agent_create_status', 'agent_create_cancel', 'engines_probe', 'theme_set', 'usage_read', 'guest_folders',
+    for (const type of ['agents_list', 'agent_create', 'agent_create_status', 'agent_create_cancel', 'engines_probe', 'theme_set', 'guest_folders',
       'terminal_capabilities', 'terminal_alive', 'terminal_ack', 'terminal_input', 'terminal_resize', 'terminal_paste', 'terminal_paste_image',
       'terminal_paste_file', 'terminal_chunked_upload_begin', 'terminal_chunked_upload_cancel', 'terminal_scroll', 'terminal_resync', 'terminal_close']) {
       expect(verdict(type, type === 'agent_create' ? { engine: 'claude' } : {}), type).toEqual({ allow: true })
@@ -34,6 +34,21 @@ describe('what a guest may ask', () => {
     }
   })
 
+  // Review Focus 1 of the agent browser: a share guest's session is `owner` too, and the browser holds the owner's logins.
+  // The policy is default-deny, so every browser frame and request is refused before any service hears it.
+  it('the guest policy refuses every agent_browser type', () => {
+    for (const type of ['agent_browser_open', 'agent_browser_ack', 'agent_browser_close',
+      'agent_browser_available', 'agent_browser_setup', 'agent_browser_retry', 'agent_browser_state',
+      'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+      expect(verdict(type, { agentId: 'mine' }), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
+    }
+  })
+
+  it('reads none of the owner\'s plan allowances: its harnesses run on its own sign-in (anh Dee, 2026-11-07)', () => {
+    expect(verdict('usage_read')).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
+    expect(verdict('usage_read', { profile: { engine: 'claude', id: 'default' } })).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
+  })
+
   it('a guest whose account was never recorded owns nothing', () => {
     expect(guestVerdict('terminal_open', { agentId: 'unrecorded' }, '', () => '')).toEqual({ allow: false, error: 'NOT_YOUR_HARNESS' })
   })
@@ -49,8 +64,14 @@ describe('what a guest may ask', () => {
     for (const type of ['e2ee_pairings_list', 'e2ee_pairing_unpair', 'device_e2ee_pair', 'phone_pair', 'group_sync', 'shared_machines',
       'sessions_list', 'session_get', 'session_search', 'agent_recent', 'agent_fork', 'agent_purge', 'agents_cleanup_preview', 'fs_list_dir',
       'agent_read_file', 'shell', 'connectors', 'memory', 'grid_models_list', 'api_connections', 'harness_devices_list', 'browser_open',
-      'claude_login_status', 'route_task', 'viewer_surface', 'a_request_added_next_year']) {
+      'claude_login_status', 'route_task', 'viewer_surface', 'agent_instructions_read', 'agent_instructions_write', 'a_request_added_next_year']) {
       expect(verdict(type), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
+    }
+  })
+
+  it('never reads or saves an agent\'s instructions file, not even one of its own harnesses: the owner\'s own computers do that', () => {
+    for (const type of ['agent_instructions_read', 'agent_instructions_write']) {
+      expect(verdict(type, { agentId: 'mine', name: 'Faye', text: 'x', version: '' }), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
     }
   })
 

@@ -10,12 +10,10 @@ static const char *TAG = "power";
 static i2c_master_dev_handle_t s_dev;
 
 // AXP2101 registers we touch.
-#define AXP_REG_STATUS0   0x00   // PMU status: VBUS/battery presence + current direction
 #define AXP_REG_IRQ_EN1   0x41   // IRQ enable set 1 (holds the PONKEY power-key bits)
 #define AXP_REG_IRQ_ST0   0x48   // IRQ status set 0 (write-1-to-clear)
 #define AXP_REG_IRQ_ST1   0x49   // IRQ status set 1 (PONKEY power-key events)
 #define AXP_REG_IRQ_ST2   0x4A   // IRQ status set 2 (write-1-to-clear)
-#define AXP_REG_BAT_PCT   0xA4   // fuel-gauge battery percentage (0..100), valid when gauge is running
 // PONKEY (PWR key) PRESS (negative-edge / key-DOWN) bit, in both IRQ enable-1 (0x41) and status-1 (0x49).
 // We react on the key-DOWN edge so the screen toggles INSTANTLY. The SHORT-press event (bit 3) is only
 // latched by the AXP2101 on release, AFTER its internal short-press timing → a 1-2s lag. PONKEY bits:
@@ -86,34 +84,4 @@ bool power_take_pwrkey_tap(void)
     if (st < 0 || !(st & AXP_PKEY_PRESS)) return false;
     axp_write(AXP_REG_IRQ_ST1, AXP_PKEY_PRESS);   // write-1-to-clear only the press-edge bit
     return true;
-}
-
-int power_battery_pct(void)
-{
-    int v = axp_read(AXP_REG_BAT_PCT);
-    if (v < 0 || v > 100) return -1;   // gauge not ready / no battery / bad read
-    return v;
-}
-
-// AXP2101 PMU_STATUS2 (REG 0x01) bits [7:5] = battery activity: 0 = standby (idle/full), 1 = charging,
-// 2 = discharging. This is the reliable source — REG 0x00 bit5 is the charge-CURRENT direction, which
-// reads 0 when the battery is full but still plugged in.
-#define AXP_REG_STATUS2   0x01
-static int axp_charge_state(void)   // 0/1/2, or -1 on read error
-{
-    int s = axp_read(AXP_REG_STATUS2);
-    return s < 0 ? -1 : (s >> 5) & 0x07;
-}
-
-bool power_is_charging(void)
-{
-    return axp_charge_state() == 1;   // actively topping up the battery (drives the charge bolt)
-}
-
-bool power_is_on_external(void)
-{
-    // Plugged into external power = anything but "discharging". Covers actively charging AND a full
-    // battery on standby, so the screen stays on whenever it's plugged in — even at 100%.
-    int cs = axp_charge_state();
-    return cs >= 0 && cs != 2;
 }

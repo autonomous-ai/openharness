@@ -16,6 +16,7 @@ import 'shared_tab_tasks.dart';
 import 'tab_people.dart';
 import 'update_harness.dart';
 import 'shared_tabs.dart' show SharedTabsState;
+import '../widgets/laid_out_list.dart';
 
 /// The parts of a shared tab's Agent Messages panel.
 enum AgentMessagesTab {
@@ -284,7 +285,7 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
       );
     } else {
       // Reversed, so the newest sits at the bottom and the list opens there.
-      body = ListView.builder(
+      body = LaidOutListView.builder(
         reverse: true,
         shrinkWrap: true,
         itemCount: messages.length,

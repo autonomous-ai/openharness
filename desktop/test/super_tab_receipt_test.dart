@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/personal_lead.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -27,7 +28,11 @@ class ReceiptFixture {
   Map<String, dynamic> get delivery =>
       (message['deliveries'] as List).single as Map<String, dynamic>;
 
-  Future<void> show({AppNotifier? app, void Function()? prepare}) async {
+  Future<void> show({
+    AppNotifier? app,
+    void Function()? prepare,
+    Brightness brightness = Brightness.light,
+  }) async {
     server.state['agents'] = [
       {
         'id': 'lead-agent',
@@ -71,12 +76,12 @@ class ReceiptFixture {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        debugShowCheckedModeBanner: false,
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
             controller: controller,
             app: app,
-            onInvite: () {},
             onAddAgent: (_) => addedLead = true,
             onOpenTerminal: (agent) => opened = agent.id,
             machineName: (_) => 'Team Mac',
@@ -98,6 +103,20 @@ class ReceiptFixture {
     }
     final line = find.byKey(ValueKey('super-message-receipt-${message['id']}'));
     expect(tester.getSize(line).height, 0);
+  }
+
+  /// The quiet line under the newest own message: [text] alone, in grey, with
+  /// no mark beside it (Swarm plan, step 1, item 2).
+  void expectState(String text) {
+    expect(find.text(text), findsOneWidget);
+    final line = find.byKey(ValueKey('super-message-receipt-${message['id']}'));
+    expect(
+      find.descendant(of: line, matching: find.byType(Icon)),
+      findsNothing,
+    );
+    for (final other in ['Sent', 'Typed', 'Not typed yet', 'Not sent']) {
+      if (other != text) expect(find.text(other), findsNothing);
+    }
   }
 
   Future<void> close() async {
@@ -126,7 +145,7 @@ void main() {
   );
   for (final status in ['queued', 'claimed']) {
     testWidgets(
-      'receipt: fresh $status reads Sending then an older message shows nothing',
+      'receipt: fresh $status reads Sending, then Sent once it is older',
       (tester) async {
         final f = ReceiptFixture(tester, status: status);
         await f.show(
@@ -134,32 +153,40 @@ void main() {
               f.message['createdAt'] = DateTime.now().toIso8601String(),
         );
         expect(find.text('Sending…'), findsOneWidget);
-        f.message['createdAt'] = f.now
-            .subtract(const Duration(seconds: 8))
-            .toIso8601String();
-        await f.controller.refresh();
-        await tester.pump();
-        f.expectQuiet();
+        // The message ages on screen: no read of it again, which a state
+        // with the same counters no longer makes (spec 2026-11-02-poll-cost).
+        await tester.pump(const Duration(seconds: 8));
+        f.expectState('Sent');
         await f.close();
       },
     );
   }
 
-  for (final status in ['delivered', 'confirmed', 'answered']) {
-    testWidgets('receipt: $status shows nothing under the message', (
+  for (final status in ['delivered', 'confirmed']) {
+    testWidgets('receipt: $status reads Typed under the message', (
       tester,
     ) async {
       final f = ReceiptFixture(tester, status: status);
-      await f.show(
-        prepare: () => f.delivery['answeredAt'] = f.now.toIso8601String(),
-      );
-      f.expectQuiet();
+      await f.show();
+      f.expectState('Typed');
       await f.close();
     });
   }
 
   testWidgets(
-    'receipt: a delivered message stays quiet while its Lead works and after',
+    'receipt: answered shows nothing: its answer is the third state',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'answered');
+      await f.show(
+        prepare: () => f.delivery['answeredAt'] = f.now.toIso8601String(),
+      );
+      f.expectQuiet();
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: a delivered message reads Typed while its Lead works and after',
     (tester) async {
       final app = createApp(connected: true);
       addTearDown(app.dispose);
@@ -170,40 +197,82 @@ void main() {
         'agentId': 'a0',
       });
       await tester.pump();
-      f.expectQuiet();
+      f.expectState('Typed');
       await app.handleEventForTest('m', {
         'type': 'turn_ended',
         'agentId': 'a0',
       });
       await tester.pump(const Duration(milliseconds: 100));
-      f.expectQuiet();
+      f.expectState('Typed');
       await f.close();
     },
   );
 
-  for (final (reason, label) in [
-    ('team_waiting_idle', 'Lead is busy'),
-    ('team_waiting_user', "someone is typing in Lead's terminal"),
-    ('team_waiting_draft', "Lead's terminal has unsent text"),
-    ('team_waiting_control', "Lead can't take messages right now"),
-    ('team_waiting_unavailable', "Lead can't take messages right now"),
+  // Not typed in 2 minutes says why (Swarm plan, step 1, item 2), from what
+  // holds it in its terminal (cli core/input.ts), and offers the terminal when
+  // its person can see to it there.
+  const harnessKeepsTrying =
+      "Lead can't take messages right now. Harness keeps trying, and it goes in as soon as it can.";
+  for (final (reason, why, inTerminal) in [
+    (
+      'team_waiting_idle',
+      'Lead is working. Your message goes in when this turn ends.',
+      false,
+    ),
+    (
+      'team_waiting_busy',
+      'Lead is working. Your message goes in when this turn ends.',
+      false,
+    ),
+    (
+      'team_waiting_user',
+      'Lead is waiting on your answer in its terminal.',
+      true,
+    ),
+    ('team_waiting_draft', "Lead's terminal has unsent text.", true),
+    ('team_waiting_dialog', "Lead's terminal has a menu open.", true),
+    ('team_waiting_control', harnessKeepsTrying, false),
+    ('team_waiting_unavailable', harnessKeepsTrying, false),
+    (null, harnessKeepsTrying, false),
   ]) {
-    testWidgets('receipt: $reason held message shows nothing', (tester) async {
-      final f = ReceiptFixture(tester);
-      await f.show(
-        prepare: () {
-          f.delivery['holdReason'] = reason;
-          f.delivery['holdSince'] = f.now
-              .subtract(const Duration(seconds: 34))
-              .toIso8601String();
-        },
-      );
-      f.expectQuiet();
-      expect(find.textContaining(label), findsNothing);
-      expect(find.textContaining('waiting'), findsNothing);
-      expect(find.textContaining('by itself'), findsNothing);
-      await f.close();
-    });
+    testWidgets(
+      'receipt: held by ${reason ?? 'nothing named'} reads Sent, and two minutes on says why',
+      (tester) async {
+        final f = ReceiptFixture(tester);
+        await f.show(
+          prepare: () {
+            f.message['createdAt'] = clock
+                .now()
+                .subtract(const Duration(minutes: 1, seconds: 30))
+                .toIso8601String();
+            if (reason != null) {
+              f.delivery['holdReason'] = reason;
+              f.delivery['holdSince'] = f.now
+                  .subtract(const Duration(seconds: 34))
+                  .toIso8601String();
+            }
+          },
+        );
+        f.expectState('Sent');
+        expect(find.text(why), findsNothing);
+        // By the receipt's own clock: no snapshot comes to rebuild it.
+        await tester.pump(const Duration(seconds: 31));
+        expect(find.text('Not typed yet'), findsOneWidget);
+        expect(find.text('Sent'), findsNothing);
+        expect(find.text(why), findsOneWidget);
+        expect(
+          find.text('Open terminal'),
+          inTerminal ? findsOneWidget : findsNothing,
+        );
+        if (inTerminal) {
+          await tester.tap(find.text('Open terminal'));
+          await tester.pump();
+          expect(f.opened, 'lead-agent');
+          expect(f.server.posts, isEmpty);
+        }
+        await f.close();
+      },
+    );
   }
 
   testWidgets(
@@ -231,7 +300,7 @@ void main() {
 
   for (final direct in [true, false]) {
     testWidgets(
-      'receipt: a held message to a computer with no Swarm reading ${direct ? 'connected directly shows nothing' : 'read through the Swarm says offline'}',
+      'receipt: a held message to a computer with no Swarm reading ${direct ? 'connected directly says why it is not typed' : 'read through the Swarm says offline'}',
       (tester) async {
         final app = createApp(connected: true);
         addTearDown(app.dispose);
@@ -247,7 +316,13 @@ void main() {
         );
         expect(find.textContaining('busy'), findsNothing);
         if (direct) {
-          f.expectQuiet();
+          expect(find.text('Not typed yet'), findsOneWidget);
+          expect(
+            find.text(
+              'Lead is working. Your message goes in when this turn ends.',
+            ),
+            findsOneWidget,
+          );
         } else {
           expect(find.text("Lead's computer is offline"), findsOneWidget);
         }
@@ -307,6 +382,81 @@ void main() {
     await f.close();
   });
 
+  // Huy, 11-04 (task #2633): in a Personal Swarm the message waits for the
+  // Lead Desktop starts, which the line says, or why it could not start.
+  testWidgets('receipt: no Lead in a Personal project says its Lead starts', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final f = ReceiptFixture(tester, status: null);
+    await f.show(
+      app: app,
+      prepare: () =>
+          (f.server.state['conversations'] as List).first['leadId'] = null,
+    );
+    PersonalLeadStarter.of(app).setStatusForTest(
+      f.controller,
+      'lead',
+      PersonalLeadStatus.starting(clock.now()),
+    );
+    await tester.pump();
+    expect(find.text('Starting a Lead…'), findsOneWidget);
+    expect(find.textContaining('Not sent'), findsNothing);
+    expect(find.text('Add a Lead'), findsNothing);
+    await f.close();
+  });
+
+  testWidgets(
+    'receipt: a Personal project\'s Lead that could not start says why and '
+    'offers Add a Lead',
+    (tester) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        app: app,
+        prepare: () =>
+            (f.server.state['conversations'] as List).first['leadId'] = null,
+      );
+      PersonalLeadStarter.of(app).setStatusForTest(
+        f.controller,
+        'lead',
+        const PersonalLeadStatus.failed(
+          'Claude Code and Codex aren’t signed in on Studio',
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.text(
+          'Couldn’t start a Lead: Claude Code and Codex aren’t signed in on '
+          'Studio',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Not sent'), findsNothing);
+      await tester.tap(find.text('Add a Lead'));
+      expect(f.addedLead, isTrue);
+      await f.close();
+    },
+  );
+
+  testWidgets('receipt: no Lead and no start, with an app, is still not sent', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final f = ReceiptFixture(tester, status: null);
+    await f.show(
+      app: app,
+      prepare: () =>
+          (f.server.state['conversations'] as List).first['leadId'] = null,
+    );
+    expect(find.text('Not sent · this chat has no Lead'), findsOneWidget);
+    expect(find.text('Add a Lead'), findsOneWidget);
+    await f.close();
+  });
+
   testWidgets(
     'receipt: only latest own message carries a receipt, even after another person speaks',
     (tester) async {
@@ -340,56 +490,17 @@ void main() {
     },
   );
 
-  testWidgets(
-    'receipt: stored hold notices stay hidden while other agent messages stay',
-    (tester) async {
-      final f = ReceiptFixture(tester);
-      await f.show(
-        prepare: () {
-          f.delivery['holdReason'] = 'team_waiting_idle';
-          f.delivery['holdSince'] = f.now.toIso8601String();
-          final original = f.message['id'];
-          f.server.append('A message for Lead is waiting. It stays queued.');
-          f.message['author'] = {
-            'kind': 'agent',
-            'id': 'lead-agent',
-            'name': 'Lead',
-          };
-          f.message['source'] = {
-            'kind': 'delivery-hold',
-            'messageId': original,
-            'deliveryId': 'delivery',
-            'agentId': 'lead-agent',
-          };
-          f.server.append('A real update.');
-          f.message['author'] = {
-            'kind': 'agent',
-            'id': 'lead-agent',
-            'name': 'Lead',
-          };
-          // A newer own message: the old notice is no longer about the latest one.
-          f.server.append('My next question.');
-        },
-      );
-      expect(
-        find.textContaining('A message for Lead is waiting.'),
-        findsNothing,
-      );
-      expect(find.text('A real update.'), findsOneWidget);
-      expect(find.textContaining('Lead is busy'), findsNothing);
-      await f.close();
-    },
-  );
-
-  // Not delivered yet: prod 10-30 (v1.3.71), claims failed for two hours while
-  // every queued message looked delivered.
+  // Not typed yet, for a queued copy: prod 10-30 (v1.3.71), claims failed for
+  // two hours while every queued message looked delivered.
   const couldntTake =
       "Team Mac is online but couldn't take this message yet. Harness keeps trying, and it goes in as soon as it can.";
   const notPickedUp =
       "Team Mac is online but hasn't picked this message up yet. Harness keeps trying, and it goes in as soon as it can.";
+  const notRunning =
+      "Lead isn't running. Your message goes in when it runs again.";
 
   testWidgets(
-    'receipt: a queued message whose claims fail for a minute reads Not delivered yet',
+    'receipt: a queued message whose claims fail for a minute reads Not typed yet',
     (tester) async {
       final f = ReceiptFixture(tester, status: 'queued');
       await f.show(
@@ -397,7 +508,7 @@ void main() {
             .subtract(const Duration(seconds: 61))
             .toIso8601String(),
       );
-      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text('Not typed yet'), findsOneWidget);
       expect(find.text(couldntTake), findsOneWidget);
       expect(find.text('Send again'), findsNothing);
       await f.close();
@@ -405,7 +516,7 @@ void main() {
   );
 
   testWidgets(
-    'receipt: a queued message no computer picked up for 2 minutes reads Not delivered yet',
+    'receipt: a queued message no computer picked up for 2 minutes reads Not typed yet',
     (tester) async {
       final f = ReceiptFixture(tester, status: 'queued');
       await f.show(
@@ -413,15 +524,13 @@ void main() {
             .subtract(const Duration(minutes: 2, seconds: 1))
             .toIso8601String(),
       );
-      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text('Not typed yet'), findsOneWidget);
       expect(find.text(notPickedUp), findsOneWidget);
       await f.close();
     },
   );
 
-  testWidgets('receipt: offline still wins over Not delivered yet', (
-    tester,
-  ) async {
+  testWidgets('receipt: offline still wins over Not typed yet', (tester) async {
     final f = ReceiptFixture(tester, status: 'queued');
     await f.show(
       prepare: () {
@@ -435,12 +544,12 @@ void main() {
       },
     );
     expect(find.text("Lead's computer is offline"), findsOneWidget);
-    expect(find.text('Not delivered yet'), findsNothing);
+    expect(find.text('Not typed yet'), findsNothing);
     await f.close();
   });
 
   testWidgets(
-    'receipt: a stopped recipient that has been queued for minutes shows neither case',
+    'receipt: a stopped recipient queued for minutes says it is not running',
     (tester) async {
       final f = ReceiptFixture(tester, status: 'queued');
       await f.show(
@@ -453,13 +562,15 @@ void main() {
               .toIso8601String();
         },
       );
-      expect(find.text('Not delivered yet'), findsNothing);
+      expect(find.text('Not typed yet'), findsOneWidget);
+      expect(find.text(notRunning), findsOneWidget);
+      expect(find.text(notPickedUp), findsNothing);
       await f.close();
     },
   );
 
   testWidgets(
-    'receipt: a stopped recipient with failing claims shows no Not delivered yet',
+    'receipt: a stopped recipient with failing claims says it is not running, not why its computer failed',
     (tester) async {
       final f = ReceiptFixture(tester, status: 'queued');
       await f.show(
@@ -472,13 +583,15 @@ void main() {
               .toIso8601String();
         },
       );
-      expect(find.text('Not delivered yet'), findsNothing);
+      expect(find.text('Not typed yet'), findsOneWidget);
+      expect(find.text(notRunning), findsOneWidget);
+      expect(find.text(couldntTake), findsNothing);
       await f.close();
     },
   );
 
   testWidgets(
-    'receipt: a delivery to an agent not in the Swarm shows nothing and does not throw',
+    'receipt: a delivery to an agent not in the Swarm reads Sent and does not throw',
     (tester) async {
       final f = ReceiptFixture(tester, status: 'queued');
       await f.show(
@@ -489,7 +602,8 @@ void main() {
               .toIso8601String();
         },
       );
-      expect(find.text('Not delivered yet'), findsNothing);
+      expect(find.text('Not typed yet'), findsNothing);
+      f.expectState('Sent');
       await f.close();
     },
   );
@@ -508,29 +622,34 @@ void main() {
               .toIso8601String();
         },
       );
-      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text('Not typed yet'), findsOneWidget);
       expect(find.text(couldntTake), findsOneWidget);
       await f.close();
     },
   );
 
   testWidgets(
-    'receipt: a claimed message with leftover claim fields stays quiet',
+    'receipt: a claimed message\'s leftover claim fields change nothing: it reads Sent',
     (tester) async {
       final f = ReceiptFixture(tester);
       await f.show(
-        prepare: () => f.delivery['claimFailingSince'] = f.now
-            .subtract(const Duration(minutes: 5))
-            .toIso8601String(),
+        prepare: () {
+          f.message['createdAt'] = f.now
+              .subtract(const Duration(minutes: 1))
+              .toIso8601String();
+          f.delivery['claimFailingSince'] = f.now
+              .subtract(const Duration(minutes: 5))
+              .toIso8601String();
+        },
       );
-      f.expectQuiet();
-      expect(find.text('Not delivered yet'), findsNothing);
+      f.expectState('Sent');
+      expect(find.text(couldntTake), findsNothing);
       await f.close();
     },
   );
 
   testWidgets(
-    'receipt: below both thresholds nothing shows, and the line comes by the receipt\'s own clock',
+    'receipt: below both thresholds it reads Sent, and Not typed yet comes by the receipt\'s own clock',
     (tester) async {
       final f = ReceiptFixture(tester, status: 'queued');
       await f.show(
@@ -539,9 +658,9 @@ void main() {
             .subtract(const Duration(minutes: 1, seconds: 58))
             .toIso8601String(),
       );
-      expect(find.text('Not delivered yet'), findsNothing);
+      f.expectState('Sent');
       await tester.pump(const Duration(seconds: 3));
-      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text('Not typed yet'), findsOneWidget);
       await f.close();
     },
   );
@@ -588,7 +707,7 @@ void main() {
     });
 
     testWidgets(
-      'the Lead got it and the Builder\'s copy was cancelled: no Not sent',
+      'the Lead got it and the Builder\'s copy was cancelled: Typed, no Not sent',
       (tester) async {
         final f = ReceiptFixture(tester, status: null);
         await f.show(
@@ -597,7 +716,7 @@ void main() {
             row('lead-agent', 'delivered'),
           ],
         );
-        f.expectQuiet();
+        f.expectState('Typed');
         await f.close();
       },
     );
@@ -622,7 +741,7 @@ void main() {
         ],
       );
       expect(find.text('Not sent'), findsNothing);
-      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text('Not typed yet'), findsOneWidget);
       await f.close();
     });
   });

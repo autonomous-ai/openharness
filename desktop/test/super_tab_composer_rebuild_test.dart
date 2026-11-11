@@ -22,7 +22,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -39,7 +38,7 @@ void main() {
   final transcript = find.byType(CustomScrollView);
 
   ConversationServer longChat() {
-    final server = ConversationServer()..messagePage = 300;
+    final server = ConversationServer.chat()..messagePage = 300;
     for (var i = 0; i < 300; i++) {
       server.append('Update $i');
     }
@@ -74,7 +73,7 @@ void main() {
   testWidgets('rows share one map of group references, read again on change', (
     tester,
   ) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     (server.state['conversations'] as List)[1]['number'] = 12;
     server.append('See #12');
     server.append('And #12 again');

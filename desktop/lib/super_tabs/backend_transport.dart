@@ -12,20 +12,22 @@ import 'controller.dart';
 /// call (hosts, starts, GitHub tokens, deliveries, terminals) are refused
 /// before anything is sent, so this transport never signs them.
 const _tab =
-    r'(?!(?:hosts|workspaces|grids|list|invitations|deleted|routing-policy|workspace-invitations)/)[A-Za-z0-9_-]+';
+    r'(?!(?:hosts|grids|list|invitations|deleted|routing-policy)/)[A-Za-z0-9_-]+';
 const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
   '|/list|/invitations|/deleted'
-  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
+  '|/$_tab/(?:parts|changes|commands|shipping|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
-  '|activity|activity/read|threads|inbox'
-  '|conversations/$_id/(?:messages|catch-up|read|notifications'
-  '|threads/$_id/(?:read|follow)'
+  // New Project's New Repository asks whether an organization can (#3374).
+  '|github/owners/$_id'
+  // A voice message's clip, read once before it is sent (#2887; the mic, #2665).
+  '|attachments/$_id/voice'
+  '|conversations/$_id/(?:messages|catch-up|read|unread|notifications'
+  '|threads/$_id/read'
   '|messages/$_id/attachments/$_id)'
-  '|projects/$_id/(?:github|github/approve'
-  '|instructions(?:/revisions(?:/[0-9]+)?)?)'
-  '|route-decisions/$_id|machines/$_id/removal)'
+  '|projects/$_id/(?:github|github/approve|github/repository)'
+  '|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );
 

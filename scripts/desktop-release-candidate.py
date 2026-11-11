@@ -232,10 +232,13 @@ def read_receipt(artifact, archive, run, repository, version, tree, inputs, buck
     return receipt
 
 
-def check_jobs(run, jobs):
+def check_jobs(run, jobs, windows_signing=False):
     required = {'version', 'preflight', 'build-macos', 'build-linux (ubuntu-22.04, x64)',
                 'build-linux (ubuntu-22.04-arm, arm64)', 'build-windows (windows-latest, x64)',
                 'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup'}
+    # While WINDOWS_SIGNING is `required`, a candidate built before it (sign-windows skipped) would ship unsigned.
+    if windows_signing:
+        required.add('sign-windows')
     require(required <= {job['name'] for job in jobs}, 'candidate build/verification jobs are missing')
     for job in jobs:
         require(job.get('run_id') == run['id'] and job.get('head_sha') == run['head_sha']
@@ -294,7 +297,7 @@ def find_candidate(client, version, inputs, bucket, current_run, wait_seconds=MA
             continue
         jobs = client.api(f'actions/runs/{run["id"]}/jobs?filter=latest&per_page=100')
         require(jobs['total_count'] == len(jobs['jobs']), 'candidate job list is incomplete')
-        check_jobs(run, jobs['jobs'])
+        check_jobs(run, jobs['jobs'], windows_signing=os.environ.get('WINDOWS_SIGNING') == 'required')
         artifacts = client.api(f'actions/runs/{run["id"]}/artifacts?per_page=100')['artifacts']
         selected = [item for item in artifacts if item['name'] == f'desktop-release-candidate-{run["run_attempt"]}']
         require(len(selected) == 1 and selected[0].get('size_in_bytes', 65537) <= 65536, 'candidate receipt is missing or too large')

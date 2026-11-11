@@ -7,8 +7,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { listGroupIndexes, NAMED_INDEX, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
-import { SwarmWorkspaces } from '../src/superTabs/workspaceStore.js'
-import { agentOpenDeliveries } from '../src/superTabs/pageReads.js'
+import { agentOpenDeliveries, storedMessages } from '../src/superTabs/pageReads.js'
 import { loadChanged } from '../src/superTabs/parts/index.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
@@ -47,6 +46,62 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+// Prisma sends an empty list as `$or: []`, which no index serves: a scan of the whole collection for nothing.
+describe('a person with nothing to read', () => {
+  const on = (entries: Array<{ ns: string }>, collection: string) => entries.filter(entry => entry.ns.endsWith(`.${collection}`))
+
+  it('reads no heads or members for an owner with no Swarm', async () => {
+    const entries = await profiled(db, () => store.hostGrids(person('no-swarm')))
+    expect(on(entries, 'SwarmHead')).toEqual([])
+    expect(on(entries, 'SwarmMember')).toEqual([])
+  })
+
+  it('reads no members when none of the owner\'s Swarms has a grid', async () => {
+    const someone = person('no-grid')
+    await swarmRow(someone.sub)
+    const entries = await profiled(db, () => store.hostGrids(someone))
+    expect(on(entries, 'SwarmMember')).toEqual([])
+  })
+
+  it('reads no heads for no Swarms split into parts', async () => {
+    const heads = (store as unknown as { heads(rows: unknown[]): Promise<Map<string, unknown>> }).heads.bind(store)
+    const entries = await profiled(db, () => heads([{ id: 'old', format: 1 }]))
+    expect(on(entries, 'SwarmHead')).toEqual([])
+  })
+})
+
+// The Performance Advisor's suggestion from Ken's plan (2026-11-04): by tabId alone, or by date alone, this reads every row of
+// the big Swarm or of the range, to return a few.
+describe('operation receipts by Swarm and date', () => {
+  it('reads only the Swarm\'s rows in the range, by its index', async () => {
+    const row = (tabId: string, at: Date) => ({ id: randomUUID(), tabId, actorKey: 'person:x', requestHash: 'h', revision: 0, result: {}, createdAt: at })
+    const old = new Date(NOW - 20 * 86_400_000), recent = new Date(NOW - 86_400_000), big = randomUUID()
+    await db.superTabOperation.createMany({ data: [
+      ...Array.from({ length: 300 }, () => row(big, old)), ...Array.from({ length: 300 }, () => row(randomUUID(), recent)),
+      ...Array.from({ length: 5 }, () => row(big, recent)),
+    ] })
+    const entries = await profiled(db, () => db.superTabOperation.aggregateRaw({ pipeline: [
+      { $match: { tabId: big, createdAt: { $gte: { $date: new Date(NOW - 2 * 86_400_000).toISOString() } } } }, { $project: { _id: 1 } }] }))
+    const rows = reads(entries, 'SuperTabOperation', ['tabId', 'createdAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.nreturned).toBe(5)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(5)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
+  })
+
+  // A write on every command: the index on tabId alone is a prefix of this one, so it would only add write cost (review of #2888).
+  it('keeps one index for reads by Swarm, which still use it', async () => {
+    const listed = await db.$runCommandRaw({ listIndexes: 'SuperTabOperation' }) as unknown as { cursor: { firstBatch: Array<{ key: Record<string, number> }> } }
+    expect(listed.cursor.firstBatch.map(index => Object.keys(index.key).join(',')).filter(key => key.startsWith('tabId'))).toEqual(['tabId,createdAt'])
+    const tab = randomUUID()
+    await db.superTabOperation.create({ data: { id: randomUUID(), tabId: tab, actorKey: 'person:x', requestHash: 'h', revision: 0, result: {} } })
+    const entries = await profiled(db, () => db.superTabOperation.aggregateRaw({ pipeline: [{ $match: { tabId: tab } }, { $project: { _id: 1 } }] }))
+    const rows = reads(entries, 'SuperTabOperation', ['tabId'])
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBe(1)
+  })
+})
+
 describe('the owner\'s grid poll', () => {
   it('finds the owner\'s Swarms by the owner index, examining none of anyone else\'s', async () => {
     const mine = [await swarmRow(owner.sub), await swarmRow(owner.sub)]
@@ -80,7 +135,9 @@ describe('a person\'s Swarm list', () => {
     mine.sort()
   })
 
-  const memberReads = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SuperTab', ['memberIds'])
+  /** The auto-join read (superTabs/autoJoin.ts) also names memberIds, as `$ne`: it is checked on its own below. */
+  const isAutoJoin = (row: ReturnType<typeof reads>[number]) => JSON.stringify(row.command ?? {}).includes('autoJoinDomain')
+  const memberReads = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SuperTab', ['memberIds']).filter(row => !isAutoJoin(row))
   const bounded = (rows: ReturnType<typeof memberReads>, returned: number) => {
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.nreturned).toBe(returned)
@@ -95,6 +152,11 @@ describe('a person\'s Swarm list', () => {
     expect(listed!.tabs.map(t => t.id)).toEqual(mine)
     expect(listed!.next).toBeNull()
     bounded(memberReads(entries), mine.length)
+    // Before it, the person's try for Swarms of their domain: one read on its own index, which finds none and examines none.
+    const autoJoins = reads(entries, 'SuperTab', ['memberIds']).filter(isAutoJoin)
+    expect(autoJoins, JSON.stringify(plan(autoJoins))).toHaveLength(1)
+    expect(autoJoins[0]!.docsExamined).toBe(0)
+    expect(autoJoins[0]!.command?.hint).toEqual({ autonomousEnv: 1, autoJoinDomain: 1 })
   })
 
   it('the store\'s list and its later page read the same way', async () => {
@@ -108,22 +170,6 @@ describe('a person\'s Swarm list', () => {
     bounded(memberReads(after), mine.length - 1)
   })
 
-  it('a Workspace removal finds only the removed person\'s Swarms of that Workspace', async () => {
-    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: mine[0]! } })).workspaceId!
-    const left: string[] = []
-    const workspaces = new SwarmWorkspaces(db, { transaction: body => db.$transaction(body), now: () => NOW,
-      leave: async (_person, tabId) => { left.push(tabId) } })
-    await db.swarmWorkspaceRemoval.create({ data: { id: `${workspaceId}:${me.sub}:g1`, workspaceId, userId: me.sub, email: me.email, generation: 'g1',
-      autonomousEnv: 'prod', removedAt: new Date(NOW), removedBy: owner.sub, finishedAt: null, purgeAt: null } })
-    const entries = await profiled(db, () => workspaces.finishPending(workspaceId, me.sub))
-    const inWorkspace = (await db.superTab.findMany({ where: { workspaceId }, select: { id: true } })).map(r => r.id).filter(id => mine.includes(id))
-    expect(left.sort()).toEqual(inWorkspace.sort())
-    const rows = memberReads(entries)
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    // Bounded by the person's Swarms, whichever Workspace each is in.
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(mine.length)
-    expect(rows[0]!.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
-  })
 })
 
 describe('an agent\'s open deliveries', () => {
@@ -168,7 +214,7 @@ describe('an agent\'s open deliveries', () => {
 
 describe('what changed in a set of Swarms since a cursor', () => {
   const OLD = new Date(NOW - 3_600_000), SINCE = new Date(NOW - 1_800_000), LATER = new Date(NOW - 60_000)
-  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart', 'swarmProgress'] as const
+  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart'] as const
   let ids: string[]
   beforeAll(async () => {
     const maker = await signedIn('changer')
@@ -192,8 +238,8 @@ describe('what changed in a set of Swarms since a cursor', () => {
     expect(keys(ids[1]!)).toEqual([])
     expect(keys(ids[2]!)).toEqual([])
     expect(changed.get(ids[0]!)!.find(p => p.key === 'machine:read')!.readAt).toBe(LATER.getTime())
-    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.ns))
-    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(8)
+    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/.test(e.ns))
+    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(7)
     for (const read of swarmReads) {
       expect(read.docsExamined, `${read.ns} ${JSON.stringify(plan([read]))}`).toBeLessThanOrEqual(read.nreturned!)
       expect(read.command?.hint, `${read.ns} names its index: ${JSON.stringify(plan([read]))}`).toBeTruthy()
@@ -250,7 +296,7 @@ describe('a conversation\'s page of messages', () => {
   it('returns each message as Prisma reads it', async () => {
     const page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` })
     const prisma = await db.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: page.messages.map(m => m.id) } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }] })
-    expect(page.messages.map(({ reactions: _r, deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
+    expect(page.messages.map(({ deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
     expect(page.messages.find(m => m.text === 'm05')).toMatchObject({ source: { kind: 'route', p: 0.75 }, attachments: [{ size: 2048 }], alsoInChat: true })
   })
 })
@@ -290,6 +336,51 @@ describe('the rows a page points at', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
     expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2 * 3)
     expect(rows[0]!.command?.hint, JSON.stringify(plan(rows))).toEqual(NAMED_INDEX.SuperTabMessage.id)
+  })
+})
+
+// Ken's slow log of 11-04: 8% of the slow SuperTabMessage ops were an `$expr $and[$eq]` read on `_id`, ~101 rows for 1 s: the
+// check of a machine report's or a Lead poll's notices already stored (store.ts writeMessages), sent by Prisma's `id: { in }`.
+describe('the stored notices a time check keeps', () => {
+  it('are read by a plain id match through the id index, examining only the rows it returns', async () => {
+    const tabId = `tab-${randomUUID()}`
+    const author = { kind: 'agent', id: 'lead', name: 'Lead', membershipGeneration: tabId }
+    const ids = Array.from({ length: 101 }, (_, i) => `${tabId}-notice-${i}`)
+    await db.superTabMessage.createMany({ data: [
+      ...ids.map((id, i) => ({ id, tabId, conversationId: `chat-${i % 3}`, sequence: i + 1, text: id, author, recipientIds: [], mentions: [],
+        source: { kind: 'work-lost', worker: `w-${i}` } })),
+      // Rows of the same Swarm the read must not examine.
+      ...Array.from({ length: 50 }, (_, i) => ({ id: `${tabId}-other-${i}`, tabId, conversationId: 'chat-0', sequence: 200 + i, text: 'other', author,
+        recipientIds: [], mentions: [] })),
+    ] })
+    let found: Awaited<ReturnType<typeof storedMessages>> = []
+    const entries = await profiled(db, async () => { found = await storedMessages(db, [...ids, `${tabId}-missing`]) })
+    expect(found.map(m => m.id).sort()).toEqual([...ids].sort())
+    expect(found.find(m => m.id === ids[4])).toEqual({ id: ids[4], tabId, conversationId: 'chat-1', source: { kind: 'work-lost', worker: 'w-4' } })
+    const rows = entries.filter(e => e.ns.endsWith('.SuperTabMessage'))
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(JSON.stringify(rows[0]!.command), 'no $expr').not.toContain('$expr')
+    expect(rows[0]!.planSummary).toBe('IXSCAN { _id: 1 }')
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBe(101)
+    expect(rows[0]!.nreturned).toBe(101)
+    console.info(`stored notices by id: ${JSON.stringify(plan(rows))}`)
+  })
+
+  it('answers each source as Prisma reads it, so a notice already stored is kept, not written twice', async () => {
+    const tabId = `tab-${randomUUID()}`
+    const author = { kind: 'agent', id: 'lead', name: 'Lead', membershipGeneration: tabId }
+    // What a lost task's notice holds: ids, a time in ms past 2^31, a fraction, a list and a nested object.
+    const source = { kind: 'work-lost', worker: 'w-1', assignmentId: 'a-1', at: 1793804932778, share: 0.25, ids: ['x', 'y'], why: { code: 'stalled', n: 3 } }
+    await db.superTabMessage.create({ data: { id: `${tabId}-n`, tabId, conversationId: 'c', sequence: 1, text: 'n', author, recipientIds: [], mentions: [], source } })
+    const prisma = await db.superTabMessage.findUniqueOrThrow({ where: { id: `${tabId}-n` }, select: { source: true } })
+    const [found] = await storedMessages(db, [`${tabId}-n`])
+    expect(found!.source).toStrictEqual(prisma.source)
+    expect(found!.source).toStrictEqual(source)
+  })
+
+  it('reads nothing for no ids', async () => {
+    const entries = await profiled(db, async () => { expect(await storedMessages(db, [])).toEqual([]) })
+    expect(entries.filter(e => e.ns.endsWith('.SuperTabMessage'))).toEqual([])
   })
 })
 

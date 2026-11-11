@@ -8,7 +8,7 @@
  * a process on this computer. The rest of the relay's rules are held where they always were, through the
  * socket and its gateway together (backendSocket.spec.ts).
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendSocket } from '../backendSocket.js'
 import type { Asker } from '../core/api.js'
 import * as C from '../lib/e2ee/core.js'
@@ -18,6 +18,7 @@ import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { unknownHelloReader } from './start.js'
+import { UI_GATED_EVENTS, UI_QUIET_MS, UI_SNAPSHOT_MAX_MS } from './gateway.js'
 import { env } from '../config/env.js'
 
 /** The machine the sessions are bound to: every hello and welcome is signed over it. */
@@ -66,12 +67,12 @@ const queuedFor = (socket: BackendSocket, connId: string): Frame[] =>
 
 /** A paired client with a live session on `connId`: it proves its identity with a hello and reads the
  *  welcome, as the phone app does, so what it seals opens under the gateway's real session. */
-async function pairedClient(socket: BackendSocket, connId: string, opts: { role?: 'web' | 'device'; label?: string; shared?: boolean } = {}) {
+async function pairedClient(socket: BackendSocket, connId: string, opts: { role?: 'web' | 'device'; label?: string; shared?: boolean; machineId?: string } = {}) {
   const gateway = gatewayOf(socket)
   const identity = C.newIdentity()
   const pub = C.b64e(identity.pub)
-  const store = (gateway.e2ee as unknown as { store: { addPaired(pub: string, label: string, at: number, role: string, peer?: { shared?: boolean }): void } }).store
-  store.addPaired(pub, opts.label ?? 'Dee’s phone', Date.now(), opts.role ?? 'web', { shared: opts.shared })
+  const store = (gateway.e2ee as unknown as { store: { addPaired(pub: string, label: string, at: number, role: string, peer?: { shared?: boolean; kind?: 'machine'; machineId?: string }): void } }).store
+  store.addPaired(pub, opts.label ?? 'Dee’s phone', Date.now(), opts.role ?? 'web', { shared: opts.shared, ...(opts.machineId ? { kind: 'machine', machineId: opts.machineId } : {}) })
   const eph = C.newEphemeral()
   await dispatchDown(socket, { type: 'e2e_hello', payload: { identityPub: pub, ephPub: C.b64e(eph.pub), sig: C.b64e(C.helloSig(identity.priv, MACHINE, eph.pub)) } }, connId)
   // The latest: a second hello on a connection replaces its session.
@@ -100,6 +101,18 @@ describe('a remote client, as the core hears it', () => {
     await socket.stop()
   })
 
+  // The agent browser opens only for the machine's own person (core/api.ts `mayOpenBrowser`): a verified machine share is
+  // `owner` too, so the rule stands on `accountOwner`, which the gateway sets from the pairing record alone.
+  it('accountOwner is set for the owner\'s other machine, and never for a shared machine', async () => {
+    const socket = relaySocket(MACHINE)
+    await pairedClient(socket, 'other-mac', { machineId: 'machine-2', label: 'Dee’s Mac' })
+    await pairedClient(socket, 'shared-mac', { machineId: 'machine-3', label: 'Kim’s Mac', shared: true })
+    expect(socket.remoteClient('other-mac')).toMatchObject({ accountOwner: true, machineId: 'machine-2' })
+    expect(socket.remoteClient('shared-mac')).toMatchObject({ accountOwner: false })
+    expect(socket.remoteClient('shared-mac')).not.toHaveProperty('machineId')
+    await socket.stop()
+  })
+
   it('asks as the owner only with a web session, whatever its frame says', async () => {
     const socket = relaySocket(MACHINE)
     const asked: Array<{ type: string; asker: Asker }> = []
@@ -113,12 +126,12 @@ describe('a remote client, as the core hears it', () => {
     // A colleague the machine is shared with is a guest (core/guestPolicy.ts): never the owner, whatever it says. Its
     // `dsh_list` is refused before any service hears it; what a guest may ask is asked as that guest.
     await dispatchDown(socket, colleague.seal('dsh_list', { requestId: 'c', owner: true, local: true, accountOwner: true }), 'colleague')
-    await dispatchDown(socket, colleague.seal('usage_read', { requestId: 'u', owner: true, local: true, accountOwner: true }), 'colleague')
+    await dispatchDown(socket, colleague.seal('guest_folders', { requestId: 'u', owner: true, local: true, accountOwner: true }), 'colleague')
     // With the connection and the request id it asked under, which a service keys a connection's own work by.
     expect(asked).toEqual([
       { type: 'dsh_list', asker: { local: false, owner: true, accountOwner: true, connection: 'phone-1', requestId: 'p' } },
       { type: 'dsh_list', asker: { local: false, owner: false, accountOwner: false, connection: 'dial-1', requestId: 'd' } },
-      { type: 'usage_read', asker: expect.objectContaining({ local: false, owner: false, accountOwner: false, connection: 'colleague', requestId: 'u' }) },
+      { type: 'guest_folders', asker: expect.objectContaining({ local: false, owner: false, accountOwner: false, connection: 'colleague', requestId: 'u' }) },
     ])
     await socket.stop()
   })
@@ -250,6 +263,151 @@ describe('events only a terminal app reads', () => {
     queue.length = 0
     gateway.broadcast({ type: 'tool_end', agentId: 'a1', payload: {} }, 'guest@example.com')
     expect(queue.map(item => (item.msg as { targetConnId?: string }).targetConnId)).toEqual(['guest-conn'])
+  })
+})
+
+// Part 4 of docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md: a machine's live events go to the relay only
+// while an app could see them, once the backend has said it may hold them (`uiGate`) and counts no app (`ui: 0`).
+describe('ui gate', () => {
+  const live = ['text_delta', 'tool_start', 'tool_end', 'user_message', 'thinking_delta', 'thinking_title', 'turn_heartbeat',
+    'agent_activity', 'turn_ended', 'turn_summary', 'subagent_finished', 'done', 'context_compact']
+  const setup = () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    const queue = upstreamOf(socket).queue
+    /** What the relay is sent for every machine-wide copy of [types], each broadcast once. */
+    const relayed = (types: string[] = live) => {
+      queue.length = 0
+      for (const type of types) gateway.broadcast({ type, agentId: 'a1', payload: {} })
+      return queue.filter(item => !(item.msg as { targetConnId?: string }).targetConnId).map(item => (item.msg as { frame: { type: string } }).frame.type)
+    }
+    const noUi = (commander = 0) => dispatchDown(socket, { type: '__clients', payload: { ui: 0, commander, commanderActive: commander, uiGate: true } }, '')
+    return { socket, gateway, queue, relayed, noUi }
+  }
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('holds exactly the live events, for 60 s of quiet', () => {
+    expect([...UI_GATED_EVENTS].sort()).toEqual([...live].sort())
+    expect(UI_QUIET_MS).toBe(60_000)
+  })
+
+  it('a live event is not relayed while the backend says no UI and none spoke for 60 s', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    expect(relayed()).toEqual([])
+    expect(relayed(['agent_renamed', 'swarm_changed'])).toEqual(['agent_renamed', 'swarm_changed'])
+    await socket.stop()
+  })
+
+  it('a "no UI" the backend has not repeated for UI_SNAPSHOT_MAX_MS is not trusted', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    expect(relayed()).toEqual([])
+    // The backend repeats `__clients` every 15 s (nodeRole PRESENCE_REFRESH_MS); one that stopped may be wrong.
+    vi.advanceTimersByTime(UI_SNAPSHOT_MAX_MS)
+    expect(relayed()).toEqual(live)
+    await noUi()
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('relayed with ui > 0', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    await dispatchDown(socket, { type: '__clients', payload: { ui: 1, commander: 0, uiGate: true } }, '')
+    expect(relayed()).toEqual(live)
+    await noUi()
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('relayed again at once when a remote web frame arrives (its e2e hello)', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    // Its hello comes before it can open anything, so it misses nothing it could read.
+    const phone = await pairedClient(socket, 'phone-1')
+    expect(relayed()).toEqual(live)
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS - 1)
+    expect(relayed()).toEqual(live)
+    await dispatchDown(socket, phone.seal('agents_list', { requestId: 'r' }), 'phone-1')
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS - 1)
+    expect(relayed()).toEqual(live)
+    // The backend says it again, as it does every 15 s: its word is not stale.
+    await noUi()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('a device\'s frame, the backend\'s and a viewer\'s do not count as an app viewing', async () => {
+    const { socket, relayed, noUi } = setup()
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device' })
+    // The backend counts the dial as a commander, never as an app (ui).
+    await noUi(1)
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS)
+    expect(relayed()).toEqual([])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await dispatchDown(socket, dial.seal('agents_list', { requestId: 'd' }), 'dial-1')
+    await dispatchDown(socket, { type: '__clients_dirty', payload: {} }, '')
+    // The hub addresses this one to the connection that left: it is the backend speaking, not that app.
+    await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'phone-8')
+    await dispatchDown(socket, { type: 'observer_ping', payload: {} }, 'phone-9')
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('relayed before any __clients, and after the link drops', async () => {
+    const { socket, gateway, relayed, noUi } = setup()
+    expect(relayed()).toEqual(live)
+    await noUi()
+    expect(relayed()).toEqual([])
+    ;(gateway as unknown as { linkGone(): void }).linkGone()
+    expect(relayed()).toEqual(live)
+    await socket.stop()
+  })
+
+  it('relayed when __clients has no uiGate (older backend or switch off)', async () => {
+    const { socket, relayed } = setup()
+    await dispatchDown(socket, { type: '__clients', payload: { ui: 0, commander: 0, commanderActive: 0 } }, '')
+    expect(relayed()).toEqual(live)
+    await dispatchDown(socket, { type: '__clients', payload: { ui: 0, uiGate: 'true' } }, '')
+    expect(relayed()).toEqual(live)
+    await socket.stop()
+  })
+
+  it('turn_started, agent_synced and agent_deleted are never held', async () => {
+    // The backend reads these itself: daily turn counts and the short-turn guard, and the machine's agents.
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    expect(relayed(['turn_started', 'agent_synced', 'agent_deleted'])).toEqual(['turn_started', 'agent_synced', 'agent_deleted'])
+    await socket.stop()
+  })
+
+  it('guest copies, device, user and targeted frames are never held', async () => {
+    const { socket, gateway, queue, noUi } = setup()
+    const phone = await pairedClient(socket, 'phone-1')
+    const e2ee = (gateway as unknown as { e2ee: { guestSessions(g: string): string[]; wrapFor(c: string, f: unknown): unknown } }).e2ee
+    vi.spyOn(e2ee, 'guestSessions').mockReturnValue(['guest-conn'])
+    vi.spyOn(e2ee, 'wrapFor').mockReturnValue({ type: 'text_delta', payload: { __e2e: 'sealed' } })
+    await noUi()
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS)
+    queue.length = 0
+    const sent = () => queue.splice(0).map(item => item.msg as { targetConnId?: string; commanderEligible?: boolean; userEligible?: boolean; frame: Frame })
+
+    gateway.broadcast({ type: 'text_delta', agentId: 'a1', payload: {} }, 'guest@example.com')
+    expect(sent().map(msg => msg.targetConnId)).toEqual(['guest-conn'])
+    gateway.commander({ type: 'text_delta', agentId: 'a1', payload: {} })
+    expect(sent().map(msg => msg.commanderEligible)).toEqual([true])
+    gateway.user({ type: 'text_delta', payload: {} })
+    expect(sent().map(msg => msg.userEligible)).toEqual([true])
+    // A reply to one client, and the backend's own (connId ''), which goes out machine-wide.
+    gateway.reply('phone-1', 'agents_list', 'r-1', { agents: [] })
+    const targeted = sent()
+    expect(targeted.map(msg => msg.targetConnId)).toEqual(['phone-1'])
+    expect(phone.open(targeted[0].frame)).toEqual({ requestId: 'r-1', agents: [] })
+    gateway.reply('', 'machine_info', 'r-2', { name: 'm' })
+    expect(sent().map(msg => [msg.targetConnId, msg.frame.type])).toEqual([[undefined, 'machine_info_result']])
+    await socket.stop()
   })
 })
 
@@ -424,6 +582,144 @@ describe('terminal streams on a client\'s P2P channel', () => {
     const again = await pairedClient(socket, 'phone-1')
     await dispatchDown(socket, again.seal('terminal_ack', { streamId: STREAM, lastSeq: 1 }), 'phone-1', 'relay')
     expect(outputRides()).toBe('relay')
+    await socket.stop()
+  })
+})
+
+// An agent browser's stream keeps the route it opened on: VNC has no resync or keyframe, so a moved stream would corrupt.
+describe('agent browser streams on a client\'s links', () => {
+  const S1 = '00000000-0000-4000-8000-0000000000b1', S2 = '00000000-0000-4000-8000-0000000000b2'
+  const S3 = '00000000-0000-4000-8000-0000000000b3', S4 = '00000000-0000-4000-8000-0000000000b4'
+  const TERMINAL = '00000000-0000-4000-8000-0000000000c1'
+  // The relay's hop header carries the connection as a UUID, as the backend names one.
+  const PHONE = '00000000-0000-4000-8000-00000000aaaa'
+
+  async function browserOnPhone() {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const p2p = (gateway as unknown as { terminalP2p: { send(connId: string, data: unknown): boolean; transport(connId: string): 'direct' | 'relay' | null } }).terminalP2p
+    const send = vi.spyOn(p2p, 'send').mockReturnValue(true)
+    const transport = vi.spyOn(p2p, 'transport').mockReturnValue('direct')
+    const link = (gateway as unknown as { link: { sendBinary(packet: Uint8Array): boolean } }).link
+    const relayBinary = vi.spyOn(link, 'sendBinary').mockReturnValue(true)
+    const route = vi.spyOn(socket.fromGateway, 'browserRoute')
+    const lost = vi.spyOn(socket.fromGateway, 'browserRouteLost')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const phone = await pairedClient(socket, PHONE)
+    let request = 0
+    const open = async (streamId: string, via: 'relay' | 'p2p') => {
+      const requestId = `open-${++request}`
+      await dispatchDown(socket, phone.seal('agent_browser_open', { requestId, agentId: 'a1' }), PHONE, via)
+      gateway.terminal(PHONE, 'agent_browser_open_result', { requestId, streamId })
+    }
+    const screen = (streamId: string) => gateway.terminalBinary(PHONE, { kind: TerminalBinaryKind.browser, streamId, seq: 1, compressed: false, bytes: new Uint8Array([1]) })
+    const directSends = () => send.mock.calls.filter(([, data]) => typeof data !== 'string').length
+    return { socket, gateway, phone, send, transport, relayBinary, route, lost, open, screen, directSends }
+  }
+
+  it('the route of a browser stream is chosen at open and reported once, as direct, turn or relay', async () => {
+    const { socket, gateway, phone, transport, route, open } = await browserOnPhone()
+    await open(S1, 'p2p')
+    transport.mockReturnValue('relay')
+    await open(S2, 'p2p')
+    await open(S3, 'relay')
+    // A refused open has no stream to route.
+    await dispatchDown(socket, phone.seal('agent_browser_open', { requestId: 'refused', agentId: 'a1' }), PHONE, 'p2p')
+    gateway.terminal(PHONE, 'agent_browser_open_result', { requestId: 'refused', error: 'NOT_READY' })
+    gateway.terminal(PHONE, 'agent_browser_close', { streamId: S1, reason: 'closed' })
+    expect(route.mock.calls).toEqual([[S1, 'direct'], [S2, 'turn'], [S3, 'relay']])
+    await socket.stop()
+  })
+
+  it('a link the responder cannot classify is reported as turn', async () => {
+    const { socket, transport, route, open } = await browserOnPhone()
+    transport.mockReturnValue(null)
+    await open(S1, 'p2p')
+    expect(route.mock.calls).toEqual([[S1, 'turn']])
+    await socket.stop()
+  })
+
+  it('kind 8 output of a direct stream leaves on the direct link, and of a relay stream on the relay', async () => {
+    const { socket, relayBinary, open, screen, directSends } = await browserOnPhone()
+    await open(S1, 'p2p')
+    await open(S3, 'relay')
+    expect(screen(S1)).toBe(true)
+    expect([directSends(), relayBinary.mock.calls.length]).toEqual([1, 0])
+    expect(screen(S3)).toBe(true)
+    expect([directSends(), relayBinary.mock.calls.length]).toEqual([1, 1])
+    await socket.stop()
+  })
+
+  it('a relay frame for a direct browser stream does not move it', async () => {
+    const { socket, phone, relayBinary, open, screen, directSends } = await browserOnPhone()
+    await open(S1, 'p2p')
+    await dispatchDown(socket, phone.seal('agent_browser_ack', { streamId: S1, bytes: 65536 }), PHONE, 'relay')
+    await dispatchDown(socket, phone.seal('agent_browser_close', { streamId: S1 }), PHONE, 'relay')
+    screen(S1)
+    expect([directSends(), relayBinary.mock.calls.length]).toEqual([1, 0])
+    await socket.stop()
+  })
+
+  it('a kind-8 frame that cannot be sent, on a direct link or on the relay, is dropped and raises browserRouteLost', async () => {
+    const { socket, gateway, send, relayBinary, lost, open, screen } = await browserOnPhone()
+    await open(S1, 'p2p')
+    await open(S3, 'relay')
+    await open(S4, 'relay')
+    send.mockReturnValue(false)
+    expect(screen(S1)).toBe(false)
+    expect(relayBinary).not.toHaveBeenCalled()
+    expect(lost.mock.calls).toEqual([[S1]])
+    relayBinary.mockReturnValue(false)
+    expect(screen(S3)).toBe(false)
+    expect(lost.mock.calls.at(-1)).toEqual([S3])
+    // No session to seal it under.
+    relayBinary.mockClear()
+    gateway.e2ee.dropSession(PHONE)
+    expect(screen(S4)).toBe(false)
+    expect(relayBinary).not.toHaveBeenCalled()
+    expect(lost.mock.calls.at(-1)).toEqual([S4])
+    await socket.stop()
+  })
+
+  it('a dropped link raises browserRouteLost for each of its browser streams and for no terminal stream', async () => {
+    const { socket, gateway, phone, relayBinary, lost, open, screen, directSends } = await browserOnPhone()
+    await open(S1, 'p2p')
+    await open(S2, 'p2p')
+    await open(S3, 'relay')
+    await dispatchDown(socket, phone.seal('terminal_open', { requestId: 't-1', agentId: 'a1', cols: 80, rows: 24 }), PHONE, 'p2p')
+    gateway.terminal(PHONE, 'terminal_ready', { requestId: 't-1', streamId: TERMINAL })
+    ;(gateway as unknown as { demoteP2pConnection(connId: string, reason: string): void }).demoteP2pConnection(PHONE, 'peer_failed')
+    expect(lost.mock.calls).toEqual([[S1], [S2]])
+    // A late frame of a lost stream never falls through to the relay.
+    const before = directSends()
+    expect(screen(S1)).toBe(false)
+    expect([directSends(), relayBinary.mock.calls.length]).toEqual([before, 0])
+    expect(screen(S3)).toBe(true)
+    await socket.stop()
+  })
+
+  it('a plaintext agent_browser_transport_error from the backend is accepted and raises browserTransportError', async () => {
+    const socket = relaySocket(MACHINE)
+    const heard = vi.spyOn(socket.fromGateway, 'browserTransportError')
+    await dispatchDown(socket, { type: 'agent_browser_transport_error', payload: { code: 'RATE' } }, '')
+    expect(heard).toHaveBeenCalledTimes(1)
+    await socket.stop()
+  })
+
+  it('the same frame from a client is refused', async () => {
+    const socket = relaySocket(MACHINE)
+    const heard = vi.spyOn(socket.fromGateway, 'browserTransportError')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const phone = await pairedClient(socket, PHONE)
+    await dispatchDown(socket, { type: 'agent_browser_transport_error', payload: { code: 'RATE' } }, PHONE)
+    await dispatchDown(socket, phone.seal('agent_browser_transport_error', { code: 'RATE' }), PHONE)
+    await dispatchDown(socket, phone.seal('agent_browser_transport_error', { code: 'RATE' }), PHONE, 'p2p')
+    socket.registerLocalClient('local:w', { sendFrame: () => true, sendBinary: () => true })
+    await dispatchDown(socket, { type: 'agent_browser_transport_error', payload: { code: 'RATE' } }, 'local:w')
+    expect(heard).not.toHaveBeenCalled()
+    expect(warn.mock.calls.flat().join(' ')).toContain('only the backend')
+    await socket.unregisterLocalClient('local:w')
     await socket.stop()
   })
 })

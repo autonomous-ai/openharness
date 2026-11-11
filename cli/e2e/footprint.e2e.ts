@@ -12,7 +12,8 @@
  * service process (`harnessd-<name>`) and the engine workers. Each is named by its process title, or by the pid the
  * master logged it under. Reported per process as the mean over the window, and in total: a readable table on stdout
  * for each, and JSON of all of them to FOOTPRINT_REPORT when it is set. Processes that are not the daemon's own (a `ps`
- * the monitor ran at that moment) are listed apart and left out of the total.
+ * the monitor ran at that moment) are listed apart and left out of the total. FOOTPRINT_ENGINES names the agents
+ * instead, comma-separated, or `none` for a daemon at rest with no agent.
  *
  * Measurement only, no limit: it was written to answer what Agent Messages costs in a process of its own against in
  * the edge host (2026-10-12). Run it on two builds on the same machine, one after the other, and compare.
@@ -91,6 +92,7 @@ const SCENARIOS: Record<Scenario, string> = {
   off: 'Agent Messages turned off for the account',
   defaults: 'never turned: every switch at its default (off)',
 }
+const engines = (process.env.FOOTPRINT_ENGINES ?? 'claude,codex').split(',').map((name) => name.trim()).filter((name) => name && name !== 'none')
 const chosen = (process.env.FOOTPRINT_SCENARIOS ?? 'on,off,defaults').split(',').map((name) => name.trim()).filter((name): name is Scenario => name in SCENARIOS)
 /** CPU % of one core over the window: each pid's CPU time from its first sample to its last, summed, over the window's
  *  length. A pid seen once (born or gone in the window) adds nothing; null with no time to divide by. */
@@ -111,7 +113,7 @@ function latency(times: number[]): { count: number; p50Ms: number | null; maxMs:
 const reports: Record<string, unknown> = {}
 
 describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', () => {
-  it.each(chosen)('reports every process\'s resident memory, and the total, with two agents in a tab: Agent Messages %s', async (scenario) => {
+  it.each(chosen)('reports every process\'s resident memory, and the total, with the agents in a tab: Agent Messages %s', async (scenario) => {
     const seconds = knob('FOOTPRINT_SECONDS', 30, 5, 3_600)
     const warmup = knob('FOOTPRINT_WARMUP_SECONDS', 20, 0, 600)
     const bundle = process.env.E2E_BUNDLE_PATH
@@ -134,7 +136,7 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
       await until('signed in to the fake backend', () => backend.nodeUp(ME.machineId) || null, 60_000, 250)
       client = await LocalClient.connect(d, { machineId: ME.machineId })
       const agents: Array<Record<string, any>> = []
-      for (const engine of ['claude', 'codex']) {
+      for (const engine of engines) {
         const cwd = join(d.projectsDir, `footprint-${engine}`)
         mkdirSync(cwd, { recursive: true })
         const created = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
@@ -148,7 +150,7 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
       // One tab holds both: on, Agent Messages reads it from the account and gives each its note.
       backend.agentMessages = { revision: 1, machines: [{ machineId: ME.machineId, name: ME.name }],
         tabs: [{ id: 'footprint', name: 'footprint', panes: agents.map((agent) => ({ machineId: ME.machineId, agentId: agent.id })) }] }
-      if (scenario === 'on') {
+      if (scenario === 'on' && agents.length) {
         await until('Agent Messages to give both agents their note', () => {
           try {
             const state = JSON.parse(readFileSync(join(d.dataDir, 'agent-messages', 'state.json'), 'utf8')) as { notes: Record<string, unknown> }
@@ -207,7 +209,7 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
         source: { commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')),
           bundleSha256: createHash('sha256').update(readFileSync(bundle)).digest('hex') },
         machine: { platform: platform(), release: release(), node: process.version, logicalCpus: cpus().length, cpu: cpus()[0]?.model, ramBytes: totalmem() },
-        workload: { signedIn: true, agents: agents.map((agent) => agent.engine), tab: 'one tab, both agents', agentMessages: SCENARIOS[scenario], warmupSeconds: warmup, seconds, sampleEveryMs: 1_000 },
+        workload: { signedIn: true, agents: agents.map((agent) => agent.engine), tab: agents.length ? 'one tab, every agent' : 'none', agentMessages: SCENARIOS[scenario], warmupSeconds: warmup, seconds, sampleEveryMs: 1_000 },
         // How often the daemon read the account's tabs and experiments while it was measured, on its own: the probes'
         // reads below are left out.
         tabReadsInWindow: backendReads('/api/agent-messages') - reads - probed,

@@ -6,11 +6,12 @@ import { shouldSkipAuth } from '../middlewares/authMiddleware.js'
 
 const owner = { id: 'owner', email: 'owner@example.com' }
 const tab = () => createSuperTab('tab', 'Fixture Swarm', owner, 'prod')
-const linkToken = (state: ReturnType<typeof tab>) => new URL(sharingDetails(state).joinUrl!).searchParams.get('token')!
+const linkToken = (state: ReturnType<typeof tab>) => new URL(sharingDetails(state, owner.email).joinUrl!).searchParams.get('token')!
 
 describe('Swarm sharing policy', () => {
   it('defaults to invited people and keeps every sharing endpoint authenticated', () => {
-    expect(sharingDetails(tab())).toEqual({ revision: 0, access: { mode: 'invited', role: 'collaborator' }, joinUrl: null })
+    expect(sharingDetails(tab(), owner.email)).toEqual({ revision: 0, access: { mode: 'invited', role: 'collaborator' }, joinUrl: null,
+      ownDomain: 'example.com', ownDomainPublic: false, autoJoinFull: false })
     expect(() => authorizeSwarmJoin(tab(), owner.email)).toThrow('unavailable')
     for (const path of ['sharing', 'join', 'join/preview']) expect(shouldSkipAuth(`/api/super-tabs/tab/${path}`)).toBe(false)
   })
@@ -61,7 +62,7 @@ describe('Swarm sharing policy', () => {
     expect(visibleState(state, { kind: 'person', userId: owner.id, email: owner.email }).sharing).toBeUndefined()
     state.people.push({ id: 'peer', email: 'peer@example.com', generation: 'peer', role: 'viewer' })
     expect(visibleState(state, { kind: 'person', userId: 'peer', email: 'peer@example.com' }).sharing).toBeUndefined()
-    expect(sharingDetails(state).joinUrl).toBe(`harness://swarm/join/tab?token=${token}`)
+    expect(sharingDetails(state, owner.email).joinUrl).toBe(`harness://swarm/join/tab?token=${token}`)
   })
 
   it('keeps a copied link through a role edit, replaces it explicitly, and erases it when access is closed', () => {
@@ -76,10 +77,10 @@ describe('Swarm sharing policy', () => {
     expect(() => authorizeSwarmJoin(state, owner.email, token)).toThrow('unavailable')
     state.sharing = configureSharing(state.sharing, { mode: 'domain', domain: 'example.com', role: 'viewer' })
     expect(state.sharing.link).toBeUndefined()
-    expect(sharingDetails(state).joinUrl).toBe('harness://swarm/join/tab')
+    expect(sharingDetails(state, owner.email).joinUrl).toBe('harness://swarm/join/tab')
     state.sharing = configureSharing(state.sharing, { mode: 'invited', role: 'viewer' })
     expect(state.sharing.revision).toBe(5)
-    expect(sharingDetails(state).joinUrl).toBeNull()
+    expect(sharingDetails(state, owner.email).joinUrl).toBeNull()
     expect(() => authorizeSwarmJoin(state, owner.email)).toThrow('unavailable')
   })
 })

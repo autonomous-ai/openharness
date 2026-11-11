@@ -32,6 +32,7 @@ export const SWITCH_ARM_MS = 2 * 60_000
 export const SWITCH_HOLD_MS = 3 * 60_000
 /** How long, from its stop, the host waits for the Swarm to take in a new session that runs (agent.rebind, every 5 s). */
 export const SWITCH_ADOPT_MS = 10 * 60_000
+
 /** Ended records go after a day; each Product Manager has at most one. */
 const KEEP_MS = 24 * 60 * 60_000
 const CHANGE_ID = /^[0-9a-f]{32}$/

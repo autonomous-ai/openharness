@@ -1,27 +1,28 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
-import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-import 'model.dart';
+import 'swarm_agents.dart';
+import 'swarm_home_view_sheet.dart';
 import 'swarm_inbox.dart';
-import 'swarm_needs_page.dart';
-import 'swarm_project_tasks.dart' show swarmProgressAt;
+import 'swarm_rename.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 
 /// The top of Swarm Home, direction C, as Tony's prototype C1 draws it
-/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]) and
-/// While you were away ([SwarmAwayCard]).
+/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]). While
+/// you were away is the need-you line since 2026-11-04 (`SwarmNeedLine`).
 
 /// Whether the account's Swarms are still to come, a failed read still trying:
 /// never from a server without the list, which no read will bring.
@@ -50,35 +51,91 @@ String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
     (shown.length > 1 ? 'All Swarms' : 'Swarm');
 
 /// The Swarms Home can show, from its title: All Swarms over several, each
-/// Swarm, the one shown ticked and what waits in each other one counted,
-/// and Join or create a Swarm. A Swarm the account loses, or whose read is
-/// taken away, while it is open leaves it, and a tap on it shows nothing.
-Future<void> showSwarmSwitcher(BuildContext context, SwarmSession session) =>
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppGlass.rowFill,
-      shape: AppControl.sheetShape,
-      isScrollControlled: true,
-      builder: (sheet) => _Switcher(
-        session: session,
-        onJoin: () {
-          Navigator.of(sheet).pop();
-          unawaited(showSwarmJoinOrCreate(context));
-        },
-      ),
+/// Swarm, the one shown ticked, then Sort and filter ([onView]) and the agents on the person's computers
+/// ([agents]), where Home has them — moved here from Home's filter icon and
+/// Agents tile (anh Dee, 2026-11-04: less on Home) — then New project, for
+/// someone who may write in a Swarm Home shows ([offersNewProject]), and
+/// Join or create a Swarm. A Swarm the account loses, or whose read is taken away, while it
+/// is open leaves it, and a tap on it shows nothing. A Swarm with a menu for
+/// the person ([swarmHasMenu]) shows a ⋮ on its row; the ⋮, or holding the
+/// row, closes it for that menu over Home ([showSwarmMenu]). Each of the
+/// rows under the Swarms closes it, then opens what it names.
+Future<void> showSwarmSwitcher(
+  BuildContext context,
+  SwarmSession session, {
+  VoidCallback? onView,
+  SwarmAgents? agents,
+  bool Function()? offersNewProject,
+  VoidCallback? onNewProject,
+}) => showModalBottomSheet<void>(
+  context: context,
+  backgroundColor: AppGlass.rowFill,
+  shape: AppControl.sheetShape,
+  isScrollControlled: true,
+  builder: (sheet) {
+    VoidCallback then(VoidCallback open) => () {
+      Navigator.of(sheet).pop();
+      open();
+    };
+    return _Switcher(
+      session: session,
+      onJoin: then(() => unawaited(showSwarmJoinOrCreate(context))),
+      onHold: (swarmId) => then(
+        () => unawaited(showSwarmMenu(context, session.inbox, swarmId)),
+      )(),
+      onView: onView == null ? null : then(onView),
+      agents: agents,
+      onAgents: agents == null ? null : then(() => agents.openList(context)),
+      offersNewProject: offersNewProject,
+      onNewProject: onNewProject == null ? null : then(onNewProject),
     );
+  },
+);
 
 class _Switcher extends StatelessWidget {
-  const _Switcher({required this.session, required this.onJoin});
+  const _Switcher({
+    required this.session,
+    required this.onJoin,
+    required this.onHold,
+    this.onView,
+    this.agents,
+    this.onAgents,
+    this.offersNewProject,
+    this.onNewProject,
+  });
 
   final SwarmSession session;
   final VoidCallback onJoin;
 
+  /// Sort and filter, and the agents' list: null, no row.
+  final VoidCallback? onView, onAgents, onNewProject;
+  final SwarmAgents? agents;
+
+  /// Whether New project is offered now: read on each build, so a role
+  /// taken away while it is open takes the row with it.
+  final bool Function()? offersNewProject;
+
+  /// A Swarm's menu asked for, from its row's ⋮ or by holding the row,
+  /// with its id.
+  final ValueChanged<String> onHold;
+
+  /// A row's end: what it shows ([status]), then its ⋮ ([menu]).
+  static Widget? _trailing(Widget? status, {Widget? menu}) => menu == null
+      ? status
+      : Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (status != null) ...[status, const SizedBox(width: AppSpace.s)],
+            menu,
+          ],
+        );
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([session.inbox, session.home]),
+    listenable: Listenable.merge([session.inbox, session.home, ?agents]),
     builder: (context, _) {
       final inbox = session.inbox;
+      final home = session.home;
       final swarms = [
         for (final swarm in inbox.swarms)
           if (swarmHomeOffers(inbox, swarm.id)) swarm,
@@ -142,17 +199,76 @@ class _Switcher extends StatelessWidget {
                   key: ValueKey('swarm-switch-${swarm.id}'),
                   leading: SwarmProjectTile(swarm.name),
                   title: swarm.name,
-                  trailing: swarm == shown
-                      ? tick('Shown on Swarm Home')
-                      // What waits in a Swarm Home does not show.
-                      : switch (shown == null
-                            ? 0
-                            : swarmNeedsOf(inbox, swarm.id).length) {
-                          0 => null,
-                          final count => SwarmBadge(count, warn: true),
-                        },
+                  trailing: _trailing(
+                    swarm == shown ? tick('Shown on Swarm Home') : null,
+                    // Its menu, for someone with something in it to do,
+                    // from a ⋮ as a chat's is.
+                    menu: swarmHasMenu(inbox, swarm.id)
+                        ? _SwarmMenuButton(
+                            key: ValueKey('swarm-switch-menu-${swarm.id}'),
+                            onTap: () => onHold(swarm.id),
+                          )
+                        : null,
+                  ),
                   chevron: null,
                   onTap: () => show(swarm.id),
+                  // Held, the same menu: a shortcut to the ⋮.
+                  onLongPress: swarmHasMenu(inbox, swarm.id)
+                      ? () => onHold(swarm.id)
+                      : null,
+                ),
+              if (onView case final onView?)
+                // Said in words too, as the dot is not heard.
+                Semantics(
+                  button: true,
+                  label:
+                      'Sort and filter: ${swarmHomeSortLabel(home)}, '
+                      '${swarmHomeFilterLabel(home.filter)}',
+                  excludeSemantics: true,
+                  onTap: onView,
+                  child: SwarmRow(
+                    key: const ValueKey('swarm-switch-view'),
+                    leading: const _Glyph(LucideIcons.listFilter300),
+                    title: 'Sort and filter',
+                    trailing: home.viewChanged
+                        ? SizedBox.square(
+                            key: const ValueKey('swarm-switch-view-dot'),
+                            dimension: AppSpace.s,
+                            child: DecoratedBox(
+                              decoration: ShapeDecoration(
+                                color: AppPalette.swarmAccent,
+                                shape: const CircleBorder(),
+                              ),
+                            ),
+                          )
+                        : null,
+                    chevron: null,
+                    onTap: onView,
+                  ),
+                ),
+              if ((agents, onAgents) case (final agents?, final onAgents?))
+                SwarmRow(
+                  key: const ValueKey('swarm-switch-agents'),
+                  leading: const _Glyph(LucideIcons.squareTerminal300),
+                  title: 'Agents',
+                  trailing: switch (agents.working) {
+                    final n? when n > 0 => Text(
+                      '$n working',
+                      style: AppType.caption(color: AppPalette.textSecondary),
+                    ),
+                    _ => null,
+                  },
+                  chevron: null,
+                  onTap: onAgents,
+                ),
+              if ((offersNewProject, onNewProject)
+                  case (final offers?, final onNewProject?) when offers())
+                SwarmRow(
+                  key: const ValueKey('swarm-switch-new-project'),
+                  leading: const _Glyph(LucideIcons.squarePlus300),
+                  title: 'New project',
+                  chevron: null,
+                  onTap: onNewProject,
                 ),
               SwarmRow(
                 key: const ValueKey('swarm-switch-join'),
@@ -166,6 +282,41 @@ class _Switcher extends StatelessWidget {
         ),
       );
     },
+  );
+}
+
+/// A switcher row's ⋮: that Swarm's menu ([showSwarmMenu]), as a chat's ⋮
+/// opens its own. A thumb's size, inside the row.
+class _SwarmMenuButton extends StatelessWidget {
+  const _SwarmMenuButton({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    // Its own button for a screen reader, not merged into the row's.
+    container: true,
+    button: true,
+    label: 'Swarm options',
+    excludeSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: SizedBox.square(
+        dimension: minTouchTarget,
+        child: Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Icon(
+            LucideIcons.ellipsisVertical300,
+            size: AppIconSize.standalone,
+            color: AppPalette.textSecondary,
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -198,154 +349,4 @@ class _Glyph extends StatelessWidget {
     width: 32,
     child: Icon(icon, size: 22, color: AppPalette.textSecondary),
   );
-}
-
-/// How many tasks of [snapshot] their agents said Done after [since]: work
-/// done holds no time of its Done, which comes at or after its last
-/// progress ([swarmProgressAt]), so what this counts is a floor, as Done
-/// today's is.
-int swarmDoneSince(SuperTabSnapshot snapshot, DateTime since) => snapshot
-    .conversations
-    .where(
-      (g) =>
-          g.assignment?['status'] == 'done' &&
-          (swarmProgressAt(g)?.isAfter(since) ?? false),
-    )
-    .length;
-
-/// While you were away, as C1 draws it: how long the person was away, from
-/// leaving the app ([since]) to coming back ([back]), then the work done
-/// since ([done], green) and what needs them now ([needs], yellow), each a
-/// skeleton until it is known. A tap opens what needs them ([onTap]).
-class SwarmAwayCard extends StatelessWidget {
-  const SwarmAwayCard({
-    super.key,
-    required this.since,
-    required this.back,
-    required this.done,
-    required this.needs,
-    required this.onTap,
-  });
-
-  final DateTime since, back;
-  final int? done, needs;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final age = fzfAge(since.toLocal(), back.toLocal());
-    return Semantics(
-      button: true,
-      label:
-          'While you were away, $age: ${done ?? 'not known how many'} done, '
-          '${needs ?? 'not known how many'} need you',
-      excludeSemantics: true,
-      onTap: onTap,
-      child: Material(
-        color: AppGlass.rowFill,
-        borderRadius: BorderRadius.circular(AppCard.radius),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppCard.radius),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.l,
-              AppSpace.m,
-              AppSpace.m,
-              AppSpace.m,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'While you were away',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.label(
-                          color: AppPalette.textPrimary,
-                          fontWeight: AppFont.semibold,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      age,
-                      style: AppType.caption(color: AppPalette.textFaint),
-                    ),
-                    const SizedBox(width: AppSpace.xs),
-                    Icon(
-                      LucideIcons.chevronRight300,
-                      size: 18,
-                      color: AppPalette.textFaint,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: AppSpace.s),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _Stat(
-                        key: const ValueKey('swarm-away-done'),
-                        count: done,
-                        label: 'done',
-                        color: AppColors.success,
-                      ),
-                    ),
-                    Expanded(
-                      child: _Stat(
-                        key: const ValueKey('swarm-away-needs'),
-                        count: needs,
-                        label: 'need you',
-                        color: AppColors.warning,
-                      ),
-                    ),
-                    // Where new threads goes, once the server can tell them.
-                    const Spacer(),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// One figure of While you were away: its count, large, over its words.
-class _Stat extends StatelessWidget {
-  const _Stat({
-    super.key,
-    required this.count,
-    required this.label,
-    required this.color,
-  });
-
-  /// Null until it is known: a skeleton as tall as the figure.
-  final int? count;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final count = this.count;
-    final style = AppType.title(
-      color: (count ?? 0) > 0 ? color : AppPalette.textSecondary,
-      fontWeight: AppFont.semibold,
-      height: 1.2,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (count == null)
-          SkeletonText(style: style, width: 28)
-        else
-          Text('$count', style: style),
-        Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
-      ],
-    );
-  }
 }

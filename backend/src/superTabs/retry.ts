@@ -1,8 +1,9 @@
 import { fail } from './model.js'
 import { recordAttempt, recordBusy, recordRetry } from './retryStats.js'
+import { addPhase, timedPhase } from './commandTiming.js'
 
-/** A Swarm's answers that say "try again" rather than "no": busy after its retries, or moving to its new store. */
-export const RETRYABLE_SWARM_CODES: ReadonlySet<string> = new Set(['SWARM_BUSY', 'SWARM_MIGRATING'])
+/** A Swarm's answers that say "try again" rather than "no": busy after its retries. */
+export const RETRYABLE_SWARM_CODES: ReadonlySet<string> = new Set(['SWARM_BUSY'])
 
 const TRANSACTION_ATTEMPTS = 8
 const EXPIRED_TRANSACTION_ATTEMPTS = 2
@@ -27,6 +28,7 @@ export async function retryTransient<T>(attempt: () => Promise<T>,
   alsoRetry: (error: unknown) => boolean = () => false): Promise<T> {
   for (let tries = 1; ; tries++) {
     recordAttempt()
+    addPhase('attempts', 1)
     try {
       return await attempt()
     } catch (error) {
@@ -39,7 +41,7 @@ export async function retryTransient<T>(attempt: () => Promise<T>,
         fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
       }
       recordRetry(typeof errorCode(error) === 'string' ? errorCode(error) as string : 'transient')
-      await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (tries - 1)))
+      await timedPhase('backoff', () => sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (tries - 1))))
     }
   }
 }

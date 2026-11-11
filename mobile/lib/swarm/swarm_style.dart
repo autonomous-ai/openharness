@@ -7,28 +7,18 @@ import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'profile_model.dart';
 import 'swarm_face.dart';
-import 'team_glance.dart';
 
 /// The pieces Swarm's screens are drawn with, as the approved prototype v2
 /// draws them: a top bar with its title beside the menu or back button,
 /// captions in sentence case, cards of rows, round avatars, a project's
 /// initial in a tile, filled counts, and buttons a thumb can find. Every
 /// colour is one of the app's own tokens.
-
-/// The colour of an agent's state: working green, waiting yellow, down red.
-Color swarmStateColor(SwarmAgentState state) => switch (state) {
-  SwarmAgentState.working => AppColors.success,
-  SwarmAgentState.waiting || SwarmAgentState.stuck => AppColors.warning,
-  SwarmAgentState.down => AppColors.danger,
-  SwarmAgentState.limited || SwarmAgentState.idle => AppPalette.textFaint,
-};
 
 /// The colour [id]'s avatar takes, the same on every screen and every run.
 Color swarmAvatarColor(String id) {
@@ -57,6 +47,8 @@ class SwarmTopBar extends StatelessWidget {
     this.subtitle,
     this.line,
     this.trailing,
+    this.onTitle,
+    this.titleLabel,
   });
 
   final Widget leading;
@@ -69,10 +61,56 @@ class SwarmTopBar extends StatelessWidget {
   /// At the bar's end: a [SwarmIconButton].
   final Widget? trailing;
 
+  /// The title, with its line, is a button too: a channel's name opens its
+  /// details in Slack, a project's here. [titleLabel] is how it is heard.
+  final VoidCallback? onTitle;
+  final String? titleLabel;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
+    Widget words = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          key: const ValueKey('swarm-title'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: tty
+              .style(size: 17, weight: FontWeight.w600)
+              .copyWith(height: 1.25),
+        ),
+        if (line case final line?)
+          line
+        else if (subtitle case final subtitle?)
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppType.caption(color: AppPalette.textSecondary),
+          ),
+      ],
+    );
+    if (onTitle case final onTitle?) {
+      words = Semantics(
+        button: true,
+        label: titleLabel,
+        onTap: onTitle,
+        excludeSemantics: titleLabel != null,
+        child: InkWell(
+          key: const ValueKey('swarm-title-button'),
+          borderRadius: BorderRadius.circular(AppCard.insetRadius),
+          onTap: onTitle,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: minTouchTarget),
+            child: Align(alignment: Alignment.centerLeft, child: words),
+          ),
+        ),
+      );
+    }
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 52),
       child: Padding(
@@ -86,32 +124,7 @@ class SwarmTopBar extends StatelessWidget {
           children: [
             leading,
             const SizedBox(width: 4),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    key: const ValueKey('swarm-title'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: tty
-                        .style(size: 17, weight: FontWeight.w600)
-                        .copyWith(height: 1.25),
-                  ),
-                  if (line case final line?)
-                    line
-                  else if (subtitle case final subtitle?)
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.caption(color: AppPalette.textSecondary),
-                    ),
-                ],
-              ),
-            ),
+            Expanded(child: words),
             ?trailing,
           ],
         ),
@@ -251,7 +264,7 @@ class SwarmTabHeader extends StatelessWidget {
 }
 
 /// A caption over a card, in sentence case, with maybe a count, or a
-/// [note], at its right.
+/// [note], or a control ([trailing]), at its right.
 class SwarmCaption extends StatelessWidget {
   const SwarmCaption(
     this.text, {
@@ -261,6 +274,7 @@ class SwarmCaption extends StatelessWidget {
     this.countKey = const ValueKey('swarm-needs-count'),
     this.note,
     this.first = false,
+    this.trailing,
   });
 
   final String text;
@@ -278,6 +292,12 @@ class SwarmCaption extends StatelessWidget {
   /// The first thing on the screen: less room above it.
   final bool first;
 
+  /// A control at its right end, a thumb's touch tall (44 points): Home's
+  /// Sort and filter on its projects (Tony, 2026-11-03). Centred on the
+  /// words, it takes the room above and under them, so they stay about where
+  /// they are without it.
+  final Widget? trailing;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -285,6 +305,22 @@ class SwarmCaption extends StatelessWidget {
     final quiet = AppType.caption(
       color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
     );
+    if (trailing case final trailing?) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(
+          AppSpace.xs,
+          first ? 0 : AppSpace.s + 2,
+          0,
+          0,
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(text, style: quiet)),
+            trailing,
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -349,18 +385,34 @@ class SwarmGroup extends StatelessWidget {
   }
 }
 
+/// A row's glyph ([SwarmRow.leading]): You's rows, Settings' when opened from
+/// Swarm. In a 32-point box so the titles of a card line up.
+class SwarmRowGlyph extends StatelessWidget {
+  const SwarmRowGlyph(this.icon, {super.key});
+
+  static const double width = 32;
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: width,
+    child: Icon(icon, size: 22, color: AppPalette.textSecondary),
+  );
+}
+
 /// A row on its way, in the shape of the row it stands for: a mark at its
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
 /// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
 /// title — a need's — or its title alone ([titleOnly]), or a project's on Home
-/// ([dot]).
+/// ([nameOnly]).
 class SwarmSkeletonRow extends StatelessWidget {
   const SwarmSkeletonRow({
     super.key,
     this.round = false,
     this.titleOnly = false,
-    this.dot = false,
+    this.nameOnly = false,
     this.width = .45,
   });
 
@@ -370,9 +422,9 @@ class SwarmSkeletonRow extends StatelessWidget {
   /// The row it stands for has no line under its title.
   final bool titleOnly;
 
-  /// A project's small dot on Home ([SwarmHomeProjectRow]) rather than a tile,
-  /// in the room that row keeps for it.
-  final bool dot;
+  /// A project's row on Home ([SwarmHomeProjectRow]): its name alone, with no
+  /// mark before it, on its one line, as tall as it.
+  final bool nameOnly;
 
   /// The title bar's share of the row's words.
   final double width;
@@ -382,24 +434,17 @@ class SwarmSkeletonRow extends StatelessWidget {
     // The real rows' metrics.
     final title = AppType.label(height: 1.3);
     final line = AppType.caption(height: 1.35);
+    final titleOnly = this.titleOnly || nameOnly;
     return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 56),
+      constraints: BoxConstraints(minHeight: nameOnly ? minTouchTarget : 56),
       child: Padding(
-        padding: const EdgeInsets.symmetric(
+        padding: EdgeInsets.symmetric(
           horizontal: AppSpace.l,
-          vertical: AppSpace.m,
+          vertical: nameOnly ? AppSpace.xs : AppSpace.m,
         ),
         child: Row(
           children: [
-            if (dot) ...[
-              const SizedBox(
-                width: 16,
-                child: Center(
-                  child: Skeleton(width: 8, height: 8, shape: BoxShape.circle),
-                ),
-              ),
-              const SizedBox(width: AppSpace.s),
-            ] else ...[
+            if (!nameOnly) ...[
               Skeleton(
                 width: 32,
                 height: 32,
@@ -440,7 +485,7 @@ class SwarmSkeletonRows extends StatelessWidget {
     this.rows = 2,
     this.round = false,
     this.titleOnly = false,
-    this.dot = false,
+    this.nameOnly = false,
   }) : super(key: ValueKey(id));
 
   final String id;
@@ -452,8 +497,8 @@ class SwarmSkeletonRows extends StatelessWidget {
   /// Rows with no line under their titles ([SwarmSkeletonRow.titleOnly]).
   final bool titleOnly;
 
-  /// Projects' dots on Home ([SwarmSkeletonRow.dot]).
-  final bool dot;
+  /// Projects' rows on Home ([SwarmSkeletonRow.nameOnly]).
+  final bool nameOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -465,7 +510,7 @@ class SwarmSkeletonRows extends StatelessWidget {
             key: ValueKey('$id-$i'),
             round: round,
             titleOnly: titleOnly,
-            dot: dot,
+            nameOnly: nameOnly,
             width: i.isEven ? .45 : .6,
           ),
         ),
@@ -475,7 +520,7 @@ class SwarmSkeletonRows extends StatelessWidget {
 }
 
 /// A person's or an agent's round mark: their picture, or their initial on
-/// their colour; a person's status emoji at its corner while it lasts.
+/// their colour.
 class SwarmAvatar extends StatelessWidget {
   const SwarmAvatar({
     super.key,
@@ -483,7 +528,6 @@ class SwarmAvatar extends StatelessWidget {
     required this.name,
     this.size = 32,
     this.picture,
-    this.status,
   });
 
   final String id, name;
@@ -492,13 +536,10 @@ class SwarmAvatar extends StatelessWidget {
   /// What they chose to wear; null wears the initial.
   final SuperTabAvatarPicture? picture;
 
-  /// A person's status; null for an agent.
-  final SuperTabPersonStatus? status;
-
   @override
   Widget build(BuildContext context) {
     final color = swarmAvatarColor(id);
-    final face = SwarmFace(
+    return SwarmFace(
       picture: picture,
       size: size,
       tint: color,
@@ -518,7 +559,6 @@ class SwarmAvatar extends StatelessWidget {
         ),
       ),
     );
-    return SwarmStatusFace(name: name, size: size, status: status, face: face);
   }
 }
 
@@ -595,33 +635,6 @@ class SwarmTags extends StatelessWidget {
   }
 }
 
-/// A count in a filled circle: blue, or yellow for what waits on the person.
-class SwarmBadge extends StatelessWidget {
-  const SwarmBadge(this.count, {super.key, this.warn = false});
-
-  final int count;
-  final bool warn;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-    padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
-    alignment: Alignment.center,
-    decoration: ShapeDecoration(
-      color: warn ? AppColors.warning : AppPalette.accent,
-      shape: const StadiumBorder(),
-    ),
-    child: Text(
-      '$count',
-      style: AppType.caption(
-        color: warn ? SwarmInk.onWarning : AppInk.onFill,
-        fontWeight: AppFont.semibold,
-        height: 1,
-      ),
-    ),
-  );
-}
-
 /// How a [SwarmButton] is drawn.
 enum SwarmButtonStyle {
   /// A quiet button on a field, rimmed: a decision's option.
@@ -634,7 +647,8 @@ enum SwarmButtonStyle {
   link,
 }
 
-/// A button at least 44 points tall, in the app's sans face.
+/// A button at least 44 points tall, in the app's sans face; [compact], drawn
+/// at a control's height in a box 44 tall ([SwarmTapTarget]).
 class SwarmButton extends StatelessWidget {
   const SwarmButton({
     super.key,
@@ -643,9 +657,10 @@ class SwarmButton extends StatelessWidget {
     this.style = SwarmButtonStyle.plain,
     this.icon,
     this.wide = false,
+    this.compact = false,
     this.busy = false,
     this.busyLabel,
-  });
+  }) : assert(!(wide && compact), 'a wide button is never compact');
 
   final String label;
   final VoidCallback? onPressed;
@@ -654,6 +669,11 @@ class SwarmButton extends StatelessWidget {
 
   /// The whole width, taller and bolder: a screen's main action.
   final bool wide;
+
+  /// A row's own action (Activity's Reply and Approve): drawn at the
+  /// standard control height ([AppControl.height]) and pressed across the
+  /// 44-point box it is laid out in ([SwarmTapTarget]).
+  final bool compact;
 
   /// Working: a spinner and [busyLabel], and taps do nothing.
   final bool busy;
@@ -678,7 +698,7 @@ class SwarmButton extends StatelessWidget {
       fontWeight: wide ? FontWeight.w600 : FontWeight.w500,
       height: 1.25,
     );
-    return Semantics(
+    final button = Semantics(
       button: true,
       enabled: enabled,
       label: busy ? busyLabel ?? label : label,
@@ -698,13 +718,19 @@ class SwarmButton extends StatelessWidget {
                 }
               : null,
           child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: wide ? 52 : 44),
+            constraints: BoxConstraints(
+              minHeight: wide
+                  ? 52
+                  : compact
+                  ? AppControl.height
+                  : 44,
+            ),
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: style == SwarmButtonStyle.link
+                horizontal: style == SwarmButtonStyle.link || compact
                     ? AppSpace.m
                     : AppSpace.l,
-                vertical: AppSpace.s,
+                vertical: compact ? AppSpace.xs : AppSpace.s,
               ),
               child: Row(
                 mainAxisSize: wide ? MainAxisSize.max : MainAxisSize.min,
@@ -738,6 +764,151 @@ class SwarmButton extends StatelessWidget {
         ),
       ),
     );
+    return compact ? SwarmTapTarget(child: button) : button;
+  }
+}
+
+/// [child], a control drawn smaller than a thumb, laid out in a box at least
+/// 44 points square that hands a touch anywhere in it to [child], as the
+/// themed buttons' padded target does: a row holding one is at least 44 tall
+/// (design system: Phone). A bare [TouchTarget] reaches only as far as its
+/// parents' bounds, and a row as tall as its words leaves it short.
+class SwarmTapTarget extends StatelessWidget {
+  const SwarmTapTarget({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(
+      minWidth: minTouchTarget,
+      minHeight: minTouchTarget,
+    ),
+    child: Center(
+      widthFactor: 1,
+      heightFactor: 1,
+      child: TouchTarget(child: child),
+    ),
+  );
+}
+
+/// A choice of a few, side by side, that takes effect on the tap — Settings'
+/// Theme: System | Dark | Light.
+///
+/// Swarm's chips (Activity's filters) drawn as one control: a pill track in the
+/// search surface, the chosen segment filled in the primary ink with the
+/// page's ground for its words, the others in the secondary ink. A segment is
+/// a compact control ([AppControl.heightSmall]) with a control's words
+/// ([AppType.label]); it is pressed across 44 points of height though it draws
+/// 28, so the track sits in a 56-point row as the − + stepper does.
+class SwarmSegments<T> extends StatelessWidget {
+  const SwarmSegments({
+    super.key,
+    required this.values,
+    required this.selected,
+    required this.label,
+    required this.onSelected,
+  });
+
+  final List<T> values;
+  final T selected;
+  final String Function(T value) label;
+
+  /// A segment tapped that is not [selected] already.
+  final ValueChanged<T> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        color: AppPalette.swarmSearchSurface,
+        shape: const StadiumBorder(),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpace.xs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final value in values)
+              _SwarmSegment(
+                label: label(value),
+                selected: value == selected,
+                onTap: () => onSelected(value),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SwarmSegment extends StatelessWidget {
+  const _SwarmSegment({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    // The chosen one is already chosen: no click, nothing sent.
+    final VoidCallback? choose = selected
+        ? null
+        : () {
+            HapticFeedback.selectionClick();
+            onTap();
+          };
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      // Its children's semantics are excluded, the InkWell's tap with them: a
+      // screen reader taps through this node (review of #2920).
+      onTap: choose,
+      excludeSemantics: true,
+      child: TouchTarget(
+        child: Material(
+          color: selected ? AppPalette.textPrimary : Colors.transparent,
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: choose,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: AppControl.heightSmall,
+                minWidth: minTouchTarget,
+              ),
+              child: Padding(
+                // Three at the label size, System the longest, fit a 375-point
+                // phone's row beside its title without shrinking.
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+                child: Center(
+                  widthFactor: 1,
+                  heightFactor: 1,
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    style: AppType.label(
+                      color: selected
+                          ? AppPalette.windowBg
+                          : AppPalette.textSecondary,
+                      fontWeight: selected ? AppFont.semibold : AppFont.medium,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -751,6 +922,7 @@ class SwarmIconButton extends StatelessWidget {
     required this.onPressed,
     this.size = 22,
     this.selected,
+    this.dot = false,
   });
 
   final IconData icon;
@@ -763,6 +935,10 @@ class SwarmIconButton extends StatelessWidget {
   /// A switch's state: on, it is tinted in the accent; null for a plain
   /// button.
   final bool? selected;
+
+  /// A dot in the accent at the glyph's corner: something is changed from its
+  /// default. Say what in [label], as a dot is not heard.
+  final bool dot;
 
   @override
   Widget build(BuildContext context) {
@@ -803,7 +979,27 @@ class SwarmIconButton extends StatelessWidget {
               ),
               child: SizedBox.square(
                 dimension: 36,
-                child: Icon(icon, size: size, color: color),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Icon(icon, size: size, color: color),
+                    if (dot)
+                      PositionedDirectional(
+                        top: AppSpace.xs,
+                        end: AppSpace.xs,
+                        child: SizedBox.square(
+                          key: const ValueKey('swarm-icon-dot'),
+                          dimension: AppSpace.s,
+                          child: DecoratedBox(
+                            decoration: ShapeDecoration(
+                              color: AppPalette.swarmAccent,
+                              shape: const CircleBorder(),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

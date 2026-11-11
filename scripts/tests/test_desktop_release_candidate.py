@@ -224,6 +224,21 @@ class CandidateIdentityTests(unittest.TestCase):
                 if change == 'wrong-source': client.jobs[2]['head_sha'] = 'f' * 40
                 candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
 
+    # A candidate prepared while signing was off would otherwise publish unsigned Windows files once it is on.
+    def test_unsigned_windows_candidate_cannot_reuse_once_signing_is_required(self):
+        jobs = make_jobs()
+        candidate.check_jobs(make_run(), jobs)
+        for skipped in [False, True]:
+            with self.subTest(skipped=skipped):
+                signed = jobs + [dict(jobs[0], name='sign-windows', conclusion='skipped' if skipped else 'success')]
+                if skipped:
+                    with self.assertRaises(ValueError):
+                        candidate.check_jobs(make_run(), signed, windows_signing=True)
+                else:
+                    candidate.check_jobs(make_run(), signed, windows_signing=True)
+        with self.assertRaises(ValueError):
+            candidate.check_jobs(make_run(), jobs, windows_signing=True)
+
     def test_wait_follows_one_live_run_without_starting_another(self):
         client = FakeGithub()
         client.run.update(status='in_progress', conclusion=None)

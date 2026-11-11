@@ -34,10 +34,8 @@ import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
-import { machineKindsOf } from '../lib/e2ee/machineKinds.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
-import { createJevDecide } from '../lib/jev/jevClient.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
@@ -59,7 +57,7 @@ export interface DevicesDeps {
   /** `HARNESSD_TEST_FAULTS`: parts to fail, for the end-to-end suite. */
   faults?: ReadonlySet<string>
   log?: (line: string) => void
-  /** How loudly a finished turn tells the devices. Defaults to rules plus Jev (off with `HARNESS_NOTIFY_SMART=0`). */
+  /** How loudly a finished turn tells the devices. Defaults to the fixed rules (lib/notifyTier.ts). */
   decideTier?: (input: TierInput) => Promise<TierDecision>
   /** A monotonic clock in ms (default `performance.now`), for the reply throttle: a wall-clock step must not stall or burst it. */
   now?: () => number
@@ -97,7 +95,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
     tally,
-    jev: process.env.HARNESS_NOTIFY_SMART === '0' ? null : createJevDecide({ backend: (method, path, body) => core.account.backend(method, path, body) }),
     log,
   })
   const part = createPartGuard({ log, faults: deps.faults })
@@ -124,12 +121,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // the trust group read; this copy writes no file of its own, so `machines.json` has one writer.
   const machines = new MachineListCache(() => core.account.machines(), () => core.machine.computerId(),
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
-  // The account's Harness Team account machines, as each list read says (docs/plans/2026-10-24-swarm-team-account.md):
-  // they run Swarm work only. Forgotten on a sign-out, which tells the list as null.
-  let teamMachines = new Set<string>()
-  machines.listen((body) => {
-    teamMachines = new Set([...machineKindsOf(body) ?? []].filter(([, kind]) => kind === 'team').map(([id]) => id))
-  })
   const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: deps.refresh }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +183,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let cardInclude: string[] = []
   // The conversation the window has open in its active Swarm tab, which the round dial's face follows (design
   // 2026-10-28-round-dial-swarm-chat): said with the wish, and left out when there is none, as before.
-  let cardFocus: { tabId: string; conversationId: string; fromDevice?: true } | null = null
+  let cardFocus: { tabId: string; conversationId: string } | null = null
   const tellCards = (): void => {
     const on = cardDevices > 0
     void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
@@ -256,13 +247,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // name that chat by an id: a dial never shows it for another one.
     swarmCardRecap: async (tabId, leadId, chat) => {
       const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
+      // A refusal fails with its code, which the dial's log names; null was silent (Diego, 2026-11-03).
+      if (r.ok !== true && typeof r.error === 'string') throw new Error(r.error)
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
       return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
         ...(chat === 'buddy' ? { buddy: true as const } : {}) }
     },
     swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
-    swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
     swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
       ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
@@ -368,7 +360,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!start || !cable.wantsStats()) return finish({})
       return turnTokens(event.agentId, start).then(finish)
     }
-    // On screen or a sub-agent's: silent, Jev is not asked. Otherwise the tier decides how loudly the dial tells. The
+    // On screen or a sub-agent's: silent, nobody is asked. Otherwise the tier decides how loudly the dial tells. The
     // tile still updates either way — the recap is what it draws.
     else if (event.kind === 'summary') {
       const { agentId } = event
@@ -390,7 +382,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
-        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true })
+        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, swarm: swarmAgent(event) })
         .then((d) => d.tier, () => 'list' as const)
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
@@ -398,7 +390,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       began.delete(event.agentId); ended.delete(event.agentId)
       stats.take(event.agentId) // a failed turn's sums must not leak into the next turn
       starts.delete(event.agentId)
-      // A Swarm Reviewer on a Mac's Harness Team account failed every turn in 1-2 s (2026-10-28), and each failure took over
+      // A Swarm Reviewer failed every turn in 1-2 s (2026-10-28), and each failure took over
       // the round dial with the engine's raw error for 8 s. A Swarm's workers answer to their Lead, who hears of it in the
       // Swarm: one the person has not put on a tab ends its tile quietly, as a finished turn does, and never stays Working.
       const quiet = (): void => {
@@ -418,13 +410,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
   }
   /** An agent the Swarm started here, a Builder or Reviewer as it was (its record's Swarm role, and an agent started it, as
-   *  every Swarm start is), or any agent on a Harness Team account. The coordinator is the person's own agent leading the
+   *  every Swarm start is). The coordinator is the person's own agent leading the
    *  Swarm, and one the person started by hand is theirs whatever its role: their failures reach the dial as before. */
   const swarmWorker = (event: DialEvent): boolean => {
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
-    return role === 'agent' || (!!event.machineId && teamMachines.has(event.machineId))
+    return role === 'agent'
   }
+  /** Any Swarm agent, whatever its role (PM, Buddy, Builder, Reviewer, Tester): its registry row carries `swarmSkill`. Its
+   *  news reaches the dial through the Swarm's cards, so its finished turn is silent. */
+  const swarmAgent = (event: DialEvent): boolean => !event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill
   /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
    *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
   const WORKER_ANSWER_MS = 60_000
@@ -576,9 +571,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // The Swarms the window has tabs for are read first; said again to the core only when they change.
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
       const open = cableHost.activeSwarmProject()
-      // `fromDevice`: the window followed a device's own pick, which the cards keep a dial's side through.
       const focus = open?.conversationId
-        ? { tabId: open.superTabId, conversationId: open.conversationId, ...(open.fromDevice ? { fromDevice: true as const } : {}) } : null
+        ? { tabId: open.superTabId, conversationId: open.conversationId } : null
       const refocused = `${focus?.tabId}/${focus?.conversationId}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}`
       if (include.join(',') !== cardInclude.join(',') || refocused) { cardInclude = include; cardFocus = focus; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()

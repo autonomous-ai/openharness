@@ -47,7 +47,8 @@ afterEach(async () => {
     child.stderr?.destroy()
     await until(() => !alive(child.pid), 1_000)
   }
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  // Windows holds a program's file for a moment after it exits (EBUSY on the Arm runner).
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   vi.unstubAllEnvs()
 })
 const watchWith = (lines: string[], extra: Record<string, string> = {}, deps: Partial<Parameters<typeof createWindowsDialWatch>[0]> = {}) => {

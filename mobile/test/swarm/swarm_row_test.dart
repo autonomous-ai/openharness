@@ -74,4 +74,24 @@ void main() {
       greaterThanOrEqualTo(SwarmRow.height),
     );
   });
+
+  testWidgets('a row held opens its menu, and a tap still opens it; with no '
+      'menu a hold is a slow tap', (tester) async {
+    var taps = 0, holds = 0;
+    await show(
+      tester,
+      SwarmRow(
+        title: 'Fix login',
+        onTap: () => taps++,
+        onLongPress: () => holds++,
+      ),
+    );
+    await tester.longPress(find.byType(SwarmRow));
+    await tester.tap(find.byType(SwarmRow));
+    expect((taps, holds), (1, 1));
+
+    await show(tester, SwarmRow(title: 'Fix login', onTap: () => taps++));
+    await tester.longPress(find.byType(SwarmRow));
+    expect((taps, holds), (2, 1));
+  });
 }

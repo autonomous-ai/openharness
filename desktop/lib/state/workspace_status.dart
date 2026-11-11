@@ -94,8 +94,11 @@ String? _autoName(AppNotifier app, Swarm tab) {
 /// With Auto rename on, a name from the tab's machine replaces the vote.
 Map<String, String> workspaceTabNames(AppNotifier app) {
   final candidates = <String, List<_TabName>>{};
+  // A tab showing a Swarm is called what the Swarm is called, whatever its
+  // panes run: never their folder, project or type (task #2647).
+  bool namedBySwarm(Swarm tab) => tab.isSuperTab && tab.superTabId != null;
   for (final tab in app.swarms) {
-    if (tab.nameIsCustom) {
+    if (tab.nameIsCustom || namedBySwarm(tab)) {
       candidates[tab.id] = [];
       continue;
     }
@@ -150,7 +153,7 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
   final autoNames = {for (final tab in app.swarms) tab.id: _autoName(app, tab)};
   return {
     for (final tab in app.swarms)
-      tab.id: tab.nameIsCustom
+      tab.id: tab.nameIsCustom || namedBySwarm(tab)
           ? tab.name
           : tab.isStore
           ? 'store'
@@ -255,10 +258,7 @@ class WorkspacePaneContext {
         pane.sharedHarness != null || machine?.machine.isShared == true;
     // Another account's name: plain, one line (the bar ellipsizes it).
     final ownerName = shared
-        ? [
-            pane.sharedOwnerName,
-            machine?.machine.ownerName,
-          ]
+        ? [pane.sharedOwnerName, machine?.machine.ownerName]
               .whereType<String>()
               .map(plainSharedText)
               .where((n) => n.isNotEmpty)
