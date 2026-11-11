@@ -466,7 +466,8 @@ export interface SuperTabState {
    *  the ids of their own (visibleState). */
   removedMachines?: Array<{ machineId: string; contributorId: string }>
   /** The projects deleted from this Swarm, by id (the request that created each) and when (ms), so the same request never makes
-   *  one again (commands.ts project.create): at most MAX_DELETED_PROJECTS, the newest; no reader gets it (visibleState). */
+   *  one again (commands.ts project.create): at most MAX_DELETED_PROJECTS, the newest, each for DELETED_PROJECT_KEEP_MS; no reader
+   *  gets it (visibleState). */
   deletedProjects?: Array<{ id: string; at: number }>
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]

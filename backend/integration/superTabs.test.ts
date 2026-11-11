@@ -323,7 +323,7 @@ describe('a deleted project\'s request', () => {
     await run(tab, { type: 'project.delete', projectId })
     await expect(create()).rejects.toMatchObject({ code: 'NOT_FOUND' })
     // Its receipt expires (operations.ts, 30 days).
-    await db.superTabOperation.deleteMany({ where: { tabId: tab, result: { equals: { projectId, conversationId: `project-${projectId}` } } } })
+    expect((await db.superTabOperation.deleteMany({ where: { tabId: tab, result: { equals: { projectId, conversationId: `project-${projectId}` } } } })).count).toBe(1)
     await expect(create()).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect((await store.read(owner, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
   })
