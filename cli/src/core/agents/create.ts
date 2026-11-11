@@ -8,6 +8,7 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { agentTmpLaunch } from '../../lib/agentTmp.js'
+import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -372,11 +373,11 @@ export function createAgentCreator({
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
     // A launch an older CLI saved to finish later (a pending intent) names its role in the wire's values (lead, dev, review):
-    // read as this release keeps it, so a Reviewer keeps its swarm-review file. Nothing else is one.
-    const swarmSkill = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback, mode: input.swarmSkillMode }) : undefined
+    // read as this release keeps it, so a Reviewer keeps its Reviewer kind. Nothing else is one.
+    const swarmSkill = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback }) : undefined
     // Its own words: the Swarm's skill code (and its refusal's text) stays out of the core's bundle (src/leanEntry.spec.ts).
     if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
-    const swarmInstructions = swarmLaunch && swarmSkill ? swarmLaunch.prepare(swarmSkill).instructions : undefined
+    const swarmInstructions = swarmLaunch && swarmSkill ? swarmLaunch.basics(swarmSkill.role === 'coordinator') : undefined
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
@@ -391,7 +392,9 @@ export function createAgentCreator({
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
-    const launchOptions = { ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
+    const agentId = randomUUID()
+    const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
     let command: string[], argv: string[]
     try {
@@ -416,7 +419,7 @@ export function createAgentCreator({
     return { ok: true, dispatch: async () => {
     if (!current()) return stale()
     const result = await createAndRegisterPane({
-      current, ...(native ? { nativeToken: native.token } : {}),
+      current, agentId, ...(native ? { nativeToken: native.token } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,

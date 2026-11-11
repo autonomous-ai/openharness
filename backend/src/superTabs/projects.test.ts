@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
+import { opensStored, storedCreate, type StoredCreate } from './steps.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
-import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { storedAssignment } from './storedWork.test-support.js'
 
@@ -15,8 +15,8 @@ function setup() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
   let next = 0, messages: MessageDraft[] = []
-  const run = (command: Command | StepCommand, actor = owner, context: Partial<CommandContext> = {}) => {
-    if (opensStep(command)) return storedStep(state, command, actor).result
+  const run = (command: Command | StoredCreate, actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStored(command)) return storedCreate(state, command, actor).result
     const effect = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
       contribution: { machineOwnerId: 'host', contributorId: actor.kind === 'person' ? actor.userId : 'owner' }, ...context })
     state = effect.state
@@ -313,22 +313,6 @@ describe('projects inside an invite-only swarm', () => {
   })
 })
 
-describe('project skill modes', () => {
-  it('reads a project with no stored mode as Harness orchestration, and new projects and Swarms as Default', () => {
-    const legacy = createSuperTab('old', 'Old', { id: 'owner', email: 'owner@example.com' }, 'test')
-    delete legacy.projects
-    expect(skillModeOf(projectsOf(legacy)[0]!)).toBe('orchestration')
-    expect(skillModeOf({ ...projectsOf(legacy)[0]!, skillMode: undefined })).toBe('orchestration')
-    for (const visibility of [undefined, 'private', 'public'] as const) {
-      const swarm = createSuperTab('new', 'New', { id: 'owner', email: 'owner@example.com' }, 'test', visibility)
-      expect(projectsOf(swarm).map(p => p.skillMode)).toEqual(['default'])
-    }
-    const f = setup(), p = f.project()
-    expect(projectOf(f.state, p.projectId).skillMode).toBe('default')
-  })
-
-})
-
 describe('who may watch an agent\'s terminal (final review, Critical 1)', () => {
   it('keeps a session in a private chat to its machine\'s owner even when it is no longer the Lead, and leaves other agents to every reader', () => {
     const f = setup()
@@ -361,7 +345,7 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     for (const reader of [owner, peer, host]) expect(canWatchAgent(f.state, reader, target())).toBe(true)
     // Confidential in another Swarm too: that Swarm's chats are not this one's members' to read.
     expect(canWatchAgent(f.state, peer, target(), true)).toBe(false)
-    const refusal = (actor: Actor) => { try { mayDrive(f.state, actor, target()); return null } catch (error) { if (error instanceof SuperTabError) return error.code; throw error } }
+    const refusal = (actor: Actor) => { try { mayDrive(f.state, actor, target(), false, 'input'); return null } catch (error) { if (error instanceof SuperTabError) return error.code; throw error } }
     expect(refusal(owner)).toBe('TERMINAL_PRIVATE')
     expect(refusal(peer)).toBe('TERMINAL_PRIVATE')
     expect(refusal(host)).toBeNull()
@@ -382,7 +366,7 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     // Every command marks: a Lead stored before the mark is marked by the next one.
     const lead = f.add('lead', 'pm', true)
     delete f.state.agents.find(a => a.id === lead)!.confidential
-    f.run({ type: 'conversation.create', title: 'Next', brief: '', checks: [] })
+    f.run({ type: 'tab.rename', name: 'Next' })
     expect(f.state.agents.find(a => a.id === lead)!.confidential).toBe(true)
   })
 })

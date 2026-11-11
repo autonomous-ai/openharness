@@ -2,6 +2,7 @@ import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { agentFrame } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
 import type { RegisteredSession } from './registry.js'
@@ -25,6 +26,15 @@ describe('agentFrame', () => {
     const row = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
     expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ sessionId: 's1', status: 'active', identityHold: row.identityHold })
+  })
+  // A named state is the person's to read and act on; the daemon's own waits (above) are not.
+  it('says a named state for a person, and nothing for a hold that is only the daemon waiting', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    const held = { ...session(null), engine: 'openclaw' as const, identityHold: OPENCLAW_STATES.noGateway }
+    expect(await agentFrame(held, context)).toMatchObject({ namedState: OPENCLAW_STATES.noGateway, identityHold: OPENCLAW_STATES.noGateway })
+    const waiting = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
+    expect(await agentFrame(waiting, context)).not.toHaveProperty('namedState')
+    expect(await agentFrame(session(null), context)).not.toHaveProperty('namedState')
   })
   // Null is a real answer: a push without the key would leave a window showing a wait that ended.
   it('says what a message to it waits for, read as the frame is built, and null when nothing', async () => {

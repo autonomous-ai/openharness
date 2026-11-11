@@ -146,14 +146,12 @@
    "a00000000000000000000001": {
     "downSince": null,
     "limitedUntil": null,
-    "workDecision": null,
-    "roleId": null
+    "workDecision": null
    },
    "a00000000000000000000002": {
     "downSince": null,
     "limitedUntil": null,
-    "workDecision": null,
-    "roleId": null
+    "workDecision": null
    }
   },
   "machines": {

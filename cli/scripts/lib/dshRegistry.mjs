@@ -10,6 +10,10 @@ import { fileURLToPath } from 'url'
 const engineSource = readFileSync(new URL('../../src/engines/types.ts', import.meta.url), 'utf8')
 const engineList = engineSource.match(/export const ENGINES = \[([\s\S]*?)\] as const/)
 if (!engineList) throw new Error('Cannot read the canonical engine list')
+// Mirrors `readsHarness` in src/dsh/compatibility.ts: an adapter with no instruction file (and so no flag)
+// in src/dsh/adapters.ts cannot run a harness, so no entry lists its engine.
+const adapterSource = readFileSync(new URL('../../src/dsh/adapters.ts', import.meta.url), 'utf8')
+const readsNoHarness = new Set([...adapterSource.matchAll(/^\s*(\w+): \{ instructionFiles: \[\] \},?$/gm)].map(match => match[1]))
 const processEngines = [...engineList[1].matchAll(/'([^']+)'/g)].map(match => match[1]).filter(engine => engine !== 'terminal')
 
 const HARNESS_MONOREPO = 'https://github.com/autonomous-ai/openharness'
@@ -22,7 +26,7 @@ export function storeEntry(path, manifest, facts) {
   for (const key of ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
   if (manifest.engine !== undefined) entry.engine = manifest.engine
   if (manifest.engine !== undefined) entry.engines = manifest.kind === 'viewer' || manifest.engine === 'terminal'
-    ? [] : [manifest.engine, ...processEngines.filter(engine => engine !== manifest.engine)]
+    ? [] : [manifest.engine, ...processEngines.filter(engine => engine !== manifest.engine)].filter(engine => !readsNoHarness.has(engine))
   if (typeof manifest.viewer?.use === 'string') entry.viewerUse = manifest.viewer.use
   if (manifest.toolchain?.setup || manifest.toolchain?.doctor) entry.runsScripts = true
   entry.tier = manifest.viewer ? 2 : manifest.verdict ? 1 : 0

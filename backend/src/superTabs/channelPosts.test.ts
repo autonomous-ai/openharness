@@ -6,13 +6,13 @@
 import { describe, expect, it } from 'vitest'
 import type { Command, CommandContext } from './commands.js'
 import type { Author } from './model.js'
-import { owner, stepsFixture } from './steps.test-support.js'
+import { stepsFixture } from './steps.test-support.js'
 
 function setup() {
   const f = stepsFixture()
-  const person: Author = { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation } as Author
-  const asked = f.run({ type: 'message.send', conversationId: 'lead', text: 'Is the release out?', replyTo: null, recipientIds: [] } as Command, owner).result.messageId as string
-  const reply: Partial<CommandContext> = { reply: { id: asked, conversationId: 'lead', author: person, createdAt: 0, thread: asked } }
+  const asker = { kind: 'agent', id: f.dev } as Author
+  const asked = f.run({ type: 'message.send', conversationId: 'lead', text: 'Is the release out?', replyTo: null, recipientIds: [] } as Command, f.as(f.dev)).result.messageId as string
+  const reply: Partial<CommandContext> = { reply: { id: asked, conversationId: 'lead', author: asker, createdAt: 0, thread: asked } }
   const post = (by: string, text: string, extra: Record<string, unknown> = {}, context: Partial<CommandContext> = {}) =>
     f.run({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...extra } as Command, f.as(by), context)
   return { f, asked, reply, post }

@@ -52,7 +52,7 @@ export class HostReads {
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     // Every agent's grant check of this read shares one read of each machine, share and contributor.
     const grants = new GrantReads(owned)
-    // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
+    // Swarms in parts only: one still in one row is never served, and the wipe removes it (migration/wipeJob.ts).
     const ids = await machineSwarms(tx, user.autonomousEnv, machineId, FULL_TABS)
     const full = 'reload' in from
     const woken = full ? null : await this.woken(tx, ids, machineId, from.since)

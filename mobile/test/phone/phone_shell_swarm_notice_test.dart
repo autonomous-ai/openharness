@@ -5,7 +5,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 
@@ -44,7 +43,7 @@ void main() {
 
   for (final on in [true, false]) {
     for (final start in ['foreground', 'background', 'cold']) {
-      for (final kind in ['project', 'pm', 'group', 'decision', 'work']) {
+      for (final kind in ['project', 'pm', 'group', 'work']) {
         testWidgets('$kind notice Swarm=$on $start', (tester) async {
           experimentalFeaturesStore.value = on ? {PhoneExperiment.swarm} : {};
           final target = (
@@ -57,7 +56,7 @@ void main() {
             messageId: const ['project', 'pm', 'group'].contains(kind)
                 ? 'm7'
                 : null,
-            decisionId: kind == 'decision' ? 'd1' : null,
+            decisionId: null,
             threadId: null,
           );
           if (start == 'cold') notices().openedSwarm.value = target;
@@ -84,15 +83,7 @@ void main() {
           }
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 400));
-          if (on && kind == 'decision') {
-            // A decision opens in Activity, at it: no chat shows decisions.
-            final page = tester.widget<SwarmActivityPage>(
-              find.byType(SwarmActivityPage),
-            );
-            expect((page.focus, page.swarmId), ('decision:d1', 'tab-b'));
-            expect(find.byType(SwarmConversationPage), findsNothing);
-            expect(find.byType(SwarmPage, skipOffstage: false), findsOneWidget);
-          } else if (on) {
+          if (on) {
             final page = tester.widget<SwarmConversationPage>(
               find.byType(SwarmConversationPage),
             );

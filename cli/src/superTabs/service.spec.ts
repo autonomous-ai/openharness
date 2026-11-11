@@ -50,8 +50,8 @@ describe('restart role lookup through the service', () => {
     const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [{ leadId: 'agent' }] }) } }))
     const service = superTabService(fakeCore({ account: { backend: call } }))
-    expect(await service.port.swarmRole('old-native')).toEqual({ role: 'coordinator', mode: 'orchestration' })
-    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'lead', mode: 'orchestration' })
+    expect(await service.port.swarmRole('old-native')).toEqual({ role: 'coordinator' })
+    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'lead' })
     expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
     call.mockRejectedValueOnce(new Error('Offline'))
     expect(await service.port.swarmRole('old-native')).toBeUndefined()
@@ -73,14 +73,14 @@ describe('restart role lookup through the service', () => {
     service.port.stop()
   })
   // Project instructions, phase 4 (decision 1): the process answers the core in the wire's values, which a core from before
-  // role kinds reads too; a Reviewer's answer keeps its swarm-review file.
+  // role kinds reads too; a Reviewer's answer keeps its Reviewer kind.
   it('answers the core\'s role lookup in the values every core reads', async () => {
     const agent = { id: 'agent', machineId: 'machine-1', harnessId: 'old-native', role: 'reviewer' }
     const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [{ leadId: 'other', agentIds: ['agent'] }] }) } }))
     const service = superTabService(fakeCore({ account: { backend: call } }))
-    expect(await service.port.swarmRole('old-native')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
-    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'review', mode: 'orchestration' })
+    expect(await service.port.swarmRole('old-native')).toEqual({ role: 'agent', fallback: 'review' })
+    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'review' })
     service.port.stop()
   })
   // The v3 Buddy is gone (backend S17): a row that still names an owner gets a role from its groups alone, as any agent's.

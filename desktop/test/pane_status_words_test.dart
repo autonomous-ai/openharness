@@ -226,14 +226,13 @@ void main() {
     tester,
   ) async {
     final app = await _app(tester, []);
-    final session = app.panes.single.session!
-      ..stageInputContext(null, watchOnly: true);
+    final session = app.panes.single.session!..stageWatchOnly(true);
     await _mount(tester, app, chrome: webWorkspaceChrome(app));
     expect(find.byKey(_cursorLock), findsOneWidget);
 
     // Control comes back as a stream does: reopened, then live.
     session
-      ..stageInputContext(null)
+      ..stageWatchOnly(false)
       ..status = TerminalSessionStatus.opening
       ..notifyListeners();
     await tester.pump();

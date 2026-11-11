@@ -7,9 +7,9 @@ import { type Actor, type Agent, type AgentStart, type Conversation } from '../m
 import { canReadAgent, canReadGroup } from '../projects.js'
 import { knownKind, type MachineData, type Part } from '../parts/index.js'
 import type { ChangesDelta, DormantStub, MachineView, Tombstone } from './contract.js'
-import { envelope, progressView, seenIn, visibleGroupView, type ReaderView } from './views.js'
+import { envelope, seenIn, visibleGroupView, type ReaderView } from './views.js'
 
-export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'machineReadings' | 'starts' | 'progress'>
+export type PartChanges = Pick<ChangesDelta, 'head' | 'members' | 'agents' | 'groups' | 'machines' | 'machineReadings' | 'starts'>
 
 const stub = (part: Part): Tombstone => ({ key: part.key, version: part.version, changedAt: part.changedAt, deleted: true })
 const dormantStub = (part: Part): DormantStub => ({ key: part.key, version: part.version, changedAt: part.changedAt, dormant: true })
@@ -25,7 +25,7 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor, ligh
     ?? changed.find(p => p.kind === 'group' && p.key === id)?.data as Conversation | undefined
   const visibleAgents = new Set(seen.agents.map(a => a.key))
   const seenMachines = seenIn(seen)
-  const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], ...light ? { machineReadings: [] } : {}, starts: [], progress: [] }
+  const out: PartChanges = { head: null, members: [], agents: [], groups: [], machines: [], ...light ? { machineReadings: [] } : {}, starts: [] }
   for (const part of changed) {
     switch (part.kind) {
       case 'head': out.head = seen.head; break
@@ -67,10 +67,6 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor, ligh
         const start = live(seen.starts, part.key), group = groupOf((part.data as AgentStart).request.conversationId)
         if (part.deleted) { if (group && groupReadable(group)) out.starts.push(stub(part)) }
         else if (start) out.starts.push(start)
-        break
-      }
-      case 'progress': {
-        if (!part.deleted && seen.head.data.projects?.some(p => p.id === part.key)) out.progress.push(envelope(part, progressView(part.data as never)))
         break
       }
     }

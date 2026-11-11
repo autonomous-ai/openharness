@@ -26,17 +26,6 @@ Map<String, dynamic> row(
   'source': source,
 };
 
-Map<String, dynamic> routeSource({Object? decision = 'd1'}) => {
-  'kind': 'route',
-  'decisionId': decision,
-  'via': 'order',
-  'why': 'A small fix',
-  'pick': {'id': 'c0', 'title': 'Nico · Claude opus high · Mac Studio'},
-  'alternatives': <Object>[],
-};
-
-const decisions = '/api/super-tabs/$tab/route-decisions/d1';
-
 FakeSwarm backend(List<Map<String, dynamic>> page) {
   final fake = FakeSwarm();
   fake.routes['/api/super-tabs/list'] = (_) => {
@@ -99,121 +88,6 @@ String textOf(WidgetTester tester, String id) => [
 ].join('\n');
 
 void main() {
-  group('a route row', () {
-    testWidgets('is a quiet line naming who it went to, with no author', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        backend([row('r1', 2, 'Routed to Nico', routeSource())]),
-      );
-      expect(textOf(tester, 'r1'), contains('Routed to Nico'));
-      expect(inRow('r1', find.text('River')), findsNothing);
-      expect(inRow('r1', find.text('Details')), findsOneWidget);
-    });
-
-    testWidgets('a new agent reads as its engine', (tester) async {
-      await show(
-        tester,
-        backend([
-          row('r1', 2, 'x', {
-            ...routeSource(),
-            'pick': {'id': 'c0', 'title': 'New agent · Codex gpt high · Mac'},
-          }),
-        ]),
-      );
-      expect(textOf(tester, 'r1'), contains('Routed to new Codex agent'));
-    });
-
-    testWidgets('Details reads the decision once, and hides again', (
-      tester,
-    ) async {
-      final fake = backend([row('r1', 2, 'x', routeSource())]);
-      fake.routes[decisions] = (_) => {
-        'record': {
-          'instructionsRevision': 7,
-          'candidates': [
-            {'title': 'Echo · Claude', 'label': 'busy'},
-          ],
-          'excluded': [
-            {'title': 'Mac 3', 'reason': 'offline'},
-          ],
-        },
-      };
-      await show(tester, fake);
-      await tester.tap(inRow('r1', find.text('Details')));
-      await tester.pumpAndSettle();
-      for (final words in const [
-        'Nico · Claude opus high · Mac Studio',
-        'A small fix',
-        'Selection: Ranked by strength, price and quota',
-        'Relied on instructions revision 7',
-        'Considered',
-        'Echo · Claude — busy',
-        'Unavailable: Mac 3 — offline',
-      ]) {
-        expect(inRow('r1', find.text(words)), findsOneWidget, reason: words);
-      }
-      await tester.tap(inRow('r1', find.text('Hide details')));
-      await tester.pumpAndSettle();
-      expect(inRow('r1', find.text('Considered')), findsNothing);
-      await tester.tap(inRow('r1', find.text('Details')));
-      await tester.pumpAndSettle();
-      expect(fake.paths.where((p) => p == decisions), hasLength(1));
-    });
-
-    // Task #2901 (Ken, 2026-11-04): the route names no pick; the start's row
-    // names the candidate the instructions chose.
-    testWidgets('Details says the Routing instructions chose', (tester) async {
-      final fake = backend([
-        row('r1', 2, 'x', {...routeSource(), 'via': 'instructions'}),
-      ]);
-      fake.routes[decisions] = (_) => {
-        'record': {'instructionsRevision': 7},
-      };
-      const chosen = 'Chosen by the project\'s Routing instructions';
-      await show(tester, fake);
-      await tester.tap(inRow('r1', find.text('Details')));
-      await tester.pumpAndSettle();
-      expect(inRow('r1', find.text('Selection: $chosen')), findsOneWidget);
-    });
-
-    testWidgets('a failed read says so, and Retry reads again', (tester) async {
-      final fake = backend([row('r1', 2, 'x', routeSource())]);
-      var fails = true;
-      fake.routes[decisions] = (_) {
-        if (fails) throw StateError('offline');
-        return {
-          'record': {'instructionsRevision': 0},
-        };
-      };
-      await show(tester, fake);
-      await tester.tap(inRow('r1', find.text('Details')));
-      await tester.pumpAndSettle();
-      expect(
-        inRow('r1', find.text('Could not load this decision.')),
-        findsOneWidget,
-      );
-      fails = false;
-      await tester.tap(inRow('r1', find.text('Retry')));
-      await tester.pumpAndSettle();
-      expect(
-        inRow('r1', find.text('Relied on the built-in instructions')),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('one with no decision is an ordinary message', (tester) async {
-      await show(
-        tester,
-        backend([
-          row('r1', 2, 'Routed somewhere', routeSource(decision: null)),
-        ]),
-      );
-      expect(inRow('r1', find.text('Details')), findsNothing);
-      expect(inRow('r1', find.text('River')), findsOneWidget);
-    });
-  });
 
   group('a terminal note', () {
     testWidgets('of input: a quiet line, what was typed in the mono face', (
@@ -422,6 +296,33 @@ void main() {
     expect(inRow('later', find.text('Next')), findsOneWidget);
     expect(find.textContaining('changed the instructions'), findsNothing);
     expect(find.textContaining('See revision'), findsNothing);
+  });
+
+  testWidgets('a v3 routing note, its override and a ship line are no chat '
+      'row, as the backend removes them', (tester) async {
+    await show(
+      tester,
+      backend([
+        row('said', 2, 'A real update', {}),
+        row('routed', 3, 'Routed to Nico', {
+          'kind': 'route',
+          'decisionId': 'd1',
+          'pick': {'id': 'c0', 'title': 'Nico'},
+        }),
+        row('override', 4, 'Route changed to Ivy', {'kind': 'route-override'}),
+        row('shipped', 5, 'Shipped #12', {'kind': 'ship'}),
+        row('later', 6, 'Next', {}),
+      ]),
+    );
+    expect(inRow('said', find.text('A real update')), findsOneWidget);
+    expect(inRow('later', find.text('Next')), findsOneWidget);
+    for (final gone in [
+      'Routed to Nico',
+      'Route changed to Ivy',
+      'Shipped #12',
+    ]) {
+      expect(find.textContaining(gone), findsNothing, reason: gone);
+    }
   });
 
   group('an ordinary message says', () {

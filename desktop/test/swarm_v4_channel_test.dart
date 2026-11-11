@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 
 import 'support/capture.dart';
+import 'support/fake_voice_recorder.dart';
 import 'support/swarm_v4_channel.dart';
 
 /// Set to a folder to write this file's screenshots there, with the system's real fonts.
@@ -122,6 +124,79 @@ void main() {
     expect(find.byType(EditableText), findsNothing);
     expect(server.posts, isEmpty);
   });
+
+  // The backend refuses a person's post, upload or voice message in a project's channel and its tasks' chats (AGENTS_ONLY):
+  // none of them is offered there, while the person's chat with their own agent keeps its box and mic.
+  testWidgets(
+    'a person has a box and a mic in their agent\'s chat, and none in the channel or a task\'s chat',
+    (tester) async {
+      final server = swarmV4Channel();
+      swarmV4Talk(server);
+      final task = swarmV4Post(
+        server,
+        'Faye',
+        '#12 The voice declines. @Pip yours.',
+      );
+      swarmV4Post(server, 'Pip', 'Taking #12.', thread: task);
+      await openSwarmV4(
+        tester,
+        server,
+        saved: 'agent-chat-pip',
+        voiceRecorder: FakeVoiceRecorder.new,
+      );
+      expect(key('super-composer-mic'), findsOneWidget);
+      expect(find.byType(EditableText), findsOneWidget);
+
+      await tester.tap(key('super-group-channel'));
+      await tester.pumpAndSettle();
+      expect(key('super-agents-only'), findsOneWidget);
+      expect(key('super-composer-mic'), findsNothing);
+      expect(find.byType(EditableText), findsNothing);
+
+      await tester.tap(key('super-thread-bar-$task'));
+      await tester.pumpAndSettle();
+      expect(key('super-thread-agents-only'), findsOneWidget);
+      expect(key('super-thread-mic'), findsNothing);
+      expect(find.byType(EditableText), findsNothing);
+      expect(server.posts, isEmpty);
+    },
+  );
+
+  // The backend refuses a person's edit in a project's channel and its tasks' chats (AGENTS_ONLY); a delete still goes.
+  // Their chat with their own agent keeps both.
+  testWidgets(
+    'a person deletes but does not edit their own old post in the channel, and does both in their agent\'s chat',
+    (tester) async {
+      final server = swarmV4Channel();
+      swarmV4Talk(server);
+      server.append('An old note of mine', conversationId: 'channel');
+      final inChannel = 'message-${server.revision}';
+      server.append('Please read #12 first', conversationId: 'agent-chat-pip');
+      final inChat = 'message-${server.revision}';
+      await openSwarmV4(tester, server);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      Future<void> openMore(String id) async {
+        await mouse.moveTo(tester.getCenter(key('super-message-$id')));
+        await tester.pumpAndSettle();
+        await tester.tap(key('super-message-more-$id'));
+        await tester.pumpAndSettle();
+      }
+
+      await openMore(inChannel);
+      expect(find.text('Delete message'), findsOneWidget);
+      expect(find.text('Edit message'), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('super-agent-pip'));
+      await tester.pumpAndSettle();
+      await openMore(inChat);
+      expect(find.text('Delete message'), findsOneWidget);
+      expect(find.text('Edit message'), findsOneWidget);
+    },
+  );
 
   testWidgets('nothing posted yet: what a person sees in the channel', (
     tester,

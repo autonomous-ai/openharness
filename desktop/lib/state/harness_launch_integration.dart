@@ -37,30 +37,18 @@ class HarnessLaunchIntegration {
     this.initialTask,
     this.engines,
     this.swarmRole,
-    this.swarmSkillMode,
-    this.roleSuggestions,
-    this.roleName,
     this.startInSwarm,
     this.checkRepositoryOwner,
     this.createRepository,
     this.checkRepositoryAgain,
-    this.agentKind,
     this.ownMachinesOnly = false,
     this.offersBrowser = false,
   });
   final String creationId, actionLabel;
 
+  /// `lead` for a Product Manager, `dev` for any other agent: what the daemon's launch reads to give a Swarm
+  /// agent's engine its folder trust and the team's basics (cli core/agents/create.ts).
   String? swarmRole;
-  String? swarmSkillMode;
-
-  /// An agent joining a project that has instructions names its role in free
-  /// text; these are the document's role headings, offered as suggestions.
-  /// Null hides the field: the coordinator's own start, a new project, or a
-  /// Swarm from before instructions. Empty (the read failed) keeps it free.
-  final List<String>? roleSuggestions;
-
-  /// The role typed; empty or null sends none and the server names the agent.
-  String? roleName;
 
   // Restores the person's original request from a destination launch journal.
   final String? initialTask;
@@ -68,13 +56,6 @@ class HarnessLaunchIntegration {
   final List<String>? engines;
   String? projectVisibility;
   bool projectVisibilityLocked;
-
-  /// + New agent in a Swarm (task #4196): whether it starts as a `lead`, which
-  /// names and starts a project, or a `member`. Null shows no such choice.
-  String? agentKind;
-
-  /// Set once the choice's first request is sent: it cannot change after.
-  bool agentKindLocked = false;
 
   /// Only the person's own computers, never a shared, guest or Team one: an
   /// agent they start runs in their own account.

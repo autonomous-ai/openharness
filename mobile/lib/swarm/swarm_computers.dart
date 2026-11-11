@@ -12,7 +12,6 @@ import '../phone/phone_status.dart';
 import '../phone/welcome/your_computer.dart';
 import '../state/app_state.dart';
 import 'swarm_agents.dart';
-import 'swarm_chat_agents.dart';
 import 'swarm_lead_start.dart';
 import 'swarm_request.dart';
 import 'swarm_start.dart';
@@ -25,13 +24,10 @@ import 'swarm_start.dart';
 /// a Swarm read waiting for a computer needs, `SwarmInbox.computerUp`) — not
 /// at every change of the app's state, which moves with every frame a
 /// terminal sends.
-///
-/// It also lists the sessions running on them, for Add agent ([running]).
 class AppSwarmComputers extends ChangeNotifier
     implements
         SwarmComputers,
         SwarmAgentsSource,
-        SwarmRunningSessions,
         SwarmLeadComputers {
   AppSwarmComputers(this.notifier) {
     notifier.addListener(_changed);
@@ -223,12 +219,6 @@ class AppSwarmComputers extends ChangeNotifier
     Map<String, dynamic> payload,
   ) => notifier.swarmAskComputer(machineId, payload);
 
-  /// What runs on the computers now ([swarmRunningSessions]), read when
-  /// asked: told of by nothing here, since it moves with the app's state.
-  @override
-  List<SwarmRunningSession> get running =>
-      swarmRunningSessions(notifier.machineStates.values);
-
   /// The machines tab's Try again: the account's list read again.
   @override
   Future<void> recheck() => notifier.retryMachines();
@@ -241,21 +231,24 @@ class AppSwarmComputers extends ChangeNotifier
   );
 
   /// The harnesses on them, told of on their own: a change there is no
-  /// computer coming or going for Swarm's reads.
+  /// computer coming or going for Swarm's reads. Made when first asked for;
+  /// none once disposed, as the app's state it listens to may be gone.
   @override
-  late final AppSwarmAgents agents = AppSwarmAgents(notifier);
+  AppSwarmAgents? get agents =>
+      _disposed ? null : _agents ??= AppSwarmAgents(notifier);
+  AppSwarmAgents? _agents;
 
   @override
   void dispose() {
     _disposed = true;
     notifier.removeListener(_changed);
-    agents.dispose();
+    _agents?.dispose();
     super.dispose();
   }
 }
 
 /// The app's harnesses for Swarm ([SwarmAgents]), from [agentIndex]: told of
-/// when how many work or wait — Search's dots — or the list itself, changes.
+/// when how many work changes.
 class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   AppSwarmAgents(this.notifier) {
     notifier.addListener(_changed);
@@ -263,39 +256,16 @@ class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   }
 
   final AppNotifier notifier;
-  int? _working, _waiting;
-  List<AgentEntry>? _index;
+  int? _working;
 
   @override
   int? get working => _working;
 
-  @override
-  List<SwarmAgentRef> get agents => [
-    for (final entry in visibleAgents(agentIndex(notifier)))
-      if (entry.isOpenable)
-        (
-          machineId: entry.machineId,
-          agentId: entry.agent.id,
-          name: entry.agent.displayName,
-          machine: entry.machineName,
-          engine: entry.agent.engineDisplayName ?? entry.agent.engine,
-          working: entry.isWorking,
-          waiting: entry.isWaiting,
-        ),
-  ];
-
   void _changed() {
     final index = notifier.machinesAnswered ? agentIndex(notifier) : null;
     final working = index?.where((entry) => entry.isWorking).length;
-    final waiting = index?.where((entry) => entry.isWaiting).length;
-    if (working == _working &&
-        waiting == _waiting &&
-        identical(index, _index)) {
-      return;
-    }
+    if (working == _working) return;
     _working = working;
-    _waiting = waiting;
-    _index = index;
     notifyListeners();
   }
 
@@ -306,49 +276,8 @@ class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   );
 
   @override
-  void open(BuildContext context, SwarmAgentRef agent) =>
-      openAgent(context, notifier, agent.machineId, agent.agentId);
-
-  @override
   void dispose() {
     notifier.removeListener(_changed);
     super.dispose();
   }
 }
-
-/// The sessions running on [machines] that may join a Swarm, as Desktop's Add
-/// agent offers them (`swarm_screen.dart` `unavailable`): Claude Code or
-/// Codex, its terminal there and not stopped, the last used first; never one
-/// whose id the Swarm would refuse. Only on a computer answering now with a
-/// list of its own: one kept from the last run may name a session long gone.
-List<SwarmRunningSession> swarmRunningSessions(
-  Iterable<MachineState> machines,
-) => [
-  for (final machine in machines)
-    if (phoneMachineStatusOf(machine) == PhoneMachineStatus.ready &&
-        !machine.agentsFromCache)
-      for (final agent in [...machine.agents]..sort(_lastUsedFirst))
-        if (agent.engine case final engine?
-            when (engine == 'claude' || engine == 'codex') &&
-                agent.terminalAvailable &&
-                !agent.isStopped &&
-                _sessionId.hasMatch(agent.id))
-          (
-            machineId: machine.machine.machineId,
-            machine: machine.machine.displayName,
-            harnessId: agent.id,
-            name: agent.displayName,
-            engine: engine,
-          ),
-];
-
-int _lastUsedFirst(Agent a, Agent b) {
-  final at = a.lastUsedAt, bt = b.lastUsedAt;
-  if (at == null || bt == null) {
-    return (at == null ? 1 : 0) - (bt == null ? 1 : 0);
-  }
-  return bt.compareTo(at);
-}
-
-/// An id the Swarm takes for a session (backend commands.ts `id`).
-final _sessionId = RegExp(r'^[A-Za-z0-9_-]{1,160}$');

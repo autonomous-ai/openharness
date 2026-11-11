@@ -50,6 +50,12 @@ const _engines = <String, EngineIdentity>{
     color: Colors.white,
     asset: 'assets/engine-icons/pi.png',
   ),
+  'openclaw': EngineIdentity(
+    id: 'openclaw',
+    label: 'OpenClaw',
+    color: Color(0xffff4d4d),
+    asset: 'assets/engine-icons/openclaw.png',
+  ),
   'hermes': EngineIdentity(
     id: 'hermes',
     label: 'Hermes',

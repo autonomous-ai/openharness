@@ -1965,6 +1965,30 @@
      "hookEvent": "CopilotResume"
     }
    ]
+  ],
+  [
+   "openclaw footer",
+   [
+    {
+     "engine": "openclaw",
+     "sessionId": "agent:main:plain",
+     "cwd": "/work/g",
+     "source": "openclaw-footer",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "openclaw"
+     },
+     "hookEvent": "OpenclawFooter"
+    }
+   ]
   ]
  ],
  "repair": [

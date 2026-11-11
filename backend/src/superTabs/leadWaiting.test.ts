@@ -121,11 +121,10 @@ describe('who reads the claim', () => {
   })
 })
 
+// A person does not post in a Team Swarm's project chat at all (agentsOnly.test.ts); a claim from an older Desktop is still refused.
 describe('a Team Swarm project chat with no Lead', () => {
-  it('keeps nothing for a Lead and refuses the claim, so it still says Not sent', () => {
+  it('refuses the claim, so a Lead joining has nothing waiting for it', () => {
     const f = fixture(false)
-    f.send('hello')
-    expect(f.project().leadWaiting).toBeUndefined()
     expect(refusal(() => f.claim('mac'))).toBe('PERSONAL_SWARM_ONLY')
     expect(f.join('h1', false).lateDeliveries).toBeUndefined()
   })

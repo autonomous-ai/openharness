@@ -409,35 +409,6 @@ void main() {
     expect(other.hasPendingAction, isFalse);
   });
 
-  test(
-    'a confirmed new group cannot send into the old group when its read fails',
-    () async {
-      final server = ConversationServer();
-      final controller = await open(server);
-      controller.setDraft('lead', 'Keep this in Lead');
-      server.failReads = true;
-      final result = await controller.command({
-        'type': 'conversation.create',
-        'title': 'New feature',
-        'brief': '',
-        'checks': <dynamic>[],
-      });
-      expect(controller.selectedId, result!['conversationId']);
-      expect(controller.selected, isNull);
-      controller.setDraft(controller.selectedId, 'Work here');
-      expect(await controller.send(), isNull);
-      expect(server.messages, isEmpty);
-      server.failReads = false;
-      await controller.refresh();
-      await controller.send();
-      expect(
-        server.messages.single['conversationId'],
-        result['conversationId'],
-      );
-      expect(controller.draft('lead'), 'Keep this in Lead');
-    },
-  );
-
   test('viewers cannot send messages but can leave', () async {
     final server = ConversationServer();
     server.state['people'] = [

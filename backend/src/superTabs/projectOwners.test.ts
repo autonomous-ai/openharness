@@ -5,7 +5,7 @@ import type { AgentStart } from './model.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { admitPerson, ownerAccount, ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
 import { visibilityChanged } from './parts/commit.js'
-import { storedAssignment } from './storedWork.test-support.js'
+import { storedAssignment, storedTask } from './storedWork.test-support.js'
 
 // Task #3073 (Diego, 11-05): a private project's owner who leaves the Swarm, or is removed, loses it, and the project stays
 // manageable. Ownership is a membership (id and generation), as a project member's is, never the account id alone.
@@ -162,7 +162,7 @@ describe('a private project left with no member', () => {
    *  reads, task #4120), and P removed by the Swarm's owner. */
   function ownerless() {
     const f = setup(), x = f.create(p)
-    const task = f.run({ type: 'conversation.create', projectId: x.projectId, title: 'Secret task', brief: 'Secret', checks: [] }, p).conversationId as string
+    const task = storedTask(f.state, { projectId: x.projectId as string, title: 'Secret task', brief: 'Secret', requesterId: 'p' })
     const agentId = f.run({ type: 'agent.add', conversationId: task, harnessId: 'h', machineId: 'p-mac', name: 'Worker', configuration, lead: false }, p,
       { contribution: { machineOwnerId: 'p', contributorId: 'p' } }).agentId as string
     storedAssignment(f.state, task, agentId, 1000)
