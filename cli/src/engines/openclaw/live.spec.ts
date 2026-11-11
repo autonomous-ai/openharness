@@ -305,6 +305,26 @@ describe('OpenclawLive', () => {
       expect(onSessionMissing).not.toHaveBeenCalled()
     })
 
+    // The unreadable store's own state replaces the hold on the agent (core/transcripts/attach.ts), and its recovery
+    // clears it: a store that still holds no session is said again, never left at no state.
+    it('a store read again after it could not be says again that it holds no session', async () => {
+      const { path, db } = store()
+      const { stream, onSessionMissing } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+      db.exec('ALTER TABLE session_nodes RENAME COLUMN status TO status_renamed')
+      await at(33)
+      stream.paneRead(RUNNING)
+      db.exec('ALTER TABLE session_nodes RENAME COLUMN status_renamed TO status')
+      await at(36)
+      stream.paneRead(RUNNING)
+      await at(66)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledTimes(2)
+    })
+
     it('connecting or ready with no session says nothing', async () => {
       // A fresh session reads `ready` before its first message, and `connecting` is no run yet: no node is due.
       const { stream, onSessionMissing } = await watch(store().path)
