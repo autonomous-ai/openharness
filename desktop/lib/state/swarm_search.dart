@@ -2020,7 +2020,7 @@ class SwarmSearchController extends ChangeNotifier {
               ? 'Current agent'
               : engine.id == 'opencode'
               ? 'Muse Spark 1.3 · continue with recent context'
-              : takesFirstTask(engine.id)
+              : takesHandoff(engine.id)
               ? 'Continue this project with recent context'
               : 'New conversation in the same project',
           swarmId: null,

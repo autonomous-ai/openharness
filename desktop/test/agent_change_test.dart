@@ -1009,24 +1009,53 @@ void main() {
       connection.handoff = handoffOk;
       final target = allEngines
           .map((e) => e.id)
-          .firstWhere((id) => !takesFirstTask(id) && id != 'codex');
+          .firstWhere((id) => !takesHandoff(id) && id != 'codex');
       await app.changeAgent('m', 'a0', target);
       expect(connection.handoffCalls, isEmpty);
       expect(connection.recentReads, 0);
       expect(notices, isEmpty);
     });
 
-    // Every engine that takes a first task takes the handoff as one: omp as an argument, OpenClaw typed into its
-    // session (the CLI's FIRST_PROMPT_ARGS, kFirstTaskEngines).
-    for (final target in ['omp', 'openclaw']) {
-      test('a switch to $target keeps the handoff', () async {
+    // omp takes a first task as an argument (the CLI's FIRST_PROMPT_ARGS), so it takes the handoff as one.
+    test('a switch to omp keeps the handoff', () async {
+      final (connection, app) = await open();
+      connection.handoff = handoffOk;
+      expect(await app.changeAgent('m', 'a0', 'omp'), isNull);
+      final call = connection.handoffCalls.single;
+      expect(call['targetEngine'], 'omp');
+      expect(
+        connection.creations.single['prompt'],
+        agentHandoffFilePrompt(
+          'Codex',
+          '.harness/handoff/a0-${call['changeId']}.md',
+          gitRepo: true,
+        ),
+      );
+    });
+
+    // OpenClaw's tools work in its Gateway agent's workspace, not the pane's folder where the handoff file is written:
+    // it starts a new conversation, and nothing is read for it.
+    test('a switch to OpenClaw reads no handoff', () async {
+      final (connection, app) = await open();
+      connection.handoff = handoffOk;
+      await app.changeAgent('m', 'a0', 'openclaw');
+      expect(connection.handoffCalls, isEmpty);
+      expect(connection.recentReads, 0);
+    });
+
+    // A machine from before omp refuses its handoff as an engine it does not know: the switch goes on to the excerpt,
+    // as with a machine from before the handoff file, never held for a retry that refuses again.
+    test(
+      'a machine that does not know the engine falls back to the excerpt',
+      () async {
         final (connection, app) = await open();
-        connection.handoff = handoffOk;
-        expect(await app.changeAgent('m', 'a0', target), isNull);
-        expect(connection.handoffCalls.single['targetEngine'], target);
-        expect(connection.creations.single['prompt'], isNotNull);
-      });
-    }
+        connection.handoff = (_) => {'error': 'BAD_ENGINE'};
+        expect(await app.changeAgent('m', 'a0', 'omp'), isNull);
+        expect(connection.handoffCalls, hasLength(1));
+        expect(connection.recentReads, 1);
+        expect(connection.creations.single['prompt'], contains('maple-42'));
+      },
+    );
 
     test('the request is sealed on the wire', () {
       expect(encryptedDownTypes, contains('agent_handoff_prepare'));

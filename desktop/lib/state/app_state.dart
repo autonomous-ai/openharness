@@ -18179,7 +18179,9 @@ class AppNotifier extends ChangeNotifier {
         change.handoffHeld = false;
         return 'The conversation changed. Choose the agent again to start a new switch.';
       }
-      if (reply['error'] != 'UNSUPPORTED') {
+      // A machine from before the handoff file, or one that does not know the new engine (BAD_ENGINE: omp before
+      // #1509), falls back to the excerpt; its own refusal of the engine, if any, comes with the start.
+      if (reply['error'] != 'UNSUPPORTED' && reply['error'] != 'BAD_ENGINE') {
         return agentHandoffHeldMessage(
           reply['error'],
           reply['hold'],
@@ -18247,8 +18249,7 @@ class AppNotifier extends ChangeNotifier {
       return 'This harness has no project folder to open with another agent.';
     }
     if (source.dsh != 'autonomous/pair' &&
-        // The handoff is the new agent's first task: an engine that takes one takes it (core/first_task.dart).
-        takesFirstTask(change.engine) &&
+        takesHandoff(change.engine) &&
         !change.contextLoaded) {
       final error = await _loadSwitchHandoff(machineId, change, source, folder);
       if (error != null) return error;
