@@ -483,7 +483,10 @@ describe('a task\'s tokens over HTTP', () => {
       ['a count missing', { ...row, tokens: [{ model: 'gpt-5.5', input: 1, output: 2, cacheRead: 3 }] }],
       ['a field it does not know', { ...row, title: 'Add a search field' }],
       ['a field it does not know on a model', { ...row, tokens: [{ ...model('gpt-5.5'), prompt: 'words' }] }],
+      ['an issue numbered past what GitHub counts to', { ...row, number: 2_147_483_648 }],
+      ['a model\'s name longer than a name is', { ...row, tokens: [model('m'.repeat(121))] }],
       ['rounds below zero', { ...row, rounds: -1 }],
+      ['more rounds than any change has', { ...row, rounds: 100_001 }],
       ['an end before its start', { ...row, endedAt: row.startedAt - 1 }],
       ['a time that is no date', { ...row, endedAt: 9e15 }],
     ]
