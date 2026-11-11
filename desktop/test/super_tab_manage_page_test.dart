@@ -129,10 +129,12 @@ void main() {
       );
     });
 
-    testWidgets('has Add machine and its screen title', (tester) async {
+    testWidgets('has Add machine, and its tab is its one title', (
+      tester,
+    ) async {
       await show(tester);
       expect(find.text('Add machine'), findsOneWidget);
-      expect(find.text('Machines'), findsNWidgets(2));
+      expect(find.text('Machines'), findsOneWidget);
       expect(find.byTooltip('Add machine'), findsNothing);
     });
   });
