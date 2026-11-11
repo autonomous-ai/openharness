@@ -33,8 +33,10 @@ export function hookScriptCandidates(dir: string, script: string | undefined, pl
 }
 export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
 
-/** The notify.mjs every hook line names, when it is not there; null when it is. */
-export function missingHookScript(): string | null {
+/** The notify.mjs every hook line names, when it is not there; null when it is. With [engine], null too for an engine
+ *  whose hooks do not run it. */
+export function missingHookScript(engine?: string): string | null {
+  if (engine !== undefined && !(NOTIFY_ENGINES as readonly string[]).includes(engine)) return null
   return existsSync(HOOK_SCRIPT) ? null : HOOK_SCRIPT
 }
 
@@ -151,7 +153,9 @@ function withoutTrailingSeparators(arg: string): string {
   return arg.slice(0, end)
 }
 
-type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot'
+/** The engines whose hook lines run notify.mjs; the others (OpenCode, Pi, Amp, …) report through a plugin of their own. */
+const NOTIFY_ENGINES = ['claude', 'codex', 'cursor', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'copilot'] as const
+type NotifyEngine = typeof NOTIFY_ENGINES[number]
 
 /** notify.mjs's argument list for [engine]: the managed Node, the script, and Harness's own flags. No user input. */
 export function hookArgv(

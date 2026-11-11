@@ -472,6 +472,7 @@ describe('creating an agent', () => {
       const launch = { current: () => true, environment: { HOME: root }, prepareHooks: async () => false } as unknown as NativeLaunch
       expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request())).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD',
         unavailable: 'native', detail: 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.' })
+      expect(missingHookScript).toHaveBeenLastCalledWith('claude')
       expect(createAndRegisterPane).not.toHaveBeenCalled()
     } finally { vi.mocked(missingHookScript).mockReturnValue(null) }
   })

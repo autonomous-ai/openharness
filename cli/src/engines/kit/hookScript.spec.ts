@@ -9,7 +9,7 @@ import { HookScriptMissing } from './hookHeld.js'
 import { installHookSettings } from './hookSettings.js'
 import { installNativeHookSettings } from './nativeHookSettings.js'
 import { installHermesHooks } from '../nativeHooks.js'
-import { HOOK_SCRIPT, requireHookScript } from './notifyHooks.js'
+import { HOOK_SCRIPT, missingHookScript, requireHookScript } from './notifyHooks.js'
 
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -32,6 +32,13 @@ afterEach(() => {
 it('refuses to name a notify.mjs that is not there', () => {
   expect(() => requireHookScript()).toThrow(HookScriptMissing)
   expect(() => requireHookScript()).toThrow(`notify.mjs is missing (${HOOK_SCRIPT})`)
+})
+
+// Review of #3954: a held create blamed notify.mjs for an engine whose plugin never runs it.
+it('names a missing notify.mjs only for an engine whose hooks run it', () => {
+  expect(missingHookScript()).toBe(HOOK_SCRIPT)
+  expect(missingHookScript('codex')).toBe(HOOK_SCRIPT)
+  expect(missingHookScript('opencode')).toBeNull()
 })
 
 it.each(['linux', 'darwin', 'win32'] as const)('installs no Codex hook naming a missing notify.mjs, and says why in one line (%s)', async platform => {

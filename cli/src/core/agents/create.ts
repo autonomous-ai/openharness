@@ -116,10 +116,10 @@ async function swarmFolder(cwd: string): Promise<boolean> {
   return harnessMadeWorktree(cwd, root)
 }
 
-/** A create held because the engine's hooks are not in place: [waiting] while they may still be, the file and what to do
- *  when notify.mjs, which every hook line runs, is missing. That does not change by waiting (#3954). */
-function hooksHeld(waiting: string) {
-  const missing = missingHookScript()
+/** A create held because [engine]'s hooks are not in place: [waiting] while they may still be, the file and what to do
+ *  when notify.mjs, which its hook lines run, is missing. That does not change by waiting (#3954). */
+function hooksHeld(engine: string, waiting: string) {
+  const missing = missingHookScript(engine)
   return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native',
     detail: missing ? `Harness’s hook script is missing (${missing}). Reinstall Harness, then start the agent again.` : waiting } as const
 }
@@ -338,7 +338,7 @@ export function createAgentCreator({
       } catch (error) { console.warn(`[agent] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
     }
     if (native && !await native.prepareHooks(hooksDisabled ? 0 : hookPort, authority.current,
-      { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return hooksHeld('Waiting to confirm the engine’s native hooks.')
+      { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return hooksHeld(engine, 'Waiting to confirm the engine’s native hooks.')
     // Harness configuration can change the profile after executable discovery. Binding and Resume
     // must retain the home the prepared child will actually use.
     if (engine === 'codex' && native) codexHome = nativeHookLocations(native.environment).CODEX_HOME
@@ -346,7 +346,7 @@ export function createAgentCreator({
     // THAT folder, not the one `harness login` already installed into — without this, such an agent
     // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
     // Idempotent, so paying this on every create against an already-set-up profile is free.
-    if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return hooksHeld('Waiting to confirm Codex’s hooks in the selected profile.')
+    if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return hooksHeld('codex', 'Waiting to confirm Codex’s hooks in the selected profile.')
     // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too.
     const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
     if (profileHome && (engine === 'claude' || engine === 'codex')) {
