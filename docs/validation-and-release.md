@@ -5,6 +5,38 @@ The release clock starts at the user's request, not at the tag. The October 2
 baseline investigations, local environment failures, and waiting before publishing.
 Keep a short validation plan and reuse its evidence through merge and release.
 
+## In short
+
+The rules AGENTS.md carried until 2026-11-11; the sections below have the details.
+
+- Time the request through completion: implementation, validation, merge, publication and waiting, each apart.
+- Pick the checks before starting them: affected tests and integration checks, full suites for broad changes, run
+  together within the machine's capacity. No second full local suite after equivalent CI passed.
+- Reuse evidence only for the source and environment it covers (pass the prior receipt with `--reuse`). A squash with
+  the same tree keeps it; conflicts, dependencies or relevant code changes do not.
+- A documented, unchanged failure needs no new baseline. New failures need investigation. Never call an incomplete or
+  failed suite passing, and never skip a required check to save time.
+- PR CI runs only the Linux unit checks of changed components; the one required check is `ci/required`. Push work in
+  progress as a draft; mark it ready, then keep the head stable while CI and review run. Review independently of
+  implementation. Base the branch on current `main`.
+- Never start extra runs: no manual CI run beside the automatic one, no pushes to retrigger. Read the failure, fix it,
+  push once. Rerun only a recorded flaky test.
+- Checks PR CI does not run are yours when you touch their area: the CLI coverage gates (`npm run test:core`,
+  `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`,
+  `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Record them in the PR.
+- Heavy workflows (OS images, VM tests, CLI end to end) run only by hand, once, when the change needs them; report the
+  run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
+- In a Swarm project the merge train lands ready pull requests by itself, together on one run. Never push to a
+  `harness-train/` branch; add the `hold` label to keep a PR out.
+- Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
+  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `main` moves, integrate it, review the combined
+  change, rerun only newly affected checks, and finish the authorized merge without asking again.
+- Once required checks pass, do the authorized merge or release without another validation cycle, then verify the
+  published versions and checksums. A release failure is a code failure: fix it and cut the next version; never move a
+  published tag.
+- For an authorized Desktop release, start `make release-desktop ARGS="--prepare"` from the final pushed branch beside
+  validation and review; publish only after checks pass. Its `--wait` receipt is the artifact verification.
+
 ## Select the checks once
 
 | Change | Required scope |
