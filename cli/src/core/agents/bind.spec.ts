@@ -1414,7 +1414,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
 
     it('a relaunched TUI that holds another state folder: the row takes it and the session is read again', async () => {
-      const run = bound('/new', { firstTask: 'Fix the parser' })
+      const run = bound('/new', { firstTask: 'Fix the parser', openclawStateDir: '/h/.openclaw' })
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
       expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/new')
@@ -1423,6 +1423,20 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // The task waits for the session read from the new folder: the next pass binds it again, then hands it over.
       expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
       expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
+    // A row with no folder saved (its TUI's open files could not be read at bind) had its stream find the store from
+    // those same open files at attach (lib/openclawStore.ts). Let go and bound again after a daemon restart, it dropped
+    // a message awaiting confirmation and started a run in progress over, to read the store it already read.
+    it('the first read of a TUI whose row kept no folder records it, and the session stays', async () => {
+      const run = bound('/h/.openclaw')
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/h/.openclaw')
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+      // Relaunched since, its stream's store is the one the TUI before it named: the new folder is read again.
+      vi.mocked(run.deps.openclawStateDir).mockResolvedValue('/new')
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7715, startMarker: '2026-11-10T09:00:00Z', executable: 'openclaw' } }))
+      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true }]])
     })
 
     it('the folder is read once per TUI process', async () => {
