@@ -386,6 +386,8 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     }
     expect(f.state.branches.size).toBe(0)
     expect(f.logged()).toContainEqual(`[super-tab] train acme/app#900 landed #4 #5 as ${landed.sha.slice(0, 7)}`)
+    // Nothing is read between the merge and the notes: the way it landed is the way it was just sent.
+    expect(f.state.asked.filter(path => path === `/git/commits/${landed.sha}`)).toEqual([])
   })
 
   it.each([
@@ -575,18 +577,38 @@ describe('a train waits for its own checks, then lands or is closed', () => {
 
   // A rule of the repository the train cannot meet (a required review, a merge method) refused it every 15 minutes for good,
   // nothing else landed, and only the log said so.
-  it('says once on the train that GitHub refuses its merge, and leaves it open for a person', async () => {
+  // Review of the merge-commit landing: a base that requires a linear history (or signed commits) refuses a merge commit with
+  // a 405 while the repository's settings still allow one. The train stayed open and tried the same way for good, and nothing
+  // else landed; squashed, as every train was before, the same tree lands.
+  it('lands squashed when GitHub refuses the merge commit by a rule of the base, and closes each member itself', async () => {
+    const f = setup()
+    const a = f.add(4), b = f.add(5)
+    await f.settle()
+    const built = f.state.sent.length, branch = f.train().head.ref, head = f.train().head.sha
+    f.state.answer = (method, path) => method === 'PUT' && path === '/pulls/900/merge' && f.state.sent.at(-1)!.body.merge_method === 'merge' ? { status: 405 } : undefined
+    await f.ends(PASSED)
+    // Both pinned to the head its checks passed.
+    expect(f.state.sent.slice(built).filter(s => s.method === 'PUT').map(s => [s.body.merge_method, s.body.sha])).toEqual([['merge', head], ['squash', head]])
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'PUT /pulls/900/merge', 'POST /issues/4/comments', 'PATCH /pulls/4', 'POST /issues/5/comments', 'PATCH /pulls/5',
+      `DELETE /git/refs/heads/${branch}`])
+    for (const pull of [a, b]) expect(pull).toMatchObject({ state: 'closed', merged_at: null })
+    expect(f.said(900)).toEqual([])
+    expect(f.state.main.at(-1)!.files).toEqual(['cli/src/f4.ts', 'cli/src/f5.ts'])
+  })
+
+  it('says once on the train that GitHub refuses its merge every way, and leaves it open for a person', async () => {
     const f = setup()
     f.add(4); f.add(5)
     await f.settle()
     const built = f.state.sent.length
     f.state.answer = (method, path) => method === 'PUT' && path === '/pulls/900/merge' ? { status: 405 } : undefined
     await f.ends(PASSED)
-    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'POST /issues/900/comments'])
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'PUT /pulls/900/merge', 'PUT /pulls/900/merge', 'POST /issues/900/comments'])
+    expect(f.state.sent.slice(built, built + 3).map(s => s.body.merge_method)).toEqual(['merge', 'squash', 'rebase'])
     expect(f.said(900)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: GitHub refuses to merge this train \(405\)\. Nothing else lands in main while it is open: lift what blocks it, or close it and the next is built\.$/)])
     expect(f.logged()).toContainEqual(expect.stringContaining('TRAIN_REFUSED acme/app: GitHub answered PUT /pulls/900/merge with 405. (again in 30 s)'))
     await f.tick()
-    expect(f.writes(built).filter(w => w.startsWith('PUT'))).toHaveLength(2)
+    expect(f.writes(built).filter(w => w.startsWith('PUT'))).toHaveLength(6)
     expect(f.said(900)).toHaveLength(1)
     expect(f.train().state).toBe('open')
   })
