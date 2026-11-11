@@ -191,20 +191,23 @@ void main() {
     'Projects are the repos the agents work in, one per repo across the computers, and a pane with no repo is in none',
     (tester) async {
       final (:f, :c, gh: _) = await open(tester);
-      // Each repo is one project, the api's two computers included. The Swarm's own first project, Personal, names no
-      // repository: it is not listed (anh Dee via the lead, 2026-11-10: projects are repos only).
-      expect(listed(c), unorderedEquals(['api', 'web']));
+      // Each repo is one project, the api's two computers included. The Swarm's own first project, which this Swarm
+      // kept (the server deletes an empty one, PS-B), is listed as any other.
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
       for (final tab in ['one', 'two', 'Tab']) {
         expect(find.text(tab), findsNothing, reason: tab);
       }
-      // The server learns each project's name and nothing else: no tab's, no folder's.
+      // The server learns each project's name and its GitHub repository, nothing else: no tab's, no folder's.
       expect(
         [for (final p in sent(f, 'project.create')) p['name']],
         ['api', 'web'],
       );
+      expect([
+        for (final p in sent(f, 'project.github')) p['repository'],
+      ], unorderedEquals(['acme/api', 'acme/web']));
       expect(sent(f, 'project.rename'), isEmpty);
       final posted = f.connection.server.posts.toString();
-      for (final leak in ['acme', 'notes', '/Users', 'laptop']) {
+      for (final leak in ['github.com', 'notes', '/Users', 'laptop']) {
         expect(posted, isNot(contains(leak)), reason: leak);
       }
       // The pane with no repo is still in Your Team.
@@ -231,6 +234,46 @@ void main() {
         find.text('No bathroom-break reminder skill ships'),
         findsOneWidget,
       );
+      await close(tester, f, c);
+    },
+  );
+
+  // Review of the Personal Swarm, finding 6: a computer that never saw a project's repo had no Tasks board.
+  testWidgets(
+    'a project whose repo no pane here works in still opens its Tasks board: the GitHub repository it names',
+    (tester) async {
+      final (:f, :c, :gh) = await open(
+        tester,
+        before: (f) async {
+          final projects = f.connection.server.state['projects'] ??= [
+            projectFixture('lead', 'Personal', 'lead'),
+          ];
+          (projects as List).add({
+            ...projectFixture(
+              'site',
+              'site',
+              'chat-site',
+              visibility: 'private',
+            ),
+            'githubRepository': 'acme/site',
+          });
+          (f.connection.server.state['conversations'] as List).add({
+            ...conversationFixture('chat-site', 'Lead'),
+            'projectId': 'site',
+          });
+        },
+      );
+      expect(listed(c), contains('site'));
+      await tester.tap(key('super-group-chat-site'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(key('swarm-tasks-button'));
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(key('swarm-tasks-no-repository'), findsNothing);
+      final read = gh.firstWhere((call) => call.contains('name=site'));
+      expect(read, contains('owner=acme'));
       await close(tester, f, c);
     },
   );
@@ -285,12 +328,12 @@ void main() {
         },
       ]);
       // The one with no message is gone; the one written in is kept on the server, read-only, and not listed.
-      expect(listed(c), unorderedEquals(['api', 'web']));
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
       expect(
         c.snapshot!.projects.where((p) => p.name == 'two').single.archived,
         isTrue,
       );
-      // Once: this computer keeps only the repos' projects now.
+      // Once: this computer keeps nothing of the repos' projects (the server answers them), and the tabs' are closed.
       await PersonalProjects.of(f.app).sync(c);
       expect(sent(f, 'project.closeTab'), hasLength(2));
       final kept = jsonDecode(
@@ -298,10 +341,7 @@ void main() {
           PersonalProjects.storageKey('owner'),
         ))!,
       ) as Map;
-      expect(
-        kept[tabId]['projects'].keys,
-        unorderedEquals(['github.com/acme/api', 'github.com/acme/web']),
-      );
+      expect(kept[tabId]?['projects'] ?? const {}, isEmpty);
       expect(kept[tabId], isNot(contains('layouts')));
       expect(kept[tabId], isNot(contains('order')));
       await close(tester, f, c);
@@ -361,7 +401,7 @@ void main() {
           'tabOperation': tabOperation('one'),
         },
       ]);
-      expect(listed(c), unorderedEquals(['api', 'web']));
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
       expect(c.snapshot!.projectById('tab-two'), isNotNull);
       await close(tester, f, c);
     },
@@ -391,56 +431,17 @@ void main() {
           });
         },
       );
-      expect(listed(c), unorderedEquals(['api', 'docs', 'web']));
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'docs', 'web']));
       await close(tester, f, c);
     },
   );
 
   testWidgets(
-    'the Swarm\'s own first project is listed once it has a repository, and nothing about it is deleted before',
+    'the Swarm\'s own first project, which the server keeps while it has messages, is listed as any project',
     (tester) async {
       final (:f, :c, gh: _) = await open(tester);
-      expect(listed(c), isNot(contains('Personal')));
-      expect(c.snapshot!.projectById('lead'), isNotNull);
-      expect(sent(f, 'project.delete'), isEmpty);
-      expect(sent(f, 'project.closeTab'), isEmpty);
-      (f.connection.server.state['projects'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((p) => p['id'] == 'lead')['repository'] = {
-        'repositoryUrl': 'https://github.com/acme/site',
-      };
-      await c.refresh();
-      f.app.notifyListeners();
-      for (var i = 0; i < 4; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
       expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
-      await close(tester, f, c);
-    },
-  );
-
-  testWidgets(
-    'the Swarm\'s own first project stays in reach: listed while its chat is open, and while it has something unread',
-    (tester) async {
-      final (:f, :c, gh: _) = await open(tester);
-      Future<void> redraw() async {
-        f.app.notifyListeners();
-        for (var i = 0; i < 4; i++) {
-          await tester.pump(const Duration(milliseconds: 20));
-        }
-      }
-
-      c.select('lead');
-      await redraw();
-      expect(listed(c), contains('Personal'));
-      c.select(leadOf(c, 'web'));
-      await redraw();
-      expect(listed(c), isNot(contains('Personal')));
-      // An agent of Your Team posts in it.
-      f.connection.server.append('free: Notes', conversationId: 'lead');
-      await tester.runAsync(c.refresh);
-      await redraw();
-      expect(listed(c), contains('Personal'));
+      expect(sent(f, 'project.delete'), isEmpty);
       await close(tester, f, c);
     },
   );
