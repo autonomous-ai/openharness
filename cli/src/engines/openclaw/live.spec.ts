@@ -280,6 +280,19 @@ describe('OpenclawLive', () => {
 
     it('a store file that is not there counts as no session', () => saidOnceAfter30s(join(dir, 'missing.sqlite')))
 
+    // Found end to end (2026-11-11): bind passes 5 s apart measured a little under it by `Date.now()`, so the pass 30 s
+    // on fell a few ms short and the hold came one pass, 5 s, late.
+    it('the pass 30 s on says it, a few ms short by the clock or not', async () => {
+      const { stream, onSessionMissing } = await watch(store().path)
+      for (let pass = 0; pass < 6; pass++) {
+        stream.paneRead(RUNNING)
+        await vi.advanceTimersByTimeAsync(4_999)
+      }
+      expect(onSessionMissing).not.toHaveBeenCalled()
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    })
+
     it('connecting or ready with no session says nothing', async () => {
       // A fresh session reads `ready` before its first message, and `connecting` is no run yet: no node is due.
       const { stream, onSessionMissing } = await watch(store().path)
