@@ -444,6 +444,35 @@ describe('the project clone of a large repository', () => {
     expect(running(Number(await readFile(join(root, 'pid'), 'utf8')))).toBe(false)
   }, 20_000)
 
+  // anh Dee, 2026-11-10, a project of lampOS on Mac 2: "Cloning stopped making progress (git's last words: Resolving deltas:
+  // 100% (70463/70463), done.)". After its history a blob-less clone's checkout fetches the files in a fetch of its own, which
+  // shows progress only to a terminal: git is quiet, and its pack grows.
+  it('never cuts off a quiet clone whose pack keeps growing, as a blob-less checkout fetching its files', async () => {
+    const git = await fakeGit([
+      'dest="$7"; mkdir -p "$dest/.git/objects/pack"',
+      "echo 'Resolving deltas: 100% (70463/70463), done.' >&2",
+      // Over three times the window with nothing said, 4 KB more of the pack every 200 ms.
+      'i=0; while [ $i -lt 25 ]; do head -c 4096 /dev/zero >> "$dest/.git/objects/pack/tmp_pack_x"; sleep 0.2; i=$((i+1)); done',
+      'exit 0',
+    ].join('\n'))
+    const started = Date.now()
+    await expect(cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 1500, lookMs: 300 }))
+      .resolves.toBeUndefined()
+    expect(Date.now() - started).toBeGreaterThan(4500)
+  }, 20_000)
+
+  it('still gives up on a quiet clone whose pack stopped growing', async () => {
+    const git = await fakeGit([
+      'dest="$7"; mkdir -p "$dest/.git/objects/pack"',
+      'head -c 4096 /dev/zero > "$dest/.git/objects/pack/tmp_pack_x"',
+      "echo 'Resolving deltas: 100% (70463/70463), done.' >&2",
+      'exec sleep 30',
+    ].join('\n'))
+    const failure = await cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 1500, lookMs: 300 })
+      .then(() => null, (error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'CLONE_TIMEOUT', message: expect.stringContaining('Resolving deltas: 100%') })
+  }, 20_000)
+
   it('never cuts off a slow clone that keeps making progress', async () => {
     // Over three times the window, a line every 200 ms: the receiving part of a big clone on a slow connection.
     const git = await fakeGit("i=0\nwhile [ $i -lt 25 ]; do echo \"Receiving objects: $i%\" >&2; sleep 0.2; i=$((i+1)); done\nexit 0")

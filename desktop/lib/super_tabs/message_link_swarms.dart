@@ -91,11 +91,7 @@ class AppLinkSwarms implements SwarmLinkSwarms {
       final message = rows.length == 1 ? rows.single : null;
       if (message != null &&
           message.id == link.messageId &&
-          message.conversationId == link.conversationId &&
-          const {
-            'delivery-hold',
-            'update-request',
-          }.every((kind) => message.source['kind'] != kind)) {
+          message.conversationId == link.conversationId) {
         target = SuperTabLinkTarget.message(message, author: _author(message));
       }
     } catch (_) {

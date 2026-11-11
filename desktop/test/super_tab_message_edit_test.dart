@@ -1,11 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -22,7 +20,7 @@ import 'support/super_tab_fixture.dart';
 /// deleted." and one without replies goes.
 void main() {
   setUpAll(() async {
-    if (Platform.environment['BUDDY_DELETE_SHOTS'] == null) return;
+    if (Platform.environment['MESSAGE_DELETE_SHOTS'] == null) return;
     final sf = ByteData.sublistView(
       await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
     );
@@ -47,21 +45,6 @@ void main() {
 
   final picture = GlobalKey();
   var brightness = Brightness.dark;
-
-  Future<void> shot(WidgetTester tester, String platform) async {
-    final folder = Platform.environment['BUDDY_DELETE_SHOTS'];
-    if (folder == null) return;
-    await tester.runAsync(() async {
-      final boundary =
-          picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-      final image = await boundary.toImage(pixelRatio: 1.5);
-      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      await Directory(folder).create(recursive: true);
-      await File('$folder/$platform-buddy-delete-${brightness.name}.png')
-          .writeAsBytes(bytes!.buffer.asUint8List());
-      image.dispose();
-    });
-  }
 
   late SuperTabController c;
 
@@ -167,61 +150,14 @@ void main() {
     );
   });
 
-  for (final appearance in Brightness.values) {
-    testWidgets(
-      'your Buddy proposal offers Delete without Edit (${appearance.name})',
-      (tester) async {
-        brightness = appearance;
-        grid.AppTheme.brightness.value = appearance;
-        addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        final server = ConversationServer.chat()..append('Please fix the menu');
-        server.messages.single['source'] = {
-          'kind': 'buddy-proposal',
-          'personId': 'owner',
-        };
-        await show(tester, server);
-        await openMore(tester, 'message-1');
-        expect(find.text('Delete message'), findsOneWidget);
-        expect(find.text('Edit message'), findsNothing);
-        await shot(tester, 'desktop');
-      },
-    );
-  }
-
-  for (final entry in <String, Map<String, dynamic>>{
-    'another person': {'kind': 'person', 'id': 'huy', 'name': 'Huy'},
-    'an agent': {'kind': 'agent', 'id': 'owner', 'name': 'Buddy'},
-  }.entries) {
-    testWidgets('${entry.key} cannot delete an owner Buddy proposal', (
-      tester,
-    ) async {
-      final server = ConversationServer.chat()..append('Please fix the menu');
-      server.messages.single
-        ..['author'] = entry.value
-        ..['source'] = {'kind': 'buddy-proposal', 'personId': 'owner'};
-      await show(tester, server);
-      await openMore(tester, 'message-1');
-      expect(find.text('Delete message'), findsNothing);
-      expect(find.text('Edit message'), findsNothing);
-    });
-  }
-
-  for (final source in [
-    {'kind': 'buddy-proposal', 'personId': 'huy'},
-    {'kind': 'buddy-proposal'},
-    {'kind': 'task-line', 'personId': 'owner'},
-  ]) {
-    testWidgets('a source that does not authorize owner deletion: $source', (
-      tester,
-    ) async {
-      final server = ConversationServer.chat()..append('Please fix the menu');
-      server.messages.single['source'] = source;
-      await show(tester, server);
-      await openMore(tester, 'message-1');
-      expect(find.text('Delete message'), findsNothing);
-      expect(find.text('Edit message'), findsNothing);
-    });
-  }
+  testWidgets('a system message offers neither', (tester) async {
+    final server = ConversationServer.chat()..append('Please fix the menu');
+    server.messages.single['source'] = {'kind': 'system'};
+    await show(tester, server);
+    await openMore(tester, 'message-1');
+    expect(find.text('Delete message'), findsNothing);
+    expect(find.text('Edit message'), findsNothing);
+  });
 
   testWidgets('an agent’s and another person’s message offer neither', (
     tester,

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectToMaster, HEARTBEAT_INTERVAL_MS, heartbeatInterval, processChannel, processLoopDelay, type LoopDelay, type MasterChannel } from './coreLink.js'
+
+// Whether the core starts an event-loop delay monitor: one samples on a 20 ms timer, 50 wakeups a second.
+const loopMonitors = vi.hoisted(() => ({ started: 0 }))
+vi.mock('node:perf_hooks', async (original) => {
+  const real = await original<typeof import('node:perf_hooks')>()
+  return { ...real, monitorEventLoopDelay: (...args: Parameters<typeof real.monitorEventLoopDelay>) => { loopMonitors.started++; return real.monitorEventLoopDelay(...args) } }
+})
+import { connectToMaster, HEARTBEAT_INTERVAL_MS, heartbeatInterval, processChannel, type MasterChannel } from './coreLink.js'
 import { HARNESSD_PROTOCOL, type CoreMessage } from './protocol.js'
 
 class FakeChannel implements MasterChannel {
@@ -18,20 +25,6 @@ class FakeChannel implements MasterChannel {
 }
 
 const supervised = { HARNESSD_SUPERVISED: '1' }
-
-/** Loop delays that read back as given, one per beat, and remember being stopped. */
-const delays = (...values: number[]) => {
-  const made: Array<LoopDelay & { stopped: boolean }> = []
-  return {
-    made,
-    factory: () => {
-      const queue = [...values]
-      const delay = { stopped: false, take: () => queue.shift() ?? 0, stop: () => { delay.stopped = true } }
-      made.push(delay)
-      return delay
-    },
-  }
-}
 
 describe('connectToMaster', () => {
   beforeEach(() => vi.useFakeTimers())
@@ -60,10 +53,10 @@ describe('connectToMaster', () => {
     expect(channel.sent).toEqual([])
   })
 
-  it('says it is bound, then ready, then beats with its memory and loop delay until closed', () => {
+  it('says it is bound, then ready, then beats with its memory until closed, and wakes for nothing between beats', () => {
+    loopMonitors.started = 0
     const channel = new FakeChannel()
-    const loop = delays(4, 250)
-    const link = connectToMaster(channel, supervised, 1_000, loop.factory)
+    const link = connectToMaster(channel, supervised, 1_000)
     expect(link.supervised).toBe(true)
     expect(link.masterPid).toBe(4242)
     // Reparented once the master is gone: the master it had is still the one it names.
@@ -81,16 +74,16 @@ describe('connectToMaster', () => {
     expect(channel.sent).toEqual([
       { type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port: 18473 },
       { type: 'harnessd:ready' },
-      { type: 'harnessd:heartbeat', rssBytes: 100, heapUsedBytes: 50, loopDelayMs: 4 },
-      { type: 'harnessd:heartbeat', rssBytes: 200, heapUsedBytes: 100, loopDelayMs: 250 },
+      { type: 'harnessd:heartbeat', rssBytes: 100, heapUsedBytes: 50 },
+      { type: 'harnessd:heartbeat', rssBytes: 200, heapUsedBytes: 100 },
     ])
-    expect(loop.made).toHaveLength(1)
-    expect(loop.made[0].stopped).toBe(true)
+    // No event-loop delay monitor: its 20 ms timer cost an idle process 0.075% of a core, for a figure nobody read.
+    expect(loopMonitors.started).toBe(0)
   })
 
   it('beats well inside the silence its master allows', () => {
     const channel = new FakeChannel()
-    const link = connectToMaster(channel, { ...supervised, HARNESSD_WATCHDOG_MS: '3000' }, undefined, delays().factory)
+    const link = connectToMaster(channel, { ...supervised, HARNESSD_WATCHDOG_MS: '3000' })
     link.startHeartbeat()
     vi.advanceTimersByTime(2_999)
     link.close()
@@ -223,14 +216,6 @@ describe('connectToMaster', () => {
     expect(processChannel.parentPid).toBe(process.ppid)
   })
 
-  it('measures this process\'s loop delay, in whole milliseconds, from nothing after each reading', () => {
-    vi.useRealTimers()
-    const delay = processLoopDelay()
-    const first = delay.take()
-    expect(Number.isInteger(first) && first >= 0).toBe(true)
-    expect(delay.take()).toBeGreaterThanOrEqual(0)
-    delay.stop()
-  })
 })
 
 describe('heartbeatInterval', () => {

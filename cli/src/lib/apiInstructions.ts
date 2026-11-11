@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ApiConnectionMetadata } from './apiConnectionMetadata.js'
 import { instructionFileOf } from '../engines/launches.js'
+import { HARNESS_ADAPTERS } from '../dsh/adapters.js'
 
 const marker = '<!-- harness:apis -->'
 export const API_INSTRUCTIONS = `${marker}
@@ -20,7 +21,9 @@ Adding an API does not change this harness's model or subscription.
 /** Only Harness-created workspaces with saved APIs. Existing instructions are kept;
  * no global agent settings or credentials are written into the project. */
 export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'list'>, workspace: string, engine: string): void {
-  if (engine === 'terminal' || !store.list().length) return
+  // An engine that reads no instruction file in its folder (OpenClaw reads its own workspace's) gets none written there.
+  const adapter: { instructionFiles: readonly string[] } | undefined = HARNESS_ADAPTERS[engine as keyof typeof HARNESS_ADAPTERS]
+  if (engine === 'terminal' || adapter?.instructionFiles.length === 0 || !store.list().length) return
   const name = instructionFileOf(engine) ?? (engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md')
   const file = join(workspace, name)
   if (existsSync(file) && (!lstatSync(file).isFile() || lstatSync(file).isSymbolicLink())) return

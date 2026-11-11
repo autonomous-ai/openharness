@@ -31,7 +31,7 @@ permissions:
 
 # The managed runtime shipped by the CLI; keep release.yml's pin in sync.
 env:
-  CLI_NODE_VERSION: 22.23.2
+  CLI_NODE_VERSION: 24.22.2
   CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 # Supersede individual PR jobs, not the whole workflow: an always-running final
@@ -202,7 +202,6 @@ jobs:
             /mobile/pubspec.lock
             /backend/src/lib/communityContract.ts
             /backend/src/lib/hubMetricsContract.ts
-            /backend/src/superTabs/buddyContract.ts
             /mobile/lib/p2p/terminal_p2p_plugin.dart
             /mobile/lib/p2p/terminal_p2p_link.dart
             /mobile/lib/p2p/terminal_p2p_policy.dart

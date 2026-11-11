@@ -13,7 +13,7 @@ import {
  * secret without holding one, and ordinary prose in any language pass unchanged.
  */
 export type CredentialKind = 'private-key' | 'jwt' | 'harness' | 'github' | 'anthropic' | 'openai' | 'aws-key-id' | 'aws-secret'
-  | 'slack' | 'google' | 'stripe' | 'gitlab' | 'npm' | 'password'
+  | 'slack' | 'google' | 'stripe' | 'gitlab' | 'npm' | 'password' | 'link-token'
 
 /** What the sender is told was removed. */
 export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
@@ -31,6 +31,7 @@ export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
   gitlab: 'GitLab token',
   npm: 'npm token',
   password: 'password or secret',
+  'link-token': 'Harness join or link token',
 }
 
 export const CREDENTIAL_MARKER = '[credential removed]'
@@ -82,7 +83,7 @@ interface Rule {
   accept: (secret: string) => boolean | number
 }
 
-// A team session's tokens (lib/teamSession.ts) have their own prefixes; pasted, they are as live as any other sign-in.
+// A Harness Team account's old tokens have their own prefixes (harnessTokenFormat.ts); pasted, they are caught as any other.
 const HARNESS_PREFIXES = [HARNESS_ACCESS_PREFIX, HARNESS_REFRESH_PREFIX, HARNESS_TEAM_ACCESS_PREFIX, HARNESS_TEAM_REFRESH_PREFIX,
   HARNESS_HANDOFF_PREFIX, HARNESS_QR_PREFIX, HARNESS_QR_POLL_PREFIX]
 // Keys whose value is the secret: DB_PASSWORD, x-api-key, client_secret, access_token, "token": … Not `pwd` (a folder), and
@@ -130,6 +131,12 @@ const RULES: Rule[] = [
     pattern: /(?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]{1,20}:\/\/[^\s/:@]{1,256}:([^\s/@]{8,256})@/dgi },
   { kind: 'password', group: 1, accept: value => secretValue(value.replace(/[.!?:]+$/, '')) && value.replace(/[.!?:]+$/, '').length,
     pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${KEY}${ASSIGN}([^\s"'\x60<>()[\]{}$%&,;\\]{12,})`, 'dgi') },
+  // A bare Harness join or link token (sharing.ts: 32 random bytes as base64url, 43 characters), with no label to find it by
+  // (task #3595: one was logged in #2480). Last, so a token a rule above knows keeps its own kind. Random as the generic rules
+  // judge it (secretValue), so a 43-character identifier made of words is not one. Never a segment of a dotted token or a path,
+  // nor inside base64; a sentence may end right after it, and a percent-encoded link's `%3D` may come right before it.
+  { kind: 'link-token', accept: token => secretValue(token, 43, true),
+    pattern: /(?:(?<![A-Za-z0-9_\-+/.])|(?<=%3[Dd]))[A-Za-z0-9_-]{43}(?![A-Za-z0-9_\-+/=]|\.[A-Za-z0-9_-])/dg },
 ]
 
 /** Private keys first, by hand: a block may be cut off before its END line, and then its base64 lines still go. */

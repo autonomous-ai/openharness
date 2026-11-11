@@ -4,10 +4,10 @@ import type { Changes } from '../../src/superTabs/read/contract.js'
 import { readDelta } from '../../src/superTabs/cachedReads.js'
 import { listGroupIndexes } from '../../src/superTabs/parts/indexed.js'
 import { parseArgs } from './config.js'
-import { partsDriver } from './drivers/parts.js'
+import { partsDriver, storeRoutes } from './drivers/parts.js'
 import type { Reader, Reply } from './driver.js'
 import { machineId, seedAccounts } from './fixtures.js'
-import { storeRoutes } from './legacyDriver.js'
+import { observation } from './load.js'
 import { localDatabase } from './mongo.js'
 import { plan } from './plan.js'
 import { seedSwarm } from './seed.js'
@@ -69,12 +69,11 @@ async function main() {
     }
     const all = Object.values(kinds).flat()
     let n = 0
-    const reading = (machine: number): Promise<unknown> => driver.observeMachine(swarm.tabId, people[machine]!, machineId(machine), {
-      generation: swarm.generations[machine]!, quotas: [], tools: {}, runningHarnessIds: machine === 0 ? ['bench-lead'] : [], stoppedHarnessIds: [],
-      resources: { cpuPercent: 10 + (n++ % 50), memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
-        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Bench', os: 'macOS', gpuPercent: null } })
-    const post = () => driver.execute(swarm.tabId, people[0]!, `etag-cost-${n++}`,
-      { type: 'message.send', conversationId: swarm.workers[0]!.group, text: 'One post.', replyTo: null, recipientIds: [] })
+    const reading = (machine: number): Promise<unknown> => driver.observeMachine(swarm.tabId, people[machine]!, machineId(machine),
+      observation(swarm.generations[machine]!, swarm.agents.filter(a => a.machine === machine).map(a => a.harnessId), 10 + (n++ % 50)))
+    const agent = swarm.agents[0]!
+    const post = () => driver.execute(swarm.tabId, people[agent.machine]!, `etag-cost-${n++}`,
+      { type: 'message.send', conversationId: agent.channel, text: 'One post.', replyTo: null, recipientIds: [] }, agent.id)
     for (const r of all) await r.poll()
     // A first reading after the seed changes more than the reading: done before the quiet wait, as machineCapCost.ts does.
     await Promise.all(people.map((_, m) => reading(m)))
@@ -82,7 +81,7 @@ async function main() {
     clock = Date.now()
     for (const r of all) await r.poll()
 
-    process.stdout.write(`${config.machines} machines (${people.length} people), ${config.groups} groups; ${READERS} windows of each kind\n\n`)
+    process.stdout.write(`${config.machines} machines (${people.length} people), ${config.projects} projects; ${READERS} windows of each kind\n\n`)
     process.stdout.write('| Before each round | Window | Polls | Reply KB/poll | `derived` KB/poll | Summary left out |\n|---|---|---|---|---|---|\n')
     const phases: Array<[string, () => Promise<unknown>]> = [['nothing', async () => {}],
       ['every machine reading', () => Promise.all(people.map((_, m) => reading(m)))], ['one post', post]]

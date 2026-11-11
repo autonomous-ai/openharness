@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Frame } from './tunnel.js'
 import {
+  AGENT_BROWSER_DOWN_TYPES,
+  AGENT_BROWSER_UP_TYPES,
+  browserRateNotice,
   isEncryptedTerminalFrame,
   RELAY_BUSY_STREAMS,
   TERMINAL_DOWN_TYPES,
@@ -118,5 +121,73 @@ describe('terminal opaque relay contract', () => {
     for (const type of TERMINAL_DOWN_TYPES) {
       if (type !== 'terminal_open') expect(terminalFrameNeedsWake(type)).toBe(false)
     }
+  })
+})
+
+/** The largest `agent_browser_ack` a viewer sends: a stream id and a byte count, sealed into an `__e2e` envelope. */
+function worstCaseBrowserAck(): Frame {
+  const plaintext = JSON.stringify({ streamId: '00000000-0000-4000-8000-000000000000', bytes: Number.MAX_SAFE_INTEGER })
+  const ct = Buffer.alloc(Buffer.byteLength(plaintext) + 16).toString('base64')
+  return { type: 'agent_browser_ack', payload: { __e2e: { v: 1, k: 'p', n: Number.MAX_SAFE_INTEGER, ct } } }
+}
+
+describe('agent browser relay contract', () => {
+  it('relays agent_browser_open down and agent_browser_open_result up, and nothing unknown', () => {
+    expect([...AGENT_BROWSER_DOWN_TYPES].sort()).toEqual(['agent_browser_ack', 'agent_browser_close', 'agent_browser_open'])
+    expect([...AGENT_BROWSER_UP_TYPES].sort()).toEqual(['agent_browser_close', 'agent_browser_open_result'])
+    for (const type of ['agent_browser_foo', 'agent_browser_transport_error']) {
+      expect(AGENT_BROWSER_DOWN_TYPES.has(type), type).toBe(false)
+      expect(AGENT_BROWSER_UP_TYPES.has(type), type).toBe(false)
+    }
+  })
+
+  it('budgets a machine\'s browser bytes at 512 KiB a second, under their own key', () => {
+    const guard = new TerminalRateGuard(() => 1_000)
+    for (let i = 0; i < 60 * 8; i++) expect(guard.allow('agent_browser_output', 64 * 1024)).toBe(true)
+    expect(guard.allow('agent_browser_output', 1)).toBe(false)
+    // A spent browser budget does not throttle the terminal on the same socket.
+    expect(guard.allow('terminal_output', 1_024)).toBe(true)
+    expect(guard.allow('terminal_keyframe', 1_024)).toBe(true)
+  })
+
+  it('budgets a client\'s browser bytes at 64 KiB a second, apart from terminal paste and input', () => {
+    const guard = new TerminalRateGuard(() => 1_000)
+    for (let i = 0; i < 60; i++) expect(guard.allow('agent_browser_input', 64 * 1024)).toBe(true)
+    expect(guard.allow('agent_browser_input', 1)).toBe(false)
+    expect(guard.allow('terminal_input', 100)).toBe(true)
+    expect(guard.allow('terminal_paste', 100)).toBe(true)
+  })
+
+  it('never refuses agent_browser_ack at twice one ack per 64 KiB of the machine budget', () => {
+    const guard = new TerminalRateGuard(() => 1_000)
+    const bytes = terminalFrameBytes(worstCaseBrowserAck())
+    const acks = 2 * ((512 * 1024) / (64 * 1024)) * 60
+    for (let i = 0; i < acks; i++) expect(guard.allow('agent_browser_ack', bytes)).toBe(true)
+    expect(guard.allow('agent_browser_ack', bytes)).toBe(false)
+  })
+
+  it('allows 120 browser opens and closes a minute', () => {
+    let now = 1_000
+    const guard = new TerminalRateGuard(() => now)
+    for (const type of ['agent_browser_open', 'agent_browser_open_result', 'agent_browser_close']) {
+      for (let i = 0; i < 120; i++) expect(guard.allow(type, 300), type).toBe(true)
+      expect(guard.allow(type, 300), type).toBe(false)
+    }
+    now += 60_000
+    expect(guard.allow('agent_browser_open', 300)).toBe(true)
+  })
+
+  it('tells the sender of a refused browser frame, at most once a second', () => {
+    let now = 1_000
+    const sent: Frame[] = []
+    const refused = browserRateNotice((frame) => sent.push(frame), () => now)
+    refused(); refused(); refused()
+    expect(sent).toEqual([{ type: 'agent_browser_transport_error', payload: { code: 'RATE' } }])
+    now += 999
+    refused()
+    expect(sent).toHaveLength(1)
+    now += 1
+    refused()
+    expect(sent).toHaveLength(2)
   })
 })

@@ -13,7 +13,7 @@ import type { SwarmSkill } from './savedSkill.js'
  * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
-import { agentTmpLaunch, buddyTmpEnv } from './agentTmp.js'
+import { agentTmpLaunch } from './agentTmp.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
@@ -39,6 +39,7 @@ import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
+import { browserMcpArgs } from './browserMcpArgs.js'
 import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
@@ -116,12 +117,12 @@ export interface LaunchOverridesDeps {
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
-  /** What the Swarm prepares on every relaunch of a session it started: its skill file and instructions
-   *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+  /** What the Swarm gives every relaunch of a session it started: the team's basics (lib/swarmSkills.ts) and the Harness
+   *  GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
    *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
-    prepare(workspace: string, saved: SwarmSkill): { instructions: string }
+    basics(lead: boolean): string
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
   }
@@ -170,6 +171,8 @@ export interface LaunchSource extends NativeLaunchSource {
   /** The owner's extra launch words (the registry row's `launchArgs`). Checked again at each launch (`checkLaunchWords`):
    *  a row edited by hand, or a flag a later release refuses, applies none. */
   launchArgs?: string[]
+  /** The registry row's `browser`: the agent was created with Browser, and every relaunch gives it its browser tools. */
+  browser?: true
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
@@ -300,7 +303,8 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
-    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    // A session started for another person's project before the App's removal keeps git and gh on it at every relaunch, until
+    // its task token stops (backend #3723, 2026-12-10; lib/swarmGitHub.ts).
     if (source.swarmSkill?.github) {
       let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
       try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
@@ -316,10 +320,11 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again; a
-    // Buddy's too (task #2832).
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
     const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
+    // A Browser agent's `browser` MCP server (lib/browserMcpArgs.ts), in the slot `agent_create` gave it.
+    if (source.browser && (engine === 'claude' || engine === 'codex')) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...browserMcpArgs(engine, 'harness')] }
     // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
     if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
     // The owner's own flags (`agent_restart`'s `launchArgs`) are the owner's, so they come last on the command line, in a
@@ -332,21 +337,14 @@ export async function prepareLaunchOverrides(
     }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
-    let swarmInstructions: string | undefined
-    if (source.swarmSkill) {
-      try {
-        if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
-        swarmInstructions = swarm!.prepare(source.cwd, source.swarmSkill).instructions
-      } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
-    }
+    const swarmInstructions = source.swarmSkill ? swarm!.basics(source.swarmSkill.role === 'coordinator') : undefined
     const told = agentLaunchArgs(engine, source.startedBy, {
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
     // The private temporary folder, as at agent_create: a relaunch rebuilds the engine's arguments, so a Swarm agent's folder is
     // added again (lib/agentTmp.ts, task #4395). The launch's own variables win over it.
-    const tmp = source.swarmSkill?.role === 'buddy' && source.cwd ? { env: buddyTmpEnv(engine, source.cwd), args: [] }
-      : agentTmpLaunch(engine, source.swarmSkill)
+    const tmp = agentTmpLaunch(engine, source.swarmSkill)
     if (tmp.args.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...tmp.args] }
     const launchEnv = { ...tmp.env, ...overrides.env, ...native?.environment }
     return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }

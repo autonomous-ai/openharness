@@ -71,13 +71,13 @@ class _ChoicesApp extends AppNotifier {
     PaneSplitRequest? split,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
     String? agent,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     createCalls++;
     return null;

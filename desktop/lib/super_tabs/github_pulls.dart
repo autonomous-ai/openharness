@@ -48,6 +48,9 @@ class SwarmPull {
     required this.branch,
     required this.status,
     this.closes = const [],
+    this.author,
+    this.updatedAt,
+    this.readOk = false,
   });
 
   final int number;
@@ -60,6 +63,16 @@ class SwarmPull {
 
   /// The issues it closes when it merges ("Closes #14").
   final List<int> closes;
+
+  /// The agent it is by, in lowercase ([authorOf]): its builder label, else its branch's first part. Null when neither names one.
+  final String? author;
+
+  /// When anything last happened on it, as its row in Pull requests says.
+  final DateTime? updatedAt;
+
+  /// It has the READ-OK it needs on its head, as the merger counts them: with its checks still running, Harness merges it
+  /// once they pass, as lampOS's train bot takes a read PR whose own run is not red (train-bot.sh `eligible`).
+  final bool readOk;
 
   /// The tasks it is for: those it closes, else the issue its branch is named for (`pip/14`).
   List<int> get tasks {
@@ -142,36 +155,52 @@ class SwarmPull {
     final commit = last is Map ? last['commit'] : null;
     final rollup = commit is Map ? commit['statusCheckRollup'] : null;
     final base = row['baseRefName'];
+    // Harness's train (cli/src/superTabs/githubTrain.ts): it carries pull requests that were read, so nobody reads it and
+    // no agent wrote it. Its checks run on the combined change, and it lands when they pass. By its branch and its title:
+    // anyone can push a branch under the prefix, and one not titled as a train is a builder's, still to read.
+    final train =
+        branch.startsWith(_trainBranch) && title.startsWith(_trainTitle);
+    final author = train ? null : authorOf(labels, branch);
+    final standing = standingOf(
+      draft: row['isDraft'] == true,
+      head: head,
+      author: author,
+      writers: train ? const {} : writersOf(labels, branch),
+      body: row['body'] is String ? row['body'] as String : '',
+      comments: [
+        for (final comment in _nodes(row['comments']))
+          if (comment is Map) comment,
+      ],
+      checks: rollup is Map ? rollup['state'] as String? : null,
+      mergeable: row['mergeable'] as String?,
+      intoDefault: defaultBranch == null || base == defaultBranch,
+      opener: switch (row['author']) {
+        {'login': final String login} => login,
+        _ => null,
+      },
+      team: team,
+    );
     return SwarmPull(
       number: number,
       title: title,
       url: url,
       branch: branch,
+      author: author,
+      updatedAt: DateTime.tryParse(row['updatedAt'] as String? ?? ''),
       closes: [
         for (final issue in _nodes(row['closingIssuesReferences']))
           if (issue is Map && issue['number'] is int) issue['number'] as int,
       ],
-      status: statusOf(
-        draft: row['isDraft'] == true,
-        head: head,
-        author: authorOf(labels, branch),
-        writers: writersOf(labels, branch),
-        body: row['body'] is String ? row['body'] as String : '',
-        comments: [
-          for (final comment in _nodes(row['comments']))
-            if (comment is Map) comment,
-        ],
-        checks: rollup is Map ? rollup['state'] as String? : null,
-        mergeable: row['mergeable'] as String?,
-        intoDefault: defaultBranch == null || base == defaultBranch,
-        opener: switch (row['author']) {
-          {'login': final String login} => login,
-          _ => null,
-        },
-        team: team,
-      ),
+      status: train && standing.status == SwarmPullStatus.review
+          ? SwarmPullStatus.merging
+          : standing.status,
+      readOk: train || standing.read,
     );
   }
+
+  /// The branches Harness's train builds on, and how it titles its pull request (cli/src/superTabs/githubTrain.ts
+  /// TRAIN_BRANCH, TITLE).
+  static const _trainBranch = 'harness-train/', _trainTitle = 'Train: ';
 
   /// Its author by name, as the merger finds it: its builder label, else its branch's first part (`pip/12`).
   static String? authorOf(List<String> labels, String branch) {
@@ -201,8 +230,34 @@ class SwarmPull {
     Set<String> writers = const {},
     String? opener,
     Set<String>? team,
+  }) => standingOf(
+    draft: draft,
+    head: head,
+    author: author,
+    body: body,
+    comments: comments,
+    checks: checks,
+    mergeable: mergeable,
+    intoDefault: intoDefault,
+    writers: writers,
+    opener: opener,
+    team: team,
+  ).status;
+
+  /// [statusOf], and whether it has the READ-OK it needs on its head whatever its checks are doing ([SwarmPull.readOk]).
+  static ({SwarmPullStatus status, bool read}) standingOf({
+    required bool draft,
+    required String head,
+    required String? author,
+    required String body,
+    required List<Map<Object?, Object?>> comments,
+    required String? checks,
+    required String? mergeable,
+    bool intoDefault = true,
+    Set<String> writers = const {},
+    String? opener,
+    Set<String>? team,
   }) {
-    if (draft) return SwarmPullStatus.draft;
     var twoReads = RegExp(r'\bTWO READS\b').hasMatch(body);
     final notReaders = {
       ...writers,
@@ -252,16 +307,6 @@ class SwarmPull {
         );
       }
     }
-    if (last.values.any((v) => v.verdict == 'HOLD')) {
-      return SwarmPullStatus.held;
-    }
-    if (mergeable == 'CONFLICTING') return SwarmPullStatus.conflict;
-    if (checks == 'FAILURE' || checks == 'ERROR') {
-      return SwarmPullStatus.failing;
-    }
-    if (checks == 'PENDING' || checks == 'EXPECTED') {
-      return SwarmPullStatus.checks;
-    }
     final reads = last.entries
         .where(
           (e) =>
@@ -271,9 +316,22 @@ class SwarmPull {
               !notReaders.contains(e.key),
         )
         .length;
-    return intoDefault && reads >= (twoReads ? 2 : 1)
+    final held = last.values.any((v) => v.verdict == 'HOLD');
+    final read = !draft && !held && intoDefault && reads >= (twoReads ? 2 : 1);
+    final status = draft
+        ? SwarmPullStatus.draft
+        : held
+        ? SwarmPullStatus.held
+        : mergeable == 'CONFLICTING'
+        ? SwarmPullStatus.conflict
+        : checks == 'FAILURE' || checks == 'ERROR'
+        ? SwarmPullStatus.failing
+        : checks == 'PENDING' || checks == 'EXPECTED'
+        ? SwarmPullStatus.checks
+        : read
         ? SwarmPullStatus.merging
         : SwarmPullStatus.review;
+    return (status: status, read: read);
   }
 }
 

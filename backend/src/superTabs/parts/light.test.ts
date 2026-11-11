@@ -10,7 +10,6 @@ import { FINISHED, GROUP_FIELDS } from './light.js'
 const assignment: Required<Assignment> = {
   agentId: 'a',
   askedOf: 'p',
-  changesRequestedAt: 1,
   configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
   execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' },
   handoffs: 1,
@@ -18,40 +17,28 @@ const assignment: Required<Assignment> = {
   id: 'w',
   leaseUntil: 1,
   lost: { reason: 'r', at: 1 },
-  nudgedAt: 1,
   progressAt: 1,
   recordingProgress: { at: 1, revision: 1 },
   reopened: { at: 1, why: 'r' },
   result: null,
   reviewFoundAt: 1,
   status: 'working',
-  toldEngineerAt: 1,
   verdicts: [{ by: 'agent:r', passed: true, handoff: 1, review: 'g' }],
 }
 const conversation: Required<Conversation> = {
   agentIds: [],
-  answered: [],
   archived: false,
   assignment,
   audience: { people: [] },
   brief: '',
   briefAt: 1,
-  buddyChats: ['other'],
-  buddyDefault: true,
-  buddyDownTold: true,
-  buddyName: 'Sparky',
-  buddySessions: [],
   cards: {},
-  chatLimits: { asks: [] },
   checks: [],
-  codePullRequestUrls: [],
   dormant: false,
   foldedInto: ['f'],
-  handOutLane: 'Desktop',
   hold: { kind: 'requester' },
   id: 'g',
   kind: 'leads',
-  lane: 'Desktop',
   lastActivityAt: '',
   lastMainSequence: 0,
   lastMessageSequence: 0,
@@ -64,42 +51,20 @@ const conversation: Required<Conversation> = {
   messageSeq: 0,
   notBefore: '2026-12-04',
   number: 1,
-  openedBy: 'server',
-  owed: [],
-  paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
   process: 'full',
   projectId: 'p',
-  proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
-  proposals: [],
-  pullRequestChecks: {},
-  pullRequestEvents: {},
-  pullRequestHeads: {},
   pullRequestUrls: [],
-  pulse: {} as never,
-  queueRank: 1.5,
   reactionSeq: 0,
   released: { at: 1, tags: [] },
-  reportSeq: 0,
   requesterId: 'p',
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },
-  statusLine: { text: '', since: 0 },
   step: 'Review',
-  stepIds: [],
-  stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
-  stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
-  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
-  teamWritten: true,
-  teamWrittenBy: { kind: 'assigned' },
   title: 't',
-  unlinkedPullRequests: [],
-  waitingLinuxStep: { step: { name: 'Test on a Linux machine', kind: 'test', areas: [], where: ['The CLI on a Linux machine'], os: 'linux' }, pulls: [] },
-  waitingWindowsStep: { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' }, pulls: [] },
-  writers: [],
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {
@@ -127,18 +92,18 @@ describe('the light conversation projection (parts/light.ts)', () => {
     s.join(outsider)
     const lead = s.add('lead-harness', 'lead', true)
     const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
-    const [web, hidden, closedChat, buddyChat] = [s.group('Web'), s.group('Secret work', secret), s.group('Peer and PM'), s.group('Peer\'s Buddy')]
+    const [web, hidden, closedChat, agentChat] = [s.group('Web'), s.group('Secret work', secret), s.group('Peer and PM'), s.group('Peer\'s agent')]
     s.edit(state => {
       const audience = { people: [{ id: peer.userId, generation: state.people.find(p => p.id === peer.userId)!.generation }] }
       state.conversations.find(c => c.id === closedChat)!.audience = audience
-      Object.assign(state.conversations.find(c => c.id === buddyChat)!, { kind: 'buddy', leadId: null, agentIds: [], audience })
+      Object.assign(state.conversations.find(c => c.id === agentChat)!, { kind: 'agent-chat', leadId: null, agentIds: [], audience })
     })
     const state = s.state
     const kept = GROUP_FIELDS.always.filter(field => !field.includes('.'))
     const light = (group: Conversation) => Object.fromEntries(kept.filter(field => field in group).map(field => [field, group[field as keyof Conversation]])) as unknown as Conversation
     const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: state.agents.find(a => a.id === lead)!.machineOwnerId }
     const readers: Actor[] = [owner, peer, outsider, leadActor]
-    const reads = readers.flatMap(actor => [web, hidden, closedChat, buddyChat].map(id => {
+    const reads = readers.flatMap(actor => [web, hidden, closedChat, agentChat].map(id => {
       const group = state.conversations.find(c => c.id === id)!
       expect(canReadGroup(state, actor, light(group)), `${actor.kind} ${id}`).toBe(canReadGroup(state, actor, group))
       return canReadGroup(state, actor, group)

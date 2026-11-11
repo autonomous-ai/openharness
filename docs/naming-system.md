@@ -67,6 +67,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |
 | **Task** | The work requested. | Add a search field. |
 | **Browser** | The optional browser for web content and visual review. | Open the browser. |
+| **An agent's Browser** | That agent's own sandboxed Chrome, which it drives and its person can use too. A web pane shows one address. | Sign in to Gmail in Faye's Browser. |
 | **Connections** | Service accounts available to agents running as the same local user on a Harness computer. | Open Connections; connect GitHub. |
 | **Viewer** | A surface for inspecting or interacting with work. | The game viewer; the HTML preview. |
 | **This computer** | The local execution machine. | Run on This computer. |
@@ -150,8 +151,6 @@ older messages. When an agent has left, its recorded author name remains availab
 Machine rows in Manage show a status dot, the name the person gave the machine (else the
 Swarm's name for it), its owner (or **This machine**) and its free disk; one not online says
 when it was last seen, and one being removed says **Cleaning up**.
-In the Swarm's views, a Mac and its Harness Team account are one row, and agents in that account
-read as on the Mac. App-wide machine lists still show the team account as its own machine.
 A click on the row expands it, and its labeled details are in the right-click menu (a long press
 on a touch screen). Expanded, it shows agents with their names, role badges
 and status, followed by known resources and the models it serves. Offline machines stay in the

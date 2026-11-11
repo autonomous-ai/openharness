@@ -16,14 +16,16 @@ import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
-import { GitHubMentions, watchedAgents } from './githubMentions.js'
+import { FirstAnswers } from './firstAnswers.js'
+import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { githubRest } from './githubRest.js'
+import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { claimAsked, takeTask } from './githubClaim.js'
+import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
+import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
-import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
-import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
+
 import { peopleNamed } from './personName.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
@@ -40,7 +42,7 @@ async function withSteps(page: unknown, steps: Array<Record<string, unknown>>, r
 }
 
 /** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
-const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
+const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
 const NOT_IN_SWARM = 'This agent is not in a Swarm on this machine\'s roster. If it should be, this machine may have no access to it, or its billing does not allow it: check how this machine is shared.'
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
@@ -111,16 +113,19 @@ export interface SuperTabServiceOptions {
   cards?: (core: CoreApi, machineId: string) => SwarmCards
   /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
-  /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
-  pullRequests?: BuddyStatusDeps['pullRequests']
+
   /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
   githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop'>
   /** What merges by rule the pull requests of the projects whose PM runs here (superTabs/githubMerge.ts), for a spec. */
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
   githubAssign?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubAssign, 'start' | 'stop'>
+  /** GitHub as this computer's own gh login (superTabs/githubRest.ts), for a spec. */
+  github?: () => { get: GitHubGet; send: GitHubSend }
   /** What reports what this computer's person's agents shipped to the Swarm's leaderboard (superTabs/shipping.ts), for a spec. */
   shipping?: (core: CoreApi) => Pick<ShippingReporter, 'start' | 'stop'>
+  /** What posts an agent's answer to its launch line in its chat (superTabs/firstAnswers.ts), for a spec. */
+  firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -146,10 +151,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   let host: SuperTabHost | null = null
   let book: ReservationBook | null = null, bookMachine: string | null = null
-  // A Buddy runs only on its person's own machine (backend buddy.create), so this machine's GitHub is its person's. Read once
-  // per daemon, cached 30 seconds a pull request. Each Buddy's last summary, by tab and agent, marks what changed since.
-  let pullRequests: BuddyStatusDeps['pullRequests'] | null = null
-  const buddySince = new Map<string, number | null>()
+
   const reservations = () => {
     const machine = core.daemon.machineId()
     if (bookMachine !== machine) { book?.stop(); book = null; bookMachine = machine }
@@ -158,7 +160,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
-  const github = githubRest()
+  const github = (options.github ?? githubRest)()
+  // The verdicts and claims being made by command now, by agent and what was asked: as many as there are commands running.
+  const commands = new Map<string, Promise<unknown>>()
+  // This computer's GitHub login, asked once: a verdict or a claim made by command looks for its own earlier comment by it
+  // (githubVerdict.ts, githubClaim.ts).
+  let githubLogin: Promise<string> | null = null
+  const loginOf = () => githubLogin ??= github.get('/user', null).then(reply => {
+    const login = object(reply.body).login
+    if (reply.status !== 200 || typeof login !== 'string' || !login) throw new Error(`GitHub answered ${reply.status} for this computer's login.`)
+    return login
+  }).catch(error => { githubLogin = null; throw error })
   // GitHub for this computer's person's v4 agents (githubMentions.ts).
   const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
     watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
@@ -180,13 +192,33 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // The crew of a project its PM leads, as the PM reads the Swarm.
   const crewOfProject = (held: () => SwarmSources) => async (project: LedProject) =>
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
+  // Who made each verdict by command, read once for the merger and the assigner alike.
+  const records = new VerdictRecords(recordedAuthors(path => backend(core, 'GET', path)), Date.now, line => console.warn(line))
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send })))(core, sources)
+    send: github.send, records })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
-    get: github.get, send: github.send })))(core, sources)
+    get: github.get, send: github.send, records })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
+  // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
+  // the agent, as the host posts a reply (agentReplies.ts).
+  const firstAnswers = (options.firstAnswers ?? ((api, held) => new FirstAnswers({
+    me: async () => (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
+    roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state,
+    working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
+    lastTurn: async id => { const session = api.agents.byAgent(id)?.sessionId; return session ? api.transcripts.lastTurn(session) : null },
+    onEnd: listener => api.turns.onEnd(listener), answerOf: end => api.turns.answerOf(end),
+    // Its person's words in its chat, read as it reads them: the request they started it with is the first (backend agent.add).
+    words: async agent => {
+      const page = object(await backend(api, 'GET', `/api/super-tabs/${agent.tabId}/conversations/${encodeURIComponent(agent.chat)}/messages?asAgentId=${agent.agentId}`))
+      return (Array.isArray(page.messages) ? page.messages.map(object) : [])
+        .filter(m => object(m.author).kind === 'person' && typeof m.text === 'string').map(m => m.text as string)
+    },
+    post: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
+      command: { type: 'message.send', conversationId: agent.chat, text, replyTo: null, recipientIds: [] } }),
+    file: join(api.dataDir, 'super-tab-first-answers.json'),
+  })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
@@ -197,6 +229,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     merges.start()
     assigns.start()
     shipping.start()
+    firstAnswers.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -215,7 +248,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -247,11 +280,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Only this machine's own host, which read the Swarm's verdict for its start (machines.ts): a relayed caller could
         // otherwise free memory a start still holds (issue #2989).
         if (payload.action === 'endCapacity') return asker.local ? await reservations().ended(payload.creationId, closed) : { error: 'OWNER_REQUIRED' }
-        // A backend-issued context scopes provenance only. Existing machine
-        // control is still required to open/write the native terminal itself.
-        if (payload.action === 'prepareNative' || payload.action === 'renewNative') {
-          return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
-        }
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
         // `harness git-credential` in a local agent's shell (superTabs/gitCredential.ts): the token of that agent's task,
         // which goes to this computer's own processes alone, never to another machine through the relay.
@@ -265,8 +293,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in
-          // these alone; a Reviewer's keeps its swarm-review file.
-          return { ok: true, role: grant ? wireRole(grant) : grant, ...(grant ? { mode: grant.mode } : {}) }
+          // these alone; a Reviewer's keeps its kind.
+          return { ok: true, role: grant ? wireRole(grant) : grant }
         }
         // Import agent (Desktop): whether any Swarm lists this harness here. An unreadable roster answers no `listed`, on which
         // Desktop refuses rather than share.
@@ -274,36 +302,23 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const listed = await within(swarmListedFor(sources(), String(payload.harnessId ?? '')))
           return listed === null ? { ok: true } : { ok: true, listed }
         }
-        // `harness send`, `new`, `tell` and `close` from a pane (buddyPane.ts): whether its harness is a Buddy, from this computer's
-        // own launch record (start.ts starts one with the Swarm role buddy; core/agents/create.ts saves it on the session). The
-        // second review of #2087 found the server read alone missed its deadline 2 times in 3 under load: it is asked only about a
-        // harness an agent started with no Swarm record, and only as one more reason to refuse. Without a harness: whether this
-        // computer runs a Buddy at all, which Windows refuses on as it cannot check a pane.
-        if (payload.action === 'buddyCheck') {
-          if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          if (payload.harnessId === undefined) return { ok: true, buddiesHere: core.agents.live().some(session => session.swarmSkill?.role === 'buddy') }
-          const session = identifier(payload.harnessId) ? core.agents.byAgent(payload.harnessId) : undefined
-          if (!session || session.startedBy !== 'agent' && !session.swarmSkill) return { ok: true, buddy: false }
-          if (session.swarmSkill) return { ok: true, buddy: session.swarmSkill.role === 'buddy' }
-          const grant = await port.swarmRole(session.agentId).catch(() => undefined)
-          return { ok: true, buddy: grant?.role === 'buddy' }
-        }
+
         if (payload.action === 'prepareContribution') return preparations.read(payload)
-        // The phone signing Claude Code, or Codex (`engineSignIn` {engine}), in here for the Buddy it starts (claudeSignIn.ts):
+        // The phone signing Claude Code, or Codex (`engineSignIn` {engine}), in here as it sets this computer up (claudeSignIn.ts):
         // its owner's, as the setup is.
         if (payload.action === 'claudeSignIn' || payload.action === 'engineSignIn') {
           const answer = await claudeSignIns.read(payload)
-          // Once per sign-in: the Swarm reads it signed in now, before the Buddy that phone starts next asks.
+          // Once per sign-in: the Swarm reads it signed in now, before the next start asks.
           if (answer.state === 'done' && reported !== payload.operationId) {
             reported = String(payload.operationId)
             wake().engineSignedIn()
           }
           return answer
         }
-        // The phone's answers to Claude Code's first-run questions here, asked as it set this computer up for its Buddy
+        // The phone's answers to Claude Code's first-run questions here, asked as it sets this computer up
         // (engines/launchPrep.ts answerFirstRun): its owner's, as the setup is.
         if (payload.action === 'claudeFirstRun') {
-          // Its theme and first-run screens only: the Buddy runs in its owner's own permission mode (task #4215), so a phone's
+          // Its theme and first-run screens only: an agent runs in its owner's own permission mode (task #4215), so a phone's
           // `acceptFullMode` from before is read as nothing.
           if (typeof payload.theme !== 'string') return { error: 'INVALID_REQUEST' }
           return answerFirstRun('claude', { theme: payload.theme }) ? { ok: true } : { error: 'FIRST_RUN_UNANSWERED' }
@@ -352,7 +367,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         const named = identifier(payload.agentId) ? payload.agentId : null
         const hashed = identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
-        // An agent speaks through its own computer's Harness alone: the second review of #2087 sent a Buddy's request with
+        // An agent speaks through its own computer's Harness alone: the second review of #2087 sent an agent's request with
         // --machine to the owner's other Mac, which knew no pane there and served the agent it named. Delivered instructions
         // always name this computer.
         if (!asker.local) return { error: 'AGENT_LOCAL_ONLY', detail: LOCAL_ONLY }
@@ -385,7 +400,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The server leaves an agent off the roster when this machine has no access or billing for it; it gives no reason,
         // and the server enforces the grant anyway, so the text says where to look (Lead's ruling, #1726 G5).
         if (!caller || !identifier(agent.id)) return { error: 'AGENT_UNAVAILABLE', detail: OFF_ROSTER }
-        // A harness speaks as its own agent alone (security review of #2087: a Buddy named its Builder with --agent).
+        // A harness speaks as its own agent alone (security review of #2087: one named another agent with --agent).
         if (named && identifier(payload.harnessId) && agent.harnessId !== payload.harnessId) {
           return { error: 'AGENT_MISMATCH', detail: 'This harness may speak only as its own Swarm agent. Run the command without --agent, or with its own id.' }
         }
@@ -398,32 +413,32 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         const swarm = () => reads.read(String(payload.tabId), agentId)
         wake()
         if (payload.action === 'status') {
-          const read = await swarm()
-          if (!isBuddyIn(read.state, agentId)) return { ok: true, value: statusView(answerOf(read), agentId) }
-          pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
-          const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
-            decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
-          const project = typeof payload.project === 'string' ? payload.project : undefined
-          if (payload.archived === true) {
-            // A person's one Buddy names the project whose archive it reads (status --project NAME --archived).
-            const named = project ? projectNamed(read.state, project) : undefined
-            if (isSwarmBuddyIn(read.state, agentId) && !named) return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: { error: 'Name the project: status --project NAME --archived.' } } }
-            const projectId = String(named?.id ?? list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
-            const before = typeof payload.before === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(payload.before) ? `&before=${payload.before}` : ''
-            const page = await backend(core, 'GET', `${path}/groups?dormant=1&projectId=${encodeURIComponent(projectId)}${before}&${identity}`)
-            return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: await buddyArchived(page, read.state, agentId, deps) } }
+          return { ok: true, value: statusView(answerOf(await swarm()), agentId) }
+        }
+        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts) and a builder's claim on a task (`take`,
+        // githubClaim.ts): made with this computer's gh under the calling agent's name, on a repository of a project it reads,
+        // and its comment recorded with the backend as that agent's.
+        if (payload.action === 'read' || payload.action === 'take') {
+          const verdict = payload.action === 'read' ? verdictAsked(payload) : null, claim = payload.action === 'take' ? claimAsked(payload) : null
+          if (!verdict && !claim) return { error: 'INVALID_REQUEST' }
+          // This computer's gh login is its person's: only that person's own agent here posts with it, as GitHub news and the
+          // merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
+          const me = (await core.account.identity().catch(() => null))?.accountId ?? null
+          if (!me || agent.contributorId !== me || agent.machineOwnerId !== me) {
+            return { error: 'AGENT_UNAVAILABLE', detail: verdict ? 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.'
+              : 'A task is taken with its person\'s own GitHub login, on that person\'s computer.' }
           }
-          const key = `${payload.tabId}:${agentId}`
-          const summary = await buddyStatus({ state: read.state, lastChangedAt: read.lastChangedAt, groupChangedAt: read.groupChangedAt, agentId,
-            since: buddySince.get(key) ?? null, ...(project ? { project } : {}) }, deps)
-          // One project's read leaves the index's "changed since" where it was.
-          if (!project) {
-            buddySince.delete(key)
-            buddySince.set(key, read.lastChangedAt)
-          }
-          // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
-          for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
-          return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+          const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
+          const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
+          const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
+          // The CLI gives up after 30 seconds and says "Try again" while this works on: the same command from the same agent
+          // joins the one still running, or both would find no comment yet and each post its own.
+          const same = JSON.stringify([agentId, verdict ?? claim])
+          const deps = { get: github.get, send: github.send, login: loginOf, record }
+          const made = commands.get(same) ?? (verdict ? postVerdict(deps, { name, repositories }, verdict) : takeTask(deps, { name, repositories }, claim!))
+            .finally(() => commands.delete(same))
+          commands.set(same, made)
+          return { ok: true, value: await made }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {

@@ -30,6 +30,7 @@ const DEFAULT_MAX_ATTEMPTS = 3
 export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> {
   tmuxBackend: Pick<TerminalBackend<Ref>, 'create' | 'kill'>
   registry: { openPendingAgent: (input: {
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -54,8 +55,11 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     startedBy?: StartedBy | null
     parentAgentId?: string | null
     guest?: string | null
+    browser?: boolean
   }) => RegisteredSession | null }
   nativeToken?: string
+  /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
+  agentId?: string
   engine: AgentEngine
   cwd?: string | null
   bypassPermission?: boolean
@@ -105,6 +109,8 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   externalResume?: ExternalResumeIntent
   /** The guest (an email) whose harness this is: it runs as their own OS user (core/agents/guestCreate.ts). */
   guest?: string | null
+  /** Browser ticked, recorded on the row (registry.ts `browser`). */
+  browser?: boolean
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
   onDispatch?: () => void
@@ -141,6 +147,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
     }
     const pending = deps.registry.openPendingAgent({
+      ...(deps.agentId ? { agentId: deps.agentId } : {}),
       ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
       engine: deps.engine,
       runtimes: [spawned.runtime],
@@ -165,6 +172,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
       ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
       ...(deps.guest ? { guest: deps.guest } : {}),
+      ...(deps.browser ? { browser: true } : {}),
     })
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `

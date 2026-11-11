@@ -108,10 +108,33 @@ The PM's line "Give a task to the builder who owns its part, is free and has wha
 deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
 
 **The PM announces each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
-`PM_BASICS`, "Pip, you have #12", once per hand-off, the rest of the task's talk staying on its issue. It is a prompt line only
+`PM_BASICS`, "@Pip #12 is yours", once per hand-off, the rest of the task's record staying on its issue. It is a prompt line only
 until code does it: the PM does not see who a task went to until it reads the issue, and Harness knows at the moment it
 labels. Proposal to the maintainers: `githubAssign.ts give()` posts the line itself as it sets `builder:<name>`, keyed by
 repository, number and builder so a restart or a second daemon posts nothing twice; the prompt line goes with it (standard 13).
+
+**The channel is the team's group chat (anh Dee, 2026-11-10: "channel chat here replaces the queue"):** `SWARM_BASICS` tells
+every agent to talk to the others there, as lampOS's builders do on their Queue issue (taking a task, a pull request up, asks
+to a part's owner and answers, hand-offs, a person's decision passed on, proposals, `free`), each post opening with `@Name`
+and unsigned, while a task's own record stays on its issue or pull request. It stays a prompt line: what to say to a teammate
+is judgment. The code half is already code: an `@Name` in the channel wakes that agent (backend `recipientIds`), and the
+app shows the post's author and time, and a task's pull request talk in the task's chat.
+
+**Every agent's basics are held under 200 words (Swarm plan, step 1 item 7, 2026-11-10):** `SWARM_BASICS` held 507 words and
+grew with each incident; `cli/src/lib/swarmSkills.spec.ts` now fails at 200. What left, and where it lives:
+
+| Line that left | Where it is now |
+|---|---|
+| Add `status:taken` and comment "taken by <name>" | code: `harness super-tab take` (`cli/src/superTabs/githubClaim.ts`) |
+| "Juno, 14:05: READ-OK <sha>" / "HOLD <sha>", an unsigned READ-OK never counts | code: `harness super-tab read ok\|hold` (`githubVerdict.ts`), and the merger counts the recorded agent (`githubMerge.ts`) |
+| Keep your branch current, fix what Harness says blocks it | said by Harness on the pull request when it applies (`githubMerge.ts` `tellOnce`) |
+| What Harness brings, and where to answer | said with each thing it brings (`githubMentions.ts`) |
+| The channel's manners (what to say, "free", unsigned) | the project's own AGENTS.md where it wants them; `@Name` waking someone stays |
+| The "Works on:" line | asked for when it is needed (`githubMentions.ts`) |
+
+Three things stay as prompt because code reads what they ask for and cannot yet know it another way: a post on GitHub opens
+with the agent's name (`githubMentions.ts` `signedBy`), the branch opens with it (`githubMerge.ts` `authorOf`), and the pull
+request carries the agent's builder label (`githubMentions.ts` finds what is an agent's by it). The safety lines stay (standard 13).
 
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts
@@ -202,10 +225,10 @@ out "Product direction" because it holds facts and targets, not rules.
 | A held task waiting on a person has a default and a time | Roles › PM (Ken 11-04) | code | `backend/src/superTabs/heldReason.ts` (`HOLD_REASON_MISSING`: a person hold needs `personId` and `defaultAt`); `decisions.ts` (options plus a recommendation). |
 | At the default time the default is applied, never waited past | Roles › PM (Ken 11-04) | new | Time check (`timeChecks.ts`) wakes the PM when a hold's `defaultAt` passes ("default due: apply it") and shows it on the task. |
 | Never offer a choice it can make; pick, say why, go | Roles › PM (Ken 11-04) | judgment | Whether the PM could have made the choice itself is judgment. |
-| Answer each proposal Accept, Reshape, Later or No | Roles › PM (Dee 11-03) | code | `proposalCards.ts` (decision kind plus reason; `PROPOSAL_DATE`: Later needs a revisit date); `commands.ts` assignRefusal `PROPOSAL_UNDECIDED`. Covers Buddy proposals only. |
+| Answer each proposal Accept, Reshape, Later or No | Roles › PM (Dee 11-03) | remove | Proposals are gone with Swarm v4 (2026-11-10): a person asks an agent in its chat. |
 | Weigh against positioning; name the part it rests on | Roles › PM (Dee 11-03) | judgment | Product judgment. |
 | A No or Reshape tells how to revise the idea | Roles › PM (Dee 11-03) | judgment | The content of the advice. |
-| Only Dee or Ken overrule the PM's answer, by saying so | Roles › PM (Dee 11-03) | new | A second decision on a decided proposal is refused unless the actor is `instructionApprovals.topDeciderId` or a listed approver (`policy.ts`). |
+| Only Dee or Ken overrule the PM's answer, by saying so | Roles › PM (Dee 11-03) | remove | Proposals are gone with Swarm v4 (2026-11-10). |
 | Fixes, security fixes, crew-speed work are yes at once | Roles › PM (Dee 11-03) | remove | Duplicates AGENTS.md › Scope. |
 | Dee's decisions override every other decision, at once | Roles › PM (Dee 11-04) | judgment | Spotting which decision conflicts. The spec moves it to AGENTS.md. |
 | Dee's word changes or drops Ken's rules without asking Ken | Roles › PM (Ken 11-06) | code | `ruleGuard.ts`: the top decider (`topDeciderId`) may approve any dropped rule. |
@@ -376,7 +399,7 @@ out "Product direction" because it holds facts and targets, not rules.
 | Answer in the message's own thread, never a main line below it | Talking (Dee 11-06) | new | Refuse `--answers` (an answer right below, in the main chat) to a person's message in a project chat, and require `--reply-to`. Today `answers.ts` and `chatLimits.ts` still accept "right below it". |
 | Pickup, follow-ups and the result go in the ask's thread | Talking (Dee 11-06) | code | `chatLimits.ts` `CHAT_MAIN_LIMIT` (at most 2 main posts per ask), `CHAT_ASK_CLOSED`. |
 | Reply in the message's language | Talking (Dee 11-04) | judgment | Mixed-language messages; also clashes with Dee's 11-06 "English to me". |
-| React instead of posting an acknowledgement | Talking (Dee 11-04) | code | `ACK_ONLY` (`acknowledgements.ts`); `reactions.ts` 👀 ✅ 🚀. |
+| Post no acknowledgement | Talking (Dee 11-04) | code | `ACK_ONLY` (`acknowledgements.ts`). Reactions are gone (2026-11-09). |
 | 👀 when work is taken, ✅ when it ships | Talking (Dee 11-04) | new | The server reacts 👀 when a task opens from a person's message and ✅ when its merge is in a verified release (`releaseWatch.ts`). |
 | Answer a status question first, from whoever knows | Talking (Dee 11-04) | judgment | Who knows. |
 | Spawned tasks named in the answer's thread, not as separate rows | Talking (Dee 11-04) | building | #4538, one card per ask. |
@@ -564,7 +587,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 | No progress notes or acks to the PM | instructionsTemplate.ts:87-88 | code | acknowledgements.ts ACK_ONLY; chatLimits.ts `requireChatContent` CHAT_STATUS (project chat main) |
 | No progress notes to the PM in task chats | instructionsTemplate.ts:87-88 | new | Extend chatLimits.ts CHAT_STATUS to worker posts addressed to the Lead in task chats |
 | PM checks CI, merges passed PRs | instructionsTemplate.ts:89 | building | Merge train (mergeTrain/plan.ts, ci/required + reads at head) |
-| Tell the people who asked once merged | instructionsTemplate.ts:89 | building | #4533 (issue closes on merge, GitHub tells its author); buddyNews.ts `shippedNotice` covers release only |
+| Tell the people who asked once merged | instructionsTemplate.ts:89 | building | #4533 (issue closes on merge, GitHub tells its author) |
 | Needing a person or a down machine goes to the PM | instructionsTemplate.ts:90 | code | crewNeeds.ts `routesToPm` for needs_human; stuck.ts/liveness.ts for machines down |
 | Idle Engineers stopped; Reviewers/Testers kept | instructionsTemplate.ts:91 | code | tidy.ts idle stop; steps.ts `checksOpenWork` keeps checkers |
 | After a pause, run `mine` first | instructionsTemplate.ts:92 | new | Daemon: answer the engine's compaction/resume hook (engines/*/hookContract.ts) with the agent's `mine` output, beside #4537's re-send |
@@ -585,7 +608,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 | PM applies the order itself; route ranks nothing | instructionsTemplate.ts:120 | remove | Stale: the route already returns a pick (commands.ts `decision.record.pick`); #4546 makes the router own it |
 | Each start/assignment gives the rule as its reason | instructionsTemplate.ts:120-121 | code | commands.ts ROUTE_REASON_REQUIRED when not the route's pick |
 | "idle" or "first in the list" is no reason | instructionsTemplate.ts:121 | new | Backend: refuse an `overrideReason` that is only "idle"/"first"/"first in the list" (anchored match, same refusal) |
-| Out of quota mid-task: hand the branch to another account | instructionsTemplate.ts:122-123 | code | liveness.ts loses the task at a usage limit and hands it on; crewKeep.ts `crewTrouble` 'quota'/'quota-low' moves crew; cli limitResume.ts |
+| Out of quota mid-task: hand the branch to another account | instructionsTemplate.ts:122-123 | code | liveness.ts loses the task at a usage limit and hands it on; crewKeep.ts `crewTrouble` 'quota'/'quota-low' moves crew |
 | Urgent work ignores quota | instructionsTemplate.ts:124 | building | #4546 (quota) |
 | Any member may change it; PM says what it changed | instructionsTemplate.ts:129 | code | commands.ts instructions.save: member/coordinator only (COORDINATOR_REQUIRED), `summary` required |
 | Every agent reads its own role's part | instructionsTemplate.ts:129-130 | building | #4537 (one job page per role, re-sent on version change) |
@@ -610,7 +633,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 |---|---|---|---|
 | Read the instructions before any project work | swarmInstructionsSkill.ts:26 | building | #4537: the daemon sends the parts when first needed instead of asking the agent to read a skill |
 | Read both skills before your next step and work by them | swarmInstructionsSkill.ts:106 | building | #4537 (sent once, re-sent on version change); the notice itself is code (`noticeOf`, `refreshProjectSkills`) |
-| A Buddy's read doesn't change its limits | swarmInstructionsSkill.ts:107 | code | Buddy limits enforced server-side: commands.ts BUDDY_NOT_ASSIGNABLE, BUDDY_CHAT_ONLY, buddyContract.ts |
+| A Buddy's read doesn't change its limits | swarmInstructionsSkill.ts:107 | remove | the backend has no Buddy since S17 (2026-11-10): the line goes with the CLI's Buddy skill |
 | On change, read the files again and work by them | swarmInstructionsSkill.ts:120 | building | #4537 (re-send on version change and compaction) |
 
 ### Counts
@@ -679,7 +702,7 @@ once, under the first skill, and the repeat is one `remove` row pointing back to
 | Lost task: hand on at once | swarm-lead, swarmSkills.ts:475 | code | dispatch.ts / handed.ts: lost work goes to anyone free in its lane |
 | Lost task: avoid the failed machine, account or engine | swarm-lead, swarmSkills.ts:475-476 | building | #4546 |
 | Successor continues from the pushed branch | swarm-lead, swarmSkills.ts:475 | code | commands.ts `assignTo` recovery lines ("Continue the previous attempt from its pushed work", PR ref and head) |
-| Usage-limit task resumes by itself at reset | swarm-lead, swarmSkills.ts:476 | code | cli superTabs/limitResume.ts |
+| Usage-limit task resumes by itself at reset | swarm-lead, swarmSkills.ts:476 | removed | Swarm v4 (backend S13a, #3847): a lost task is not given back; the CLI's limitResume.ts went with `work.resume` |
 | Hand on early only to an account with allowance | swarm-lead, swarmSkills.ts:476 | building | #4546 (quota) |
 | Morning digest at 08:00 per project | swarm-lead, swarmSkills.ts:477 | code | digest.ts, `project.digest` |
 | Move or turn off the digest only when a person asks | swarm-lead, swarmSkills.ts:477 | new | commands.ts `project.digest`: from an agent, require `askedIn` (a person's message in the last day), as `rule.set` does |

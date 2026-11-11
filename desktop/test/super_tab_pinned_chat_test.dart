@@ -8,7 +8,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/super_tab_fixture.dart';
 
 /// A chat pinned to its newest message stays still (task #3124, Scholes
-/// 11-05): his Buddy chat, read to the end, jumped about 100 px past its last
+/// 11-05): his agent's chat, read to the end, jumped about 100 px past its last
 /// message in one frame, then sprang back on a Mac's bouncing scroll, every
 /// few seconds with no input.
 void main() {

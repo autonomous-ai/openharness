@@ -10,7 +10,10 @@ import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import '../browser/browser_availability.dart';
 import '../core/home_dir.dart';
+import '../core/runtime_platform.dart';
+import '../logging/app_log.dart';
 import '../core/codex_profiles.dart';
 import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
@@ -454,6 +457,10 @@ class NewHarnessOption {
 enum NewHarnessOutcome { created, failed }
 
 class NewHarnessController extends ChangeNotifier {
+  /// How often a request the machine holds is asked after ([followHeld]): by an open form, and by a start that goes on
+  /// without its form (`super_tabs/swarm_starts.dart`). Tests shorten it.
+  static Duration heldFollowInterval = const Duration(seconds: 3);
+
   NewHarnessController(
     this.app, {
     required String machineId,
@@ -615,6 +622,7 @@ class NewHarnessController extends ChangeNotifier {
           .probeEngines(_machineId, force: true)
           .then((_) => _adoptAccountAgent()),
     );
+    unawaited(_loadBrowserAvailability());
     final initialMachine = _machineId;
     // A guest is listed no harnesses or folders there (asGuest): nothing to ask.
     if (!asGuest) {
@@ -1038,6 +1046,73 @@ class NewHarnessController extends ChangeNotifier {
     }
     error = null;
     _refresh();
+  }
+
+  /// Browser is drawn: Swarm New agent, on the desktop build, not on Windows.
+  bool get offersBrowser => browserOffered(
+    web: kIsWeb,
+    windows: RuntimePlatform.isWindows,
+    offersBrowser: integration?.offersBrowser ?? false,
+  );
+
+  bool _browser = false;
+
+  /// Set up Browser was answered Install on this machine: Start asks no more.
+  bool _browserSetUp = false;
+  BrowserAvailability? _browserAvailability;
+  int _browserAsk = 0;
+
+  /// Why the machine cannot take a Browser now, or null when it can. While its answer is on its way the pill works:
+  /// an agent made then still gets its Browser, whose panel says what the machine lacks.
+  String? get browserUnavailable => switch (_browserAvailability?.state) {
+    BrowserAvailability.needsSetup when _machine?.isLocalMachine != true =>
+      'Set up Browser on $machineLabel first',
+    BrowserAvailability.unsupported => 'Update Harness on $machineLabel first',
+    BrowserAvailability.unavailable =>
+      'Browser isn\'t available on $machineLabel right now',
+    _ => null,
+  };
+
+  /// Whether the agent is made with its own Browser.
+  bool get browser => _browser && offersBrowser && browserUnavailable == null;
+
+  /// This computer has no Podman: Start asks to set it up (Set up Browser) before the agent is made.
+  bool get browserNeedsSetup =>
+      _browserAvailability?.state == BrowserAvailability.needsSetup &&
+      _machine?.isLocalMachine == true &&
+      !_browserSetUp;
+
+  /// What Set up Browser says beyond its body.
+  BrowserAvailability? get browserAvailability => _browserAvailability;
+
+  void toggleBrowser() {
+    if (locked || browserUnavailable != null) return;
+    _browser = !_browser;
+    notifyListeners();
+  }
+
+  Future<void> _loadBrowserAvailability() async {
+    if (!offersBrowser) return;
+    final ask = ++_browserAsk;
+    _browserAvailability = null;
+    final answer = await app.agentBrowserAvailable(_machineId);
+    if (_disposed || ask != _browserAsk) return;
+    _browserAvailability = answer;
+    notifyListeners();
+  }
+
+  /// Install in Set up Browser: this computer's daemon starts installing Podman, and the agent is made at once, its
+  /// Browser panel showing the setup's progress.
+  Future<bool> setUpBrowser() async {
+    try {
+      await app.agentBrowserSetup(_machineId);
+    } catch (failure) {
+      appLog.warn('browser', 'setup refused', error: failure);
+      _fail('Browser isn\'t available on $machineLabel right now');
+      return false;
+    }
+    _browserSetUp = true;
+    return true;
   }
 
   void retryGitProject() {
@@ -1482,10 +1557,7 @@ class NewHarnessController extends ChangeNotifier {
       _settingsModes.any((mode) => mode.id == _permissionFor(_settingsEngine))
       ? _permissionFor(_settingsEngine)
       : kDefaultPermissionMode;
-  bool get takesTask => !bringsBuddy && (isCloud || takesFirstTask(_base));
-
-  /// Join's Buddy, which the Swarm starts (task #4196).
-  bool get bringsBuddy => integration?.startBuddy != null;
+  bool get takesTask => isCloud || takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
       _noAgentSetup || isCloud || leadThroughSwarm
@@ -1681,7 +1753,9 @@ class NewHarnessController extends ChangeNotifier {
     };
   }
 
-  String? get _leadRepositoryName =>
+  /// The new project's repository, else its folder, by name: also what its row in the left pane says while it starts
+  /// without this form (`super_tabs/swarm_starts.dart`).
+  String? get leadRepositoryName =>
       _project.repository?.name ??
       _project.newRepository?.name ??
       switch (_project.folder) {
@@ -1700,12 +1774,12 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Under [leadLine]: the repo that machine clones first, or null.
   String? get leadCloneNote {
-    if (_leadRepositoryName == null) return null;
+    if (leadRepositoryName == null) return null;
     final target = leadMachine;
     final clones = leadThroughSwarm
         ? target != null && !target.has(leadRepositoryUrl)
         : _project.repository != null;
-    return clones ? 'Clones $_leadRepositoryName there first' : null;
+    return clones ? 'Clones $leadRepositoryName there first' : null;
   }
 
   /// Why New Project cannot start its Product Manager now, or null.
@@ -1939,8 +2013,7 @@ class NewHarnessController extends ChangeNotifier {
   /// A missing or ambiguous saved value stays visible until the person
   /// replaces it. These checks never select a different launch target.
   ({NewHarnessField field, String message})? get requiredChoice {
-    // A Buddy needs only its agent and computer (task #4196).
-    if (checking || bringsBuddy) return null;
+    if (checking) return null;
     if (needsProject) {
       return (field: NewHarnessField.projectMenu, message: 'Choose a project.');
     }
@@ -1981,6 +2054,14 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     final engineState = machine.engines[_engine];
+    if (engineState?.unavailable case final reason?) {
+      return (
+        field: harnessId == null
+            ? NewHarnessField.harness
+            : NewHarnessField.agent,
+        message: reason,
+      );
+    }
     if (!compatibleEngines.contains(_engine) ||
         (_rememberedAgent &&
             !asGuest &&
@@ -2354,17 +2435,6 @@ class NewHarnessController extends ChangeNotifier {
   /// The answers cannot change: a create is running, or one whose reply was
   /// lost has still to be checked on.
   bool get locked => busy || checking || linkingProfile;
-
-  /// + New agent's Agent (`member`) or Product Manager (`lead`) (task #4196),
-  /// or null outside one.
-  String? get agentKind => integration?.agentKind;
-
-  void setAgentKind(String kind) {
-    final destination = integration;
-    if (destination == null || locked || destination.agentKindLocked) return;
-    destination.agentKind = kind;
-    notifyListeners();
-  }
 
   /// Lists always choose. The launch menu and optional task prompt start.
   bool get returnCreates =>
@@ -2804,6 +2874,8 @@ class NewHarnessController extends ChangeNotifier {
     if (_machineId == id) return;
     _projectsByMachine[_machineId] = _project;
     _machineId = id;
+    _browserSetUp = false;
+    unawaited(_loadBrowserAvailability());
     _modelCatalog = null;
     _loadingModels = false;
     _modelRequest++;
@@ -3605,6 +3677,7 @@ class NewHarnessController extends ChangeNotifier {
             'fo',
             'pi',
             'hermes',
+            'openclaw',
             'commandcode',
             'muse',
             ...engines,
@@ -4442,6 +4515,9 @@ class NewHarnessController extends ChangeNotifier {
   bool get canCancelPending => _attempt?.canCancelPending == true;
   bool get canFollowPending => _attempt?.canFollowPending == true;
 
+  /// The harness this form's start made on [machineId], once the machine has it.
+  String? get createdAgentId => _attempt?.agentId;
+
   /// The folder a new project's typed name found already there
   /// (`PROJECT_EXISTS`), with the project and machine it was refused for.
   (String, NewHarnessProject, String)? _existing;
@@ -4564,7 +4640,9 @@ class NewHarnessController extends ChangeNotifier {
       warn('Linking the profile. You can close once it is done.');
       return false;
     }
-    if (busy && integration?.stopBuddy?.call() != true) {
+    // A Swarm's start closes at once whatever it is doing: before it is under way nothing was sent, and after, it goes on
+    // without this form (anh Dee, 2026-11-10: never block for minutes).
+    if (busy && integration?.inBackground != true) {
       warn('Still working on it. You can close once it is done.');
       return false;
     }
@@ -4583,15 +4661,30 @@ class NewHarnessController extends ChangeNotifier {
     return !endCompletion();
   }
 
+  /// The start in flight, or the last one: what a start that goes on without its form waits for
+  /// (`super_tabs/swarm_starts.dart`).
+  Future<NewHarnessOutcome>? get running => _running;
+  Future<NewHarnessOutcome>? _running;
+
   /// [quiet] is [followHeld]'s: a check on a held request that changes
   /// nothing on screen until it has an answer.
   Future<NewHarnessOutcome> create({
     bool quiet = false,
     bool? resendAttachments,
+  }) {
+    // Refused while one runs: a second press must not take the place of the start a form handed on.
+    if (busy || linkingProfile) return Future.value(NewHarnessOutcome.failed);
+    // Kept before the start runs: it may hand itself on ([HarnessLaunchIntegration.onStarted]) before its first wait.
+    final done = Completer<NewHarnessOutcome>();
+    _running = done.future;
+    done.complete(_create(quiet: quiet, resendAttachments: resendAttachments));
+    return done.future;
+  }
+
+  Future<NewHarnessOutcome> _create({
+    required bool quiet,
+    bool? resendAttachments,
   }) async {
-    if (busy || linkingProfile) {
-      return NewHarnessOutcome.failed;
-    }
     final resume =
         resendAttachments != null && integration?.resolveAttachments != null
         ? () => integration!.resolveAttachments!(resendAttachments)
@@ -4600,6 +4693,7 @@ class NewHarnessController extends ChangeNotifier {
       busy = true;
       status = 'Checking on the harness…';
       notifyListeners();
+      if (!quiet) integration?.onStarted?.call();
       try {
         await resume();
         busy = false;
@@ -4609,7 +4703,6 @@ class NewHarnessController extends ChangeNotifier {
         return _fail(failure.toString());
       }
     }
-    if (bringsBuddy) return _startBuddy();
     if (!checking && usesProfile && _profile != null) {
       if (loadingProfiles) {
         return _fail(
@@ -4749,6 +4842,7 @@ class NewHarnessController extends ChangeNotifier {
       status = recheck ? 'Checking on the harness…' : _startingLine;
       notifyListeners();
     }
+    if (!quiet) integration?.onStarted?.call();
     if (!recheck && !asGuest) {
       // What is sent, not what is shown: a terminal takes no project.
       if (projectFolderRequest?.repository case final repository?) {
@@ -4871,7 +4965,7 @@ class NewHarnessController extends ChangeNotifier {
       model: model,
       dsh: harness,
       swarmRole: integration?.swarmRole,
-      swarmSkillMode: integration?.swarmSkillMode,
+      browser: browser,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty
           ? launchMessage
@@ -4973,26 +5067,6 @@ class NewHarnessController extends ChangeNotifier {
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
   /// New Project's Product Manager the Swarm starts
   /// ([HarnessLaunchIntegration.startInSwarm]) on [leadSwarmMachine].
-  /// Join's Buddy (task #4196): the Swarm starts it on the chosen computer,
-  /// as before this form; the form chose only its engine and computer.
-  Future<NewHarnessOutcome> _startBuddy() async {
-    busy = true;
-    error = null;
-    status = 'Starting your Buddy on $machineLabel…';
-    notifyListeners();
-    try {
-      await integration!.startBuddy!(_machineId, _base);
-    } catch (failure) {
-      return _fail(failure.toString());
-    }
-    integration?.completed = true;
-    if (_disposed) return NewHarnessOutcome.created;
-    busy = false;
-    status = null;
-    notifyListeners();
-    return NewHarnessOutcome.created;
-  }
-
   Future<NewHarnessOutcome> _startInSwarm() async {
     final start = integration?.startInSwarm;
     if (start == null) {
@@ -5006,13 +5080,14 @@ class NewHarnessController extends ChangeNotifier {
     status =
         'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
     notifyListeners();
+    integration?.onStarted?.call();
     try {
       await start(
         LeadSwarmStart(
           machineId: _swarmLeadMachine!,
           engine: _engine,
           repositoryUrl: leadRepositoryUrl,
-          title: _leadRepositoryName,
+          title: leadRepositoryName,
           task: task.trim(),
           files: attachments?.files ?? const [],
         ),

@@ -1,7 +1,6 @@
 import type { Prisma } from '@prisma/client'
-import { agentOnly, conversation, fail, isLeads, type AgentStart, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
+import { agentOnly, conversation, fail, isLeads, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
 import { autoJoinOn } from '../autoJoinDomain.js'
-import { wakeBuddies } from '../buddySleep.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, plainHost, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
@@ -17,7 +16,7 @@ export interface Written { kind: PartKind; key: string; version: number }
 /** MongoDB limits a document to 16 MiB. A part leaves room for its columns and indexes (design section 1.4). */
 export const PART_LIMIT_BYTES = 4 * 1024 * 1024
 
-const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts', progress: 'progress' } as const
+const LISTS = { member: 'members', agent: 'agents', group: 'groups', machine: 'machines', start: 'starts' } as const
 type ListKind = keyof typeof LISTS
 
 /** JSON with sorted keys, so two equal records compare equal whatever order a command built them in. */
@@ -121,7 +120,6 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     const sequence = (group.messageSeq ?? state.sequenceBase ?? 0) + 1
     group.messageSeq = sequence
     sequences.set(message.id, sequence)
-    wakeBuddies(state, message, now)
     if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
     if (!message.thread || message.alsoInChat) {
@@ -165,7 +163,7 @@ const withoutReading = (data: unknown) => {
 
 /** What a reading moves all the time, measured on production (2026-11-04: of 128 parts moved in 40 s, `resources` in all of them): a
  *  client that asks gets a line for these, and reads them on demand (read/changes.ts, read/service.ts machineReadings). */
-const VOLATILE_READING = ['receivedAt', 'resources', 'quotas', 'quotaReasons', 'profiles', 'privacy', 'harnessProgress', 'harnessTokens', 'harnessUncommitted'] as const
+const VOLATILE_READING = ['receivedAt', 'resources', 'quotas', 'quotaReasons', 'profiles', 'harnessProgress', 'harnessTokens', 'harnessUncommitted'] as const
 const steadyPart = (data: unknown) => {
   const machine = data as MachineData | undefined
   const observation = machine?.contribution?.observation
@@ -193,12 +191,10 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
 /**
  * The machines whose hosts a commit's writes concern, by the same rules the host read wakes a Swarm for a machine
  * (read/host.ts woken): the head and members for every host of the Swarm before or after; an agent or a start for its
- * machine; a group for the machines its marker names; a machine's settings for that machine, the Mac it follows and the
- * team accounts that follow it. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
+ * machine; a group for the machines its marker names; a machine's settings for that machine. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
  */
 export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState, after: SuperTabState): string[] {
   const hosts = new Set<string>()
-  const pools = [...before.machines ?? [], ...after.machines ?? []]
   for (const write of writes) {
     if (write.op === 'touch') continue
     switch (write.kind) {
@@ -214,9 +210,6 @@ export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState,
       case 'machine': {
         if (!write.host?.hostChangedAt) break
         hosts.add(write.key)
-        const follows = (write.data as MachineData | null)?.contribution?.hostMachineId
-        if (follows) hosts.add(follows)
-        for (const pool of pools) if (pool.hostMachineId === write.key) hosts.add(pool.machineId)
         break
       }
     }
@@ -265,7 +258,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       const prior = before.get(key)
       if (!prior) {
         writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first, ...host(kind, undefined, part.data) })
-        if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+        if (kind !== 'group' && kind !== 'start') referencesChanged = true
       } else if (!sameData(prior.data, part.data)) {
         writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data),
           ...kind === 'machine' && machineContentChanged(prior.data, part.data) ? { content: true as const } : {} })
@@ -274,7 +267,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     for (const [key, prior] of before) {
       if (now.has(key)) continue
       writes.push({ op: 'remove', kind, key, seen: prior.version, data: prior.data, ...host(kind, prior.data, undefined) })
-      if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
+      if (kind !== 'group' && kind !== 'start') referencesChanged = true
     }
   }
   const agentsWritten = new Set(writes.filter(w => w.kind === 'agent').map(w => w.key))
@@ -304,7 +297,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
     versions.set(`${write.kind}:${write.key}`, version)
     written.push({ kind: write.kind, key: write.key, version })
   }
-  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts, ...parts.progress]
+  const all = [parts.head as Part, ...parts.members, ...parts.agents, ...parts.groups, ...parts.machines, ...parts.starts]
   for (const touch of opts.touches ?? []) {
     const key = `${touch.kind}:${touch.key}`
     if (versions.has(key)) continue

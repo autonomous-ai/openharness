@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, directUploads, formFileBody, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, MemoryAttachmentStore,
@@ -63,6 +63,18 @@ describe('attachment bucket credentials', () => {
     expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(3600)
     const bucket = await (shared.avatars as unknown as { store: { files(): Promise<import('@google-cloud/storage').Bucket> } }).store.files()
     expect(bucket.name).toBe('attachments')
+  })
+
+  // For the job that removes the avatars still stored (migration/avatarRemoval.ts): one page, never the whole bucket.
+  it('lists one page of avatar keys under a folder, through the bucket the avatars are in', async () => {
+    for (const [attachments, prefix] of [[attachmentsFromEnv(env(encoded(key)))!, 'avatars/'], [attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))!, 'super-tabs/']] as const) {
+      const avatars = attachments.avatars!
+      const gcs = avatars instanceof SharedAvatarStore ? avatars.store : avatars
+      const bucket = await (gcs as unknown as { files(): Promise<import('@google-cloud/storage').Bucket> }).files()
+      const getFiles = vi.spyOn(bucket, 'getFiles').mockResolvedValue([[{ name: `${prefix}tab/1/a.png` }, { name: `${prefix}tab/2/b.png` }]] as never)
+      expect(await avatars.list(prefix, 200)).toEqual([`${prefix}tab/1/a.png`, `${prefix}tab/2/b.png`])
+      expect(getFiles).toHaveBeenCalledWith({ prefix, maxResults: 200, autoPaginate: false })
+    }
   })
 
   it('lets a dedicated avatar bucket win, under the attachments prefix as before', () => {

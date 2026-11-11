@@ -7,7 +7,7 @@ import 'package:harness/super_tabs/message_link_preview.dart';
 import 'package:harness/super_tabs/message_link_swarms.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'support/buddy_fixture.dart';
+import 'support/own_agent_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -142,10 +142,9 @@ void main() {
   });
 
   group('a link into a hidden Chat with PM', () {
-    /// Ken's Chat with PM from before Buddies replaced it, as a server from
-    /// before 10-29 still sends it (as in super_tab_buddies_test).
+    /// Ken's private chat with the PM, which the app does not open.
     Future<(ConversationServer, String, String)> hidden() async {
-      final server = buddySwarm(enabled: false);
+      final server = ownAgentSwarm();
       (server.state['conversations'] as List).add({
         ...conversationFixture('old-pm-chat', 'ken.tran'),
         'projectId': 'lead',

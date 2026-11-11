@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -364,10 +365,19 @@ void main() {
   testWidgets(
     'shows Models once a failed first read recovers, without a stuck row',
     (tester) async {
+      final lines = <String>[];
+      final before = appLog;
+      appLog = _Recorder(lines);
+      addTearDown(() => appLog = before);
       final server = modelsSwarm()..failLeaderboardReads = 1;
       final controller = await show(tester, server);
       expect(rows, findsNothing);
       expect(find.textContaining('Loading'), findsNothing);
+      // The failed read is in the app log by its name.
+      expect(
+        lines.where((line) => line.contains('leaderboard')),
+        ['super-tabs Project leaderboard not read (OFFLINE)'],
+      );
       await controller.refresh();
       await tester.pump(const Duration(minutes: 5));
       await tester.pumpAndSettle();
@@ -399,4 +409,18 @@ void main() {
     expect(rows, findsNothing);
     await close(tester, controller);
   });
+}
+
+class _Recorder implements AppLog {
+  _Recorder(this.lines);
+  final List<String> lines;
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$category $message');
 }

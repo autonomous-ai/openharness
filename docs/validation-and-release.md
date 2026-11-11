@@ -206,6 +206,10 @@ GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has
 green, run it on pull requests, make `e2e-summary` required and add it to the evidence
 collector.
 
+Run workflow with **`agent_browser_podman`** ticked runs only `cli/e2e/agentBrowserPodman.e2e.ts`, the agent
+browser on real rootless Podman: it builds the browser image, so nothing else runs beside it. Use it once for a
+change to the agent browser's container, image or stream; the nightly run leaves that file out.
+
 For changes to daemon lifetime or process boundaries, select an opt-in soak and chaos workload
 (`cli/e2e/endurance.e2e.ts`). On a Mac, run `SOAK=1 E2E_BUNDLE=1 SOAK_OUT=<folder> npx vitest run
 --config vitest.e2e.config.ts e2e/endurance.e2e.ts` in `cli/`. The defaults are 60 minutes of soak and
@@ -378,6 +382,10 @@ It runs the selected files once. Hosts with at least 16 logical CPUs use three
 quarters of them, capped at 12 workers; smaller hosts use half their logical CPUs
 (at least one worker). Lower `--workers` when memory or other running checks need it.
 Its `--timeout 900` budget includes the initial test process and any recovery.
+A slower Mac may not compile every file within it; raise it with
+`ARGS="--timeout 3600"`. The `desktop-macos` receipt then records that exact
+command: only `--timeout` and `--workers` may follow, since neither changes which
+tests run.
 Dependencies must already be installed. Browser files under `test/web/` and native
 integration checks remain separate; this command does not validate those platforms.
 

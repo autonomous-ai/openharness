@@ -136,7 +136,7 @@ it('has only status, messages, message, post, answer, screen and type: every oth
     expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print }), tail.join(' ')).toBe(1)
     expect(open).not.toHaveBeenCalled()
     const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
-    expect(refusal).toMatch(/^harness super-tab \[--tab ID\] \[--agent ID\] \[--port N --machine ID\] status \[--project NAME\] \[--archived \[PAGE\]\] \| messages GROUP /)
+    expect(refusal).toMatch(/^harness super-tab \[--tab ID\] \[--agent ID\] \[--port N --machine ID\] status \| messages GROUP /)
     expect(refusal).not.toMatch(/\b(mine|task|decisions|instructions|costs|react|command|propose|start|resume|capacity|remove-machine|set-agents|help|plan|route)\b/)
   }
 })
@@ -305,15 +305,15 @@ it('keeps the mentioned people on a post that sends files', async () => {
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-// Security review of #2087: --agent naming a Builder let a Buddy on the same machine speak as it. The harness the command
+// Security review of #2087: --agent naming a Builder let another harness on the same machine speak as it. The harness the command
 // runs in goes with every request, and the daemon holds the agent named to that harness's own (service.spec.ts).
 it('sends the pane\'s own harness with every --agent request, so the agent it names is checked against it', async () => {
   const request = vi.fn(async (type: string) => type === 'agents_list'
-    ? { agents: [{ id: 'buddy-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true })
+    ? { agents: [{ id: 'other-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true })
   const deps = { where: () => where, pane: '%42', open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn() }
   for (const argv of [['post', 'g1', 'Ready', 'op'], ['message', 'g1', 'm1'], ['messages', 'g1']]) {
     expect(await superTabCommand(['--tab', 'tab', '--agent', 'builder', ...argv], deps)).toBe(0)
-    expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ agentId: 'builder', harnessId: 'buddy-harness' }), 30_000)
+    expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ agentId: 'builder', harnessId: 'other-harness' }), 30_000)
   }
 })
 // The Lead's must on #904's plan: the harness asking is the pane the command runs in, never one it names.
@@ -335,12 +335,12 @@ it('refuses a command that sets TMUX_PANE to another harness\'s pane, before it 
   expect(sent[1]).toMatchObject({ action: 'messages', agentId: 'builder' })
   expect(sent[1]).not.toHaveProperty('harnessId')
 })
-// The second review of #2087: from a Buddy's pane, --machine sent its request to the owner's other Mac, which knew no pane
+// The second review of #2087: from a harness's pane, --machine sent its request to the owner's other Mac, which knew no pane
 // there and served the agent it named. From a harness, the Swarm is reached through this computer's own Harness alone.
 it('refuses, from a harness, a --machine or --port other than this computer\'s own, and lets a person\'s terminal choose', async () => {
   const opened: Where[] = []
   const request = vi.fn(async (type: string) => type === 'agents_list'
-    ? { agents: [{ id: 'buddy-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true })
+    ? { agents: [{ id: 'other-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] } : { ok: true })
   const print = vi.fn()
   const deps = { where: () => where, print, open: async (to: Where) => { opened.push(to); return { request, close: vi.fn(), machineId: to.machineId } as never } }
   const elsewhere = [['--machine', 'macbook'], ['--port', '15000'], ['--port', '15000', '--machine', 'macbook']]
@@ -368,12 +368,11 @@ const windowsPane = async () => [
   { pid: 600, parentPid: 1, executable: 'harness-pty.exe', startMarker: 'w:10', args: '' },
 ]
 const windowsAlone = async () => [{ pid: process.pid, parentPid: 1, executable: 'node.exe', startMarker: 'w:30', args: '' }]
-// A Buddy on the computer used to refuse every agent's shell there (second review, item 4). Now each is told apart by its pane.
-it('on Windows, a Buddy on the computer refuses no other agent, and a pane speaks as its own harness', async () => {
-  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list'
+// Each agent's shell on Windows is told apart by its pane (second review of #2087, item 4).
+it('on Windows, a pane speaks as its own harness', async () => {
+  const request = vi.fn(async (type: string) => type === 'agents_list'
     ? { agents: [{ id: 'win-harness', engine: 'claude', tmuxPane: '%3', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] }
-    : type === 'terminal_info' ? { command: 'claude', path: 'C:\\work', pid: 700 }
-    : payload.action === 'buddyCheck' ? { ok: true, buddiesHere: true } : { ok: true })
+    : type === 'terminal_info' ? { command: 'claude', path: 'C:\\work', pid: 700 } : { ok: true })
   const print = vi.fn()
   const deps = { where: () => where, print, platform: 'win32' as const, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
   expect(await superTabCommand([...prefix, 'messages', 'g1'], { ...deps, env: { HARNESS_PANE: 'p1:%3' }, readProcesses: windowsPane })).toBe(0)
@@ -442,32 +441,19 @@ it('takes a pane\'s harness only when the daemon\'s own pane process is among th
   expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ harnessId: 'builder-harness' }), 30_000)
 })
 
-// A Buddy's read verbs (Ken, 10-29): archived tasks a page at a time, and a task's older messages, with no new verb.
-it('parses archived status pages and older message pages', () => {
+// A task's older messages, with no new verb. The v3 Buddy's status pages and projects (status --archived, --project) are gone.
+it('parses older message pages, and refuses a status page or project', () => {
   const at = ['--tab', 'tab']
-  expect(parseSuperTabArgs([...at, 'status', '--archived'], where).payload).toMatchObject({ action: 'status', archived: true })
-  expect(parseSuperTabArgs([...at, 'status', '--archived', 'eyJsYSI6MX0'], where).payload).toMatchObject({ action: 'status', archived: true, before: 'eyJsYSI6MX0' })
+  expect(parseSuperTabArgs([...at, 'status'], where).payload).toEqual({ action: 'status', tabId: 'tab', agentId: '' })
   // By sequence and message id together: messages may share a sequence, and a sequence alone skipped them (security review 2).
   expect(parseSuperTabArgs([...at, 'messages', 'lead', '--before', '40', 'm-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'lead', before: 40, beforeId: 'm-1' })
-  for (const argv of [['status', '--archived', 'a b'], ['status', '--old'], ['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
+  for (const argv of [['status', '--archived'], ['status', '--archived', 'eyJsYSI6MX0'], ['status', '--project', 'web'], ['status', '--old'], ['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
     ['messages', 'lead', '--before', '40'], ['messages', 'lead', '--before', '9007199254740992', 'm-1'], ['messages', 'lead', '--before', '40', 'a b'], ['messages', 'lead', '--after', '4', 'm-1']]) {
     expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
   }
 })
 
-// Spec 2026-10-31-one-buddy-per-swarm: a person's one Buddy reads one of its projects by name, alone or with its archive.
-it('parses status --project NAME, alone or with --archived, and refuses it without a name', () => {
-  expect(parseSuperTabArgs([...prefix, 'status', '--project', 'Web App'], where).payload).toMatchObject({ action: 'status', project: 'Web App' })
-  expect(parseSuperTabArgs([...prefix, 'status', '--project', 'web', '--archived'], where).payload).toMatchObject({ action: 'status', project: 'web', archived: true })
-  expect(parseSuperTabArgs([...prefix, 'status', '--archived', 'eyJsYSI6MX0', '--project', 'web'], where).payload)
-    .toMatchObject({ action: 'status', project: 'web', archived: true, before: 'eyJsYSI6MX0' })
-  expect(parseSuperTabArgs([...prefix, 'status'], where).payload).not.toHaveProperty('project')
-  for (const argv of [['status', '--project'], ['status', '--project', 'a\nb'], ['messages', 'lead', '--project', 'web']]) {
-    expect(() => parseSuperTabArgs([...prefix, ...argv], where)).toThrow('harness super-tab')
-  }
-})
-
-// A Buddy's thread session reads its own thread (spec 2026-10-30-buddy-thread-sessions), paged as the conversation is.
+// One thread's messages, paged as the conversation is.
 it('parses one thread\'s messages, and its older pages', () => {
   const at = ['--tab', 'tab']
   expect(parseSuperTabArgs([...at, 'messages', 'chat', '--thread', 'root-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'chat', thread: 'root-1' })
@@ -478,71 +464,6 @@ it('parses one thread\'s messages, and its older pages', () => {
     ['messages', 'chat', '--thread', 'root-1', '--before', 'x', 'm-1']]) {
     expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
   }
-})
-
-// #2360 took the stdin form out of a Buddy's help, as its guard refuses a post read from stdin (#2358). The usage line still
-// offered it, so a Buddy that followed it was refused and tried again.
-describe("a Buddy's usage line", () => {
-  const buddyDeps = (buddy: boolean | 'fails') => {
-    const asked: Array<[string, Record<string, unknown> | undefined, number]> = [], opened: Where[] = []
-    const request = vi.fn(async (type: string, payload?: Record<string, unknown>) => {
-      asked.push([type, payload, opened.length])
-      if (type === 'agents_list') return { agents: [{ id: 'buddy-h', engine: 'claude', tmuxPane: '%9', status: 'active' }] }
-      if (payload?.action === 'buddyCheck') {
-        if (buddy === 'fails') throw new Error('daemon gone')
-        return { ok: true, buddy }
-      }
-      return { ok: true }
-    })
-    const print = vi.fn()
-    const open = vi.fn(async (at: Where) => { opened.push(at); return { request, close: vi.fn(), machineId: 'machine' } })
-    const run = async (argv: string[], terminal = false) => {
-      expect(await superTabCommand(['--tab', 'tab', ...argv], { where: () => where, pane: '%9', open, print, terminal: () => terminal })).toBe(1)
-      return JSON.parse(print.mock.calls.at(-1)![0]).error as string
-    }
-    return { run, asked, opened, request }
-  }
-  it('has no stdin form for a Buddy: its post line takes TEXT', async () => {
-    const { run } = buddyDeps(true)
-    const error = await run(['post', 'lead', 'Ready'])
-    expect(error).toContain('post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to')
-    expect(error).not.toMatch(/stdin|TEXT\|-|<<| - /)
-  })
-
-  it('keeps the stdin form for any other agent, and for a harness Harness cannot confirm is a Buddy', async () => {
-    for (const buddy of [false, 'fails'] as const) {
-      const { run } = buddyDeps(buddy)
-      expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT|- OPERATION_ID')
-    }
-  })
-
-  it("asks this computer's daemon about the pane's own harness, only when the command is refused", async () => {
-    const { run, asked, opened } = buddyDeps(true)
-    await run(['post', 'lead', 'Ready'])
-    expect(asked.find(([, payload]) => payload?.action === 'buddyCheck')?.[1]).toEqual({ action: 'buddyCheck', harnessId: 'buddy-h' })
-    // Through the guard's own steps (paneBuddy), without its pane check: a wording is no refusal.
-    expect(asked.map(([type]) => type)).toEqual(['agents_list', 'super_tabs'])
-    // Another machine named with --machine is never the one asked: the pane is this computer's.
-    expect(await run(['--port', '14002', '--machine', 'other', 'post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID')
-    expect(opened).toEqual([where, where])
-    // A command that parses never asks.
-    const ok = buddyDeps(true)
-    await superTabCommand(['--tab', 'tab', 'post', 'lead', 'Ready', 'op-1'], { where: () => where, pane: '%9', open: async () => ({ request: ok.request, close: vi.fn(), machineId: 'machine' }), print: vi.fn() })
-    expect(ok.request).toHaveBeenCalled()
-    expect(ok.asked.some(([, payload]) => payload?.action === 'buddyCheck')).toBe(false)
-  })
-  it('words it for a Buddy on Windows from a Buddy\'s own pane alone', async () => {
-    const wording = async (buddy: boolean) => {
-      const print = vi.fn(), request = vi.fn(async (type: string, payload?: Record<string, unknown>) =>
-        payload?.action === 'buddyCheck' ? { ok: true, buddy }
-        : type === 'agents_list' ? { agents: [{ id: 'win-harness', engine: 'claude', tmuxPane: '%3', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] } : { ok: true })
-      await superTabCommand(['--tab', 'tab', 'post', 'lead', 'Ready'], { where: () => where, print, platform: 'win32', env: {}, pane: 'p1:%3',
-        open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) })
-      return JSON.parse(print.mock.calls.at(-1)![0]).error as string
-    }
-    expect(await wording(true)).toContain('post GROUP TEXT OPERATION_ID')
-    expect(await wording(false)).toContain('post GROUP TEXT|- OPERATION_ID')
-  })
 })
 
 // #2355: post - read stdin with no limit, so a pipe left open and idle waited for good.
@@ -581,6 +502,11 @@ describe('stdin for -', () => {
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("post - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
       + "Close stdin after the message, as a heredoc does: post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
+    // A verdict's words on stdin are told the verdict's own form, whatever the words would have been.
+    expect(await superTabCommand([...prefix, 'read', 'hold', 'acme/app#27', 'f6edb44', '-'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("read - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
+      + "Close stdin after the message, as a heredoc does: read ok|hold OWNER/REPO#N SHA - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+    expect(request).not.toHaveBeenCalled()
     // What arrives in time is used as before, read once.
     const stdin = vi.fn(async () => 'Ready\n')
     expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-3'], { ...deps, stdin })).toBe(0)
@@ -589,8 +515,7 @@ describe('stdin for -', () => {
   })
 })
 
-// Task #3403: the PM answers each ask once, in its place. `answer` names the message; the server places it in that message's
-// thread or right below it, and refuses a second answer with where the first is.
+// Task #3403: `answer` names the message; the server places the answer in that message's thread or right below it.
 it('sends answer as the answer to a message, placed by the server', () => {
   expect(parseSuperTabArgs([...prefix, 'answer', 'lead', 'ask-1', 'Out at 09:00.', 'op-1'], where).payload).toMatchObject({ action: 'command', operationId: 'op-1',
     command: { type: 'message.send', conversationId: 'lead', text: 'Out at 09:00.', replyTo: null, answers: 'ask-1', answer: true, recipientIds: [] } })
@@ -602,3 +527,39 @@ it('sends answer as the answer to a message, placed by the server', () => {
   }
 })
 
+
+// A builder's claim is made by command (githubClaim.ts).
+it('takes a task by its repository and number, and nothing else', () => {
+  expect(parseSuperTabArgs(['take', 'acme/app#34'], where).payload).toMatchObject({ action: 'take', tabId: '', repository: 'acme/app', number: 34 })
+  expect(parseSuperTabArgs([...prefix, 'take', 'Acme/App.js#3'], where).payload).toMatchObject({ action: 'take', tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', number: 3 })
+  for (const argv of [['take'], ['take', '34'], ['take', 'acme/app'], ['take', 'acme/app#0'], ['take', 'acme/../app#3'], ['take', 'acme/app#34', 'extra']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})
+
+// A reader's verdict is made by command, not typed as a comment (githubVerdict.ts).
+it('reads a verdict on a pull request: ok or hold, the repository and number, the head that was read, and the reader\'s words', () => {
+  expect(parseSuperTabArgs(['read', 'ok', 'acme/app#27', 'f6edb44', 'Ran the tests: 12 pass.'], where).payload).toMatchObject({ action: 'read', tabId: '',
+    repository: 'acme/app', number: 27, verdict: 'READ-OK', sha: 'f6edb44', text: 'Ran the tests: 12 pass.' })
+  // A READ-OK may go without words; a HOLD says what to fix.
+  expect(parseSuperTabArgs([...prefix, 'read', 'ok', 'Acme/App.js#3', 'f6edb44c0ffee0000000000000000000000000ab'], where).payload).toMatchObject({ action: 'read',
+    tabId: 'tab', agentId: 'agent', repository: 'Acme/App.js', number: 3, verdict: 'READ-OK', sha: 'f6edb44c0ffee0000000000000000000000000ab', text: '' })
+  expect(parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', 'src/a.ts:12 reads the old head.'], where).payload).toMatchObject({ verdict: 'HOLD',
+    text: 'src/a.ts:12 reads the old head.' })
+  // The words on stdin for -, as a post's are.
+  const stdin = vi.fn(() => "a.ts:1 it's `%h`\n")
+  expect(parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', '-'], where, stdin, () => false).payload).toMatchObject({ verdict: 'HOLD', text: "a.ts:1 it's `%h`" })
+  expect(stdin).toHaveBeenCalledOnce()
+  expect(() => parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', '-'], where, () => '\n', () => false))
+    .toThrow("read - read no message from stdin, so nothing was posted. Send the message on stdin: read ok|hold OWNER/REPO#N SHA - <<'MSG'")
+  expect(() => parseSuperTabArgs(['read', 'ok', 'acme/app#27', 'f6edb44', '-'], where, () => 'x', () => true))
+    .toThrow('read - reads the message from stdin, but stdin is a terminal, so nothing was posted.')
+  // Words the daemon would refuse are said too long here, with their length, as a post's are.
+  expect(() => parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', 'x'.repeat(32_001)], where))
+    .toThrow('These words are 32,001 characters, and a verdict takes at most 32,000: nothing was posted.')
+  for (const argv of [['read'], ['read', 'ok'], ['read', 'ok', 'acme/app#27'], ['read', 'yes', 'acme/app#27', 'f6edb44'], ['read', 'ok', '27', 'f6edb44'],
+    ['read', 'ok', 'acme/app#0', 'f6edb44'], ['read', 'ok', 'acme/../app#27', 'f6edb44'], ['read', 'ok', 'acme/app#27', 'f6edb4'], ['read', 'ok', 'acme/app#27', 'HEAD'],
+    ['read', 'hold', 'acme/app#27', 'f6edb44'], ['read', 'hold', 'acme/app#27', 'f6edb44', '  '], ['read', 'ok', 'acme/app#27', 'f6edb44', 'fine', 'extra']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})

@@ -19,9 +19,12 @@ import 'personal_lead.dart';
 const superTabClaimFailingNotice = Duration(seconds: 60);
 const superTabQueuedNotice = Duration(minutes: 2);
 
-/// The line under the chat's newest own message, shown only while it sends,
-/// when it was not sent, or when its delivery needs a hand; a message that
-/// arrived carries none, as in Slack.
+/// The line under the chat's newest own message, as iMessage's Delivered:
+/// Sending…, Sent once the server has it, Typed once it is in its agent's
+/// session, and nothing once its agent answers, the answer being the third
+/// state (Swarm plan, step 1, item 2, 2026-11-11). Two minutes on and not
+/// typed, it says why; Not sent, offline and a delivery that needs a hand keep
+/// their own lines.
 class SuperTabMessageReceipt extends StatefulWidget {
   const SuperTabMessageReceipt({
     super.key,
@@ -152,39 +155,41 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         delivery?.pending == true &&
         message.createdAt != null &&
         now.difference(message.createdAt!) < const Duration(seconds: 3);
-    // A queued delivery to a running agent on an online, readable Swarm that is
-    // not getting in: its claims fail, or no claim fields came (an older backend)
-    // and it just sits. Either reason shows the line, so it never drops out
-    // when the other one starts.
-    final queued =
-        delivery?.status == 'queued' &&
+    // Waiting to be typed into an agent of this Swarm on an online, readable
+    // computer. Two minutes after it was sent, or a minute into failing claims
+    // (prod 10-30, v1.3.71: claims failed for two hours and nothing showed),
+    // the line says why it is not typed yet. Either reason shows it, so it
+    // never drops out when the other one starts.
+    final waiting =
+        delivery?.pending == true &&
         agent != null &&
-        agent.downSince == null &&
         !offline &&
         !c.backendUnreachable;
-    final failingSince = delivery?.claimFailingSince;
+    // A claim's failure fields mean something only while it is queued: a
+    // claimed copy may carry an earlier one's.
+    final failingSince = delivery?.status == 'queued'
+        ? delivery?.claimFailingSince
+        : null;
     final failingAt = failingSince?.add(superTabClaimFailingNotice);
-    final queuedAt = message.createdAt?.add(superTabQueuedNotice);
-    final stuck =
-        queued &&
+    final lateAt = message.createdAt?.add(superTabQueuedNotice);
+    final late =
+        waiting &&
         ((failingAt != null && !failingAt.isAfter(now)) ||
-            (queuedAt != null && !queuedAt.isAfter(now)));
+            (lateAt != null && !lateAt.isAfter(now)));
     // Until a threshold is crossed the receipt must tick by itself: no snapshot
     // arrives to rebuild it. The earlier of the two is the next to cross.
     final upcoming = [
       failingAt,
-      queuedAt,
+      lateAt,
     ].whereType<DateTime>().where((t) => t.isAfter(now));
-    final nextAt = queued && !stuck && upcoming.isNotEmpty
+    final nextAt = waiting && !late && upcoming.isNotEmpty
         ? upcoming.reduce((a, b) => a.isBefore(b) ? a : b)
         : null;
     final error = Theme.of(context).colorScheme.error;
     var color = error;
     var icon = AppIcons.triangleAlert;
-    // Like Slack, a message that went where it was sent carries no line: only
-    // sending, not sending and what needs a hand show (Dee, 10-29).
     String? title, note;
-    bool sending = false;
+    bool sending = false, quiet = false;
     final actions = <(String, VoidCallback?)>[];
     final canResolve = c.canWrite && !c.saving && delivery?.id != null;
 
@@ -206,8 +211,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       }
     } else if (delivery == null &&
         c.selected?.leadId == null &&
-        // A Buddy chat has no Lead: its Buddy takes the message, and so does an agent's own chat its agent.
-        c.selected?.isBuddyChat != true &&
+        // An agent's own chat has no Lead: its agent takes the message.
         c.selected?.isAgentChat != true) {
       // In a Personal Swarm this Desktop starts the project's Lead, which the
       // server keeps the message for (task #2633); else, or when it could
@@ -237,21 +241,39 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
-    } else if (stuck) {
-      // Queued to an online computer with no line read as delivered (prod 10-30).
-      // Nothing to do for the sender: Send again would queue behind the same failure.
+    } else if (late) {
+      // Send again would wait behind the same thing: the line says what it is,
+      // and offers the terminal when its person can see to it there.
       color = grid.AppPalette.warn;
       icon = AppIcons.clock;
-      title = 'Not delivered yet';
+      title = 'Not typed yet';
       final host =
           machine?['name'] as String? ?? widget.machineName(agent.machineId);
-      note = failingSince != null
-          ? "$host is online but couldn't take this message yet. Harness keeps trying, and it goes in as soon as it can."
-          : "$host is online but hasn't picked this message up yet. Harness keeps trying, and it goes in as soon as it can.";
+      final (why, inTerminal) = superTabNotTypedWhy(
+        delivery!,
+        name: name,
+        host: host,
+        stopped: agent.downSince != null,
+      );
+      note = why;
+      if (inTerminal) {
+        actions.add((
+          'Open terminal',
+          canResolve ? () => widget.onResolve(delivery, 'open') : null,
+        ));
+      }
     } else if (fresh) {
       color = DesktopChrome.muted;
       title = 'Sending…';
       sending = true;
+    } else if (delivery?.pending == true) {
+      color = DesktopChrome.muted;
+      title = 'Sent';
+      quiet = true;
+    } else if (delivery?.delivered == true) {
+      color = DesktopChrome.muted;
+      title = 'Typed';
+      quiet = true;
     }
     final ticking = fresh || (delivery?.pending == true && offline);
     _clock(ticking || nextAt != null, ticking ? null : nextAt?.difference(now));
@@ -260,7 +282,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     final parts = <Widget>[
       if (sending)
         _sendingMark(context, color)
-      else
+      else if (!quiet)
         Icon(icon, size: 14, color: color),
       Text(title, style: style),
       for (final (label, action) in actions) ...[
@@ -294,6 +316,49 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       ],
     );
   }
+}
+
+/// Why [delivery], sent to [name] on [host], is not typed yet, and whether its
+/// person can see to it in the agent's terminal: what holds it there, as the
+/// daemon reads the pane (cli core/input.ts; closeAgentService.ts reads
+/// `team_waiting_user` as waiting on its person and `team_waiting_draft` as
+/// unsent text), else why its computer has not taken it.
+(String, bool) superTabNotTypedWhy(
+  SuperTabDelivery delivery, {
+  required String name,
+  required String host,
+  required bool stopped,
+}) {
+  if (stopped) {
+    return (
+      "$name isn't running. Your message goes in when it runs again.",
+      false,
+    );
+  }
+  if (delivery.status == 'queued') {
+    return (
+      delivery.claimFailingSince != null
+          ? "$host is online but couldn't take this message yet. Harness keeps trying, and it goes in as soon as it can."
+          : "$host is online but hasn't picked this message up yet. Harness keeps trying, and it goes in as soon as it can.",
+      false,
+    );
+  }
+  return switch (delivery.holdReason) {
+    'team_waiting_idle' || 'team_waiting_busy' => (
+      '$name is working. Your message goes in when this turn ends.',
+      false,
+    ),
+    'team_waiting_user' => (
+      '$name is waiting on your answer in its terminal.',
+      true,
+    ),
+    'team_waiting_draft' => ("$name's terminal has unsent text.", true),
+    'team_waiting_dialog' => ("$name's terminal has a menu open.", true),
+    _ => (
+      "$name can't take messages right now. Harness keeps trying, and it goes in as soon as it can.",
+      false,
+    ),
+  };
 }
 
 /// Sending's mark: a small spinner, or a still loader when motion is off.
@@ -348,17 +413,19 @@ Widget _receiptAction(
   child: Text(label),
 );
 
-/// The line under a message: [parts] in a row that wraps, announced as it
-/// changes, with [below] under it.
+/// The line under your own message: [parts] in a row that wraps, announced as
+/// it changes, with [below] under it, at the bubble's side as iMessage's
+/// Delivered is (desktop-design-system.md, Message states).
 Widget _receiptLine(List<Widget> parts, {List<Widget> below = const []}) =>
     Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Semantics(
             liveRegion: true,
             child: Wrap(
+              alignment: WrapAlignment.end,
               spacing: 6,
               runSpacing: 2,
               crossAxisAlignment: WrapCrossAlignment.center,

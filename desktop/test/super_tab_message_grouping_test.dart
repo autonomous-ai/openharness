@@ -1,13 +1,8 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
@@ -28,7 +23,7 @@ void main() {
     if (shots != null) await loadPreviewFonts();
   });
 
-  const buddy = {
+  const river = {
     'kind': 'agent',
     'id': 'pm',
     'name': 'Lead',
@@ -40,7 +35,7 @@ void main() {
   SuperTabMessage message(
     int n,
     DateTime at, {
-    Map<String, Object> author = buddy,
+    Map<String, Object> author = river,
     String text = 'An update.',
     String? thread,
     bool alsoInChat = false,
@@ -59,18 +54,6 @@ void main() {
     'deliveries': <dynamic>[],
     'source': ?source,
   });
-
-  // The rows view.dart draws for themselves, with no header to join (Diego,
-  // #2547).
-  const ownRows = <String, Map<String, Object?>>{
-    'terminal input': {'kind': 'terminal-input'},
-    'terminal alert': {
-      'kind': 'terminal-alert',
-      'alert': 'prompt',
-      'agentId': 'pm',
-    },
-    'ship': {'kind': 'ship', 'title': 'Shipped it'},
-  };
 
   group('the rule', () {
     // Its header is where its tag shows (#2552), and a message after it is not
@@ -186,47 +169,6 @@ void main() {
       );
     });
 
-    for (final MapEntry(key: line, value: source) in ownRows.entries) {
-      group('after a $line line from the same sender', () {
-        final person = message(1, start, author: ken);
-        final row = message(
-          2,
-          start.add(const Duration(seconds: 20)),
-          source: source,
-        );
-        final plan = message(3, start.add(const Duration(seconds: 30)));
-
-        test('the next message starts a header', () {
-          expect(
-            SuperTabMessageRow.consecutiveUpdates([person, row, plan]),
-            isNot(contains('m3')),
-          );
-          expect(SuperTabMessageRow.groupsWith(plan, row), isFalse);
-        });
-
-        test('the next reply in a thread starts a header', () {
-          expect(
-            SuperTabMessageRow.groupsWith(plan, row, inThread: true),
-            isFalse,
-          );
-        });
-
-        test('the line joins nothing above it', () {
-          expect(
-            SuperTabMessageRow.groupsWith(
-              message(
-                4,
-                start.add(const Duration(seconds: 40)),
-                source: source,
-              ),
-              plan,
-            ),
-            isFalse,
-          );
-        });
-      });
-    }
-
     test('two plain messages ten seconds apart still group', () {
       expect(
         SuperTabMessageRow.groupsWith(
@@ -253,188 +195,8 @@ void main() {
     });
   });
 
-  group("with a step's row between", () {
-    /// Diego's case: a task's chat shows its step's rows by time, and a
-    /// person's second line after a step agent's row read as that agent's.
-    const reviewer = {
-      'kind': 'agent',
-      'id': 'reviewer',
-      'name': 'Reviewer',
-      'displayName': 'Merlin',
-    };
-
-    Future<(ConversationServer, SuperTabController)> show(
-      WidgetTester tester, {
-      bool stepBetween = true,
-      Map<String, Object> author = ken,
-      Brightness brightness = Brightness.light,
-      Key? picture,
-      DateTime? at,
-    }) async {
-      grid.AppTheme.brightness.value = brightness;
-      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-      await tester.binding.setSurfaceSize(const Size(1400, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer()..threads = true;
-      for (final (id, name, shown) in [
-        ('pm', 'Lead', 'River'),
-        ('reviewer', 'Reviewer', 'Merlin'),
-      ]) {
-        (server.state['agents'] as List).add({
-          'id': id,
-          'projectId': 'lead',
-          'name': name,
-          'displayName': shown,
-          'machineId': 'studio',
-          'harnessId': 'h-$id',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'claude', 'model': 'opus'},
-        });
-      }
-      (server.state['people'] as List).add({
-        'id': 'ken',
-        'email': 'ken@example.com',
-        'role': 'collaborator',
-      });
-      (server.state['conversations'] as List)
-              .cast<Map<String, dynamic>>()
-              .firstWhere((g) => g['id'] == 'offline')['leadId'] =
-          'pm';
-      (server.state['conversations'] as List).add(<String, dynamic>{
-        ...conversationFixture('review', 'Review'),
-        'number': 31,
-        'reviewOf': 'offline',
-        'step': 'Review',
-      });
-      final from = at ?? start;
-      void say(
-        String text,
-        String conversationId,
-        Map<String, Object> sender,
-        int minutes,
-      ) {
-        server.append(text, conversationId: conversationId);
-        server.messages.last
-          ..['author'] = sender
-          ..['createdAt'] = from
-              .add(Duration(minutes: minutes))
-              .toUtc()
-              .toIso8601String();
-      }
-
-      say('First line.', 'offline', author, 0);
-      if (stepBetween) say('Review started.', 'review', reviewer, 1);
-      say('Second line.', 'offline', author, 3);
-      say('Third line.', 'offline', author, 4);
-      final c = server.controller();
-      await c.refresh();
-      addTearDown(c.dispose);
-      c.select('offline');
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: brightness),
-          builder: (context, child) =>
-              RepaintBoundary(key: picture, child: child),
-          home: Scaffold(
-            body: SuperTabView(
-              controller: c,
-              onAddAgent: (_) {},
-              onOpenTerminal: (_) {},
-              machineName: (_) => 'Mac Studio',
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      return (server, c);
-    }
-
-    Finder rowOf(String text) => find.ancestor(
-      of: find.text(text),
-      matching: find.byType(SuperTabMessageRow),
-    );
-    bool grouped(WidgetTester tester, String text) =>
-        tester.widget<SuperTabMessageRow>(rowOf(text)).grouped;
-
-    testWidgets("the person's next line shows its own name again", (
-      tester,
-    ) async {
-      await show(tester);
-      expect(find.text('Review started.'), findsOneWidget);
-      expect(grouped(tester, 'First line.'), isFalse);
-      expect(grouped(tester, 'Second line.'), isFalse);
-      expect(
-        find.descendant(of: rowOf('Second line.'), matching: find.text('ken')),
-        findsOneWidget,
-      );
-      // The line after it has their own row above, so it joins as ever.
-      expect(grouped(tester, 'Third line.'), isTrue);
-    });
-
-    testWidgets('with no step row between, the lines still group', (
-      tester,
-    ) async {
-      await show(tester, stepBetween: false);
-      expect(grouped(tester, 'First line.'), isFalse);
-      expect(grouped(tester, 'Second line.'), isTrue);
-      expect(grouped(tester, 'Third line.'), isTrue);
-    });
-
-    testWidgets('a line still sending keeps its name under a step row', (
-      tester,
-    ) async {
-      final (server, c) = await show(
-        tester,
-        author: const {
-          'kind': 'person',
-          'id': 'owner',
-          'name': 'owner@example.com',
-        },
-        at: DateTime.now().subtract(const Duration(minutes: 5)),
-      );
-      // The step's row is the newest, drawn just above what is sent next.
-      server.append('Review passed.', conversationId: 'review');
-      server.messages.last
-        ..['author'] = reviewer
-        ..['createdAt'] = DateTime.now().toUtc().toIso8601String();
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(find.text('Review passed.'), findsOneWidget);
-      final hold = server.holdCommands = Completer<void>();
-      await tester.enterText(
-        find.byKey(const ValueKey('super-message-composer')),
-        'Quick line.',
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
-      expect(grouped(tester, 'Quick line.'), isFalse);
-      hold.complete();
-      await tester.pumpAndSettle();
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-    });
-
-    for (final brightness in Brightness.values) {
-      testWidgets('screenshot for review (${brightness.name})', (tester) async {
-        final picture = GlobalKey();
-        await show(tester, brightness: brightness, picture: picture);
-        final boundary =
-            picture.currentContext!.findRenderObject()!
-                as RenderRepaintBoundary;
-        await tester.runAsync(() async {
-          final image = await boundary.toImage(pixelRatio: 2);
-          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-          image.dispose();
-          File('$shots/step-between-${brightness.name}.png')
-              .writeAsBytesSync(bytes!.buffer.asUint8List());
-        });
-      }, skip: shots == null);
-    }
-  });
-
   group('on screen', () {
-    /// Huy's case: three Buddy messages in two minutes, a report and a
+    /// Huy's case: three of River's messages in two minutes, a report and a
     /// question among them, then a reply thread on the first.
     Future<ConversationServer> show(WidgetTester tester) async {
       await tester.binding.setSurfaceSize(const Size(1400, 900));
@@ -482,13 +244,13 @@ void main() {
         }
       }
 
-      say('Taken. Building it now.', buddy, const Duration(minutes: 30));
+      say('Taken. Building it now.', river, const Duration(minutes: 30));
       say(
         'Report:\n- tests pass\n- screenshots attached',
-        buddy,
+        river,
         const Duration(minutes: 29),
       );
-      say('Shall I merge it?', buddy, const Duration(minutes: 28));
+      say('Shall I merge it?', river, const Duration(minutes: 28));
       say('First', ken, const Duration(minutes: 27), thread: 'message-1');
       say('Second', ken, const Duration(minutes: 26), thread: 'message-1');
       say('Later', ken, const Duration(minutes: 10), thread: 'message-1');

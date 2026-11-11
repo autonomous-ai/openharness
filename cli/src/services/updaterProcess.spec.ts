@@ -7,8 +7,7 @@ import type { startSelfUpdater } from '../lib/selfUpdate.js'
 import type { startPtyUpdater } from '../lib/windows/ptyUpdate.js'
 import type { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
-import { inTeamAccount, processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from './updaterProcess.js'
-import type { readTeamConfig } from '../team/config.js'
+import { processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from './updaterProcess.js'
 
 // A lock someone else holds a moment: what the updater says while it waits for it.
 const locked = vi.hoisted(() => [] as string[])
@@ -47,6 +46,13 @@ vi.mock('../lib/selfUpdate.js', async (real) => {
     downloadVerified: async (ref: unknown, limits: unknown) => { downloaded.ref = ref; downloaded.limits = limits; return Buffer.from('zip') },
   }
 })
+
+// Which Node the machine has: what ensureNodeMeetsMinimum answers, and the lines it reports while it works.
+const nodeCheck = vi.hoisted(() => ({ answer: { node: '/managed/node', reason: null } as { node: string | null; reason: string | null } }))
+vi.mock('../lib/runtimeInstall.js', async (real) => ({
+  ...await real<object>(),
+  ensureNodeMeetsMinimum: async (log: (line: string) => void) => { log('  ✓ Node 24 ready\n'); return nodeCheck.answer },
+}))
 
 // No process runs from any build: the retirement's table, the same on every host.
 vi.mock('../lib/windows/processTable.js', () => ({ windowsProcessRows: async () => [] }))
@@ -108,25 +114,20 @@ describe('the updater in its own process', () => {
     return { deps, windows, calls, told, ready, cli: () => cli!, hn: () => hn!, pty: () => pty, sent: () => sent! }
   }
 
-  it('follows releases in the Harness Team account, and only there', () => {
-    const team = make()
-    runUpdaterService(undefined, { ...team.deps, inTeamAccount: () => true }).stop()
-    expect(team.cli()).toMatchObject({ followReleases: true })
-    const owner = make()
-    runUpdaterService(undefined, { ...owner.deps, inTeamAccount: () => false }).stop()
-    expect(owner.cli()).not.toHaveProperty('followReleases')
-    // The account the root-owned team config names, and no other; an account whose name cannot be read is not it.
-    const named = { user: 'harnessteam' } as ReturnType<typeof readTeamConfig>
-    expect(inTeamAccount(() => named, () => 'harnessteam')).toBe(true)
-    expect(inTeamAccount(() => named, () => 'owner')).toBe(false)
-    expect(inTeamAccount(() => null, () => 'harnessteam')).toBe(false)
-    expect(inTeamAccount(() => named, () => { throw new Error('no passwd entry') })).toBe(false)
+  it('makes sure of Node for the build, passes the answer on, and logs what the check says as an update line', async () => {
+    const m = make()
+    const service = runUpdaterService(undefined, m.deps)
+    await expect(m.cli().node!.ensure()).resolves.toEqual({ node: '/managed/node', reason: null })
+    expect(m.calls).toContain('[update] ✓ Node 24 ready')
+    service.stop()
   })
 
   it('checks for this build\'s successor, and hn\'s, on the installed copy, and stops both', () => {
     const m = make()
     const service = runUpdaterService(undefined, m.deps)
     expect(m.cli()).toMatchObject({ currentVersion: VERSION, stageWhileJudged: true })
+    // The Node the build comes up on is made sure of first, and the one this daemon runs on is the way back.
+    expect(m.cli().node).toMatchObject({ ensure: expect.any(Function), running: process.execPath })
     expect(m.hn()).toMatchObject({ currentVersion: VERSION, isInstalledCopy: true })
     expect(m.calls[0]).toMatch(new RegExp(`^\\[update\\] self-update on · v${VERSION.replace(/\./g, '\\.')} · every \\d+s`))
     service.stop()

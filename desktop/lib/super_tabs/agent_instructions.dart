@@ -9,6 +9,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import 'instructions_link.dart';
 import 'model.dart';
+import 'swarm_type.dart';
 
 /// An agent's own instructions (Swarm v4, anh Dee 2026-11-09): the plain file `agents/NAME.md` in its folder, which the agent
 /// writes when its person tells it a rule and reads at every start. Its person reads and changes it here, from any of their
@@ -65,6 +66,10 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   /// Why the last save was refused, in words.
   String? _saveError;
 
+  /// The files of its folder opened to their text, by place: each starts folded, its name and size (anh Dee, 2026-11-10: a
+  /// project's long AGENTS.md shown whole read as the agent's own instructions).
+  final _open = <int>{};
+
   /// The most the computer takes: 64 KiB of UTF-8, as its answer `TOO_LARGE` says. Counted in bytes, not characters.
   static const _maxBytes = 65536;
 
@@ -89,6 +94,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
       _saving = false;
       _saveError = null;
       _dirty = false;
+      _open.clear();
       _draft.clear();
       _read();
     }
@@ -333,15 +339,18 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           child: SelectableText(
             file!.text!,
             key: const ValueKey('swarm-instructions-text'),
-            style: grid.AppType.mono(color: DesktopChrome.foreground),
+            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+            style: grid.AppType.mono(color: DesktopChrome.foreground)
+                .copyWith(fontSize: SwarmType.sizeOf(context)),
           ),
         )
-      else if (shared.files.isEmpty)
+      else
         _note(
-          'No instructions yet. Tell ${widget.name} how you want it to work, '
-          'and it writes them here.',
+          'Empty for now. Tell ${widget.name} how you want it to work, and it '
+          'writes it down here.',
+          key: 'swarm-instructions-empty',
         ),
-      for (final (i, one) in shared.files.indexed) _sharedFile(i, one),
+      if (shared.files.isNotEmpty) _folder(shared.files),
     ];
     return SingleChildScrollView(
       child: Column(
@@ -374,36 +383,114 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     );
   }
 
-  /// A file of the agent's folder, read only: its name, its text, and a line when the computer cut it. One with the text
-  /// of an earlier file ([SwarmSharedFile.sameAs]) says so instead of repeating it.
-  Widget _sharedFile(int index, SwarmSharedFile file) => Padding(
-    padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+  /// What else instructs the agent in its folder, read only, under its own heading so it never reads as the agent's own:
+  /// each file folded to its name and size, a click away from its text.
+  Widget _folder(List<SwarmSharedFile> files) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: grid.AppDesktop.controlGap),
     child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          file.name,
-          key: ValueKey('swarm-shared-name-$index'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: DesktopChrome.control(medium: true),
-        ),
-        const SizedBox(height: grid.AppDesktop.controlGap),
-        if (file.sameAs case final sameAs?)
-          Text(
-            'Same as $sameAs.',
-            key: ValueKey('swarm-shared-same-$index'),
-            style: DesktopChrome.metadata(),
-          )
-        else
-          SelectableText(
-            file.text,
-            key: ValueKey('swarm-shared-text-$index'),
-            style: grid.AppType.mono(color: DesktopChrome.foreground),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            grid.AppDesktop.panelPadding,
+            grid.AppDesktop.controlGap,
+            grid.AppDesktop.panelPadding,
+            grid.AppDesktop.controlGap,
           ),
-        if (file.truncated && file.sameAs == null)
+          child: Text(
+            'From its folder',
+            key: const ValueKey('swarm-shared-heading'),
+            style: DesktopChrome.metadata(),
+          ),
+        ),
+        for (final (i, one) in files.indexed) _sharedFile(i, one),
+      ],
+    ),
+  );
+
+  /// A file of the agent's folder: its name and size, its text below once opened, and a line when the computer cut it. One
+  /// with the text of an earlier file ([SwarmSharedFile.sameAs]) says so in place of its size and has nothing to open.
+  Widget _sharedFile(int index, SwarmSharedFile file) {
+    final same = file.sameAs;
+    final open = same == null && _open.contains(index);
+    final lines = file.text.isEmpty ? 0 : '\n'.allMatches(file.text).length + 1;
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.panelPadding,
+        vertical: grid.AppDesktop.controlGap,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              file.name,
+              key: ValueKey('swarm-shared-name-$index'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(medium: true),
+            ),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          Text(
+            same != null
+                ? 'Same as $same.'
+                : lines == 1
+                ? '1 line'
+                : '$lines lines',
+            key: ValueKey(
+              same != null
+                  ? 'swarm-shared-same-$index'
+                  : 'swarm-shared-size-$index',
+            ),
+            style: DesktopChrome.metadata(),
+          ),
+          if (same == null) ...[
+            const SizedBox(width: 4),
+            Icon(
+              open ? AppIcons.chevronDown : AppIcons.chevronRight,
+              size: 14,
+              color: DesktopChrome.muted,
+            ),
+          ],
+        ],
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (same != null)
+          row
+        else
+          InkWell(
+            key: ValueKey('swarm-shared-row-$index'),
+            onTap: () =>
+                setState(() => open ? _open.remove(index) : _open.add(index)),
+            child: Semantics(button: true, expanded: open, child: row),
+          ),
+        if (open)
           Padding(
-            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.panelPadding,
+              0,
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.controlGap,
+            ),
+            child: SelectableText(
+              file.text,
+              key: ValueKey('swarm-shared-text-$index'),
+              // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+              style: grid.AppType.mono(color: DesktopChrome.foreground)
+                  .copyWith(fontSize: SwarmType.sizeOf(context)),
+            ),
+          ),
+        if (open && file.truncated)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.panelPadding,
+              0,
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.controlGap,
+            ),
             child: Text(
               'Cut at 64 KB.',
               key: ValueKey('swarm-shared-cut-$index'),
@@ -411,8 +498,8 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             ),
           ),
       ],
-    ),
-  );
+    );
+  }
 
   /// Why a file in the agent's folder is not shown, by the computer's own word for it.
   String _skippedWords(SwarmSkippedFile file) => switch (file.why) {
@@ -440,8 +527,17 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             expands: true,
             textAlignVertical: TextAlignVertical.top,
             keyboardType: TextInputType.multiline,
-            style: grid.AppType.mono(color: DesktopChrome.foreground),
-            decoration: const InputDecoration.collapsed(hintText: ''),
+            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+            style: grid.AppType.mono(color: DesktopChrome.foreground)
+                .copyWith(fontSize: SwarmType.sizeOf(context)),
+            // An empty file says what goes in it, rather than looking like a blank page.
+            decoration: InputDecoration.collapsed(
+              hintText:
+                  'Rules for ${widget.name}, as you would tell it. It reads '
+                  'them at every start.',
+              hintStyle: grid.AppType.mono(color: DesktopChrome.muted)
+                  .copyWith(fontSize: SwarmType.sizeOf(context)),
+            ),
           ),
         ),
       ),

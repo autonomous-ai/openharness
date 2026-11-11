@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -214,8 +215,33 @@ Future<void> showText(
 
 Finder notificationsEntry() => find.byKey(const ValueKey('super-mentions'));
 
-/// A Swarm whose reader is the peer, with the Lead and the peer's own Buddy
-/// chat in the first project, where the PM's private lines reach them.
+/// A Swarm's agent names that count how often they are read.
+class WalkedNames extends ListBase<String> {
+  WalkedNames(this._names);
+  final List<String> _names;
+  int walks = 0;
+
+  @override
+  int get length => _names.length;
+  @override
+  set length(int _) => throw UnsupportedError('fixed');
+  @override
+  String operator [](int at) {
+    walks++;
+    return _names[at];
+  }
+
+  @override
+  void operator []=(int at, String name) => throw UnsupportedError('fixed');
+  @override
+  Iterator<String> get iterator {
+    walks++;
+    return _names.iterator;
+  }
+}
+
+/// A Swarm whose reader is the peer, with the Lead and the peer's chat with
+/// their own agent in the first project.
 ConversationServer swarm() {
   final server = ConversationServer.chat();
   server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
@@ -226,10 +252,9 @@ ConversationServer swarm() {
   server.state['conversations'] = [
     conversationFixture('lead', 'Lead'),
     {
-      ...conversationFixture('buddy-peer-lead', "ken.tran's Buddy"),
+      ...conversationFixture('agent-chat-peer', 'Wren'),
       'projectId': 'lead',
-      'kind': 'buddy',
-      'buddyOwnerId': 'peer',
+      'kind': 'agent-chat',
     },
   ];
   return server;
@@ -277,6 +302,114 @@ void main() {
       // Not shown again before the text, as if the text had not said it.
       expect(find.text('@dee', findRichText: true), findsNothing);
     });
+
+    // lampOS's PM is "first builder" and the sandbox has "a2a swarm": a tag of one read as plain text, and a post to one
+    // opened with its tag a second time (2026-11-11).
+    testWidgets('an agent whose name is several words is its tag, whole', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: const Scaffold(
+            body: SuperTabMessageText(
+              '@First Builder heads up on #3706. Not @first, and not @first builders.',
+              agents: ['first builder', 'second'],
+              addressed: ['first builder'],
+            ),
+          ),
+        ),
+      );
+      expect(
+        runsOf(tester, '@First Builder').single?.backgroundColor,
+        isNotNull,
+      );
+      // Said once, as written: the post it is to does not open with the tag again.
+      expect(
+        find.text(
+          '@First Builder heads up on #3706. Not @first, and not @first builders.',
+          findRichText: true,
+        ),
+        findsOneWidget,
+      );
+      expect(runsOf(tester, '@first'), isEmpty);
+    });
+
+    // Review of #3904.
+    testWidgets(
+      'a several-word name is one line\'s, a tagged person\'s tag stays theirs, and a name no tag can open is addressed in words',
+      (tester) async {
+        Future<void> show(
+          String text, {
+          List<String> people = const [],
+          List<String> to = const [],
+        }) => tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: SuperTabMessageText(
+                text,
+                mentions: people,
+                agents: const [
+                  'first',
+                  'first builder',
+                  'mate builder',
+                  '(qa) bot',
+                ],
+                addressed: to,
+              ),
+            ),
+          ),
+        );
+        // The next paragraph's first word is not part of the tag.
+        await show('Thanks @first\n\nBuilder agents should rebase.');
+        expect(runsOf(tester, '@first').single?.backgroundColor, isNotNull);
+        // "mate" is a person tagged here: the tag is theirs, not the agent "mate builder"'s.
+        await show('@mate builder #12 is ready', people: ['mate']);
+        expect(runsOf(tester, '@mate').single?.backgroundColor, isNotNull);
+        expect(runsOf(tester, '@mate builder'), isEmpty);
+        // No tag opens with a bracket, so a post to such an agent still opens with its name.
+        await show('@(qa) bot can you look?', to: ['(qa) bot']);
+        expect(
+          find.text('@(qa) bot @(qa) bot can you look?', findRichText: true),
+          findsOneWidget,
+        );
+      },
+    );
+
+    // Review of #3904: each row read every agent's name each time it was drawn, tagged or not: with a thousand agents,
+    // forty plain rows took 60 ms where they had taken 10. Rendering is a hot path (AGENTS.md standard 4).
+    testWidgets(
+      'rows that tag nobody read the Swarm\'s agent names once between them, not once a row',
+      (tester) async {
+        final agents = WalkedNames([
+          for (var at = 0; at < 1000; at++) 'builder $at',
+          'first builder',
+        ]);
+        for (final text in ['Plain words.', 'More of them.', 'And a third.']) {
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: grid.buildAppTheme(brightness: Brightness.dark),
+              home: Scaffold(body: SuperTabMessageText(text, agents: agents)),
+            ),
+          );
+        }
+        expect(agents.walks, 1);
+        // The names are still known: a row that tags one draws it whole.
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: SuperTabMessageText('@first builder ready', agents: agents),
+            ),
+          ),
+        );
+        expect(
+          runsOf(tester, '@first builder').single?.backgroundColor,
+          isNotNull,
+        );
+      },
+    );
 
     testWidgets('a full address is the same person', (tester) async {
       await showText(tester, 'Ask @dee@example.com first.', ['dee']);

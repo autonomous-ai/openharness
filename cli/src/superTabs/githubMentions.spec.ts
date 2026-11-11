@@ -486,6 +486,138 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.relay).toHaveBeenCalledTimes(6)
     expect(f.log).toHaveBeenCalledWith(expect.stringContaining('LOOP acme/app#4'))
   })
+
+  // Swarm plan, step 1, item 2 (anh Dee, 2026-11-10): "Nothing is dropped. A guard that stops a loop holds the news and says so."
+  // The two comments the pause kept from Pip were lost for good, and nobody was told.
+  it('holds what a paused thread brings, never drops it: the agent is told once, and the rest reaches it, in order, once the thread is quiet', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    for (let i = 0; i < 8; i++) {
+      f.clock.now += 20_000
+      f.github.comments.push(comment(10 + i, 20 * (i + 1) - 5, `Still working on it (${i}).`))
+      f.github.issues[0]!.updated_at = at(20 * (i + 1) - 5)
+      await f.mentions.tick()
+    }
+    expect(f.relay).toHaveBeenCalledTimes(6)
+    // Told why, once, in its chat: what it keeps hearing may be its own unsigned posts.
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    const [told, operationId, text] = f.tell.mock.calls[0]!
+    expect(told.agentId).toBe('pip')
+    expect(operationId).toMatch(/^github-held-[0-9a-f]{40}$/)
+    expect(text).toBe('Harness is holding what GitHub says to you on acme/app#4: it reached you 6 times in 10 minutes, which is how an agent '
+      + 'hears its own posts. It comes to you once the thread is quiet. Start each post you write with your name and a comma, as "Pip, 12:05: ...".')
+    // Quiet for the rest of the ten minutes: the two it held come, after the six, in order, each once.
+    f.clock.now += 10 * 60_000
+    await f.mentions.tick()
+    await f.mentions.tick()
+    expect(f.relayed().map(c => c.text)).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map(i => `Still working on it (${i}).`))
+    expect(f.tell).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds an item once though a failed pass reads it again, and tells its agent again when the first notice failed', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    for (let i = 0; i < 6; i++) {
+      f.clock.now += 20_000
+      f.github.comments.push(comment(10 + i, 20 * (i + 1) - 5, `Still working on it (${i}).`))
+      f.github.issues[0]!.updated_at = at(20 * (i + 1) - 5)
+      await f.mentions.tick()
+    }
+    // The seventh pauses the thread, and the notice of it does not go: the pass fails and reads it all again.
+    f.tell.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'The server did not answer.', 503))
+    f.clock.now += 20_000
+    f.github.comments.push(comment(16, 135, 'Still working on it (6).'))
+    f.github.issues[0]!.updated_at = at(135)
+    await f.mentions.tick()
+    f.clock.now += 60_000
+    await f.mentions.tick()
+    expect(f.tell).toHaveBeenCalledTimes(2)
+    f.clock.now += 10 * 60_000
+    await f.mentions.tick()
+    await f.mentions.tick()
+    // Held once, so handed on once.
+    expect(f.relayed().map(c => c.text)).toEqual([0, 1, 2, 3, 4, 5, 6].map(i => `Still working on it (${i}).`))
+  })
+
+  it('holds an item once when a later failure in the same pass makes it read again', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    for (let i = 0; i < 6; i++) {
+      f.clock.now += 20_000
+      f.github.comments.push(comment(10 + i, 20 * (i + 1) - 5, `Still working on it (${i}).`))
+      f.github.issues[0]!.updated_at = at(20 * (i + 1) - 5)
+      await f.mentions.tick()
+    }
+    // One pass: the seventh on #4 is held, and an ask to Pip on #9 fails to go, so the pass reads both again.
+    f.relay.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'The server did not answer.', 503))
+    f.clock.now += 20_000
+    f.github.comments.push(comment(16, 135, 'Still working on it (6).'),
+      comment(17, 136, 'Juno, 12:02, to **Pip**: can you read #9?', { issue_url: 'https://api.github.com/repos/acme/app/issues/9',
+        html_url: 'https://github.com/acme/app/issues/9#issuecomment-17' }))
+    f.github.issues[0]!.updated_at = at(135)
+    await f.mentions.tick()
+    f.clock.now += 60_000
+    await f.mentions.tick()
+    f.clock.now += 10 * 60_000
+    await f.mentions.tick()
+    await f.mentions.tick()
+    const texts = f.relayed().map(c => c.text)
+    expect(texts.filter(text => text === 'Still working on it (6).')).toHaveLength(1)
+    expect(texts.filter(text => text === 'Juno, 12:02, to **Pip**: can you read #9?')).toHaveLength(2)
+    expect(new Set(f.relay.mock.calls.map(([, id]) => id)).size).toBe(8)
+  })
+
+  it('past the 200 it keeps, counts the rest, and says how many and where once the 200 have gone', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    for (let i = 0; i < 6; i++) {
+      f.clock.now += 20_000
+      f.github.comments.push(comment(10 + i, 20 * (i + 1) - 5, `Still working on it (${i}).`))
+      f.github.issues[0]!.updated_at = at(20 * (i + 1) - 5)
+      await f.mentions.tick()
+    }
+    // A runaway: 202 more in one pass.
+    f.clock.now += 20_000
+    for (let i = 0; i < 202; i++) f.github.comments.push(comment(100 + i, 130, `Burst ${i}.`))
+    f.github.issues[0]!.updated_at = at(130)
+    await f.mentions.tick()
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    // Six each quiet ten minutes, in order, until the 200 have gone; then the two it did not keep are said.
+    for (let w = 0; w < 40 && f.tell.mock.calls.length < 2; w++) {
+      f.clock.now += 10 * 60_000
+      await f.mentions.tick()
+    }
+    const texts = f.relayed().map(c => c.text)
+    expect(texts).toHaveLength(206)
+    expect(texts.slice(6)).toEqual([...Array(200).keys()].map(i => `Burst ${i}.`))
+    expect(f.tell.mock.calls[1]![2]).toBe('2 more on acme/app#4 came while Harness held it, more than it keeps: read them on GitHub.')
+    expect(f.tell.mock.calls[1]![1]).toMatch(/^github-more-[0-9a-f]{40}$/)
+  })
+
+  it('keeps what it holds over a restart, and hands it on then', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    for (let i = 0; i < 7; i++) {
+      f.clock.now += 20_000
+      f.github.comments.push(comment(10 + i, 20 * (i + 1) - 5, `Still working on it (${i}).`))
+      f.github.issues[0]!.updated_at = at(20 * (i + 1) - 5)
+      await f.mentions.tick()
+    }
+    expect(f.relay).toHaveBeenCalledTimes(6)
+    // The daemon restarts: the held one is in its file.
+    const again = f.make()
+    f.clock.now += 10 * 60_000
+    await again.tick()
+    expect(f.relayed().map(c => c.text)).toEqual([0, 1, 2, 3, 4, 5, 6].map(i => `Still working on it (${i}).`))
+    // Handed on once: the same operation as any relay of that comment would be.
+    const ids = f.relay.mock.calls.map(([, id]) => id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
 })
 
 describe('whom it reads for (watchedAgents)', () => {
@@ -505,6 +637,29 @@ describe('whom it reads for (watchedAgents)', () => {
   it('watches the label of the name people see, and still hears its stored name', async () => {
     const watched = await watchedAgents({ me: 'dee', live: () => true, read, roster: async () => [row({ name: 'Claude Code', displayName: 'Faye' })] })
     expect(watched).toEqual([expect.objectContaining({ names: ['Faye', 'Claude Code'], label: 'builder:faye' })])
+  })
+
+  // swarm-sandbox, 2026-11-10: attached as their sessions were named, "juno" and "pip" sign "Juno, 12:17:" and are asked "to
+  // **Juno**". Read in their own case alone, Juno never heard Harness's ask to read #24 again, and Pip heard its own posts.
+  it('hears an agent named in lower case by its name with a capital too, and knows its own posts signed so', async () => {
+    const watched = await watchedAgents({ me: 'dee', live: () => true, read: async () => ({
+      conversations: [{ id: 'chat-juno', kind: 'agent-chat', agentIds: ['juno'] }, { id: 'chat-pip', kind: 'agent-chat', agentIds: ['pip'] }],
+      projects: [{ repository: { repositoryUrl: 'https://github.com/acme/app.git' } }] }),
+    roster: async () => [row({ id: 'juno', harnessId: 'h-juno', name: 'juno', displayName: 'juno' }), row({ id: 'pip', name: 'pip', displayName: 'pip' })] })
+    expect(watched.map(agent => [agent.names, agent.label])).toEqual([[['juno', 'Juno'], 'builder:juno'], [['pip', 'Pip'], 'builder:pip']])
+    const f = setup(watched)
+    f.github.issues.push(issue(24, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.clock.now += 20_000
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.comments.push(comment(1, 10, 'Pip, 12:31, to **Juno**: fixed the HOLD. Merged main, then added a `--next 2` example.', { issue_url: 'https://api.github.com/repos/acme/app/issues/24' }),
+      comment(2, 11, 'Harness, 12:31, to **Juno**: the head is now 239a631, after your HOLD on e7422a6: please read it again.', { issue_url: 'https://api.github.com/repos/acme/app/issues/24' }))
+    await f.mentions.tick()
+    // Juno hears both, as each names it; Pip only Harness's, on its own pull request, and never its own post.
+    expect(f.relayed().map(command => [command.agentId, command.text])).toEqual([
+      ['juno', 'Pip, 12:31, to **Juno**: fixed the HOLD. Merged main, then added a `--next 2` example.'],
+      ['juno', 'Harness, 12:31, to **Juno**: the head is now 239a631, after your HOLD on e7422a6: please read it again.'],
+      ['pip', 'Harness, 12:31, to **Juno**: the head is now 239a631, after your HOLD on e7422a6: please read it again.']])
   })
 
   it('reads for nobody while no one is signed in here', async () => {

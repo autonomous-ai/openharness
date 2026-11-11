@@ -415,8 +415,10 @@ class _ManageMachineLine extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
+              // Every row the same width, so the figures stay aligned; a larger text size widens them all alike.
               SizedBox(
-                width: narrow ? 112 : 150,
+                width: MediaQuery.textScalerOf(context)
+                    .scale(narrow ? 112 : 150),
                 child: _MachineDisk(view: view),
               ),
               const SizedBox(width: 12),

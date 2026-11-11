@@ -18,24 +18,20 @@ void main() {
   const top = 12.0, side = 16.0, rowGap = 12.0;
   const radius = grid.AppDesktop.composerRadius;
 
-  ConversationServer buddyChat() {
+  ConversationServer agentChat() {
     final server = ConversationServer.chat()..threads = true;
-    server.state['threadSessions'] = true;
-    server.state['sessionsFromChat'] = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['title'] = 'Wren'
-      ..['agentIds'] = ['buddy-main'];
+      ..['agentIds'] = ['own-agent'];
     (server.state['agents'] as List).add({
-      'id': 'buddy-main',
+      'id': 'own-agent',
       'name': 'Wren',
       'displayName': 'Wren',
       'machineId': 'mac',
       'harnessId': 'h-main',
       'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
       'configuration': {'engine': 'claude'},
     });
     server.append(
@@ -66,7 +62,7 @@ void main() {
       testWidgets('the $scene composer has room inside its box '
           '(${brightness.name})', (tester) async {
         final thread = scene == 'thread', phone = scene == 'web-phone';
-        final c = (thread ? projectThread() : buddyChat()).controller();
+        final c = (thread ? projectThread() : agentChat()).controller();
         addTearDown(c.dispose);
         await c.refresh();
         grid.AppTheme.brightness.value = brightness;

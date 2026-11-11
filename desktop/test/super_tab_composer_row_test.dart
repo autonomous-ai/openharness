@@ -19,7 +19,7 @@ void main() {
       'Five things for today:\nmeasure prod CPU\ncheck the '
       'release notes\nanswer Diego\nand plan the next batch';
 
-  /// The reader's Buddy chat with its Buddy running, a chat they write in;
+  /// The reader's chat with their own agent running, a chat they write in;
   /// Dee reads the Swarm, so @ has someone to offer.
   ConversationServer server() {
     final server = ConversationServer()..threads = true;
@@ -30,18 +30,16 @@ void main() {
     });
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['title'] = 'Wren'
-      ..['agentIds'] = ['buddy-main'];
+      ..['agentIds'] = ['own-agent'];
     (server.state['agents'] as List).add({
-      'id': 'buddy-main',
+      'id': 'own-agent',
       'name': 'Wren',
       'displayName': 'Wren',
       'machineId': 'mac',
       'harnessId': 'h-main',
       'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
       'configuration': {'engine': 'claude'},
     });
     server.append('The build fails on the second run.');

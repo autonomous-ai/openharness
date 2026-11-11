@@ -1,7 +1,6 @@
 import 'package:collection/collection.dart' show DeepCollectionEquality;
 
 import 'model.dart';
-import 'tasks/personal_tasks.dart';
 
 /// The response shape a Swarm read answers in (docs/design/2026-10-26-swarm-state-parts.md, section 4), mirrored by
 /// hand from backend `superTabs/read/contract.ts` (final at cd004bf5c). A first load of any other format is from a
@@ -55,7 +54,6 @@ class SuperTabParts {
     required this.cursor,
     required this.epoch,
     required this.lastChangedAt,
-    required this.githubApp,
     this.derivedEtag,
   });
 
@@ -77,7 +75,6 @@ class SuperTabParts {
       epoch: _int(answer['epoch']),
       // Null for a Swarm with no part changed yet (contract.ts `ReadMeta`).
       lastChangedAt: _int(answer['lastChangedAt'] ?? 0),
-      githubApp: answer['githubApp'] == true,
       derivedEtag: _etag(answer),
     );
     parts._seen['head'] = _int(parts._head['version']);
@@ -89,7 +86,6 @@ class SuperTabParts {
         parts._seen['$kind:${part['key']}'] = _int(part['version']);
       }
     }
-    parts.personalTasks.apply(answer['personalTasks']);
     parts._takeReadMarks(marks);
     // Every one is news to a device whose own mark is higher.
     parts._takeUnreadMarks(unreadMarks, all: true);
@@ -116,7 +112,6 @@ class SuperTabParts {
         }
       }
     }
-    parts.personalTasks.restoreVersions(json['personalTaskVersions']);
     parts._takeReadMarks(json['readMarks']);
     parts._takeThreadMarks(json['threadMarks']);
     parts._takeChatSettings(json['chatSettings']);
@@ -132,9 +127,6 @@ class SuperTabParts {
   /// The newest change of any part, in epoch milliseconds (spec ruling 8): what tells a list or a cache that this
   /// Swarm changed. 0 before any part changed.
   int lastChangedAt;
-
-  /// Whether the backend has the GitHub app, as the first load says.
-  final bool githubApp;
 
   /// The etag of the summary held (`derived` without the marks, backend read/derivedEtag.ts, #2906), as the last read
   /// sent it: sent back with the cursor, so a change read leaves the summary out while it still matches. Null from a
@@ -155,8 +147,6 @@ class SuperTabParts {
         final String etag when etag.isNotEmpty => etag,
         _ => null,
       };
-
-  final personalTasks = SuperTabPersonalTasks();
 
   Map<String, dynamic> _head;
   Map<String, dynamic> _derived;
@@ -375,9 +365,6 @@ class SuperTabParts {
       _derived = derived;
       changed = true;
     }
-    if (personalTasks.apply(changes['personalTasks'])) {
-      changed = beyondMachines = true;
-    }
     derivedEtag = etag;
     cursor = _cursor(changes);
     epoch = _int(changes['epoch'] ?? epoch);
@@ -426,7 +413,7 @@ class SuperTabParts {
     ];
   }
 
-  /// Takes dormant groups read on demand (section 4.5): a page of the dormant list, or one group by id. Each is kept
+  /// Takes dormant groups read on demand (section 4.5), one group by id. Each is kept
   /// unless this reader already holds a newer version of it; one that is active here at a lower version moves out.
   SuperTabPartsChange addDormant(List groups) {
     var changed = false;
@@ -465,11 +452,7 @@ class SuperTabParts {
       'agents': [
         for (final agent in _data('agents'))
           _avatarLink(
-            _overlay(
-              agent,
-              agentsDerived[agent['id']],
-              keepNull: 'workDecision',
-            ),
+            _overlay(agent, agentsDerived[agent['id']]),
             avatars['agent:${agent['id']}'],
           ),
       ],
@@ -479,46 +462,7 @@ class SuperTabParts {
       ],
       'machines': machines,
       'starts': [for (final start in _data('starts')) start],
-      'githubApp': githubApp,
     };
-    if (_derived['otherProjectsWork'] case final List work) {
-      state['otherProjectsWork'] = work;
-    }
-    if (_derived['mentionsWaiting'] case final num waiting) {
-      state['mentionsWaiting'] = waiting.toInt();
-    }
-    if (_derived['mentionsDigest'] case final String digest) {
-      state['mentionsDigest'] = digest;
-    }
-    if (_derived['decisionsWaiting'] case final num waiting) {
-      state['decisionsWaiting'] = waiting.toInt();
-    }
-    if (_derived['decisionsDigest'] case final String digest) {
-      state['decisionsDigest'] = digest;
-    }
-    if (_derived['promptsWaiting'] case final List waiting) {
-      state['promptsWaiting'] = waiting;
-    }
-    if (_derived['remindersDigest'] case final String digest) {
-      state['remindersDigest'] = digest;
-    }
-    if (_derived['activityDigest'] case final String digest) {
-      state['activityDigest'] = digest;
-    }
-    // Each project's board pulse (backend superTabs/pulse.ts, task #3384).
-    if (_derived['pulse'] case final Map pulse) state['pulse'] = pulse;
-    // When each release may next open, per project (backend releases.ts nextReleaseAt, task #3827).
-    if (_derived['releaseTimes'] case final Map times) {
-      state['releaseTimes'] = times;
-    }
-    // Sent only where the server does not try Harness Team accounts yet.
-    if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
-    // Sent by a server that takes a thread reply's New session.
-    if (_derived['threadSessions'] == true) state['threadSessions'] = true;
-    // And one that also takes it on a top-level message in a Buddy chat.
-    if (_derived['sessionsFromChat'] == true) state['sessionsFromChat'] = true;
-    // And one that gives each person one Buddy for the whole Swarm.
-    if (_derived['swarmBuddy'] == true) state['swarmBuddy'] = true;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     if (_chatSettings.isNotEmpty) {
       state['chatSettings'] = Map.of(_chatSettings);
@@ -539,15 +483,12 @@ class SuperTabParts {
       'cursor': cursor,
       'epoch': epoch,
       'lastChangedAt': lastChangedAt,
-      'githubApp': githubApp,
       'head': _head,
-      if (personalTasks.supported) 'personalTasks': personalTasks.toJson(),
       for (final kind in _lists)
         kind: (_live[kind] ?? const {}).values.toList(),
       'derived': _derived,
       if (derivedEtag != null) 'derivedEtag': derivedEtag,
     },
-    if (personalTasks.supported) 'personalTaskVersions': personalTasks.versions,
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),
@@ -600,19 +541,16 @@ class SuperTabParts {
     };
   }
 
-  /// [record] with the derived values over it. A null [keepNull] value means the stored one stands.
+  /// [record] with the derived values over it.
   static Map<String, dynamic> _overlay(
     Map<String, dynamic> record,
-    Object? derived, {
-    String? keepNull,
-  }) {
+    Object? derived,
+  ) {
     if (derived is! Map) return record;
-    final next = {...record};
-    for (final entry in derived.entries) {
-      if (entry.key == keepNull && entry.value == null) continue;
-      next[entry.key as String] = entry.value;
-    }
-    return next;
+    return {
+      ...record,
+      for (final e in derived.entries) e.key as String: e.value,
+    };
   }
 
   /// Whether [part] is newer than what was seen of [id], recording it when it is.

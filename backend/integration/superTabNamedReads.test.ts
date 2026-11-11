@@ -214,7 +214,7 @@ describe('an agent\'s open deliveries', () => {
 
 describe('what changed in a set of Swarms since a cursor', () => {
   const OLD = new Date(NOW - 3_600_000), SINCE = new Date(NOW - 1_800_000), LATER = new Date(NOW - 60_000)
-  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart', 'swarmProgress'] as const
+  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart'] as const
   let ids: string[]
   beforeAll(async () => {
     const maker = await signedIn('changer')
@@ -238,8 +238,8 @@ describe('what changed in a set of Swarms since a cursor', () => {
     expect(keys(ids[1]!)).toEqual([])
     expect(keys(ids[2]!)).toEqual([])
     expect(changed.get(ids[0]!)!.find(p => p.key === 'machine:read')!.readAt).toBe(LATER.getTime())
-    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.ns))
-    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(8)
+    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/.test(e.ns))
+    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(7)
     for (const read of swarmReads) {
       expect(read.docsExamined, `${read.ns} ${JSON.stringify(plan([read]))}`).toBeLessThanOrEqual(read.nreturned!)
       expect(read.command?.hint, `${read.ns} names its index: ${JSON.stringify(plan([read]))}`).toBeTruthy()
@@ -296,7 +296,7 @@ describe('a conversation\'s page of messages', () => {
   it('returns each message as Prisma reads it', async () => {
     const page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` })
     const prisma = await db.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: page.messages.map(m => m.id) } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }] })
-    expect(page.messages.map(({ reactions: _r, deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
+    expect(page.messages.map(({ deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
     expect(page.messages.find(m => m.text === 'm05')).toMatchObject({ source: { kind: 'route', p: 0.75 }, attachments: [{ size: 2048 }], alsoInChat: true })
   })
 })

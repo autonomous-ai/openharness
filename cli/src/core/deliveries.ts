@@ -37,6 +37,8 @@ export interface DeliveriesDeps {
   tell(service: string, event: TurnDelivery): void
   /** The services in their own processes that may deliver turns: writing into an agent is no other's to ask. */
   deliverers: ReadonlySet<string>
+  /** What holds a typed delivery from the agent's pane now, read with nothing written (core/input.ts `holdOf`); absent, nothing. */
+  hold?: (agentId: string, deliveryId: string) => Promise<string | null>
   log?: (line: string) => void
   now?: () => number
 }
@@ -83,8 +85,18 @@ export function createDeliveries(deps: DeliveriesDeps) {
   /** Deliveries from a person's message, which close a question open on the pane, until they settle. */
   const answering = new Map<string, { writtenAt?: number }>()
   const answers = (writtenAt: unknown) => Number.isFinite(writtenAt) ? { writtenAt: writtenAt as number } : {}
+  /** Deliveries of a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), which the short-turn guard never
+   *  holds. Kept through a write the pane held (`team_waiting_*`), as its maker asks what holds it before it writes it again; gone
+   *  once it settles otherwise, and the oldest past KEPT_DELIVERERS. */
+  const own = new Set<string>()
+  const markOwn = (deliveryId: string): void => {
+    own.delete(deliveryId)
+    own.add(deliveryId)
+    if (own.size > KEPT_DELIVERERS) own.delete(own.values().next().value!)
+  }
   const settled = (event: TurnDelivery): void => {
     if (event.state !== 'queued') answering.delete(event.deliveryId)
+    if (event.state !== 'queued' && !(event.state === 'rejected' && event.reason?.startsWith('team_waiting_'))) own.delete(event.deliveryId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
         log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
@@ -94,9 +106,11 @@ export function createDeliveries(deps: DeliveriesDeps) {
     if (maker) deps.tell(maker, event)
   }
 
-  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
+  const holdOf = async (agentId: string, deliveryId: string): Promise<string | null> => await deps.hold?.(agentId, deliveryId) ?? null
+  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries' | 'holdOf'> = {
     deliver: (agentId, content, deliveryId, options) => {
       if (options?.answersQuestion) answering.set(deliveryId, answers(options.writtenAt))
+      if (options?.personsOwn) markOwn(deliveryId)
       submit(agentId, content, deliveryId)
     },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
@@ -105,6 +119,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
       return () => { listeners.delete(listener) }
     },
     leaseDeliveries: async (service, input) => lease(service, input),
+    holdOf,
   }
 
   return {
@@ -122,6 +137,9 @@ export function createDeliveries(deps: DeliveriesDeps) {
     /** The delivery, when it is unsettled and came from a person's message (`DeliveryOptions.answersQuestion`), else null. */
     answersQuestion: (deliveryId: string): { writtenAt?: number } | null => answering.get(deliveryId) ?? null,
 
+    /** Whether the delivery is a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), held by no short-turn guard. */
+    personsOwn: (deliveryId: string): boolean => own.has(deliveryId),
+
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
      *  that said it or another listener. */
@@ -136,8 +154,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
     /** A service in its own process delivering a turn, or taking one back (`service_query`): null when the
      *  query is not one of these. Refused for a service that is not a deliverer. */
-    answer(service: string, query: string, payload: Payload): Payload | null {
-      if (query !== 'deliver' && query !== 'cancel_delivery' && query !== 'lease_deliveries') return null
+    answer(service: string, query: string, payload: Payload): Payload | Promise<Payload> | null {
+      if (query !== 'deliver' && query !== 'cancel_delivery' && query !== 'lease_deliveries' && query !== 'delivery_hold') return null
       if (!deps.deliverers.has(service)) return { error: 'NOT_A_DELIVERER' }
       if (query === 'lease_deliveries') return { leased: lease(service, payload.leases) }
       const deliveryId = text(payload.deliveryId)
@@ -145,12 +163,15 @@ export function createDeliveries(deps: DeliveriesDeps) {
       if (guarded(deliveryId) && !owned(service, deliveryId)) return { error: 'INVALID_DELIVERY' }
       if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
+      // A pane's state is read only for a delivery its own maker holds (team:service:<it>:): never another agent's pane at large.
+      if (query === 'delivery_hold') return agentId && owned(service, deliveryId) ? holdOf(agentId, deliveryId).then(hold => ({ hold })) : { error: 'INVALID_DELIVERY' }
       if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }
       // Known before it is written: the input says `queued` as it takes it, and that is the maker's to hear.
       makers.delete(deliveryId)
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
       if (payload.answersQuestion === true) answering.set(deliveryId, answers(payload.writtenAt))
+      if (payload.personsOwn === true) markOwn(deliveryId)
       submit(agentId, payload.text, deliveryId)
       return {}
     },

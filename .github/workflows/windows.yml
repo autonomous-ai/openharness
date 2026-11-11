@@ -68,7 +68,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           # Same runtime pin as release.yml / ci.yml.
-          node-version: 22.23.2
+          node-version: 24.22.2
           cache: npm
           cache-dependency-path: cli/package-lock.json
       # The pinned ConPTY payload (pty/scripts/fetch-conpty.ps1): its hash is checked on every run.
@@ -178,7 +178,7 @@ jobs:
           # serialWindows.spec.ts runs the real harness-serial.exe, placed beside the host by the payload step.
           HARNESS_SERIAL_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-serial.exe
         run: |
-          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/team/windowsTeamRemove.real.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/dsh/runtime.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts', 'src/superTabs/buddyHome.spec.ts', 'src/superTabs/start.spec.ts', 'src/engines/kit/folderTrust.spec.ts')
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/team/windowsTeamRemove.real.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/dsh/runtime.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts', 'src/superTabs/start.spec.ts', 'src/engines/kit/folderTrust.spec.ts')
           npx vitest run @paths --maxWorkers=1
       # Two real builds (sub-project G): the rollover from the previous host to this one (hostMove.real.spec.ts, and
       # drain.spec.ts's two-build case), and the payload install (the bin\ replacement, and install.ps1 in Windows
@@ -256,13 +256,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      NODE_VERSION: v22.23.2
+      NODE_VERSION: v24.22.2
       CLI_VERSION: 0.0.0-dev.ci${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22.23.2
+          node-version: 24.22.2
           cache: npm
           cache-dependency-path: cli/package-lock.json
       - uses: actions/download-artifact@v4

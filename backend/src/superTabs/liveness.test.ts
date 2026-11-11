@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentStart, Assignment, SuperTabState } from './model.js'
-import { changesRequested, LEASE_MS, loseTasks, QUIET_RUNNING_MS, renewOwnTask, revisionReady, sweepLiveness, waitingForReview } from './liveness.js'
+import { LEASE_MS, loseTasks, QUIET_RUNNING_MS, sweepLiveness, waitingForReview } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
-import { CREW_REOPEN_GRACE_MS } from './crew.js'
 import { split } from './parts/index.js'
-import { stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
 const assignment = (patch: Partial<Assignment> = {}): Assignment => ({ id: 'a1', agentId: 'w', status: 'working', result: null,
@@ -140,30 +138,12 @@ describe('a task waiting for review', () => {
     expect(handOff({ reviewFoundAt: handedOver })).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 45 minutes' } })
   })
 
-  // Task #3397: a crashed crew member's host reopens it in place, so it keeps its task for CREW_REOPEN_GRACE_MS after its
-  // session went down; one still down then loses it as any worker does. Its machine going offline still loses it at once.
-  it('keeps a crew member\'s task while its host reopens it, and loses it once the grace ends', () => {
-    const crewStopped = (downFor: number) => {
-      const state = quiet('working', 1)
-      state.machines![0]!.observation!.stoppedHarnessIds = ['h']
-      state.agents[0]!.crew = { role: 'Engineer', at: 1, by: 'p' }
-      state.agents[0]!.downSince = new Date(handedOver + MINUTE - downFor).toISOString()
-      return state
-    }
-    expect(status(crewStopped(CREW_REOPEN_GRACE_MS - 1), handedOver + MINUTE)).toMatchObject({ status: 'working' })
-    expect(status(crewStopped(CREW_REOPEN_GRACE_MS), handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
-    const notCrew = crewStopped(CREW_REOPEN_GRACE_MS - 1)
-    delete notCrew.agents[0]!.crew
-    expect(status(notCrew, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
-    // Asleep (closed on purpose) or moved to another machine (task #3398): nothing reopens it here, so no grace.
-    for (const gone of [{ asleep: { since: 1 } }, { movedTo: 'w2' }]) {
-      const away = crewStopped(CREW_REOPEN_GRACE_MS - 1)
-      Object.assign(away.agents[0]!, gone)
-      expect(status(away, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
-    }
-    const offline = quiet('working', 1)
-    offline.agents[0]!.crew = { role: 'Engineer', at: 1, by: 'p' }
-    expect(status(offline, handedOver + 4 * MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its machine Mac has been offline for 2 minutes' } })
+  // Swarm v4 has no crew (2026-11-10): a crew mark an agent kept from before gives its task no reopen grace.
+  it('loses the task of an agent with a crew mark from before as any worker\'s when its session stops', () => {
+    const state = quiet('working', 1)
+    state.machines![0]!.observation!.stoppedHarnessIds = ['h']
+    Object.assign(state.agents[0]!, { crew: { role: 'Engineer', at: 1, by: 'p' }, downSince: new Date(handedOver).toISOString() })
+    expect(status(state, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
   })
 
   // Task #3399: a handed task waits on its Reviewers and CI, not its Engineer, so neither loses it (handed.ts). An older skill's
@@ -177,148 +157,6 @@ describe('a task waiting for review', () => {
       { receivedAt: handedOver + MINUTE, harnessProgress: { h: handedOver } })
     older.machines![0]!.observation!.stoppedHarnessIds = ['h']
     expect(status(older, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
-  })
-})
-
-describe('a review task while its build is back with the Engineer', () => {
-  // Diego, 2026-11-01: a Reviewer checks and posts in the build's group, which never renewed its own linked task, so after a
-  // normal fix round of ~31 minutes the review task was lost, its Lead woken and the Reviewer told to stop. Review of #2487: it
-  // follows the Reviewer, never the Engineer, so an idle Reviewer is still lost.
-  const asked = 1_000_000
-  /** Review task r1 (reviewOf g1) held by Reviewer w on Mac, which reports it running with no screen change since [asked];
-   *  build g1 held by Engineer e on Studio, both machines reporting at [at]. */
-  const reviewing = (at: number, build: Partial<Assignment> = {}, buildPatch: Record<string, unknown> = {}, review: Partial<Assignment> = { changesRequestedAt: asked }) => {
-    const report = (h: string) => ({ runningHarnessIds: [h], stoppedHarnessIds: [], receivedAt: at, harnessProgress: { [h]: asked } })
-    return { id: 't',
-      agents: [{ id: 'w', machineId: 'm', harnessId: 'h', machineOwnerId: 'o', contributorId: 'p', membershipGeneration: 'g', name: 'Reviewer' },
-        { id: 'e', machineId: 'm2', harnessId: 'h2', machineOwnerId: 'o', contributorId: 'p', membershipGeneration: 'g', name: 'Builder' }],
-      people: [{ id: 'p', email: 'p@example.com', role: 'owner', generation: 'g' }],
-      machines: [{ machineId: 'm', name: 'Mac', observation: report('h') }, { machineId: 'm2', name: 'Studio', observation: report('h2') }],
-      conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 },
-        { id: 'g1', title: 'Build', leadId: null, agentIds: ['e', 'w'], archived: false, brief: 'Do it', checks: [], lastMessageSequence: 0,
-          assignment: assignment({ id: 'b1', agentId: 'e', execution: { machineId: 'm2', harnessId: 'h2', machineOwnerId: 'o' },
-            leaseUntil: at + LEASE_MS, progressAt: at, ...build }), ...buildPatch },
-        { id: 'r1', title: 'Review: Build', leadId: null, agentIds: ['w'], archived: false, brief: 'Review it', checks: [], lastMessageSequence: 0, reviewOf: 'g1',
-          assignment: assignment({ id: 'r', leaseUntil: asked + LEASE_MS, progressAt: asked, ...review }) }],
-    } as unknown as SuperTabState
-  }
-  const group = (state: SuperTabState, id: string) => state.conversations.find(c => c.id === id)!
-  const review = (state: SuperTabState) => group(state, 'r1').assignment!
-  const sweep = (state: SuperTabState, now: number) => {
-    const rows = loseTasks(state, now).filter(row => row.source?.kind === 'work-lost' && row.source.assignmentId === 'r')
-    return { status: review(state).status, lost: rows.length > 0 }
-  }
-  const later = asked + 35 * MINUTE
-
-  it('keeps its task through 35 quiet minutes after its verdict asked for changes, while the build is in progress, blocked or asking a person', () => {
-    for (const status of ['working', 'blocked', 'needs_human'] as const) expect(sweep(reviewing(later, { status }), later)).toEqual({ status: 'working', lost: false })
-  })
-
-  it('is lost after 30 quiet minutes with no verdict asking for changes, though its Engineer keeps working and sending heartbeats', () => {
-    // The Engineer's "working" heartbeats renew the build every few minutes; the Reviewer sits idle.
-    const idle = (at: number) => reviewing(at, { status: 'working', result: 'Working: awaiting review', progressAt: at, leaseUntil: at + LEASE_MS }, {}, {})
-    expect(sweep(idle(asked + QUIET_RUNNING_MS), asked + QUIET_RUNNING_MS)).toEqual({ status: 'working', lost: false })
-    const lost = idle(asked + QUIET_RUNNING_MS + 1)
-    expect(sweep(lost, asked + QUIET_RUNNING_MS + 1)).toEqual({ status: 'lost', lost: true })
-    expect(review(lost).lost?.reason).toBe('no progress for 30 minutes')
-    // The build waiting for review again, with the Reviewer idle since: lost the same way.
-    expect(sweep(reviewing(later, { status: 'review', result: 'Ready for review at abc1234' }, {}, {}), later)).toEqual({ status: 'lost', lost: true })
-  })
-
-  // Task #2241: Reviewers give their verdict as a post, and stay Working while the Engineer fixes it (instructions, revision 27).
-  const told = { toldEngineerAt: asked }
-  it('keeps its task through 35 quiet minutes after writing to its Engineer, while the Engineer is fixing', () => {
-    for (const status of ['working', 'blocked', 'needs_human'] as const) expect(sweep(reviewing(later, { status }, {}, told), later)).toEqual({ status: 'working', lost: false })
-  })
-
-  it('holds nothing when its Engineer is waiting on a review: "starting now", then silence, still moves', () => {
-    const waiting = reviewing(later, { status: 'review', result: 'Ready for review at abc1234' }, {}, told)
-    expect(sweep(waiting, later)).toEqual({ status: 'lost', lost: true })
-    expect(review(waiting).lost?.reason).toBe('no progress for 35 minutes')
-    // An older skill's hand-off is working by status, and waits on a review all the same.
-    expect(sweep(reviewing(later, { status: 'working', result: 'Ready for review at abc1234' }, {}, told), later)).toEqual({ status: 'lost', lost: true })
-  })
-
-  it('has 30 minutes from the Engineer\'s next Ready, and is moved after them', () => {
-    const ready = (at: number) => {
-      const state = reviewing(at, { status: 'review', result: 'Ready for review at abc1234', progressAt: later }, {}, told)
-      revisionReady(state, group(state, 'g1'), later)
-      return state
-    }
-    expect(review(ready(later)).toldEngineerAt).toBeUndefined()
-    expect(sweep(ready(later + QUIET_RUNNING_MS), later + QUIET_RUNNING_MS)).toEqual({ status: 'working', lost: false })
-    expect(sweep(ready(later + QUIET_RUNNING_MS + 1), later + QUIET_RUNNING_MS + 1)).toEqual({ status: 'lost', lost: true })
-  })
-
-  it('still loses its task at once when its session stops or its machine goes, and to time once its build ends', () => {
-    const stopped = reviewing(later, {}, {}, told)
-    stopped.machines![0]!.observation!.stoppedHarnessIds = ['h']
-    expect(sweep(stopped, later)).toEqual({ status: 'lost', lost: true })
-    for (const status of ['cancelled', 'done', 'lost'] as const) expect(sweep(reviewing(later, { status }, {}, told), later)).toEqual({ status: 'lost', lost: true })
-  })
-
-  it('still loses its task to time once its build is cancelled, finished, lost, archived, unloaded or in another project', () => {
-    for (const status of ['cancelled', 'done', 'lost'] as const) expect(sweep(reviewing(later, { status }), later)).toEqual({ status: 'lost', lost: true })
-    expect(sweep(reviewing(later, {}, { archived: true }), later)).toEqual({ status: 'lost', lost: true })
-    expect(sweep(reviewing(later, {}, { projectId: 'other', agentIds: ['e'] }), later)).toEqual({ status: 'lost', lost: true })
-    const asleep = reviewing(later)
-    asleep.conversations = asleep.conversations.filter(c => c.id !== 'g1')
-    expect(sweep(asleep, later)).toEqual({ status: 'lost', lost: true })
-  })
-
-  it('still loses its task at once when its session stops, its machine goes offline, it hits a limit or its model keeps failing', () => {
-    const stopped = reviewing(later)
-    stopped.machines![0]!.observation!.stoppedHarnessIds = ['h']
-    expect(sweep(stopped, later)).toEqual({ status: 'lost', lost: true })
-    const offline = reviewing(later - 3 * MINUTE)
-    sweep(offline, later)
-    expect(review(offline)).toMatchObject({ status: 'lost', lost: { reason: 'its machine Mac has been offline for 2 minutes' } })
-    const limited = reviewing(later)
-    Object.assign(limited.agents[0]!, { alerting: ['limit'], limitedUntil: new Date(later + 60 * MINUTE).toISOString() })
-    expect(sweep(limited, later)).toEqual({ status: 'lost', lost: true })
-    const failing = reviewing(later)
-    Object.assign(failing.agents[0]!, { alerting: ['model'] })
-    expect(sweep(failing, later)).toEqual({ status: 'lost', lost: true })
-  })
-
-  it('has 30 minutes from the build\'s next Ready, so the end of the wait does not lose it', () => {
-    const ready = (at: number) => {
-      const state = reviewing(at, { status: 'review', result: 'Ready for review at abc1234', progressAt: later })
-      revisionReady(state, group(state, 'g1'), later)
-      return state
-    }
-    expect(review(ready(later))).toMatchObject({ progressAt: later, leaseUntil: later + QUIET_RUNNING_MS })
-    expect(review(ready(later)).changesRequestedAt).toBeUndefined()
-    expect(sweep(ready(later + QUIET_RUNNING_MS), later + QUIET_RUNNING_MS)).toEqual({ status: 'working', lost: false })
-    const quiet = ready(later + QUIET_RUNNING_MS + 1)
-    expect(sweep(quiet, later + QUIET_RUNNING_MS + 1)).toEqual({ status: 'lost', lost: true })
-    expect(review(quiet).lost?.reason).toBe('no progress for 30 minutes')
-  })
-
-  it('is renewed and marked only by its own Reviewer acting in the build, never by the Engineer, another agent or another project', () => {
-    const state = reviewing(asked, {}, {}, {})
-    // A second linked task, a Tester's, and a linked task of another project naming the same build.
-    state.agents.push({ ...structuredClone(state.agents[0]!), id: 't2', harnessId: 'h3', name: 'Tester' })
-    state.conversations.push({ ...structuredClone(group(state, 'r1')), id: 's1', assignment: assignment({ id: 's', agentId: 't2', leaseUntil: 1, progressAt: 1 }) },
-      { ...structuredClone(group(state, 'r1')), id: 'x1', projectId: 'other', assignment: assignment({ id: 'x', agentId: 'w', leaseUntil: 1, progressAt: 1 }) })
-    const build = group(state, 'g1')
-    renewOwnTask(state, build, 'e', later)
-    expect(review(state)).toMatchObject({ leaseUntil: asked + LEASE_MS, progressAt: asked })
-    expect(build.assignment).toMatchObject({ leaseUntil: later + LEASE_MS, progressAt: later })
-    renewOwnTask(state, build, 'w', later + MINUTE)
-    expect(review(state)).toMatchObject({ leaseUntil: later + MINUTE + LEASE_MS, progressAt: later + MINUTE })
-    expect(group(state, 's1').assignment).toMatchObject({ leaseUntil: 1, progressAt: 1 })
-    expect(group(state, 'x1').assignment).toMatchObject({ leaseUntil: 1, progressAt: 1 })
-    // The build's lease is its Engineer's own, untouched by the Reviewer.
-    expect(build.assignment).toMatchObject({ leaseUntil: later + LEASE_MS, progressAt: later })
-    changesRequested(state, build, 'w', later)
-    expect(review(state).changesRequestedAt).toBe(later)
-    expect(group(state, 's1').assignment!.changesRequestedAt).toBeUndefined()
-    expect(group(state, 'x1').assignment!.changesRequestedAt).toBeUndefined()
-    // A cancelled build marks nothing.
-    const cancelled = reviewing(asked, { status: 'cancelled' }, {}, {})
-    changesRequested(cancelled, group(cancelled, 'g1'), 'w', later)
-    expect(review(cancelled).changesRequestedAt).toBeUndefined()
   })
 })
 
@@ -390,7 +228,6 @@ describe('a start its machine has launched', () => {
     const rows = sweepLiveness(state, at).filter(row => row.source?.kind === 'start-timeout')
     expect(rows).toEqual([expect.objectContaining({ recipients: ['L', 'E'],
       text: 'Could not start Builder on moonshotai/kimi-k3: its machine did not start it within 3 minutes.' })])
-    expect(state.conversations[0]!.stepUp).toBeUndefined()
   })
 
   // A task with no lead (opened before its project had a coordinator) still hears its failed start: the agent that made it,
@@ -485,35 +322,4 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
   const starting = (start: Record<string, unknown>) => project(null, { starts: [{ id: 's1', request: { conversationId: 'g1', machineId: 'm', name: 'Builder' },
     dispatched: false, harnessId: null, error: null, requestedAt: NOW - 9 * MINUTE, ...start }] })
 
-})
-
-// Diego, 2026-11-04 (task #2693): the project chat's thread replies are the only task state the chat shows (#2704), but a task
-// lost outside any command (the sweep, a machine's report, its Lead's poll) never said Stuck there: the thread kept saying On it.
-describe('a task lost outside any command says Stuck in its project-chat thread', () => {
-  const lost = () => {
-    const f = stepsFixture()
-    // Asked for in a person's message, whose thread is the task's (taskLine.ts); a task no message asked for says nothing there.
-    f.group(f.task).cards = { ...f.group(f.task).cards, line: { messageId: 'ask', conversationId: 'lead' } }
-    const root = f.group(f.task).cards!.line!.messageId
-    const worker = f.state.agents.find(a => a.id === f.dev)!
-    const text = `Stuck: ${worker.displayName ?? worker.name} stopped. Next: another engineer takes it over.`
-    const replies = (rows: ReturnType<typeof loseTasks>) => rows.filter(r => r.conversationId === f.group(f.task).cards!.line!.conversationId)
-    f.tick(120 * MINUTE)
-    return { f, root, text, replies }
-  }
-
-  it('through the loss check: exactly one reply, in the task\'s thread, as its coordinator', () => {
-    const { f, root, text, replies } = lost()
-    const rows = loseTasks(f.state, f.now)
-    expect(f.group(f.task).assignment!.status).toBe('lost')
-    expect(replies(rows)).toEqual([expect.objectContaining({ text, replyTo: root, thread: root, recipients: [],
-      author: expect.objectContaining({ kind: 'agent', id: f.lead }), source: expect.objectContaining({ kind: 'system' }) })])
-  })
-
-  it('once when an alert loses it inside a command', () => {
-    const { f, root, text } = lost()
-    const rows = f.run({ type: 'agent.alert', agentId: f.dev, alert: 'limit', active: true }, f.as(f.dev)).messages
-    expect(f.group(f.task).assignment!.status).toBe('lost')
-    expect(rows.filter(r => r.thread === root && r.text.startsWith('Stuck:'))).toEqual([expect.objectContaining({ text })])
-  })
 })

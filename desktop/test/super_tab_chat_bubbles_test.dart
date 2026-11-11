@@ -107,6 +107,20 @@ void main() {
     );
   });
 
+  // Each row reads the several-word names from the list it is handed (message_text.dart), once for a list: a list made
+  // anew for every row would be read again for every row.
+  testWidgets('every row of a conversation is handed the same list of the '
+      'Swarm\'s agent names', (tester) async {
+    await showView(tester, server());
+    final rows = tester
+        .widgetList<SuperTabMessageRow>(find.byType(SuperTabMessageRow))
+        .toList();
+    expect(rows.length, greaterThan(1));
+    for (final row in rows) {
+      expect(identical(row.agentNames, rows.first.agentNames), isTrue);
+    }
+  });
+
   testWidgets('a group chat names the speaker once and shows their face by '
       'their last bubble', (tester) async {
     await showView(tester, server());
@@ -139,8 +153,7 @@ void main() {
   ) async {
     final s = server(chat: 'offline')..state.remove('projects');
     ((s.state['conversations'] as List)[1] as Map)
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['agentIds'] = ['pm'];
     final c = await showView(tester, s);
     await c.select('offline');

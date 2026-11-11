@@ -24,14 +24,14 @@ import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
+import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './lib/nodeRuntime.js'
 import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
-import { confirm as confirmUpdate, pendingVersion, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
+import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
-import { isTeamAccount } from './team/config.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
 export const HARNESSD_REEXEC_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-reexec.json')
@@ -259,11 +259,16 @@ export function startMaster(
     pidFile: PID_FILE,
     statusFile: HARNESSD_STATUS_FILE,
     logFile: DAEMON_LOG_FILE,
-    // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both.
-    restoreUpdate: () => rollBackStaged({
-      cliPending: () => pendingVersion(env.ADAPTER_CLI_DIR) !== null, restoreCli: () => restoreUpdate(env.ADAPTER_CLI_DIR),
-      ptyRoot, log: masterLog, lock,
-    }),
+    // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both. The Node the
+    // CLI build's rollback put back, when the update had moved the daemon off it, is the master's to re-execute on.
+    restoreUpdate: () => {
+      let node: string | null = null
+      rollBackStaged({
+        cliPending: () => pendingVersion(env.ADAPTER_CLI_DIR) !== null, restoreCli: () => { node = restoreUpdate(env.ADAPTER_CLI_DIR) },
+        ptyRoot, log: masterLog, lock,
+      })
+      return node
+    },
     confirmUpdate: () => keepStaged({ confirmCli: () => confirmUpdate(env.ADAPTER_CLI_DIR), ptyRoot, log: masterLog, lock }),
     version: VERSION,
     reexecMarkerFile: HARNESSD_REEXEC_FILE,
@@ -273,9 +278,7 @@ export function startMaster(
     unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle)
       ?? (ptyRoot === null ? null : ptyUnjudged(ptyRoot, { cliPending: pendingVersion(env.ADAPTER_CLI_DIR) !== null, log: masterLog, lock })),
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
-    // The Harness Team account takes releases even when its owner's environment switched updates off and setup carried
-    // that in (team/layout.ts): nobody develops in it, and nobody is there to update it by hand.
-    updater: (!env.ADAPTER_UPDATE_DISABLE || isTeamAccount()) && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
+    updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can
     // clear the folder; one that dies leaves a claim whose pid is gone, which counts for nothing.
     exit: (code) => {
@@ -314,22 +317,29 @@ export interface BundleMasterDeps {
   read: (path: string) => Buffer
   /** Writes the lean bundle out and returns where (harnessd/leanBundle.ts `writeLeanBundle`). */
   write: (lean: LeanBundle) => string
-  /** Runs `<lean> __harnessd-probe` as the re-executed master would start: whether it answered. */
-  probe: (leanPath: string, env: NodeJS.ProcessEnv) => { ok: boolean; detail: string }
+  /** Runs `<node> <lean> __harnessd-probe` as the re-executed master would start: whether it answered. */
+  probe: (node: string, leanPath: string, env: NodeJS.ProcessEnv) => { ok: boolean; detail: string }
   execve: Execve | null
-  /** The node the master re-executes on: the managed one under the name `harnessd`
-   *  (harnessd/processName.ts), so Activity Monitor names it. Asked only when it re-executes; defaults
-   *  to this process's. */
+  /** The node the master re-executes on (`masterNode`), under the name `harnessd` (harnessd/processName.ts), so
+   *  Activity Monitor names it. Asked only when it can re-execute; defaults to this process's. */
   node?: () => string
+  /**
+   * The master stays on the Node it runs on although `node` named another (a lean bundle that did not answer there,
+   * which [failed] says, or a master that runs from cli.js): `current-node` is put back on this one, or the next start
+   * (launchd, systemd, `harness start`) would go onto a Node no probation judged. `harness status` says why:
+   * 'does-not-run' for a Node that failed, 'cannot-switch' for a master that cannot move. Returns this process's Node named
+   * `harnessd`, or null when `node` named this one.
+   */
+  nodeBack?: (failed: boolean) => string | null
   start: (start: MasterStart) => unknown
   log: (line: string) => void
   /** This operating system (Windows: no lean bundle). */
   platform?: NodeJS.Platform
 }
 
-/** Run `<leanPath> __harnessd-probe` with this process's Node and flags, as the master would start on it. */
-export function probeLean(leanPath: string, probeEnv: NodeJS.ProcessEnv, timeoutMs = PROBE_TIMEOUT_MS): { ok: boolean; detail: string } {
-  const run = spawnSync(process.execPath, [...process.execArgv, leanPath, '__harnessd-probe'], {
+/** Run `<leanPath> __harnessd-probe` on [node] with this process's flags, as the master would start on it. */
+export function probeLean(node: string, leanPath: string, probeEnv: NodeJS.ProcessEnv, timeoutMs = PROBE_TIMEOUT_MS): { ok: boolean; detail: string } {
+  const run = spawnSync(node, [...process.execArgv, leanPath, '__harnessd-probe'], {
     env: probeEnv, encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'],
   })
   // Judged as the re-execution's own probe judges a bundle (harnessd/reexec.ts `runProbe`).
@@ -341,36 +351,54 @@ export function probeLean(leanPath: string, probeEnv: NodeJS.ProcessEnv, timeout
   }
 }
 
+/**
+ * The Node the master goes on with: the managed one `current-node` names once it meets the minimum, else the one it
+ * runs on. This exec is where an update moves the daemon onto the Node its updater installed (lib/selfUpdate.ts
+ * `startSelfUpdater`'s `node`), in the gap the update already has, its core judged on its probation; and where a
+ * master started on an older Node by anything else (a `harness start`, launchd or systemd) moves too.
+ */
+export function masterNode(running: string, managed: string = managedNodePath()): string {
+  return (nodeMajorOf(managed) ?? 0) >= MINIMUM_NODE_MAJOR ? managed : running
+}
+
 export const processBundleDeps = (): BundleMasterDeps => ({
   env: process.env,
   leanOff: () => existsSync(LEAN_OFF_FILE),
   exists: existsSync,
   read: (path) => readFileSync(path),
   write: (lean) => writeLeanBundle(LEAN_DIR, lean),
-  probe: (leanPath, probeEnv) => probeLean(leanPath, probeEnv),
+  probe: (node, leanPath, probeEnv) => probeLean(node, leanPath, probeEnv),
   execve: processExecve(),
-  node: () => namedNode(baseNode(process.execPath), 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) }),
+  node: () => namedNode(masterNode(baseNode(process.execPath)), 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) }),
+  nodeBack: (failed) => {
+    const own = baseNode(process.execPath)
+    if (masterNode(own) === own) return null
+    putNodeBack(env.ADAPTER_CLI_DIR, own, failed ? 'does-not-run' : 'cannot-switch')
+    return namedNode(own, 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) })
+  },
   start: startMaster,
   log: (line) => console.log(`${ts()} ${line}`),
   platform: process.platform,
 })
 
 /**
- * The master, started on [bundlePath] (cli.js): re-executed on the lean bundle cli.js carries when this
- * Node can (22.15 and 23.11 on), with the services started from it; run here, from cli.js, with the
- * services still started from the lean bundle when it cannot; and as before, from cli.js alone, when
+ * The master, started on [bundlePath] (cli.js): re-executed on the lean bundle cli.js carries, on the Node
+ * `masterNode` names, when this Node can (22.15 and 23.11 on), with the services started from it; run here, from
+ * cli.js, with the services still started from the lean bundle when it cannot; and as before, from cli.js alone, when
  * there is no lean bundle to use, `HARNESSD_LEAN=off` or `LEAN_OFF_FILE`. A lean bundle is used only once
  * it has answered the probe a master about to re-execute asks (harnessd/reexec.ts): one that cannot start
  * a master is never handed the daemon.
  */
 export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps = processBundleDeps()): void {
+  // The lean bundle's claims and its services' identity rely on hard links of the managed node (harnessd/AGENTS.md
+  // rules 7 and 8), which a Windows install does not make: there the master and everything it starts run from cli.js,
+  // on the Node harness-launch.exe started it on, the one `current-node` names.
+  if (deps.platform === 'win32') { deps.start({ scriptPath: bundlePath }); return }
   const fromBundle = (reason: string | null, lean?: { path: string; fingerprint: string }): void => {
     if (reason) deps.log(`[harnessd] ${reason}`)
+    deps.nodeBack?.(false)
     deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
-  // The lean bundle's claims and its services' identity rely on hard links of the managed node (harnessd/AGENTS.md
-  // rules 7 and 8), which a Windows install does not make: there the master and everything it starts run from cli.js.
-  if (deps.platform === 'win32') { fromBundle(null); return }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
   if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master, the core and the services run from ${bundlePath}`); return }
   let written: { lean: LeanBundle; path: string } | null
@@ -385,7 +413,18 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   const { lean, path: leanPath } = written
   const fingerprint = leanFingerprint(lean)
   const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256, [LEAN_FINGERPRINT_ENV]: fingerprint }
-  const probed = deps.probe(leanPath, leanEnv)
+  // Probed on the Node the master will run on: one that cannot run it there is never handed the daemon. Without an
+  // exec, that is this one.
+  let node = deps.execve ? deps.node?.() ?? process.execPath : process.execPath
+  let probed = deps.probe(node, leanPath, leanEnv)
+  // Only a Node `node` named is the new one's fault: without an exec, the probe ran on this one.
+  const own = probed.ok || !deps.execve ? null : deps.nodeBack?.(true) ?? null
+  if (own) {
+    // Moving Nodes, and the bundle did not answer on the new one: the master stays on its own, as before the update.
+    deps.log(`[harnessd] the lean bundle ${leanPath} did not answer its probe on ${node} (${probed.detail}): the master stays on ${own}`)
+    node = own
+    probed = deps.probe(node, leanPath, leanEnv)
+  }
   if (!probed.ok) {
     fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master, the core and the services run from ${bundlePath}`)
     return
@@ -394,10 +433,9 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
     return
   }
-  // An exec that fails cannot be caught once it has begun: on Node 22.23 a node binary that is not there
+  // An exec that fails cannot be caught once it has begun: on Node 22.23 and 24.22.2 a node binary that is not there
   // aborts this process (exit 134), and a script that is not there ends it in the new image
   // (MODULE_NOT_FOUND). The probe ran both a moment ago; they are checked again right before.
-  const node = deps.node?.() ?? process.execPath
   const missing = [node, leanPath].find((path) => !deps.exists(path))
   if (missing) {
     fromBundle(`${missing} is not there to re-execute on: the master, the core and the services run from ${bundlePath}`)

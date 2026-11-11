@@ -21,6 +21,7 @@ const OFFICIAL_COMMANDS = {
   grok: 'curl -fsSL https://x.ai/cli/install.sh | bash',
   agy: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
   copilot: 'npm install -g @github/copilot',
+  openclaw: 'npm install -g openclaw',
 } as const
 
 describe('ENGINE_INSTALL', () => {
@@ -44,6 +45,16 @@ describe('ENGINE_INSTALL', () => {
   it('falls back to OpenCode’s npm package, whose binaries need no GitHub download', () => {
     expect(ENGINE_INSTALL.opencode.fallback).toBe('npm install -g opencode-ai')
     expect(ENGINE_INSTALL.opencode.executable.npmGlobal).toBe(true)
+  })
+
+  it('openclaw installs with npm on every platform', () => {
+    expect(ENGINE_INSTALL.openclaw.source).toBe('https://openclaw.ai/')
+    expect(ENGINE_INSTALL.openclaw.executable).toEqual({ names: ['openclaw'], npmGlobal: true })
+    expect(ENGINE_WINDOWS_INSTALL.openclaw).toEqual({ npm: 'openclaw' })
+    for (const [platform, arch] of [['darwin', 'arm64'], ['linux', 'x64'], ['win32', 'x64'], ['win32', 'arm64']] as const) {
+      expect(engineInstallLine(ENGINE_INSTALL.openclaw, platform, arch), `${platform}-${arch}`).toBe('npm install -g openclaw')
+    }
+    expect(engineInstallPaths(ENGINE_INSTALL.openclaw, 'C:\\Users\\a', 'win32', undefined)[0]).toBe('C:\\Users\\a\\.local\\openclaw')
   })
 
   it('generates valid POSIX pane scripts for every recipe', () => {

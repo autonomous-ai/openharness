@@ -11,9 +11,6 @@ export interface PartsStore {
   cursor: string
   epoch: number
   lastChangedAt: number | null
-  githubApp: boolean
-  /** The backend opens a task's steps (task steps design): said by its first load, kept across changes. */
-  steps?: boolean
   head: PartEnvelope | null
   /** Live parts by kind, in the order the server listed them; new keys go last. */
   parts: Map<ListedKind, Map<string, PartEnvelope>>
@@ -26,10 +23,15 @@ const LISTS: Array<[keyof PartsPayload, ListedKind]> = [
   ['members', 'member'], ['agents', 'agent'], ['groups', 'group'], ['machines', 'machine'], ['starts', 'start'], ['progress', 'progress'],
 ]
 
+/** A payload's list for [field]. Only `progress` may be absent (a backend 30 days past the CLI release that made it optional,
+ *  backend S19); any other list missing still fails the read. */
+const listed = (payload: PartsPayload, field: keyof PartsPayload): PartEnvelope[] =>
+  (field === 'progress' ? payload.progress ?? [] : payload[field]) as PartEnvelope[]
+
 export function storeOf(first: FirstLoad): PartsStore {
   const parts = new Map<ListedKind, Map<string, PartEnvelope>>(LISTS.map(([field, kind]) =>
-    [kind, new Map((first[field] as PartEnvelope[]).map(part => [part.key, part]))]))
-  return { cursor: first.cursor, epoch: first.epoch, lastChangedAt: first.lastChangedAt, githubApp: first.githubApp === true, steps: first.steps === true,
+    [kind, new Map(listed(first, field).map(part => [part.key, part]))]))
+  return { cursor: first.cursor, epoch: first.epoch, lastChangedAt: first.lastChangedAt,
     head: first.head, parts, dormant: new Map(), derived: first.derived }
 }
 
@@ -38,7 +40,7 @@ export function mergeChanges(store: PartsStore, changes: ChangedParts): PartsSto
   const dormant = new Map(store.dormant)
   for (const [field, kind] of LISTS) {
     const held = parts.get(kind)!
-    for (const part of changes[field] as PartEnvelope[]) {
+    for (const part of listed(changes, field)) {
       const known = held.get(part.key) ?? (kind === 'group' ? dormant.get(part.key) : undefined)
       if (known && known.version >= part.version) continue
       dormant.delete(part.key)
@@ -50,6 +52,6 @@ export function mergeChanges(store: PartsStore, changes: ChangedParts): PartsSto
     }
   }
   const head = changes.head && (!store.head || changes.head.version > store.head.version) ? changes.head : store.head
-  return { cursor: changes.cursor, epoch: changes.epoch, lastChangedAt: changes.lastChangedAt, githubApp: store.githubApp, steps: store.steps,
+  return { cursor: changes.cursor, epoch: changes.epoch, lastChangedAt: changes.lastChangedAt,
     head, parts, dormant, derived: changes.derived }
 }

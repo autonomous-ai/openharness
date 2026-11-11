@@ -22,8 +22,9 @@ import type { SupervisorStatus } from './supervisor.js'
  *  request needs it or the release's own harnesses are to be put in place (core/viewersWake.ts).
  *  6: `stop`, the core asking its master to stop everything (`harness stop` on Windows, where the CLI has no signal
  *  to send the master), and `shutdown`, the master asking the core or a service to leave, where a signal cannot:
- *  on Windows Node's `kill` is TerminateProcess, whatever the signal, and nothing would be torn down. */
-export const HARNESSD_PROTOCOL = 6
+ *  on Windows Node's `kill` is TerminateProcess, whatever the signal, and nothing would be torn down.
+ *  7: `want` for the agent browser's process, which runs once a browser is wanted here (core/agentBrowserLink.ts). */
+export const HARNESSD_PROTOCOL = 7
 
 /** The command a bundle's master answers its probe on, and what it answers. */
 export const PROBE_COMMAND = '__harnessd-probe'
@@ -69,9 +70,9 @@ export type CoreMessage =
   /** Start-up is done and requests are being served (protocol 2) — or, with `safeMode`, start-up gave
    *  way to safe mode: the updater alone runs, waiting for a fix. */
   | { type: 'harnessd:ready'; safeMode?: string }
-  /** Sent every few seconds; a core that stops sending is hung. `loopDelayMs`: the longest the event
-   *  loop was held since the last one (protocol 2). */
-  | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number; loopDelayMs?: number }
+  /** Sent every few seconds; a core that stops sending is hung. An older build's beat also carries
+   *  `loopDelayMs`, which no master read; like any key not checked here, it is ignored. */
+  | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number }
   /** Start the process that runs this service (harnessd/services.ts `onDemand`): an experiment that is on now
    *  (protocol 3), the devices, models or the gateway, now that they are needed (protocol 4, and before
    *  `bound` too), or the viewers (protocol 5). A master from before ignores it, or finds that process already
@@ -123,7 +124,6 @@ export function isCoreMessage(value: unknown): value is CoreMessage {
       return message.safeMode === undefined || typeof message.safeMode === 'string'
     case 'harnessd:heartbeat':
       return typeof message.rssBytes === 'number' && typeof message.heapUsedBytes === 'number'
-        && (message.loopDelayMs === undefined || typeof message.loopDelayMs === 'number')
     case 'harnessd:want':
       return typeof message.service === 'string' && message.service.length > 0
     case 'harnessd:stop':

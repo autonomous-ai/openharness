@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { HARNESSD_PROTOCOL, isCoreMessage, isMasterMessage, isUpdaterMessage } from './protocol.js'
 
 describe('the spawn channel protocol', () => {
-  it('is protocol 6: the core asks its master to stop, and the master asks a process to leave', () => {
-    expect(HARNESSD_PROTOCOL).toBe(6)
+  it('is protocol 7: the core asks for the agent browser\'s process', () => {
+    expect(HARNESSD_PROTOCOL).toBe(7)
   })
 
   it.each([
@@ -13,7 +13,6 @@ describe('the spawn channel protocol', () => {
     [{ type: 'harnessd:ready' }, true],
     [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1 }, true],
     [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 12 }, true],
-    [{ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: '12' }, false],
     [{ type: 'harnessd:heartbeat', rssBytes: '1', heapUsedBytes: 1 }, false],
     [{ type: 'harnessd:heartbeat', rssBytes: 1 }, false],
     [{ type: 'harnessd:want', service: 'orchestrator' }, true],

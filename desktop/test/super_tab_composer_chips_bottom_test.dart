@@ -28,23 +28,21 @@ void main() {
       'Five things for today:\nmeasure prod CPU\ncheck the '
       'release notes\nanswer Diego\nand plan the next batch';
 
-  /// The reader's own Buddy chat with its Buddy running, a chat they write in.
-  ConversationServer buddyChat() {
+  /// The reader's chat with their own agent running, a chat they write in.
+  ConversationServer agentChat() {
     final server = ConversationServer()..threads = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['title'] = 'Wren'
-      ..['agentIds'] = ['buddy-main'];
+      ..['agentIds'] = ['own-agent'];
     (server.state['agents'] as List).add({
-      'id': 'buddy-main',
+      'id': 'own-agent',
       'name': 'Wren',
       'displayName': 'Wren',
       'machineId': 'mac',
       'harnessId': 'h-main',
       'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
       'configuration': {'engine': 'claude'},
     });
     server.append(
@@ -65,7 +63,7 @@ void main() {
     Brightness brightness = Brightness.light,
     bool thread = false,
   }) async {
-    final c = buddyChat().controller();
+    final c = agentChat().controller();
     addTearDown(c.dispose);
     await c.refresh();
     grid.AppTheme.brightness.value = brightness;

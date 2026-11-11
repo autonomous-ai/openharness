@@ -1,5 +1,4 @@
 import { assignAgentDisplayNames } from './agentNames.js'
-import { isBuddy } from './buddies.js'
 import type { Actor, Agent, Person, SuperTabState } from './model.js'
 import { agentProjectId, canReadAgent, projectsOf } from './projects.js'
 
@@ -42,11 +41,11 @@ export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'u
 }
 
 /** The names the Swarm shows its agents, as `assignAgentDisplayNames` gives them, without changing [state], for those [counts]
- *  keeps. A Buddy never counts: it is one person's, named for them. */
+ *  keeps. */
 function agentNames(state: Pick<SuperTabState, 'agents'>, counts: (agent: Agent) => boolean): string[] {
   const named = state.agents.map(agent => ({ ...agent }))
   assignAgentDisplayNames(named)
-  return named.filter(agent => !isBuddy(agent) && counts(agent)).map(agent => agent.displayName ?? agent.name)
+  return named.filter(counts).map(agent => agent.displayName ?? agent.name)
 }
 
 /** Agents every member sees, those of shared projects: only these number a default, which every member reads. An agent some

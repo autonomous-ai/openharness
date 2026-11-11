@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import type { MessageChangeTarget } from './messageEdits.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -22,7 +23,7 @@ function fixture() {
   const agent = () => run({ type: 'agent.add', conversationId: 'lead', machineId: 'machine', harnessId: 'h1', name: 'Worker', configuration,
     lead: false }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
   const lead = () => state.conversations.find(c => c.id === 'lead')!
-  return { run, invite, agent, lead }
+  return { run, invite, agent, lead, get state() { return state } }
 }
 
 const edit = (text = 'Fixed text'): Command => commandSchema.parse({ type: 'message.edit', conversationId: 'lead', messageId: 'm1', text })
@@ -63,35 +64,6 @@ describe('message edits', () => {
     expect(f.lead().reactionSeq ?? 0).toBe(0)
   })
 
-  it.each([false, true])('lets only the attributed owner delete their Buddy proposal, with replies: %s', hasReplies => {
-    const f = fixture()
-    f.invite()
-    const proposalTarget = { ...target({ plain: false, author: { kind: 'person', id: 'peer' }, hasReplies }).messageChange!, proposalOwnerId: 'peer' }
-    // Even the Swarm owner cannot delete another person's proposal.
-    expect(() => f.run(remove(), owner, { messageChange: proposalTarget })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    expect(() => f.run(edit(), peer, { messageChange: proposalTarget })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    const asAgent: Actor = { kind: 'agent', agentId: f.agent(), machineOwnerId: 'peer' }
-    expect(() => f.run(remove(), asAgent, { messageChange: proposalTarget })).toThrow(expect.objectContaining({ status: 403 }))
-    expect(f.run(remove(), peer, { messageChange: proposalTarget }).result).toMatchObject({ changed: true, kept: hasReplies })
-    expect(f.lead().reactionSeq).toBe(1)
-  })
-
-  it('refuses proposal deletion when the source owner and attributed person disagree', () => {
-    const f = fixture()
-    f.invite()
-    const messageChange = { ...target({ plain: false }).messageChange!, proposalOwnerId: 'peer' }
-    for (const actor of [owner, peer]) expect(() => f.run(remove(), actor, { messageChange }))
-      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    expect(f.lead().reactionSeq ?? 0).toBe(0)
-  })
-
-  it('keeps deleted proposals deleted and never makes a system message deletable', () => {
-    const f = fixture()
-    const messageChange = { ...target({ plain: false, deleted: true }).messageChange!, proposalOwnerId: 'owner' }
-    expect(() => f.run(remove(), owner, { messageChange })).toThrow(expect.objectContaining({ code: 'MESSAGE_DELETED' }))
-    expect(() => f.run(remove(), owner, target({ plain: false }))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-  })
-
   it('refuses a viewer, a system row, a deleted message and a message the store did not find', () => {
     const f = fixture()
     for (const command of [edit(), remove()]) {
@@ -104,11 +76,27 @@ describe('message edits', () => {
     expect(() => f.run(edit(), peer, target({ author: { kind: 'person', id: 'peer' } }))).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
   })
 
+  // The store's one-time removal of notices of retired kinds (store.ts removeRetiredNotice), which only the store gives a delete.
+  it('lets the store remove a retired notice, in an archived chat too, stepping the counters back, and never a person\'s post', () => {
+    const f = fixture()
+    const notice = (extra: Partial<MessageChangeTarget> = {}) => ({ ...target({ author: { kind: 'agent', id: 'gone-agent' }, plain: false, sequence: 4,
+      before: { message: 3, main: 3 }, ...extra }), retiredNotice: true as const })
+    Object.assign(f.lead(), { lastMessageSequence: 4, lastMainSequence: 4 })
+    expect(f.run(remove(), owner, notice()).result).toMatchObject({ changed: true, kept: false })
+    expect(f.lead()).toMatchObject({ lastMessageSequence: 3, lastMainSequence: 3, reactionSeq: 1 })
+    expect(f.run(remove(), owner, notice({ hasReplies: true })).result).toMatchObject({ kept: true })
+    expect(() => f.run(remove(), owner, { ...target(), retiredNotice: true })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.run(remove(), owner, notice({ deleted: true }))).toThrow(expect.objectContaining({ code: 'MESSAGE_DELETED' }))
+    f.lead().archived = true
+    expect(f.run(remove(), owner, notice()).result).toMatchObject({ changed: true })
+    expect(() => f.run(remove(), owner, target())).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+  })
+
   it('refuses empty text unless the message has files, and an archived group', () => {
     const f = fixture()
     expect(() => f.run(edit('   '), owner, target())).toThrow(expect.objectContaining({ code: 'INVALID_MESSAGE' }))
     expect(f.run(edit(''), owner, target({ hasFiles: true })).result).toMatchObject({ changed: true })
-    const group = f.run({ type: 'conversation.create', title: 'Old', brief: 'Done.', checks: [] }).result.conversationId as string
+    const group = storedTask(f.state, { title: 'Old', brief: 'Done.' })
     f.run({ type: 'conversation.archive', conversationId: group, archived: true })
     expect(() => f.run(commandSchema.parse({ type: 'message.edit', conversationId: group, messageId: 'm1', text: 'x' }), owner, target()))
       .toThrow(expect.objectContaining({ code: 'ARCHIVED' }))

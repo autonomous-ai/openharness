@@ -589,19 +589,6 @@ class SuperTabMachineLocalModels extends StatelessWidget {
         ));
       }
     }
-    // Whoever serves a model sees whose Buddy runs on it (AGENTS.md,
-    // contributed capacity: seen), from the Buddies every member's read
-    // carries.
-    String? usedBy(String model) {
-      final people = {
-        for (final a in controller.snapshot!.agents)
-          // By its own name (task #4568), never "<person>'s Buddy".
-          if (a.isBuddy && a.gridModel == model)
-            controller.snapshot!.agentName(a.id, fallback: a.name),
-      };
-      return people.isEmpty ? null : 'Used by ${people.join(', ')}';
-    }
-
     Widget line(String label, List<SuperTabServedModel> served) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
@@ -621,11 +608,8 @@ class SuperTabMachineLocalModels extends StatelessWidget {
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final s in served) ...[
+                      for (final s in served)
                         Text(s.name, style: DesktopChrome.control()),
-                        if (usedBy(s.model) case final used?)
-                          Text(used, style: DesktopChrome.metadata()),
-                      ],
                     ],
                   ),
           ),

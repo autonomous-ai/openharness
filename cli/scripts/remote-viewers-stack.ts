@@ -134,7 +134,8 @@ try {
     const child = run(`backend-${index}`, join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], {
       ...backendEnv, PORT: String(backendPorts[index]), PORT_APP_PROXY: String(proxyPorts[index]), BACKEND_INSTANCE_ID: `viewer-${index}`,
     })
-    await until('backend health', () => fetch(`http://127.0.0.1:${backendPorts[index]}/api/health`).then(r => r.ok).catch(() => false))
+    // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
+    await until('backend readiness', () => fetch(`http://127.0.0.1:${backendPorts[index]}/api/ready`, { signal: AbortSignal.timeout(5_000) }).then(r => r.ok).catch(() => false))
     return child
   }
   await bootBackend(0)

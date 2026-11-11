@@ -1,6 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AgentStart, Conversation } from './model.js'
-import { stepSleeps } from './steps.js'
 import { clock, guardedWrite, PartConflict, type HeadData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { deletedSwarms } from './deletion.js'
@@ -9,20 +8,17 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
 import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
-import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
-import { sweepActivity } from './activity.js'
 import { sweepChatSettings } from './chatSettings.js'
-import { sweepReminders } from './reminders.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
-/** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
+/** Parts whose key is never used twice (conversations, starts) lose their tombstone at `purgeAt`.
  *  A person or machine can come back under the same key, so its tombstone is kept for good, compacted to its
  *  version (`compactTombstones`): versions never reset (spec ruling 6, review round 1). An agent's goes at `purgeAt` once
  *  nothing open names it (agentTombstones.ts). Run by the singleton worker at
  *  startup, like the terminal and mention expiry indexes. */
 export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
-  for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
+  for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart']) {
     await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
 }
@@ -64,7 +60,7 @@ async function guarded(db: PrismaClient, write: Parameters<typeof guardedWrite>[
 
 /**
  * A conversation leaves the active set (spec, Archive) when its work is done or cancelled and it has had no message for a
- * day, or when it was archived by hand. Nothing waits on the Lead's report: the server writes the status card (task #3593). A project's
+ * day, or when it was archived by hand. Nothing waits on the Lead's report (task #3593). A project's
  * Lead conversation and the Leads conversation never sleep; a message wakes any of them. Candidates are read oldest
  * first with a cursor, so rejected ones never hold later ones back.
  */
@@ -79,12 +75,6 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
     }
     return leads.get(tabId)!
   }
-  const tasks = new Map<string, { archived: boolean; dormant: boolean } | null>()
-  const taskOf = async (tabId: string, key: string) => {
-    const id = `${tabId}:${key}`
-    if (!tasks.has(id)) tasks.set(id, await db.swarmGroup.findUnique({ where: { tabId_key: { tabId, key } }, select: { archived: true, dormant: true } }))
-    return tasks.get(id)!
-  }
   // A deleted Swarm's groups stay as they are for its restore (deletion.ts).
   const isDeleted = deletedSwarms(db)
   let slept = 0, after: { at: Date; id: string } | null = null
@@ -97,8 +87,6 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
       const quiet = row.lastActivityAt.getTime() < now - DORMANT_AFTER_MS && ['done', 'cancelled'].includes(group.assignment?.status ?? '')
       if (!group.archived && !quiet) continue
       if ((await leadsOf(row.tabId)).has(group.id)) continue
-      // A step sleeps with its task (task steps design): read once per task in this pass.
-      if (group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
       if (await guarded(db, { tabId: row.tabId, op: 'update', kind: 'group', key: row.key, seen: row.version, data: { ...group, dormant: true } })) slept++
     }
     if (rows.length < BATCH) return slept
@@ -164,15 +152,7 @@ export async function threadMarks(db: PrismaClient, now: number) {
   }
 }
 
-/** The Activity and chat setting sweeps (activity.ts, chatSettings.ts), each failure said and kept to itself, as thread marks. */
-export async function activityRows(db: PrismaClient, now: number) {
-  try {
-    return { expired: await sweepActivity(db, now) }
-  } catch (error) {
-    logger.warn('[swarm-sweeps] activity failed', { error: error instanceof Error ? error.message : String(error) })
-    return { failed: true as const }
-  }
-}
+/** The sweep of chat settings (chatSettings.ts), its failure said and kept to itself, as thread marks. */
 export async function chatSettings(db: PrismaClient, now: number) {
   try {
     return await sweepChatSettings(db, now)
@@ -182,21 +162,11 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
-/** The reminder sweep (reminders.ts), its failure said and kept to itself, as Activity's. */
-export async function reminderRows(db: PrismaClient, now: number) {
-  try {
-    return { expired: await sweepReminders(db, now) }
-  } catch (error) {
-    logger.warn('[swarm-sweeps] reminders failed', { error: error instanceof Error ? error.message : String(error) })
-    return { failed: true as const }
-  }
-}
-
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
-    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now), reminders: await reminderRows(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), threadMarks: await threadMarks(db, now),
+    chatSettings: await chatSettings(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. */

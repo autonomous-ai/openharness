@@ -144,6 +144,22 @@ describe('the gateway in its own process', () => {
     expect(machine.daemon.coresStarted()).toBe(1)
   })
 
+  // An agent browser's stream frames ride the terminals' transport through the gateway's own process
+  // (core/browserStreams.ts): sealed both ways, and the backend's word that it dropped a browser frame reaches the core.
+  it('carries an agent browser\'s stream frames from a process of its own, sealed both ways', async () => {
+    const { backend, machine, phone, desk, agentId } = await fresh()
+    const answer = await phone.request('agent_browser_open', { agentId }, 30_000)
+    expect(answer).toMatchObject({ error: 'NO_BROWSER' })
+    const relayed = [...(backend.webSent.get(phone.connId!) ?? []), ...(backend.webReceived.get(phone.connId!) ?? [])]
+      .filter((f) => String(f.type).startsWith('agent_browser_'))
+    expect(relayed.map((f) => f.type).sort()).toEqual(['agent_browser_open', 'agent_browser_open_result'])
+    expect(relayed.every((f) => (f.payload as any)?.__e2e)).toBe(true)
+    expect(JSON.stringify(relayed)).not.toContain(agentId)
+    expect(backend.injectDown(machine.machineId, '', { type: 'agent_browser_transport_error', payload: { code: 'RATE' } })).toBe(true)
+    await deskTurn(desk, agentId, 'the desk goes on after a browser rate notice')
+    expect(machine.daemon.coresStarted()).toBe(1)
+  })
+
   it('killed outright: the phone loses the machine and gets it back; the window and the agents never notice', async () => {
     const { w, machine, phone, desk, agentId } = await fresh()
     const before = gatewayPids(machine.daemon)

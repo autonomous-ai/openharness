@@ -3007,11 +3007,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     targets[i].$1,
                     targets[i].$2.id,
                   ),
-                  coordinatorName: superTabLeadCoordinatorName(
-                    app,
-                    targets[i].$1,
-                    targets[i].$2.id,
-                  ),
                   machineName: showMachines
                       ? app.stateOf(targets[i].$1)?.machine.displayName ??
                             targets[i].$1
@@ -3122,6 +3117,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       context,
       workspaceTabNames(app)[id] ?? swarm.name,
       keymap: _keymap,
+      // A Swarm is renamed for everyone in it, not as this window's tab.
+      swarm: swarm.superTabId != null,
     );
     if (name == null) return;
     if (swarm.superTabId case final tabId?) {
@@ -3951,6 +3948,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !app.activeSwarm.isOrchestrator &&
         (!app.activeSwarm.isSuperTab || app.activeSwarm.superTabId == null);
     HarnessLaunchIntegration? integration;
+    final swarmTab = superTab?.superTabId;
+    // A start that failed after its form closed: New Project or New Agent opens that form again, with why.
+    if (swarmTab != null && (newSwarmProject || newSwarmAgent)) {
+      final failed = app.swarmStarts.takeFailed(
+        swarmTab,
+        project: newSwarmProject,
+      );
+      if (failed != null) {
+        _openNewHarness(
+          machineId: failed.machineId,
+          controller: failed,
+          swarmId: target,
+        );
+        return;
+      }
+    }
     if (superTab != null &&
         requestedSplit == null &&
         placement != HarnessPlacement.newTab) {
@@ -4003,6 +4016,26 @@ class _SwarmScreenState extends State<SwarmScreen> {
       split: requestedSplit,
       placement: placement,
     );
+    final box = _newHarness;
+    if (swarmTab != null &&
+        integration != null &&
+        box?.integration == integration) {
+      integration.onStarted = () =>
+          _startInBackground(box!, swarmTab, project: newSwarmProject);
+    }
+  }
+
+  /// A Swarm's start under way (anh Dee, 2026-11-10: "as soon as i hit new project or new agent, just get me back to my
+  /// main screen"): its form closes, back to what its person was doing, and the start goes on, its row in the left pane
+  /// saying so. A check asked after it is already there.
+  void _startInBackground(
+    NewHarnessController box,
+    String tabId, {
+    required bool project,
+  }) {
+    if (!identical(_newHarness, box)) return;
+    _closeNewHarness(keepDraft: false, keepRunning: true);
+    app.swarmStarts.add(tabId, box, project: project);
   }
 
   /// The full form, on the answers the box already holds: what the box does
@@ -4082,6 +4115,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     HarnessPlacement? placement,
     bool embedded = false,
     HarnessLaunchIntegration? integration,
+    // A form shown again, with all it holds: a Swarm start that failed after it closed.
+    NewHarnessController? controller,
   }) {
     // A dialog's pop future can complete before didChangeDependencies refreshes
     // the cached route flag. Its live route already owns the next prompt.
@@ -4141,31 +4176,36 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final savedDraft = _newHarnessDrafts[origin];
     // A lost reply always restores its exact receipt. Otherwise explicit
     // product/machine choices and explicit task requests win over old defaults.
-    final resumed =
-        draft ??
-        (savedDraft != null &&
-                (savedDraft.attempt?.awaitingConfirmation == true ||
-                    (task == null && matchesSelection(savedDraft)))
-            ? savedDraft
-            : null);
+    final resumed = controller != null
+        ? null
+        : draft ??
+              (savedDraft != null &&
+                      (savedDraft.attempt?.awaitingConfirmation == true ||
+                          (task == null && matchesSelection(savedDraft)))
+                  ? savedDraft
+                  : null);
     if (resumed != null) _newHarnessDrafts.remove(origin);
-    final box = _newHarness = NewHarnessController(
-      app,
-      machineId: machineId,
-      engine: engine,
-      harnessId: harnessId,
-      folder: folder,
-      projectName: projectName,
-      task: task,
-      draft: resumed,
-      autoProject: autoProject,
-      offersStore: true,
-      swarmId: swarmId,
-      split: split,
-      placement: placement,
-      attachments: HarnessAttachments(onDeliveryProblem: _showPaneActionHint),
-      integration: integration,
-    );
+    final box = _newHarness =
+        controller ??
+        NewHarnessController(
+          app,
+          machineId: machineId,
+          engine: engine,
+          harnessId: harnessId,
+          folder: folder,
+          projectName: projectName,
+          task: task,
+          draft: resumed,
+          autoProject: autoProject,
+          offersStore: true,
+          swarmId: swarmId,
+          split: split,
+          placement: placement,
+          attachments: HarnessAttachments(
+            onDeliveryProblem: _showPaneActionHint,
+          ),
+          integration: integration,
+        );
     _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
     _newHarnessDevicePort = DeviceFormPort();
     if (embedded) {
@@ -4409,7 +4449,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  void _closeNewHarness({bool restoreFocus = true, bool keepDraft = true}) {
+  /// [keepRunning]: its start goes on without it ([_startInBackground]), so it is not disposed.
+  void _closeNewHarness({
+    bool restoreFocus = true,
+    bool keepDraft = true,
+    bool keepRunning = false,
+  }) {
     final box = _newHarness;
     if (box == null) return;
     _canvasFocus.descendantsAreFocusable = true;
@@ -4427,7 +4472,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _rememberNewHarnessDraft(_newHarnessContext!, box.draft);
     }
     _newHarnessContext = null;
-    box.dispose();
+    if (!keepRunning) box.dispose();
     final previous = _searchReturnFocus;
     _searchReturnFocus = null;
     if (restoreFocus) {
@@ -6442,18 +6487,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
-              hidden: (row) =>
-                  app.superTabs
-                      .peek(superTabTarget.tabId)
-                      ?.snapshot
-                      ?.agents
-                      .any(
-                        (agent) =>
-                            agent.isBuddy &&
-                            agent.machineId == row.machineId &&
-                            agent.harnessId == row.agentId,
-                      ) ==
-                  true,
               unavailable: (row) {
                 final shared = app.superTabs
                     .peek(superTabTarget.tabId)
@@ -6478,8 +6511,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   return 'Only Claude Code or Codex can join this Swarm.';
                 }
                 if (agent != null) {
-                  // Buddies are personal; the picker does not list them either.
-                  if (agent.isBuddy) return 'Choose a running agent.';
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
                   }
@@ -6502,10 +6533,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null && !attach)
           for (final agent
-              in app.superTabs
-                      .peek(superTabTarget.tabId)
-                      ?.snapshot
-                      ?.teamAgents ??
+              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.agents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -8492,6 +8520,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           onAttachAgent: _attachAgent,
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),
+                                          onRenameSwarm: () => unawaited(
+                                            _rename(app.activeSwarmId),
+                                          ),
                                           onAddAgent: (group) => unawaited(
                                             _addAgent(conversationId: group.id),
                                           ),

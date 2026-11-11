@@ -42,6 +42,7 @@ class SwarmSession extends ChangeNotifier {
     LocalKeyValueStore? readMarks,
     SwarmKeptStore? kept,
     SwarmTold? told,
+    DateTime Function()? now,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
@@ -59,6 +60,7 @@ class SwarmSession extends ChangeNotifier {
           inbox.reader(need.swarmId)?.notifyOf(need.conversationId) ==
           SwarmNotify.muted,
       told: told,
+      now: now,
     );
     _chatNotices = SwarmChatNotices(_announcer);
     inbox
@@ -84,10 +86,6 @@ class SwarmSession extends ChangeNotifier {
   /// Activity digest moves, whether a screen shows them or not, so the reply
   /// a thread rang the person for is told ([announceReply]).
   late final SwarmActivity activity;
-
-  /// Brings the Buddy tab forward, while Swarm's tabs are up ([SwarmTabsPage]);
-  /// null under none.
-  VoidCallback? showBuddyTab;
 
   /// What the person chose for Home on this phone: the projects pinned and
   /// the one Swarm shown. A Swarm the account no longer has takes its own.

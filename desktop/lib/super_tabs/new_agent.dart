@@ -34,6 +34,7 @@ HarnessLaunchIntegration swarmNewAgent(
     );
   }
   String? name, chatId, engine, task, machineId, harnessId;
+  late final HarnessLaunchIntegration integration;
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -79,10 +80,11 @@ HarnessLaunchIntegration swarmNewAgent(
       }
     }
     await app.wakeSuperTabHost(machineId!);
-    // Its person goes on in their chat with it.
+    // Its person goes on in their chat with it, unless the start went on without its form: they go in when they choose
+    // (anh Dee, 2026-11-10).
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
-    await controller.select(chatId!);
+    if (!integration.inBackground) await controller.select(chatId!);
     // How long + New agent took to a running agent in its chat: the measure that warns first if it slows (task #4196).
     appLog.info(
       'super-tabs',
@@ -90,19 +92,20 @@ HarnessLaunchIntegration swarmNewAgent(
     );
   }
 
-  late final HarnessLaunchIntegration integration;
   integration = HarnessLaunchIntegration(
     creationId: creationId,
     actionLabel: 'New agent',
     // A Swarm agent runs Claude Code or Codex, on its person's own computer and account.
     engines: const ['claude', 'codex'],
     ownMachinesOnly: true,
+    offersBrowser: true,
     swarmRole: 'dev',
     prepare: (machine, text, base) async {
       final snapshot = await app.superTabs.readSnapshot(tabId);
       name ??= freshAgentName([
         for (final agent in snapshot.agents) agent.displayName ?? agent.name,
       ]);
+      integration.name = name;
       engine = base;
       task = text;
       final chat = await run('chat', {

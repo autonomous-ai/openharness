@@ -37,36 +37,18 @@ class HarnessLaunchIntegration {
     this.initialTask,
     this.engines,
     this.swarmRole,
-    this.swarmSkillMode,
-    this.roleSuggestions,
-    this.roleName,
     this.startInSwarm,
     this.checkRepositoryOwner,
     this.createRepository,
     this.checkRepositoryAgain,
-    this.agentKind,
     this.ownMachinesOnly = false,
-    this.startBuddy,
-    this.stopBuddy,
-    this.heading,
-    this.intro,
+    this.offersBrowser = false,
   });
   final String creationId, actionLabel;
 
-  /// What the form is for and one sentence on it, above its pickers, where
-  /// the form alone doesn't say: Join's Bring agent (#4442). Null shows none.
-  final String? heading, intro;
+  /// `lead` for a Product Manager, `dev` for any other agent: what the daemon's launch reads to give a Swarm
+  /// agent's engine its folder trust and the team's basics (cli core/agents/create.ts).
   String? swarmRole;
-  String? swarmSkillMode;
-
-  /// An agent joining a project that has instructions names its role in free
-  /// text; these are the document's role headings, offered as suggestions.
-  /// Null hides the field: the coordinator's own start, a new project, or a
-  /// Swarm from before instructions. Empty (the read failed) keeps it free.
-  final List<String>? roleSuggestions;
-
-  /// The role typed; empty or null sends none and the server names the agent.
-  String? roleName;
 
   // Restores the person's original request from a destination launch journal.
   final String? initialTask;
@@ -75,25 +57,12 @@ class HarnessLaunchIntegration {
   String? projectVisibility;
   bool projectVisibilityLocked;
 
-  /// + New agent in a Swarm (task #4196): whether it starts as a `lead`, which
-  /// names and starts a project, or a `member`. Null shows no such choice.
-  String? agentKind;
-
-  /// Set once the choice's first request is sent: it cannot change after.
-  bool agentKindLocked = false;
-
   /// Only the person's own computers, never a shared, guest or Team one: an
   /// agent they start runs in their own account.
   final bool ownMachinesOnly;
 
-  /// Join's Buddy (task #4196): the Swarm starts it on [machineId] with
-  /// [engine], as before; the form only chooses them. Set, the form shows no
-  /// project and takes no first message.
-  final Future<void> Function(String machineId, String engine)? startBuddy;
-
-  /// Stops [startBuddy] while it only waits for the computer, so the form
-  /// closes at once; false once the start is sent (#4442).
-  final bool Function()? stopBuddy;
+  /// Swarm New agent: the Browser pill, an agent's own sandboxed Chrome.
+  final bool offersBrowser;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and
@@ -155,4 +124,16 @@ class HarnessLaunchIntegration {
   // Drops a request recovery cannot finish. Null once dropped, or a question
   // to confirm before dropping it anyway; throws when the request is kept.
   Future<String?> Function({bool anyway})? discard;
+
+  /// A Swarm's New Project and New Agent (anh Dee, 2026-11-10: "NEVER block users for minutes"): called once the start is
+  /// under way and its person has nothing more to choose. The form then closes and the start goes on without it, its row
+  /// in the left pane saying so (`super_tabs/swarm_starts.dart`), and it ends there, opening nothing.
+  void Function()? onStarted;
+
+  /// Whether the start goes on without its form ([onStarted]).
+  bool get inBackground => onStarted != null;
+
+  /// What that row shows while it starts: the agent's name once it has one, and a new project's id once it is made,
+  /// whose own row it stands in for.
+  String? name, projectId;
 }

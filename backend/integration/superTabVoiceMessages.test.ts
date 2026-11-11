@@ -11,8 +11,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type VoiceTranscription } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { logger } from '../src/utils/logger.js'
-import { FIELDS, preview, row } from '../src/superTabs/read/inbox.js'
-import { readBy } from '../src/superTabs/parts/indexed.js'
 import { VOICE_READ_MS } from '../src/superTabs/voiceMessages.js'
 import { voiceInflightBytes } from '../src/lib/voiceBudget.js'
 
@@ -84,9 +82,11 @@ async function swarm(voice = fakeVoice(), now: () => number = Date.now) {
     store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 8 })
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
+  // The owner, who added the Lead, talks to it in their own chat with it: only agents post in a project's channel (agentsOnly.test.ts).
+  const chat = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, kind: 'agent-chat' } })).key
   const upload = async (bytes: Buffer, name = 'Voice message.wav', mime = 'audio/wav', user = owner) =>
-    (await store.upload(user, tab, 'lead', { name, mime, body: Readable.from([bytes]) })).attachment
-  return { store, tab, execute, lead, upload, voice, files }
+    (await store.upload(user, tab, chat, { name, mime, body: Readable.from([bytes]) })).attachment
+  return { store, tab, execute, lead, chat, upload, voice, files }
 }
 
 describe('reading a voice file', () => {
@@ -163,7 +163,7 @@ describe('reading a voice file', () => {
     await expect(f.store.readVoice(owner, f.tab, text.id, 'en')).rejects.toMatchObject({ code: 'UNSUPPORTED_AUDIO', status: 415 })
     const png = await f.upload(wav(2), 'shot.png', 'image/png')
     await expect(f.store.readVoice(owner, f.tab, png.id, 'en')).rejects.toMatchObject({ code: 'UNSUPPORTED_AUDIO' })
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [file.id] })
+    await f.execute({ type: 'message.send', conversationId: f.chat, text: '', replyTo: null, recipientIds: [], attachmentIds: [file.id] })
     await expect(f.store.readVoice(owner, f.tab, file.id, 'en')).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
     // Over the form's 10 MB: a long clip is stored straight in the bucket in production; here, as if it were.
     const long = await f.upload(wav(1))
@@ -201,14 +201,14 @@ describe('reading a voice file', () => {
 
 describe('sending a voice message', () => {
   const send = (f: Awaited<ReturnType<typeof swarm>>, id: string) =>
-    f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [id] })
+    f.execute({ type: 'message.send', conversationId: f.chat, text: '', replyTo: null, recipientIds: [], attachmentIds: [id] })
 
   it('stores its words as the message\'s text and its facts on the file, never its words twice', async () => {
     const f = await swarm()
     const file = await f.upload(wav(81))
     await f.store.readVoice(owner, f.tab, file.id, 'en')
     await send(f, file.id)
-    const message = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' } }))
+    const message = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.chat } }))
       .find(m => JSON.stringify(m.attachments ?? null).includes(file.id))
     expect(message!.text).toBe('Ship the parser today.')
     expect(message!.attachments).toEqual([expect.objectContaining({ id: file.id, mime: 'audio/wav', voice: expect.objectContaining({ durationMs: 81_000, transcribed: true }) })])
@@ -225,14 +225,14 @@ describe('sending a voice message', () => {
   })
 })
 
-describe('what agents and previews read of a voice message', () => {
+describe('what agents read of a voice message', () => {
   async function sent(words: string, quota: 'ok' | 'limit' = 'ok') {
     const voice = fakeVoice(words)
     voice.quota = quota
     const f = await swarm(voice)
     const file = await f.upload(wav(81))
     await f.store.readVoice(owner, f.tab, file.id, 'en')
-    const messageId = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [file.id] })).result.messageId)
+    const messageId = String((await f.execute({ type: 'message.send', conversationId: f.chat, text: '', replyTo: null, recipientIds: [], attachmentIds: [file.id] })).result.messageId)
     return { f, messageId }
   }
   const claim = async (f: Awaited<ReturnType<typeof swarm>>, messageId: string) => {
@@ -252,11 +252,4 @@ describe('what agents and previews read of a voice message', () => {
     expect((await claim(f, messageId))!.text).toBe('Voice message (1:21), not transcribed.')
   })
 
-  it('previews it as "Voice message (1:21)", and a plain message as its text', async () => {
-    const { f, messageId } = await sent('hello team')
-    const plain = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Typed words', replyTo: null, recipientIds: [] })).result.messageId)
-    const rows = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [messageId, plain] }, tabId: f.tab } },
-      { $project: { ...FIELDS, conversationId: 1 } }])).map(row)
-    expect(Object.fromEntries(rows.map(r => [r.id, preview(r).text]))).toEqual({ [messageId]: 'Voice message (1:21)', [plain]: 'Typed words' })
-  })
 })

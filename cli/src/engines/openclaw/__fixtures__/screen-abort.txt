@@ -1,0 +1,45 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session abort
+
+ session agent:main:abort
+
+
+Use the exec tool to run: sleep 40. Then reply with: slept
+
+
+ run aborted
+ connected | aborted
+ agent main | session abort | deepseek/deepseek-v4.1-flash | deliver:off | tokens 0/1.0m (0%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,5 +1,4 @@
 import { agentDisplayName } from './agentNames.js'
-import { isBuddyChat } from './buddies.js'
 import { stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { projectsOf } from './projects.js'
@@ -9,8 +8,7 @@ export type MemberChange = { group: Conversation; agent: Agent; added: boolean }
 
 /**
  * Who joined or left each chat between [original] and [state], for the row that names who did it (Ken, #2207: nothing
- * recorded who put a Reviewer in the project chat). Only chats there before, as a new chat's opening says who is in it; never a
- * Buddy chat, whose sessions come and go with its threads. An agent that left the Swarm is found in each chat it was in, by
+ * recorded who put a Reviewer in the project chat). Only chats there before, as a new chat's opening says who is in it. An agent that left the Swarm is found in each chat it was in, by
  * its name as it was (Luna's review: a host-confirmed stop said nothing), but for an archived or dormant one.
  */
 export function memberChanges(original: SuperTabState, state: SuperTabState): MemberChange[] {
@@ -22,7 +20,7 @@ export function memberChanges(original: SuperTabState, state: SuperTabState): Me
   const channels = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
     const was = before.get(group.id)
-    if (!was || isBuddyChat(group) || (was.length === group.agentIds.length && was.every((id, i) => group.agentIds[i] === id))) continue
+    if (!was || (was.length === group.agentIds.length && was.every((id, i) => group.agentIds[i] === id))) continue
     const then = new Set(was), now = new Set(group.agentIds)
     for (const id of group.agentIds) {
       if (!then.has(id) && agents.has(id) && (!channels.has(group.id) || id === group.leadId)) changes.push({ group, agent: agents.get(id)!, added: true })

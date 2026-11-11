@@ -7,28 +7,18 @@ import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'profile_model.dart';
 import 'swarm_face.dart';
-import 'team_glance.dart';
 
 /// The pieces Swarm's screens are drawn with, as the approved prototype v2
 /// draws them: a top bar with its title beside the menu or back button,
 /// captions in sentence case, cards of rows, round avatars, a project's
 /// initial in a tile, filled counts, and buttons a thumb can find. Every
 /// colour is one of the app's own tokens.
-
-/// The colour of an agent's state: working green, waiting yellow, down red.
-Color swarmStateColor(SwarmAgentState state) => switch (state) {
-  SwarmAgentState.working => AppColors.success,
-  SwarmAgentState.waiting || SwarmAgentState.stuck => AppColors.warning,
-  SwarmAgentState.down => AppColors.danger,
-  SwarmAgentState.limited || SwarmAgentState.idle => AppPalette.textFaint,
-};
 
 /// The colour [id]'s avatar takes, the same on every screen and every run.
 Color swarmAvatarColor(String id) {
@@ -645,33 +635,6 @@ class SwarmTags extends StatelessWidget {
   }
 }
 
-/// A count in a filled circle: blue, or yellow for what waits on the person.
-class SwarmBadge extends StatelessWidget {
-  const SwarmBadge(this.count, {super.key, this.warn = false});
-
-  final int count;
-  final bool warn;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-    padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
-    alignment: Alignment.center,
-    decoration: ShapeDecoration(
-      color: warn ? AppColors.warning : AppPalette.accent,
-      shape: const StadiumBorder(),
-    ),
-    child: Text(
-      '$count',
-      style: AppType.caption(
-        color: warn ? SwarmInk.onWarning : AppInk.onFill,
-        fontWeight: AppFont.semibold,
-        height: 1,
-      ),
-    ),
-  );
-}
-
 /// How a [SwarmButton] is drawn.
 enum SwarmButtonStyle {
   /// A quiet button on a field, rimmed: a decision's option.
@@ -684,7 +647,8 @@ enum SwarmButtonStyle {
   link,
 }
 
-/// A button at least 44 points tall, in the app's sans face.
+/// A button at least 44 points tall, in the app's sans face; [compact], drawn
+/// at a control's height in a box 44 tall ([SwarmTapTarget]).
 class SwarmButton extends StatelessWidget {
   const SwarmButton({
     super.key,
@@ -693,9 +657,10 @@ class SwarmButton extends StatelessWidget {
     this.style = SwarmButtonStyle.plain,
     this.icon,
     this.wide = false,
+    this.compact = false,
     this.busy = false,
     this.busyLabel,
-  });
+  }) : assert(!(wide && compact), 'a wide button is never compact');
 
   final String label;
   final VoidCallback? onPressed;
@@ -704,6 +669,11 @@ class SwarmButton extends StatelessWidget {
 
   /// The whole width, taller and bolder: a screen's main action.
   final bool wide;
+
+  /// A row's own action (Activity's Reply and Approve): drawn at the
+  /// standard control height ([AppControl.height]) and pressed across the
+  /// 44-point box it is laid out in ([SwarmTapTarget]).
+  final bool compact;
 
   /// Working: a spinner and [busyLabel], and taps do nothing.
   final bool busy;
@@ -728,7 +698,7 @@ class SwarmButton extends StatelessWidget {
       fontWeight: wide ? FontWeight.w600 : FontWeight.w500,
       height: 1.25,
     );
-    return Semantics(
+    final button = Semantics(
       button: true,
       enabled: enabled,
       label: busy ? busyLabel ?? label : label,
@@ -748,13 +718,19 @@ class SwarmButton extends StatelessWidget {
                 }
               : null,
           child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: wide ? 52 : 44),
+            constraints: BoxConstraints(
+              minHeight: wide
+                  ? 52
+                  : compact
+                  ? AppControl.height
+                  : 44,
+            ),
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: style == SwarmButtonStyle.link
+                horizontal: style == SwarmButtonStyle.link || compact
                     ? AppSpace.m
                     : AppSpace.l,
-                vertical: AppSpace.s,
+                vertical: compact ? AppSpace.xs : AppSpace.s,
               ),
               child: Row(
                 mainAxisSize: wide ? MainAxisSize.max : MainAxisSize.min,
@@ -788,7 +764,32 @@ class SwarmButton extends StatelessWidget {
         ),
       ),
     );
+    return compact ? SwarmTapTarget(child: button) : button;
   }
+}
+
+/// [child], a control drawn smaller than a thumb, laid out in a box at least
+/// 44 points square that hands a touch anywhere in it to [child], as the
+/// themed buttons' padded target does: a row holding one is at least 44 tall
+/// (design system: Phone). A bare [TouchTarget] reaches only as far as its
+/// parents' bounds, and a row as tall as its words leaves it short.
+class SwarmTapTarget extends StatelessWidget {
+  const SwarmTapTarget({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(
+      minWidth: minTouchTarget,
+      minHeight: minTouchTarget,
+    ),
+    child: Center(
+      widthFactor: 1,
+      heightFactor: 1,
+      child: TouchTarget(child: child),
+    ),
+  );
 }
 
 /// A choice of a few, side by side, that takes effect on the tap — Settings'

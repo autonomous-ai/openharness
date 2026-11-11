@@ -77,6 +77,7 @@ import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
+import { nodeRow, readNodeStatus, type NodeStatus } from './lib/nodeStatus.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { ownProcessGroup } from './lib/windows/noWindow.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
@@ -405,8 +406,6 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
-    // A Harness Team sign-in (team/): this computer runs its own Swarm agents and reaches no other computer.
-    ...(latest?.kind ? { kind: latest.kind } : {}),
     // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
@@ -414,7 +413,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   else if (signInAgain) {
     console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
   } else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness login --force signs it in as you)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -1484,7 +1483,7 @@ async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
 async function runningDaemonStatus(): Promise<{
   version: string; sessions: number; machineId: string | null; connected: boolean
   backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean | null
-  dataDir: string | null; authDir: string | null
+  dataDir: string | null; authDir: string | null; node: NodeStatus | null
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
@@ -1506,6 +1505,7 @@ async function runningDaemonStatus(): Promise<{
       signedIn: typeof status?.signedIn === 'boolean' ? status.signedIn : null,
       dataDir: typeof status?.dataDir === 'string' ? status.dataDir : null,
       authDir: typeof status?.authDir === 'string' ? status.authDir : null,
+      node: readNodeStatus(body),
     }
   } catch {
     return null
@@ -1522,6 +1522,8 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  /** The daemon's Node, as it reports it; `status` shows it, and an older daemon sends none. */
+  node?: NodeStatus | null
   /** Who keeps the daemon running, when launchd or systemd does (`harness service install`). */
   supervisor?: string
   connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
@@ -1539,6 +1541,7 @@ function printInfoBlock(opts: {
   if (machineName) console.log(row('machine', machineName))
   if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
+  if (opts.node) console.log(row('node', nodeRow(opts.node)))
   console.log(row('backend', opts.connection.signedIn ? opts.connection.backendUrl ?? 'unknown · daemon not answering' : 'not signed in · harness login'))
   console.log(row('account', opts.connection.autonomousEnv ?? 'unknown · older daemon'))
   if (opts.connection.dataDir) console.log(row('state', tildify(opts.connection.dataDir)))
@@ -2688,6 +2691,7 @@ async function status(): Promise<void> {
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
     version: daemonStatus?.version ?? VERSION,
+    node: daemonStatus?.node,
     // Read from disk, not the daemon: it answers the same with the daemon stopped.
     // Signed out, devlog.json is the last account's copy: claiming membership from it would be wrong.
     // It is left on disk at logout on purpose: clearing it would drop the freeze and the rollback
@@ -2759,6 +2763,7 @@ import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
 import { computerUseCommand } from './agentClient/computerUse.js'
+import { browserMcpCommand } from './agentClient/browserMcp.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2795,19 +2800,12 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
 /** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
 const swarmCommands = () => import('./superTabs/command.js')
 
-/** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
- *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
-function unlessBuddy(run: () => Promise<number>): Promise<number> {
-  return swarmCommands().then(({ buddyRefusal }) => buddyRefusal())
-    .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
-}
-
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
     break
   case 'send':
-    unlessBuddy(() => sendCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   // A pane's BROWSER script asking whether a phone takes the page (agentClient/openUrl.ts). Not for people.
   case 'open-url':
@@ -2835,6 +2833,10 @@ switch (cmd) {
     process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
+  case 'browser-mcp':
+    // A Browser agent's MCP server (lib/browserMcpArgs.ts): an engine starts it, never a person.
+    browserMcpCommand().then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'mcp': {
     const pane = sendPane(process.env)
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) }).then(code => { process.exitCode = code }).catch(onError)
@@ -2853,7 +2855,7 @@ switch (cmd) {
     resumeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'tell':
-    unlessBuddy(() => tellCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
+    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2862,7 +2864,7 @@ switch (cmd) {
     watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
-    unlessBuddy(() => closeCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
+    closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2872,12 +2874,9 @@ switch (cmd) {
   case 'super-tab':
     swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'buddy-read':
-    // A Buddy's read-only recipes (lib/buddyRecipes.ts), which its guard lets it run once its person approved them.
-    import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
   case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
+    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
     import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
@@ -2985,7 +2984,7 @@ switch (cmd) {
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
-    unlessBuddy(() => newCommand({
+    newCommand({
       argv: rest,
       cwd: process.cwd(),
       home: homedir(),
@@ -2997,7 +2996,7 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
-    })).then((code) => { process.exitCode = code }).catch(onError)
+    }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
@@ -3113,14 +3112,13 @@ switch (cmd) {
       }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
-  case 'team':
-    // An old Team account's boot job (set up before 2026-11-07, on macOS, Linux and Windows) still runs `team __start <file>`
-    // before its daemon, which then stops itself once no agent runs (superTabs/inCore/teamRetire.ts). It does nothing and
-    // exits 0, quietly: the job's next step, the daemon, starts as before, and its log gets no usage text. Any other `team`
-    // is an unknown command (the command was removed, anh Dee, 2026-11-10).
-    if (rest[0] === '__start') break
-    console.error(`Unknown command: ${cmd}`)
-    usage(1)
+  case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)
+    import('./team/remove.js')
+      .then(async ({ removeTeamAccount, teamRemovalDeps }) => {
+        const result = await removeTeamAccount(teamRemovalDeps())
+        console.log(JSON.stringify(result))
+        process.exitCode = result.ok ? 0 : 1
+      }).catch(onError)
     break
   case 'reset':
     resetCommand().catch(onError)

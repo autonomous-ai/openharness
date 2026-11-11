@@ -9,6 +9,8 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { logger } from '../src/utils/logger.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
@@ -45,7 +47,8 @@ afterAll(async () => {
 async function swarm(dormant = 0, awake = 0) {
   const store = new SuperTabStore(db)
   const tab = (await store.create(owner, randomUUID(), 'Loads', 'public')).id
-  const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
+  const execute = (command: Command | StoredCreate, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, owner, asAgentId) : store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 8 })
   const harness = { lead: randomUUID(), worker: randomUUID() }
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: harness.lead, name: 'Lead', configuration: config, lead: true })).result.agentId)
@@ -87,7 +90,7 @@ describe('a refused command in the log', () => {
     const { execute, tab } = await swarm()
     const said = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     try {
-      await execute({ type: 'conversation.create', title: secret, brief: secret, checks: [] })
+      await execute({ type: 'tab.rename', name: secret })
       expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([])
       await expect(execute({ type: 'conversation.rename', conversationId: secret, title: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
       // And whose (#2675): its Swarm, no agent, and no declared client; never its words.
@@ -116,12 +119,12 @@ describe('a refused command from an agent, in the log (#2675)', () => {
 })
 
 describe('a command naming the coordinator', () => {
-  it('agent.alert reads none of its 1,000 dormant groups, and its row still lands', async () => {
+  // Swarm v4 writes no row for an alert: it marks the agent alone.
+  it('agent.alert reads none of its 1,000 dormant groups, and marks the agent', async () => {
     const f = await swarm(1000)
     const read = await groupsRead(() => f.execute({ type: 'agent.alert', agentId: f.lead, alert: 'prompt', active: true }, f.lead))
     expect(read).toBeLessThan(FEW)
-    const row = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'terminal-alert')
-    expect(row?.conversationId).toBe('lead')
+    expect((await f.store.load(db as never, owner, f.tab)).state.agents.find(a => a.id === f.lead)?.alerting).toEqual(['prompt'])
   })
 
   it('agent.rebind reads none of them', async () => {
@@ -149,8 +152,8 @@ describe('a command in a Swarm with many awake conversations (#3146)', () => {
 
   it('reads none of them whole once this server has read them, only the conversation it writes', async () => {
     const f = await swarm(0, AWAKE)
-    // The awake ones were written straight to the database: the first post records their board pulse on the project chat
-    // (pulse.ts, task #3384), which the next command reads once, as it reads any part this server wrote.
+    // The awake ones were written straight to the database: the first posts read them once, as a command reads any part this
+    // server did not write.
     await posted(f)
     await posted(f)
     const groups = (await profiled(db, () => posted(f))).filter(e => e.ns.endsWith('.SwarmGroup'))
@@ -181,15 +184,6 @@ describe('a command in a Swarm with many awake conversations (#3146)', () => {
 })
 
 describe('what still reads an agent\'s dormant groups', () => {
-  it('a worker\'s alert finds its only group, asleep', async () => {
-    const f = await swarm()
-    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
-    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, data: { ...part.data as object, dormant: true } } })
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'prompt', active: true }, f.worker)
-    const row = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'terminal-alert')
-    expect(row?.conversationId).toBe(f.group)
-  })
-
   it('removing a worker takes it out of a dormant group too', async () => {
     const f = await swarm()
     const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })

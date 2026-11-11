@@ -44,16 +44,16 @@ describe('claudeProfiles', () => {
     account(join(home, '.claude-work'), { displayName: 'Work' })
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
     expect(profiles.map((p) => p.id)).toEqual([profileId(machineId, 'claude', 'default'), expect.stringMatching(/^[0-9a-f]{16}$/)])
-    expect(profiles[0]).toMatchObject({ path: home, label: basename(home), reportLabel: basename(home), offered: true, default: true })
+    expect(profiles[0]).toMatchObject({ path: home, label: basename(home), default: true })
     expect(profiles[1]).not.toHaveProperty('default')
     expect(profiles[1]).toMatchObject({ path: join(home, '.claude-work'), label: '.claude-work' })
   })
 
-  it('lists the default account even with no .claude.json, and folders without Claude files are not offered', async () => {
+  it('lists the default account even with no .claude.json, and folders without Claude files are not listed', async () => {
     const { listClaudeProfiles, profileId } = await loadModule()
     mkdirSync(join(home, '.claude-empty'))
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
-    expect(profiles).toEqual([{ id: profileId(machineId, 'claude', 'default'), default: true, path: home, label: expect.any(String), reportLabel: expect.any(String), offered: true }])
+    expect(profiles).toEqual([{ id: profileId(machineId, 'claude', 'default'), default: true, path: home, label: expect.any(String) }])
   })
 
   it('finds the inherited CLAUDE_CONFIG_DIR and a folder holding only settings.json', async () => {
@@ -70,82 +70,22 @@ describe('claudeProfiles', () => {
     const folder = join(home, 'Library/Application Support/orca/claude-profiles/ab12cd34-0000-4000-8000-000000000000/home')
     account(folder, { emailAddress: 'a@b.c' })
     const orca = listClaudeProfiles([], { home, environment: {}, machineId })[1]
-    expect(orca).toMatchObject({ label: 'Orca ab12', reportLabel: 'Orca ab12' })
+    expect(orca).toMatchObject({ label: 'Orca ab12' })
   })
 
   it('names a profile by its folder, never by the account signed in to it', async () => {
     const { listClaudeProfiles } = await loadModule()
     account(join(home, '.claude-w'), { displayName: 'Work', emailAddress: 'w@x.y' })
-    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1]).toMatchObject({ label: '.claude-w', reportLabel: '.claude-w' })
+    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1]).toMatchObject({ label: '.claude-w' })
   })
 
-  it('never reports a person: the label is the folder, Orca by its id, Harness-made as Claude <n>', async () => {
+  it('never names a person: the label is the folder, Orca by its id, Harness-made as Claude <n>', async () => {
     const { listClaudeProfiles } = await loadModule()
     account(join(home, '.claude-w'), { displayName: 'Jane Doe', emailAddress: 'jane@x.y' })
     account(join(home, '.harness/claude-profiles/acct1'), { displayName: 'Jane Doe' })
     const rows = listClaudeProfiles([], { home, environment: {}, machineId })
-    expect(rows.map((p) => p.reportLabel)).toEqual(expect.arrayContaining(['.claude-w', 'Claude acct1']))
-    expect(JSON.stringify(rows.map((p) => p.reportLabel))).not.toContain('Jane')
-  })
-
-  it('offers only the default account and what the owner offered: linking or Add Claude account never does, and a withdraw takes it back', async () => {
-    const { listClaudeProfiles, linkClaudeProfile, offerAccount } = await loadModule()
-    const orca = join(home, 'Library/Application Support/orca/claude-profiles/ab12cd34-0000-4000-8000-000000000000/home')
-    account(orca, { displayName: 'Ken' })
-    account(join(home, '.claude-w'), {})
-    account(join(home, '.harness/claude-profiles/acct1'), {})
-    const offered = () => Object.fromEntries(listClaudeProfiles([], { home, environment: {}, machineId }).map((p) => [p.path === home ? 'default' : p.reportLabel, p.offered]))
-    expect(offered()).toEqual({ default: true, 'Orca ab12': false, '.claude-w': false, 'Claude acct1': false })
-    linkClaudeProfile(orca, machineId)
-    expect(offered()['Orca ab12']).toBe(false)
-    expect(offerAccount('claude', orca, true, { home, environment: {} })).toEqual({ offered: true })
-    expect(offered()['Orca ab12']).toBe(true)
-    expect(offerAccount('claude', orca, false, { home, environment: {} })).toEqual({ offered: false })
-    expect(offered()['Orca ab12']).toBe(false)
-  })
-
-  it('offers by the real folder, refuses the default account and a missing folder, and withdraws a folder that is gone', async () => {
-    const { offerAccount, listClaudeProfiles } = await loadModule()
-    const real = join(home, '.claude-w'), link = join(home, 'link-to-w')
-    account(real, {})
-    symlinkSync(real, link)
-    const where = { home, environment: {} }
-    expect(offerAccount('claude', link, true, where)).toEqual({ offered: true })
-    expect(listClaudeProfiles([], { ...where, machineId }).find((p) => p.path === real)?.offered).toBe(true)
-    expect(offerAccount('claude', home, true, where)).toEqual({ error: 'DEFAULT_ACCOUNT' })
-    expect(offerAccount('claude', join(home, 'ghost'), true, where)).toEqual({ error: 'NOT_FOUND' })
-    expect(offerAccount('claude', 'relative', true, where)).toEqual({ error: 'INVALID_PATH' })
-    expect(offerAccount('grok', real, true, where)).toEqual({ error: 'INVALID_ENGINE' })
-    rmSync(real, { recursive: true })
-    expect(offerAccount('claude', real, false, where)).toEqual({ offered: false })
-  })
-
-  it('a damaged offers file offers nothing', async () => {
-    const { offerAccount, listClaudeProfiles } = await loadModule()
-    const folder = join(home, '.claude-w')
-    account(folder, {})
-    offerAccount('claude', folder, true, { home, environment: {} })
-    writeFileSync(join(dataDir, 'swarm-account-offers.json'), '{not json', { mode: 0o600 })
-    expect(listClaudeProfiles([], { home, environment: {}, machineId }).find((p) => p.path === folder)?.offered).toBe(false)
-  })
-
-  it('drops a report label containing @', async () => {
-    const { listClaudeProfiles } = await loadModule()
-    account(join(home, '.claude-w'), { displayName: 'me@x.y' })
-    const profile = listClaudeProfiles([], { home, environment: {}, machineId })[1]
-    expect(profile).toMatchObject({ label: '.claude-w', reportLabel: '.claude-w' })
-  })
-
-  it('falls back to a plain word when even the folder name has an @', async () => {
-    const { listClaudeProfiles } = await loadModule()
-    account(join(home, '.claude-me@x.y'), {})
-    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1].reportLabel).toBe('Claude')
-  })
-
-  it('cuts it at 40 characters', async () => {
-    const { listClaudeProfiles } = await loadModule()
-    account(join(home, '.claude-' + 'x'.repeat(60)), {})
-    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1].reportLabel).toBe(('.claude-' + 'x'.repeat(60)).slice(0, 40))
+    expect(rows.map((p) => p.label)).toEqual(expect.arrayContaining(['.claude-w', 'Claude acct1']))
+    expect(JSON.stringify(rows.map((p) => p.label))).not.toContain('Jane')
   })
 
   it('ignores a malformed or oversized account file', async () => {
@@ -179,10 +119,9 @@ describe('claudeProfiles', () => {
   it('on Windows takes a drive-letter folder and refuses a POSIX one', async () => {
     host.win32 = true
     try {
-      const { linkClaudeProfile, offerAccount } = await loadModule()
+      const { linkClaudeProfile } = await loadModule()
       expect(linkClaudeProfile('Z:\\no\\such\\.claude-work', machineId)).toEqual({ error: 'NOT_FOUND' })
       expect(linkClaudeProfile('/Users/u/.claude-work', machineId)).toEqual({ error: 'INVALID_PATH' })
-      expect(offerAccount('claude', 'Z:\\no\\such\\.claude-work', true, { home, environment: {} })).toEqual({ error: 'NOT_FOUND' })
     } finally {
       host.win32 = false
     }
@@ -239,39 +178,13 @@ describe('profileHome', () => {
     expect(profileHome('gemini', 'default', machineId, options)).toBeNull()
   })
 
-  it('with offeredOnly, an account the owner never offered is as good as gone, and only an offer brings it back', async () => {
-    const { listClaudeProfiles, profileHome, linkClaudeProfile, offerAccount, profileId } = await loadModule()
-    const folder = join(home, '.claude-work')
-    account(folder, {})
-    const codex = join(home, '.codex-two')
-    mkdirSync(codex)
-    writeFileSync(join(codex, 'config.toml'), '')
-    const options = { home, environment: {}, offeredOnly: true }
-    const work = listClaudeProfiles([], { home, environment: {}, machineId })[1]
-    expect(profileHome('claude', work.id, machineId, options)).toBeNull()
-    expect(profileHome('claude', work.id, machineId, { home, environment: {} })).toBe(folder)
-    expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, options)).toBeNull()
-    expect(profileHome('claude', 'default', machineId, options)).toBe('default')
-    linkClaudeProfile(folder, machineId)
-    expect(profileHome('claude', work.id, machineId, options)).toBeNull()
-    offerAccount('claude', folder, true, options)
-    expect(profileHome('claude', work.id, machineId, options)).toBe(folder)
-    offerAccount('codex', codex, true, options)
-    expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, options)).toBe(codex)
-    // Withdrawn while a switch is on its way: its host finds the account gone before it closes the PM.
-    offerAccount('claude', folder, false, options)
-    expect(profileHome('claude', work.id, machineId, options)).toBeNull()
-  })
-
   it('finds a Codex folder by its id', async () => {
-    const { profileHome, profileId, codexReportLabel } = await loadModule()
+    const { profileHome, profileId } = await loadModule()
     const codex = join(home, '.codex-two')
     mkdirSync(codex)
     writeFileSync(join(codex, 'config.toml'), '')
     const found = profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })
     expect(found).toBe(codex)
-    expect(codexReportLabel('/x/.codex-two')).toBe('.codex-two')
-    expect(codexReportLabel('/x/jane@corp')).toBe('Codex')
   })
 
   it('keeps a symlinked folder as it was given (Claude Code hashes that path), with the id of its real path', async () => {
@@ -295,15 +208,15 @@ describe('profileHome', () => {
     expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
   })
 
-  it('offers a claudeHome that is a listed profile or a folder under ~/.harness/claude-profiles, never the default or any other path', async () => {
-    const { claudeHomeOffered } = await loadModule()
+  it('takes a claudeHome that is a listed profile or a folder under ~/.harness/claude-profiles, never the default or any other path', async () => {
+    const { claudeHomeListed } = await loadModule()
     const work = join(home, '.claude-work')
     account(work, { displayName: 'Work' })
     const options = { home, environment: {} }
-    expect(claudeHomeOffered(work, machineId, options)).toBe(true)
-    expect(claudeHomeOffered(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
-    expect(claudeHomeOffered(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
-    expect(claudeHomeOffered(home, machineId, options)).toBe(false)
-    expect(claudeHomeOffered(join(home, 'not-listed'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(work, machineId, options)).toBe(true)
+    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
+    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(home, machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(home, 'not-listed'), machineId, options)).toBe(false)
   })
 })

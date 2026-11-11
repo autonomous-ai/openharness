@@ -135,16 +135,8 @@ Future<void> showSwitchPm(
                   !capabilities.contains('leadStart')) {
                 return 'Update Harness on $name to move a Product Manager there.';
               }
-              final own = pool['contributorId'] == c.accountId;
-              final mayUse =
-                  own ||
-                  (pool['teamWork'] is Map &&
-                      (pool['teamWork'] as Map)['allowed'] == true);
-              if (!mayUse) {
-                final refusal = (pool['teamWork'] as Map?)?['reason'];
-                return refusal is String
-                    ? refusal
-                    : 'This machine cannot take this project’s work.';
+              if (pool['contributorId'] != c.accountId) {
+                return 'This machine cannot take this project’s work.';
               }
               if (pool['removal'] != null || pool['paused'] == true) {
                 return '$name is unavailable in this Swarm.';
@@ -154,10 +146,7 @@ Future<void> showSwitchPm(
 
             final machineRows = [
               for (final pool in pools)
-                if (pool['machineId'] is String &&
-                    (pool['hostMachineId'] == null ||
-                        pool['machineId'] == currentLead?.machineId))
-                  pool,
+                if (pool['machineId'] is String) pool,
             ];
             final selectedPool = machineRows
                 .where((pool) => pool['machineId'] == machineId)
@@ -367,14 +356,11 @@ Future<void> showSwitchPm(
                           style: DesktopChrome.metadata(),
                         ),
                       ],
-                      if (activePool != null &&
-                          activePool['contributorId'] != c.accountId) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          'Only accounts its owner offered are listed.',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      ],
+                      const SizedBox(height: 8),
+                      Text(
+                        'A PM runs on its machine’s default account.',
+                        style: DesktopChrome.metadata(),
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         'The new session starts fresh and reads a handoff note. Tasks and chat stay.',

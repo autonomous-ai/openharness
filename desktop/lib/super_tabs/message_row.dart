@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
@@ -60,8 +59,6 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.message,
     required this.author,
     required this.onReturnToComposer,
-    this.card,
-    this.brief,
     required this.receipts,
     this.agent,
     this.person,
@@ -88,8 +85,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.thread,
     this.threadUnread = false,
     this.onOpenThread,
-    this.threadTrailing,
-    this.threadEnd,
     this.member,
     this.link,
     this.linkTarget,
@@ -101,14 +96,6 @@ class SuperTabMessageRow extends StatefulWidget {
 
   final SuperTabMessage message;
 
-  /// The live card [message] is (live_card.dart), drawn in place of its pull
-  /// request links; null for a plain message.
-  final Widget? card;
-
-  /// A card drawn in place of the message's text, such as a sent brief's:
-  /// a label, one title line and its action (#4529).
-  final Widget? brief;
-
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
   final bool threadUnread;
@@ -116,12 +103,6 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
   final VoidCallback? onOpenThread;
-
-  /// Ends the thread line: the mark of a thread's own Buddy session.
-  final Widget? threadTrailing;
-
-  /// After [threadTrailing], outside the thread's link: End session.
-  final Widget? threadEnd;
 
   /// Who a thread's reply author is in the Swarm now, for the faces on its
   /// reply line; without it each shows the face its recorded name gives.
@@ -160,11 +141,12 @@ class SuperTabMessageRow extends StatefulWidget {
   /// lower corner meets it, and a group chat's face waits for the last.
   final bool joinsBelow;
 
-  /// The chat has one other party (a Buddy chat, an agent chat): no names and
+  /// The chat has one other party (an agent's own chat): no names and
   /// no faces, as a one-on-one iMessage draws it.
   final bool oneOnOne;
 
-  /// The teammates a post is to ([superTabPostTo]): its name reads "Pip to Juno", so the channel reads as the team talking.
+  /// The teammates a post is to ([superTabPostTo]), by the name their tags read: each its words do not tag opens its bubble
+  /// (`@Juno`), as a group chat addresses a post.
   final List<String> to;
   final VoidCallback? onReply, onOpenAgent;
 
@@ -217,8 +199,16 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Above and below a grouped line, and below a sender's last line.
   static const rowPad = 6.0;
 
-  /// A bubble takes at most this share of the row (anh Dee's mockup, 11-07).
-  static const bubbleShare = .75;
+  /// Another's bubble, and a card, takes at most this share of the row: an agent's words read nearly the column's width, as
+  /// Codex's answers do (anh Dee, 2026-11-10: "the center chat area is too small").
+  static const bubbleShare = .92;
+
+  /// Your own bubble takes at most this share, on the right (anh Dee's mockup, 11-07), as Codex keeps yours narrower.
+  static const ownBubbleShare = .75;
+
+  /// The share of the row [own]'s bubble takes at most.
+  static double shareOf({required bool own}) =>
+      own ? ownBubbleShare : bubbleShare;
 
   /// The room between one sender's joined bubbles.
   static const joinedGap = 2.0;
@@ -253,8 +243,7 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Whether [current] joins [previous]'s header: the same sender, within five
   /// minutes on the same day. In the chat, a thread reply shown there stands
   /// on its own with its Replied in thread line; [inThread], replies group. A
-  /// line that draws its own row has no header to share, on either side, and
-  /// a [tagged] row's header is where its tag shows.
+  /// [tagged] row's header is where its tag shows.
   static bool groupsWith(
     SuperTabMessage current,
     SuperTabMessage? previous, {
@@ -262,13 +251,8 @@ class SuperTabMessageRow extends StatefulWidget {
     bool Function(SuperTabMessage) tagged = _untagged,
   }) {
     if (previous == null ||
-        current.drawsOwnRow ||
-        previous.drawsOwnRow ||
         tagged(current) ||
         tagged(previous) ||
-        // A message that started a session stands on its own, with its line.
-        current.sessionRoot ||
-        previous.sessionRoot ||
         // An older reply keeps its quote under its own header.
         (current.replyTo != null && !current.threadReply) ||
         (previous.replyTo != null && !previous.threadReply) ||
@@ -528,8 +512,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     return InkWell(onTap: widget.onOpenAgent, child: name);
   }
 
-  /// The reader's own message, a task line or proposal sent in their name
-  /// too: drawn as their bubble on the right.
+  /// The reader's own message: drawn as their bubble on the right.
   bool get _own {
     final message = widget.message;
     return widget.readerId.isNotEmpty &&
@@ -585,11 +568,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     // would push it down.
     final phone = workspaceIsCompact(context);
     final finger = phone && named;
-    final nameStyle = DesktopChrome.text(
-      size: SwarmType.nameSize,
-      height: SwarmType.bodyLine / SwarmType.nameSize,
-      color: DesktopChrome.muted,
-    );
+    final nameStyle = SwarmType.nameLine(context, color: DesktopChrome.muted);
     final slack = finger ? 12.0 : 0.0;
     // One sender's bubbles sit close; a new sender starts a group gap down.
     final above = widget.grouped
@@ -698,8 +677,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     maxWidth:
                                         room.maxWidth *
                                             (1 -
-                                                SuperTabMessageRow
-                                                    .bubbleShare) -
+                                                SuperTabMessageRow.shareOf(
+                                                  own: own,
+                                                )) -
                                         8,
                                   ),
                                   child: Padding(
@@ -716,7 +696,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   constraints: BoxConstraints(
                                     maxWidth:
                                         room.maxWidth *
-                                        SuperTabMessageRow.bubbleShare,
+                                        SuperTabMessageRow.shareOf(own: own),
                                   ),
                                   child: SwarmBubbleSide(
                                     own: own,
@@ -731,54 +711,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             padding: grid
                                                 .AppDesktop
                                                 .bubbleNamePadding,
-                                            child: Wrap(
-                                              spacing: 8,
-                                              crossAxisAlignment:
-                                                  WrapCrossAlignment.center,
-                                              children: [
-                                                if (widget.to.isEmpty)
-                                                  _name(nameStyle, finger)
-                                                else
-                                                  // "Pip to Juno" is one phrase: the name and who it is to stay on a line,
-                                                  // each giving way to the other.
-                                                  Row(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Flexible(
-                                                        child: _name(
-                                                          nameStyle,
-                                                          finger,
-                                                        ),
-                                                      ),
-                                                      const SizedBox(
-                                                        width: SwarmLayout
-                                                            .namePhraseGap,
-                                                      ),
-                                                      Flexible(
-                                                        child: Text(
-                                                          'to ${widget.to.join(', ')}',
-                                                          key: ValueKey(
-                                                            'super-message-to-${message.id}',
-                                                          ),
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          style: nameStyle,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                if (widget.thread?.askTag
-                                                    case final tag?)
-                                                  Text(
-                                                    tag,
-                                                    style: SwarmType.time(
-                                                      context,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
+                                            child: _name(nameStyle, finger),
                                           ),
                                         if (message.threadReply &&
                                             widget.onOpenThread != null)
@@ -826,9 +759,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                     ),
                                             ),
                                           ),
-                                        if (widget.brief case final brief?)
-                                          brief
-                                        else if (_bubbled(voiceMessage))
+                                        if (_bubbled(voiceMessage))
                                           SwarmBubble(
                                             own: own,
                                             tooltip: _clock,
@@ -908,6 +839,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                             widget.onOpenGroup,
                                                         mentions:
                                                             widget.mentions,
+                                                        addressed: widget.to,
                                                         agents:
                                                             widget.agentNames,
                                                         addresses: widget
@@ -957,10 +889,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             ),
                                           ),
                                         if (!message.deleted) ...[
-                                          widget.card ??
-                                              SuperTabPullRequestLinks(
-                                                message.text,
-                                              ),
+                                          SuperTabPullRequestLinks(
+                                            message.text,
+                                          ),
                                           if (widget.linkTarget
                                               case final resolve?)
                                             if (widget.onOpenLink
@@ -999,8 +930,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 unread: widget.threadUnread,
                                 onOpen: open,
                                 member: widget.member,
-                                trailing: widget.threadTrailing,
-                                end: widget.threadEnd,
                               ),
                             ),
                         ],
@@ -1241,17 +1170,9 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.unread,
     required this.onOpen,
     this.member,
-    this.trailing,
-    this.end,
   });
 
   final SuperTabThread thread;
-
-  /// Drawn after the line's link, outside it: a thread session's mark.
-  final Widget? trailing;
-
-  /// Drawn last, outside the line's link: End session.
-  final Widget? end;
   final bool unread;
   final VoidCallback onOpen;
 
@@ -1286,18 +1207,6 @@ class SuperTabThreadLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    // A session's thread with no reply yet: its mark is the line, and opens it.
-    if (thread.replies == 0 && trailing != null) {
-      final open = SuperTabLink(
-        label: 'Open thread',
-        onTap: onOpen,
-        child: trailing!,
-      );
-      return Padding(
-        padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-        child: end == null ? open : _wrapped([open, _dot, end!]),
-      );
-    }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
     final last = thread.lastAt;
     final lastReply = last == null
@@ -1358,22 +1267,9 @@ class SuperTabThreadLine extends StatelessWidget {
     );
     return Padding(
       padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-      child: trailing == null
-          ? link
-          : _wrapped([
-              link,
-              trailing!,
-              if (end != null) ...[_dot, end!],
-            ]),
+      child: link,
     );
   }
-
-  Widget get _dot =>
-      ExcludeSemantics(child: Text(' · ', style: DesktopChrome.metadata()));
-
-  /// On one line while it fits, and on two in a narrow chat.
-  Widget _wrapped(List<Widget> children) =>
-      Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: children);
 }
 
 /// The reply bar: one target, a hand cursor anywhere on it, reached by Tab and

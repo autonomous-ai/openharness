@@ -51,7 +51,10 @@ export interface MasterConfig {
   statusFile?: string
   /** The log the master and its core write, kept under its cap by the master. */
   logFile?: string
-  restoreUpdate(): void
+  /** Put the build before the update back (lib/selfUpdate.ts `restore`). When the update had moved the daemon to
+   *  another Node, `current-node` names the one before it again, and that Node is returned: this master re-executes
+   *  onto the build put back on it, and starts everything after on it. */
+  restoreUpdate(): string | null | void
   confirmUpdate(): void
   env?: NodeJS.ProcessEnv
   /** Defaults to `process.exit`. */
@@ -95,6 +98,11 @@ export interface MasterConfig {
 export type MasterHandOver = Omit<HandOverDeps, 'claim' | 'claimant' | 'takeBack' | 'leave'>
 
 export type Execve = (file: string, args: string[], env: NodeJS.ProcessEnv) => void
+
+/** A managed Node's version, from the folder it was unpacked into (`node-v24.22.2-darwin-arm64`); any other, its path. */
+function nodeVersion(path: string): string {
+  return /(?:^|[/\\])node-(v\d+\.\d+\.\d+)-[^/\\]+[/\\]/.exec(path)?.[1] ?? path
+}
 
 /** The defaults `runMaster` acts on this process with. */
 export const processExit = (code: number): void => { process.exit(code) }
@@ -281,9 +289,21 @@ export function runMaster(config: MasterConfig): Supervisor {
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
   // lines around them in the one log they share.
   const log = (line: string) => console.log(`${ts()} ${line}`)
-  // Each process exec'd through a link named after it, so Activity Monitor and `top` tell them apart.
-  const node = baseNode(config.nodePath)
+  // Each process exec'd through a link named after it, so Activity Monitor and `top` tell them apart. The Node this
+  // master runs on, until a rollback puts the daemon back on the one before an update (`restoreUpdate`).
+  let node = baseNode(config.nodePath)
   const named = (name: string): string => namedNode(node, name, config.runtimeDir, { log })
+  /**
+   * The update failed: its build goes, and the Node it moved the daemon to with it. The core that did not come up ran
+   * on this master's Node; the build put back ran on the Node before, which this master re-executes onto (`reexec`
+   * reads `node` as it does), and that every core and service after it runs on.
+   */
+  const restoreUpdate = (): void => {
+    const previous = config.restoreUpdate() ?? null
+    if (previous === null || previous === node) return
+    log(`[harnessd] the core did not come up on Node ${nodeVersion(node)}; back on ${nodeVersion(previous)}`)
+    node = previous
+  }
   // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
@@ -339,7 +359,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // which the supervisor then re-executes this master on before it starts anything.
     recoverFailedReexec({
       marker: readMarker(markerFile), pid: process.pid, alive, current: bundle,
-      restoreUpdate: config.restoreUpdate, removeMarker: () => removeMarker(markerFile), log,
+      restoreUpdate, removeMarker: () => removeMarker(markerFile), log,
     })
   }
   // Windows: the decisions of handovers over and done, all but this one's and the one a marker still names.
@@ -391,7 +411,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   // as this master hands over (Windows), which the supervisor does not know of.
   let releaseOnExit = false
   const reexec = markerFile ? createReexec({
-    own, current: bundle, nodePath: named('harnessd'), execArgv: config.execArgv, get scriptPath() { return script() }, env, pid: process.pid,
+    own, current: bundle, get nodePath() { return named('harnessd') }, execArgv: config.execArgv, get scriptPath() { return script() }, env, pid: process.pid,
     execve, exists: existsSync,
     probe: (args, probeEnv) => runProbe(node, args, probeEnv),
     stopChildren: (done) => services.stop(done),
@@ -453,7 +473,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     },
     // Removed as this master exits, below: once a handover under way (Windows) is decided.
     releasePidFile: () => { releaseOnExit = true },
-    restoreUpdate: config.restoreUpdate,
+    restoreUpdate,
     confirmUpdate: config.confirmUpdate,
     bundle,
     log,

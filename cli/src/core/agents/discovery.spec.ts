@@ -3,6 +3,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createDiscoveryHandlers, type DiscoveryDeps } from './discovery.js'
 
 // The pane's backend, asked what became of an unconfirmed start's pane.
@@ -29,6 +31,7 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
       byRuntimeEngine: vi.fn(() => undefined),
       openProcessAgent: vi.fn(() => null),
       adoptEngine: vi.fn(() => row()),
+      reinstateArchived: vi.fn(() => null),
       updateRuntimes: vi.fn(),
       updateProcessIdentity: vi.fn(),
       setBypassPermission: vi.fn(),
@@ -54,7 +57,8 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(),
     retainExitedSession: vi.fn(),
-    stoppedAgents: { finishResume: vi.fn() },
+    stoppedAgents: { finishResume: vi.fn(), list: vi.fn(() => []), remove: vi.fn(), resumeReservedAt: vi.fn(() => null) },
+    send: vi.fn(),
     restoreDegraded: (agentId) => restoreDegraded(agentId),
     terminals: { backendFor: vi.fn(() => paneBackend) },
     ...over,
@@ -149,10 +153,53 @@ describe('discovery', () => {
       expect(run.deps.registry.setBypassPermission).not.toHaveBeenCalled()
     })
 
-    it('reads a Buddy launched in full mode back as full, never as an older Buddy\'s mode (task #2832)', () => {
+    it('reads an engine launched in full mode back as full (task #2832)', () => {
       expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox -c tui.fullscreen_transcript=false')).toBe('full')
       expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions')).toBe('full')
       expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
+    })
+
+    it('takes a pane for OpenClaw only once it shows the TUI: `openclaw onboard` renames itself `openclaw` too', async () => {
+      // What `openclaw onboard` draws (OpenClaw's clack wizard, 2026.11.2): no title, no footer. Not recorded: written
+      // from its intro and first prompt.
+      const onboard = '│\n◇\n\nOpenClaw 2026.11.2 (b556fdf) — tagline\n\n┌  OpenClaw setup\n│\n◆  I understand this is personal-by-default. Continue?\n│  ● Yes / ○ No\n└\n'
+      const tui = readFileSync(join(import.meta.dirname, '../../engines/openclaw/__fixtures__/screen-plain.txt'), 'utf8')
+      let screen = onboard
+      const capture = vi.fn(async () => ({ state: 'succeeded' as const, value: screen }))
+      const run = setup({ terminals: { backendFor: vi.fn(() => ({ paneState, capture }) as unknown as TerminalBackend) } })
+      run.rows.set('a1', row({ engine: 'openclaw', sessionId: '' }))
+      const openclaw = seen({ engine: 'openclaw', args: 'openclaw' })
+      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: row({ agentId: 'new', engine: 'openclaw' }), isNew: true, evicted: null } as never)
+      await run.handlers.onObserved(openclaw, row({ engine: 'terminal' } as Partial<RegisteredSession>))
+      await run.handlers.onDiscovered(openclaw)
+      expect(capture).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
+      expect(run.deps.registry.adoptEngine).not.toHaveBeenCalled()
+      expect(run.deps.registry.openProcessAgent).not.toHaveBeenCalled()
+      expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
+      // The TUI, drawn: taken.
+      screen = tui
+      await run.handlers.onObserved(openclaw, row({ engine: 'terminal' } as Partial<RegisteredSession>))
+      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'openclaw', expect.anything())
+      await run.handlers.onDiscovered(openclaw)
+      expect(run.deps.registry.openProcessAgent).toHaveBeenCalled()
+      // A row OpenClaw already has is never asked again: an overlay over its footer does not make it look gone.
+      capture.mockClear()
+      screen = onboard
+      await run.handlers.onObserved(openclaw, row({ engine: 'openclaw' }))
+      expect(capture).not.toHaveBeenCalled()
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalled()
+    })
+
+    it('never takes an `openclaw` process for OpenClaw while its screen cannot be read', async () => {
+      const capture = vi.fn(async () => { throw new Error('pane host gone') })
+      const run = setup({ terminals: { backendFor: vi.fn(() => ({ paneState, capture }) as unknown as TerminalBackend) } })
+      // Its pane's backend failed the read, or it shows in no pane at all.
+      for (const openclaw of [seen({ engine: 'openclaw', args: 'openclaw' }), seen({ engine: 'openclaw', args: 'openclaw', runtimes: [] })]) {
+        await run.handlers.onDiscovered(openclaw)
+      }
+      expect(capture).toHaveBeenCalledOnce()
+      expect(run.deps.registry.openProcessAgent).not.toHaveBeenCalled()
+      expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
     })
 
     it('adopts the engine someone typed into a terminal, and announces it', async () => {
@@ -165,6 +212,128 @@ describe('discovery', () => {
       expect(run.deps.syncRecapPool).toHaveBeenCalled()
       expect(run.deps.announceSession).toHaveBeenCalledWith(adopted)
       expect(String(log.mock.calls[0][0])).toContain('terminal → claude')
+    })
+
+    // CLI 0.5.97 could not see Hermes in its panes on Windows: its restore archived "Hermes harness 11-9 20:28" as exited,
+    // gave pane %2007 to a new terminal row, and the harness answered Enter with AGENT_BUSY while its own Hermes (pid
+    // 25492) ran on (DESKTOP-0TFH0OJ, 2026-11-10). Seen again, that same process brings the harness back.
+    describe('an archived harness whose own engine never stopped', () => {
+      const PANE = { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2007' } as const
+      const HERMES = { pid: 25492, executable: 'python.exe', startMarker: 'w:134387585146660684' }
+      const archived = (over: Partial<RegisteredSession> = {}) => row({ agentId: 'bcdaa2eb', engine: 'hermes', sessionId: '', active: false,
+        defaultName: 'Hermes harness 11-9 20:28', runtimes: [PANE], processIdentity: HERMES, ...over } as Partial<RegisteredSession>)
+      const shell = row({ agentId: '0e375534', engine: 'terminal', sessionId: '', runtimes: [PANE] } as Partial<RegisteredSession>)
+      const hermesSeen = (over: Partial<DiscoveredTerminalAgent> = {}) => seen({ engine: 'hermes', runtimes: [PANE],
+        primaryRuntimeKey: 'ptyhost:p2-0.5.80:%2007', processIdentity: HERMES, args: 'python.exe -I hermes-boot.py', ...over })
+
+      it('comes back under its own id on its pane, the terminal tile moving to it, nothing restarted', async () => {
+        const run = setup()
+        const saved = archived()
+        const live = { ...saved, active: true, processIdentity: HERMES }
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived({ agentId: 'other', runtimes: [{ ...PANE, paneId: '%2009' }] }), saved])
+        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue(live as RegisteredSession)
+        run.rows.set('bcdaa2eb', live as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), shell)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES)
+        expect(run.deps.stoppedAgents.remove).toHaveBeenCalledWith('bcdaa2eb')
+        expect(run.deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: '0e375534', successor: 'bcdaa2eb' } })
+        expect(run.deps.announceSession).toHaveBeenCalledWith(live)
+        expect(run.deps.registry.adoptEngine).not.toHaveBeenCalled()
+        expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('bcdaa2eb', HERMES, undefined, undefined)
+      })
+
+      it.each([
+        ['another process typed into that shell', hermesSeen({ processIdentity: { ...HERMES, startMarker: 'w:1' } }), archived()],
+        ['the same process number in another pane', hermesSeen(), archived({ runtimes: [{ ...PANE, paneId: '%2008' }] })],
+        ['another engine', hermesSeen({ engine: 'codex' }), archived()],
+      ])('is not what %s is: the terminal adopts its engine as before', async (_name, observed, saved) => {
+        const run = setup()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        await run.handlers.onObserved(observed, shell)
+        expect(run.deps.registry.reinstateArchived).not.toHaveBeenCalled()
+        expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('0e375534', observed.engine, observed.processIdentity)
+      })
+
+      it('waits for a resume already under way, and adopts when the archive cannot be read or the registry refuses', async () => {
+        const reserved = setup()
+        vi.mocked(reserved.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(reserved.deps.stoppedAgents.resumeReservedAt).mockReturnValue(1)
+        await reserved.handlers.onObserved(hermesSeen(), shell)
+        expect(reserved.deps.registry.reinstateArchived).not.toHaveBeenCalled()
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const unreadable = setup()
+        vi.mocked(unreadable.deps.stoppedAgents.list).mockImplementation(() => { throw new Error('EACCES') })
+        await unreadable.handlers.onObserved(hermesSeen(), shell)
+        expect(unreadable.deps.registry.adoptEngine).toHaveBeenCalled()
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved harnesses unreadable'))
+
+        const refused = setup()
+        vi.mocked(refused.deps.stoppedAgents.list).mockReturnValue([archived()])
+        await refused.handlers.onObserved(hermesSeen(), shell)
+        expect(refused.deps.stoppedAgents.remove).not.toHaveBeenCalled()
+        expect(refused.deps.registry.adoptEngine).toHaveBeenCalled()
+      })
+
+      it('also from a terminal row that adopted that engine already, while no conversation is bound to it; looked up once', async () => {
+        const run = setup()
+        const saved = archived()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        const adopted = row({ agentId: '0e375534', engine: 'hermes', terminalHost: true, sessionId: '', runtimes: [PANE],
+          processIdentity: HERMES } as Partial<RegisteredSession>)
+        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue({ ...saved, active: true } as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), adopted)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES)
+
+        const bound = setup()
+        vi.mocked(bound.deps.stoppedAgents.list).mockReturnValue([saved])
+        await bound.handlers.onObserved(hermesSeen(), { ...adopted, sessionId: 'local-61' })
+        expect(bound.deps.stoppedAgents.list).not.toHaveBeenCalled()
+
+        const twice = setup()
+        await twice.handlers.onObserved(hermesSeen(), adopted)
+        await twice.handlers.onObserved(hermesSeen(), adopted)
+        expect(twice.deps.stoppedAgents.list).toHaveBeenCalledTimes(1)
+      })
+
+      it('forgets what it looked at once it has looked at 4096, and looks again', async () => {
+        const run = setup()
+        for (let i = 0; i < 4096; i++) {
+          await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: `t${i}` } as RegisteredSession)
+        }
+        expect(run.deps.stoppedAgents.list).toHaveBeenCalledTimes(4096)
+        await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: 't0' } as RegisteredSession)
+        expect(run.deps.stoppedAgents.list).toHaveBeenCalledTimes(4096)
+        // The 4097th row starts over; the first is looked at again.
+        await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: 't4096' } as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: 't0' } as RegisteredSession)
+        expect(run.deps.stoppedAgents.list).toHaveBeenCalledTimes(4098)
+      })
+
+      it('names what it could not read or remove, whatever was thrown', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const unreadable = setup()
+        vi.mocked(unreadable.deps.stoppedAgents.list).mockImplementation(() => { throw 'EACCES' })
+        await unreadable.handlers.onObserved(hermesSeen(), shell)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('adopts its engine as new: EACCES'))
+        const busy = setup()
+        vi.mocked(busy.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(busy.deps.stoppedAgents.remove).mockImplementation(() => { throw 'EBUSY' })
+        vi.mocked(busy.deps.registry.reinstateArchived).mockReturnValue({ ...archived(), active: true } as RegisteredSession)
+        await busy.handlers.onObserved(hermesSeen(), shell)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed: EBUSY'))
+      })
+
+      it('says so, and stays back, when its archive cannot be removed', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const run = setup()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(() => { throw new Error('EBUSY') })
+        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue({ ...archived(), active: true } as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), shell)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed'))
+        expect(run.deps.send).toHaveBeenCalled()
+      })
     })
 
     it('wakes a dormant row and attaches it in the background, or puts it back to sleep if its pane is gone', async () => {

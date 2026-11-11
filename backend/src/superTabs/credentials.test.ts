@@ -38,6 +38,8 @@ const fake = {
   npm: () => ['npm', noise(36, ALNUM, 28)].join('_'),
   pem: (kind = 'RSA PRIVATE') => [`-----BEGIN ${kind} KEY-----`, noise(64, B64, 21), noise(64, B64, 22), `${noise(20, B64, 23)}==`, `-----END ${kind} KEY-----`].join('\n'),
   password: () => `Fx${noise(16, ALNUM, 24)}`,
+  // A Harness join or link token (sharing.ts): 32 random bytes as base64url, 43 characters.
+  linkToken: () => noise(43, B64URL, 29),
 }
 
 describe('findCredentials: every kind it removes', () => {
@@ -45,6 +47,7 @@ describe('findCredentials: every kind it removes', () => {
     ['jwt', 'a signed JWT', fake.jwt()],
     ['jwt', 'an encrypted JWT (five segments)', fake.jwe()],
     ['harness', 'a Harness access token', fake.harness('hna')],
+    ['link-token', 'a bare Harness join or link token', fake.linkToken()],
     ['harness', 'a Harness refresh token', fake.harness('hnr')],
     ['harness', 'a Harness team access token', fake.harness('hta')],
     ['harness', 'a Harness team refresh token', fake.harness('htr')],

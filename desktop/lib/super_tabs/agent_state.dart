@@ -5,6 +5,8 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
+import '../state/app_state.dart';
+import '../state/harness_activity.dart';
 import 'controller.dart';
 import 'github_issues.dart';
 import 'model.dart';
@@ -26,16 +28,22 @@ class SwarmAgentStates extends ChangeNotifier {
   SwarmAgentStates({
     required this.controller,
     required this.github,
+    this.app,
     this.localRepository,
     this.boardEvery = const Duration(minutes: 1),
     this.settle = const Duration(milliseconds: 400),
   }) {
     controller.addListener(_changed);
+    app?.addListener(_activity);
     _changed();
   }
 
   final SuperTabController controller;
   final SwarmGitHub github;
+
+  /// The app whose computers' daemons say what an agent does now (a turn running, a question on its screen), which its row
+  /// says ([rowOf]); null where there is none.
+  final AppNotifier? app;
 
   /// The repo an agent's own pane works in, as this Desktop reads it (`github.com/owner/name`), for an agent whose project
   /// names none: in the person's Personal Swarm the server never learns it (personal_projects.dart).
@@ -84,11 +92,60 @@ class SwarmAgentStates extends ChangeNotifier {
   /// Whether a read is waiting to start or going on: what a change asked for is not done yet.
   bool get busy => _settling != null || _running;
 
-  /// The state of [agent] as its row says it, or null for none.
-  String? of(SuperTabAgent agent) {
+  /// What [agent]'s row says in a word or two, the first of (Swarm plan, step 1, item 1: "What Harness knows is a state
+  /// anyone can see"): not running (`offline`); `starting`; waiting on its person (`needs you` to them, `waiting on its
+  /// person` to anyone else: a question on its screen, or its terminal waits on their input); out of quota until a time (`limited until
+  /// 15:40`, what its machine saw on its screen); at a task (`on #12`); `working` (a turn runs); `free`. Idle, or nothing
+  /// known, says nothing. What its computer's daemon says of it is known where [app] reads that computer; tasks and free
+  /// come from [states], read while Your Team is open.
+  static String? rowOf(
+    SuperTabAgent agent, {
+    SwarmAgentStates? states,
+    AppNotifier? app,
+    String? me,
+    DateTime? now,
+  }) {
     if (offlineOf(agent) case final offline?) return offline;
-    if (taskOf(agent) case final number?) return 'on #$number';
-    return _free[agent.id] == true ? 'free' : null;
+    if (app?.engineStarting(agent.machineId, agent.harnessId) ?? false) {
+      return 'starting';
+    }
+    final activity = app == null
+        ? null
+        : harnessActivity(app, agent.machineId, agent.harnessId);
+    if (activity == HarnessActivity.needsInput ||
+        app?.questionFor(agent.machineId, agent.harnessId) != null) {
+      return me != null && agent.contributorId == me
+          ? 'needs you'
+          : 'waiting on its person';
+    }
+    if (agent.limitedUntil?.toLocal() case final until?
+        when until.isAfter(now ?? clock.now())) {
+      String two(int n) => n.toString().padLeft(2, '0');
+      return 'limited until ${two(until.hour)}:${two(until.minute)}';
+    }
+    if (states?.taskOf(agent) case final number?) return 'on #$number';
+    if (activity == HarnessActivity.working) return 'working';
+    return states?._free[agent.id] == true ? 'free' : null;
+  }
+
+  /// What the person's own agents' rows said when the app last changed, so a change that moves none of them redraws
+  /// nothing.
+  String _said = '';
+
+  /// The app changed (a turn started or ended, a question came or went, a computer connected): the rows redraw only once
+  /// what one of them says has moved. Not [AppNotifier.agentPulse], which every word an agent writes bumps.
+  void _activity() {
+    if (_disposed) return;
+    final me = controller.accountId;
+    final said = [
+      for (final agent
+          in controller.snapshot?.agents ?? const <SuperTabAgent>[])
+        if (agent.contributorId == me)
+          rowOf(agent, states: this, app: app, me: me),
+    ].join('\n');
+    if (said == _said) return;
+    _said = said;
+    notifyListeners();
   }
 
   /// The task [agent] has taken on its project's board, by number, whether it is online or not; null for none.
@@ -108,7 +165,6 @@ class SwarmAgentStates extends ChangeNotifier {
     final projects = <String, SuperTabProject>{};
     final agents = <String, SuperTabAgent>{};
     for (final agent in superTabMyAgents(snapshot, controller.accountId)) {
-      if (agent.buddyOf != null) continue;
       agents[agent.id] = agent;
       if (snapshot.projectById(agent.projectId) case final project?) {
         projects.putIfAbsent(project.id, () => project);
@@ -290,6 +346,7 @@ class SwarmAgentStates extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     controller.removeListener(_changed);
+    app?.removeListener(_activity);
     _settling?.cancel();
     _settling = null;
     _boards?.cancel();

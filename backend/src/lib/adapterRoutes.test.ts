@@ -118,3 +118,66 @@ describe('a machine socket and its viewers\' frames', () => {
     expect(routes.close).toHaveBeenCalled()
   })
 })
+
+// Agent browser streams (spec 2026-11-10-agent-browser-design, "Nothing is dropped silently").
+describe('a machine socket\'s browser frames', () => {
+  const browserHop = (bytes = 36) => {
+    const frame = Buffer.alloc(bytes)
+    frame.write('HTRM'); frame[4] = 3; frame[5] = TerminalBinaryKind.browser; frame.writeUInt32BE(bytes - 20, 16)
+    return encodeTerminalHop(TerminalHopDirection.up, viewer, frame)!
+  }
+  const rateErrors = (ws: Socket) => ws.send.mock.calls.map(([body]) => JSON.parse(String(body)))
+    .filter(msg => msg.frame?.type === 'agent_browser_transport_error')
+
+  it('relays binary kind 8 and agent_browser_open_result up, and drops what it does not know', async () => {
+    const ws = await machineSocket()
+    const packet = browserHop()
+    ws.emit('message', packet, true)
+    ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'agent_browser_open_result', payload: sealed() } })
+    ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'agent_browser_close', payload: sealed() } })
+    // Unknown, down-only, unsealed, untargeted: dropped before any route or publish.
+    ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'agent_browser_foo', payload: sealed() } })
+    ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'agent_browser_ack', payload: sealed() } })
+    ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'agent_browser_open_result', payload: { plain: true } } })
+    ws.frame({ t: 'up', frame: { type: 'agent_browser_open_result', payload: sealed() } })
+    await flush()
+    expect(Buffer.from(routes.hop.mock.calls[0]![0] as Uint8Array)).toEqual(packet)
+    expect(routes.targeted.mock.calls.map(([msg]) => msg)).toEqual([
+      { webEligible: true, commanderEligible: false, targetConnId: viewer, targetKind: 'web', frame: { type: 'agent_browser_open_result', payload: sealed() } },
+      { webEligible: true, commanderEligible: false, targetConnId: viewer, targetKind: 'web', frame: { type: 'agent_browser_close', payload: sealed() } },
+    ])
+    expect(m.publishUp).not.toHaveBeenCalled()
+    expect(rateErrors(ws)).toEqual([])
+  })
+
+  it('drops kind 8 past 512 KiB a second and tells the machine, at most once a second, without throttling its terminal', async () => {
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const ws = await machineSocket()
+      const full = browserHop(512 * 1024)
+      for (let i = 0; i < 63; i++) ws.emit('message', full, true)
+      expect(routes.hop).toHaveBeenCalledTimes(60)
+      expect(rateErrors(ws)).toEqual([{ t: 'down', connId: '', frame: { type: 'agent_browser_transport_error', payload: { code: 'RATE' } } }])
+      now += 1_000
+      ws.emit('message', full, true)
+      expect(rateErrors(ws)).toHaveLength(2)
+
+      const output = Buffer.alloc(36)
+      output.write('HTRM'); output[4] = 3; output[5] = TerminalBinaryKind.output; output.writeUInt32BE(16, 16)
+      ws.emit('message', encodeTerminalHop(TerminalHopDirection.up, viewer, output)!, true)
+      ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'terminal_output', payload: sealed() } })
+      await flush()
+      expect(routes.hop).toHaveBeenCalledTimes(61)
+      expect(routes.targeted).toHaveBeenCalledTimes(1)
+    } finally { clock.mockRestore() }
+  })
+
+  it('answers a refused browser JSON frame with the transport error', async () => {
+    const ws = await machineSocket()
+    for (let i = 0; i < 121; i++) ws.frame({ t: 'up', targetConnId: viewer, frame: { type: 'agent_browser_open_result', payload: sealed() } })
+    await flush()
+    expect(routes.targeted).toHaveBeenCalledTimes(120)
+    expect(rateErrors(ws)).toHaveLength(1)
+  })
+})

@@ -82,12 +82,15 @@ describe.skipIf(!binary)('native guard publication on private tmux servers', () 
   }, 10_000)
 
   it('rejects a delayed server command after a replacement, even if it carries the original nonce', async () => {
-    const token = randomUUID(), replacement = randomUUID(), invocation = join(tmux.root, 'invocation.json')
+    const token = randomUUID(), replacement = randomUUID(), invocation = join(tmux.root, 'invocation')
     const recorder = join(tmux.root, 'record-tmux')
-    writeFileSync(recorder, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(invocation)}, JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o700 })
+    // A shell, as fast to start as tmux itself: a Node stand-in took 0.4 s to start at load 30, inside the 2 s the
+    // transition gives its tmux client after its own Node start, and was killed before it recorded anything.
+    writeFileSync(recorder, `#!/bin/sh\nprintf '%s\\0' "$@" > ${shellSingleQuote(invocation + '.part')} && mv ${shellSingleQuote(invocation + '.part')} ${shellSingleQuote(invocation)}\n`, { mode: 0o700 })
     const pane = await start(token, hold(token, recorder, held(token)))
-    await vi.waitFor(() => expect(existsSync(invocation)).toBe(true))
-    const args = JSON.parse(readFileSync(invocation, 'utf8')) as string[]
+    // The transition is a Node start, then its client, bounded at 2 s: vi.waitFor's 1 s default was shorter than that.
+    await vi.waitFor(() => expect(existsSync(invocation)).toBe(true), { timeout: 5_000 })
+    const args = readFileSync(invocation, 'utf8').split('\0').slice(0, -1)
     // Preserve the old nonce in the new start command too: PID must independently fence it.
     const replacementCommand = heldPaneArgv(`Replacement ${NATIVE_LAUNCH_MARKER}=${token}`, replacement)
     expect(await backend.respawn(pane, { command: replacementCommand })).toMatchObject({ state: 'succeeded' })
@@ -95,5 +98,5 @@ describe.skipIf(!binary)('native guard publication on private tmux servers', () 
     await tmux.run(...args)
     expect(await tmux.run('display-message', '-p', '-t', pane.paneId, '#{pane_pid}')).toBe(before)
     expect(await tmux.run('display-message', '-p', '-t', pane.paneId, '#{pane_start_command}')).toContain(replacement)
-  })
+  }, 10_000)
 })

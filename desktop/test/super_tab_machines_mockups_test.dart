@@ -29,6 +29,7 @@ Future<SuperTabController> mount(
   ConversationServer? fixture,
   double width = 1200,
   String? name,
+  double textScale = 1,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = Size(width, 900);
@@ -64,14 +65,16 @@ Future<SuperTabController> mount(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: Scaffold(
         body: ListenableBuilder(
           listenable: c,
-          builder: (context, _) => SuperTabMachines(
-            controller: c,
-            onAddAgent: (_) {},
-            ticks: false,
-          ),
+          builder: (context, _) =>
+              SuperTabMachines(controller: c, onAddAgent: (_) {}, ticks: false),
         ),
       ),
     ),
@@ -276,54 +279,52 @@ void main() {
     },
   );
 
-  // The test font draws every letter 1em wide: these names fit the room the crew chip does not need, and not half the row.
+  // The test font draws every letter 1em wide: these names fit the row, and not half of it.
   for (final (width, name) in [
     (880.0, 'Dee\'s MacBook Pro (M4)'),
     // In the app a window 880 wide leaves Manage a row this narrow, beside the Swarm's sidebar.
     (600.0, 'Dee\'s MBP16'),
   ]) {
-    testWidgets(
-      'at $width wide a long machine name takes the room its crew chip does not need',
-      (tester) async {
-        await mount(tester, width: width, name: name);
-        bool cut(Finder text) => tester
+    testWidgets('at $width wide a long machine name stays whole', (
+      tester,
+    ) async {
+      await mount(tester, width: width, name: name);
+      expect(
+        tester
             .renderObject<RenderParagraph>(
-              find.descendant(of: text, matching: find.byType(RichText)),
+              find.descendant(
+                of: key('super-machine-name-mine'),
+                matching: find.byType(RichText),
+              ),
             )
-            .didExceedMaxLines;
-        expect(cut(key('super-machine-name-mine')), isFalse);
-        // Its crew chips are whole too. (A narrow row's "0 asleep" is wider in the test font than in the app's.)
-        if (width > 640) {
-          for (final id in ['mine', 'build', 'sleep', 'old']) {
-            expect(cut(key('machines-crew-$id')), isFalse, reason: id);
-          }
-        }
-        expect(tester.takeException(), isNull);
-      },
-    );
+            .didExceedMaxLines,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    });
   }
 
-  testWidgets(
-    'at twice the text size the crew chips grow with it and stay whole',
-    (tester) async {
-      tester.platformDispatcher.textScaleFactorTestValue = 2;
-      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-      await mount(tester, width: 880);
-      for (final id in ['mine', 'build', 'sleep', 'old']) {
+  testWidgets('at twice the text size the disk figures grow with the text '
+      'and stay whole and aligned', (tester) async {
+    await mount(tester, textScale: 2);
+    for (final id in ['mine', 'build', 'sleep', 'old']) {
+      final texts = find.descendant(
+        of: key('machines-disk-$id'),
+        matching: find.byType(RichText),
+      );
+      expect(texts, findsNWidgets(2));
+      for (final text in texts.evaluate()) {
         expect(
-          tester
-              .renderObject<RenderParagraph>(
-                find.descendant(
-                  of: key('machines-crew-$id'),
-                  matching: find.byType(RichText),
-                ),
-              )
-              .didExceedMaxLines,
+          (text.renderObject! as RenderParagraph).didExceedMaxLines,
           isFalse,
           reason: id,
         );
       }
-      expect(tester.takeException(), isNull);
-    },
-  );
+      expect(
+        tester.getTopLeft(key('machines-disk-$id')).dx,
+        tester.getTopLeft(key('machines-disk-mine')).dx,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
 }

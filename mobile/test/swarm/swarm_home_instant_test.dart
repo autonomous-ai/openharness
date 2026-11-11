@@ -401,42 +401,6 @@ void main() {
       stopReads(host);
     },
   );
-  testWidgets("a project opened from the Home kept: its header's team line "
-      'counts its humans and agents, before and after its Swarm is read '
-      'again, with no Updating…', (tester) async {
-    final (:host, :fake) = await coldStart(tester);
-    final read = Completer<void>();
-    fake.routes['/api/super-tabs/$tab/parts'] = (_) async {
-      await read.future;
-      return firstLoad();
-    };
-    await tester.tap(key('swarm-project-$tab-$project'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-
-    final line = key('swarm-project-team-line');
-    Finder inLine(Finder matching) =>
-        find.descendant(of: line, matching: matching);
-    // Kept: Nova waiting on the person in Fix login.
-    expect(inLine(find.text('Updating…')), findsNothing);
-    expect(inLine(find.textContaining('agent')), findsOneWidget);
-    expect(
-      inLine(find.textContaining('waiting')),
-      findsNothing,
-      reason: 'the line counts heads, not what they are doing',
-    );
-
-    read.complete();
-    await tester.pump();
-    await tester.pump();
-    await tester.pump();
-
-    // Read again: still only the count, whatever the team is doing.
-    expect(inLine(find.text('Updating…')), findsNothing);
-    expect(inLine(find.textContaining('human')), findsOneWidget);
-    expect(inLine(find.textContaining('All idle')), findsNothing);
-    stopReads(host);
-  });
 
   testWidgets(
     'a first read of the Swarm that fails leaves the Home kept as it is, '

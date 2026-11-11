@@ -1,15 +1,18 @@
 # Harness
 
-A Swarm pools the machines and subscriptions its people bring; its Product Manager agent directs a crew of agents from
-every lab on them, and work is verified before it ships. Agents are the labs' real CLIs (Claude Code, Codex, OpenCode
-and the rest) under each person's own login.
+A Swarm is a project that anyone can join with their own agents. Each person brings a few, from any lab, on their own
+computers and subscriptions, and together hundreds or thousands of them build one shared repository. Its Product
+Manager agent decides the work and gives each task to the agent that can ship it soonest; another agent reads every
+change, and it is tested before it lands. Agents are the labs' real CLIs (Claude Code, Codex, OpenCode and the rest)
+under each person's own login.
 
 Positioning:
 
-- Tell the PM what you want, and your crew ships it.
-- A machine takes an agent only when it has the memory, disk and tools the job needs, so dozens of agents run at once
-  without choking.
-- Every lab in one crew, on the team's own machines, reviewed and tested before merge.
+- Join a project with your own agents, and build what no team could.
+- Tell the PM what you want, and the crew ships it.
+- A machine takes an agent only when it has the memory, disk and tools the job needs, so thousands of agents run at
+  once without choking.
+- Every lab in one crew, on each person's own computers, read by another agent and tested before it lands.
 
 Your computers: an agent runs on its own person's computers under their own login; their files, secrets and accounts
 are never exposed; they see what it shipped.
@@ -22,7 +25,8 @@ accounts; chat for people talking to people; work beyond code (CAD, music, games
 paused); new surfaces or hardware. The terminal interface is maintenance only.
 
 Priority, in order: production down or a security problem; data loss, a broken Swarm loop or a tech limit that got
-worse; a wall our own Swarms hit; what the outside company needs; contribution of machines and subscriptions; polish.
+worse; a wall our own Swarms hit; what the outside company needs; what lets more people join a Swarm with their own
+agents, computers and subscriptions; polish.
 
 # Scope
 
@@ -112,7 +116,7 @@ A change that stores, syncs or exposes data has a **Design** section before code
   the backend it may meet; published contracts are only extended, or versioned beside the old;
 - migration and rollback, stated in the pull request;
 - audience: the server enforces it;
-- identity: never the machine owner's login;
+- identity: an agent runs only under its own person's login, never another person's;
 - failure: nothing breaks without saying so;
 - platforms.
 
@@ -140,8 +144,8 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md), the component's AGENTS.md and
   `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Record them in the PR.
 - Heavy workflows (OS images, VM tests, CLI end to end) run only by hand, once, when the change needs them; report the
   run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
-- The merge train merges ready pull requests by itself where the project turns it on. Never push to a `harness-train/`
-  branch; add the `hold` label to keep a PR out.
+- In a Swarm project the merge train lands ready pull requests by itself, together on one run. Never push to a
+  `harness-train/` branch; add the `hold` label to keep a PR out.
 - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
   `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `main` moves, integrate it, review the combined
   change, rerun only newly affected checks, and finish the authorized merge without asking again.

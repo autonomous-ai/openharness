@@ -30,12 +30,14 @@ export const MENTIONS_INTERVAL_MS = 20_000
 export const TEAM: ReadonlySet<unknown> = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 /** Bounds on one pass and on what is kept: a Swarm reads at most this many repositories here, and a burst beyond a page
  *  count is read next pass. */
-const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ASKED = 200
+const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ASKED = 200, MAX_HELD = 200
 const TEXT_MAX = 4_000, TITLE_MAX = 300
 /** Who the agents here are and what they read, asked again at most this often: each ask reads every agent's Swarm. */
 const AGENTS_FRESH_MS = 60_000
 /** A thread that relays this many times to one agent within LOOP_WINDOW_MS is paused for it: an agent that forgets to sign
- *  its posts on its own pull request would otherwise hear itself, answer, and hear that too. */
+ *  its posts on its own pull request would otherwise hear itself, answer, and hear that too. What the pause keeps from it is
+ *  held, not dropped, and goes once the thread is quiet (Swarm plan, step 1, item 2: "a guard that stops a loop holds the news
+ *  and says so"); the pause once let two comments go unheard for good, and nobody was told. */
 const LOOP_RELAYS = 6, LOOP_WINDOW_MS = 10 * 60_000
 /** How far back the first read of a repository looks: the minutes around an agent's start, never its history. */
 const FIRST_READ_MS = 10 * 60_000
@@ -59,7 +61,13 @@ interface Review extends Said { id: number; lines: Said[] }
 interface RepoMemory { comments: string; reviewComments: string; issues: string; seen: string[]; tasks: Record<string, number[]>
   owned: Record<string, string[]>; usedAt: number
   /** The agents already asked what they work on here (askFocus). */
-  asked?: string[] }
+  asked?: string[]
+  /** What a paused thread brought, in the order it came, kept until its agent's thread is quiet; at most MAX_HELD, and how
+   *  many more there were, by agent and thread, which its agent is told of when the rest goes. */
+  held?: Held[]
+  over?: Record<string, { count: number; since: number }> }
+/** One relay a paused thread kept from its agent: what it is, and when its pause began, which names the one notice of it. */
+interface Held { agentId: string; number: number; key: string; item: Json; since: number }
 interface Memory { repos: Record<string, RepoMemory> }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -70,6 +78,12 @@ export const signedBy = (body: string, names: readonly string[]): boolean =>
  *  "pip install" names nobody. */
 export const namesAgent = (body: string, names: readonly string[]): boolean =>
   names.some(name => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`).test(body))
+/** A name in lower case as people and agents write it, with a capital: an agent attached as its session was named, "juno",
+ *  signs "Juno, 12:17:" and is asked "to **Juno**" (swarm-sandbox, 2026-11-10: read in its own case alone, Juno never heard
+ *  Harness's ask to read #24 again, and Pip heard its own posts). Each form is matched as written, so "pip install" names an
+ *  agent called "Pip" no more than before. Any other name is kept as it is. */
+const capitalized = (name: string): string => name === name.toLowerCase() && name !== name.toUpperCase()
+  ? name.replace(/(^|\s)(\p{Ll})/gu, (_, gap: string, letter: string) => gap + letter.toUpperCase()) : name
 /** The builder label of an agent's tasks and pull requests: builder:pip for Pip. */
 export const builderLabel = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 
@@ -104,7 +118,8 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
     // The name people see first (backend agentNames.ts: a chosen name, else a free one): it names the agent's label and its
     // instructions file as the assigner and Desktop name them. Its stored name can be its engine's ("Claude Code").
-    const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim()).map(n => n.trim()))]
+    const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim())
+      .flatMap(n => [n.trim(), capitalized(n.trim())]))]
     if (!names.length) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     if (!state) continue
@@ -221,6 +236,7 @@ export class GitHubMentions {
     const from = new Date(this.now() - FIRST_READ_MS).toISOString()
     const kept = memory.repos[repo] ??= { comments: from, reviewComments: from, issues: from, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
     kept.usedAt = this.now()
+    await this.release(repo, agents, kept, relays, refused)
     // An agent new to this repository: its open tasks and pull requests now. Its tasks are told to nobody, since only a task
     // labelled from now on is news; its pull requests are its own, so what is said on them from now on reaches it.
     for (const agent of agents) {
@@ -248,7 +264,7 @@ export class GitHubMentions {
     for (const { agent, issue } of tasks) {
       // Only the repository's people can label an issue: a labelled one is the team's task, whoever opened it.
       const association = TEAM.has(issue.author_association) ? String(issue.author_association) : 'COLLABORATOR'
-      const refusal = await this.hand(repo, agent, Number(issue.number), relays, `t:${issue.number}`, { event: 'task', on: 'issue', number: Number(issue.number),
+      const refusal = await this.hand(repo, agent, kept, Number(issue.number), relays, `t:${issue.number}`, { event: 'task', on: 'issue', number: Number(issue.number),
         url: String(issue.html_url ?? ''), login: String(object(issue.user).login ?? ''), association, text: cut(String(issue.title ?? ''), TITLE_MAX) })
       const record = () => { kept.tasks[agent.agentId]!.push(Number(issue.number)) }
       if (refusal) { refused.push({ error: refusal, number: Number(issue.number), key: `t:${issue.number}`, record }); continue }
@@ -293,7 +309,7 @@ export class GitHubMentions {
       let refusal: SuperTabHostError | null = null
       for (const agent of agents) {
         const relay = 'lines' in item ? reviewFor(item as Review, agent, owners.includes(agent.label)) : sayingFor(item, agent, owners.includes(agent.label))
-        if (relay) refusal = await this.hand(repo, agent, item.number, relays, item.key, relay) ?? refusal
+        if (relay) refusal = await this.hand(repo, agent, kept, item.number, relays, item.key, relay) ?? refusal
       }
       const record = () => { kept.seen.push(item.key, ...('lines' in item ? (item as Review).lines.map(line => line.key) : [])) }
       if (refusal) { refused.push({ error: refusal, number: item.number, key: item.key, record }); continue }
@@ -335,15 +351,78 @@ export class GitHubMentions {
   }
 
   /** Hands one relay to the backend, once per agent and item: a retry after a failure sends the same operation id, which the
-   *  backend writes once. What the server refuses for good of it is returned, not thrown (see `passOver`). */
-  private async hand(repo: string, agent: WatchedAgent, number: number, relays: { left: number; sent: number }, key: string, item: Json): Promise<SuperTabHostError | null> {
+   *  backend writes once. What the server refuses for good of it is returned, not thrown (see `passOver`). A thread paused for
+   *  its agent, or one whose earlier news still waits, holds it instead (see `hold`), which is no refusal. */
+  private async hand(repo: string, agent: WatchedAgent, kept: RepoMemory, number: number, relays: { left: number; sent: number }, key: string,
+    item: Json): Promise<SuperTabHostError | null> {
     if (relays.left <= 0) throw new GitHubStop('BUSY', 'More GitHub news than one pass relays: the rest goes next pass.', true, this.now())
-    const thread = `${agent.agentId}\n${repo}#${number}`
-    const recent = (this.threads.get(thread) ?? []).filter(at => this.now() - at < LOOP_WINDOW_MS)
-    if (recent.length >= LOOP_RELAYS) {
-      this.tell('LOOP', `${repo}#${number} relayed ${LOOP_RELAYS} times in 10 minutes to one agent: paused there`)
+    const waiting = kept.held?.some(held => held.agentId === agent.agentId && held.number === number) ?? false
+    if (waiting || this.recent(agent, repo, number).length >= LOOP_RELAYS) {
+      await this.hold(repo, agent, kept, number, key, item)
       return null
     }
+    return this.send(repo, agent, number, relays, key, item)
+  }
+
+  /** The times a thread relayed to its agent within LOOP_WINDOW_MS. */
+  private recent(agent: WatchedAgent, repo: string, number: number): number[] {
+    return (this.threads.get(`${agent.agentId}\n${repo}#${number}`) ?? []).filter(at => this.now() - at < LOOP_WINDOW_MS)
+  }
+
+  /** Keeps a relay a paused thread brought, after what it already holds of it. The first of a pause tells its agent why, once
+   *  (the operation id is the pause's, so a restart does not say it twice); past MAX_HELD it is counted instead, and its agent is
+   *  told how many more there were and where, when the rest goes. */
+  private async hold(repo: string, agent: WatchedAgent, kept: RepoMemory, number: number, key: string, item: Json): Promise<void> {
+    const held = kept.held ??= []
+    const earlier = held.find(one => one.agentId === agent.agentId && one.number === number)
+    const over = kept.over ??= {}
+    const thread = `${agent.agentId}\n${number}`
+    const since = earlier?.since ?? this.now()
+    if (!earlier && over[thread] === undefined) {
+      // Told before it is kept: a notice that failed leaves nothing held, and the pass that reads it again tells it again.
+      this.tell('LOOP', `${repo}#${number} relayed ${LOOP_RELAYS} times in 10 minutes to one agent: held there until it is quiet`)
+      await this.deps.tell?.(agent, this.heldId(repo, agent, number, since), `Harness is holding what GitHub says to you on ${repo}#${number}: it `
+        + `reached you ${LOOP_RELAYS} times in 10 minutes, which is how an agent hears its own posts. It comes to you once the thread is quiet. `
+        + `Start each post you write with your name and a comma, as "${agent.names[0]}, 12:05: ...".`)
+    }
+    if (held.length < MAX_HELD) held.push({ agentId: agent.agentId, number, key, item, since })
+    else over[thread] = { count: (over[thread]?.count ?? 0) + 1, since: over[thread]?.since ?? this.now() }
+  }
+
+  private heldId(repo: string, agent: WatchedAgent, number: number, since: number, what = 'held'): string {
+    return `github-${what}-${createHash('sha256').update(`${repo}\n${number}\n${agent.agentId}\n${since}`).digest('hex').slice(0, 40)}`
+  }
+
+  /** Hands on what paused threads hold, in the order it came, for each agent running here whose thread is quiet again; an agent
+   *  not here now keeps its own until it is. What the server refuses for good of it is passed over as any refusal (`passOver`). */
+  private async release(repo: string, agents: WatchedAgent[], kept: RepoMemory, relays: { left: number; sent: number },
+    refused: Array<{ error: SuperTabHostError; number: number; key: string; record: () => void }>): Promise<void> {
+    for (const held of [...kept.held ?? []]) {
+      const agent = agents.find(one => one.agentId === held.agentId)
+      if (!agent || this.recent(agent, repo, held.number).length >= LOOP_RELAYS) continue
+      // A thread goes in its order: an earlier item of it still held (its thread filled again) holds this one too.
+      if (kept.held!.indexOf(held) > kept.held!.findIndex(one => one.agentId === held.agentId && one.number === held.number)) continue
+      const refusal = await this.send(repo, agent, held.number, relays, held.key, held.item)
+      const done = () => { kept.held = kept.held!.filter(one => one !== held) }
+      if (refusal) refused.push({ error: refusal, number: held.number, key: held.key, record: done })
+      else done()
+    }
+    // What came past MAX_HELD is said, once its thread holds nothing more and is quiet: how many, and where to read them.
+    for (const [thread, { count, since }] of Object.entries(kept.over ?? {})) {
+      const [agentId, number] = [thread.split('\n')[0]!, Number(thread.split('\n')[1])]
+      const agent = agents.find(one => one.agentId === agentId)
+      if (!agent || kept.held?.some(one => one.agentId === agentId && one.number === number) || this.recent(agent, repo, number).length >= LOOP_RELAYS) continue
+      await this.deps.tell?.(agent, this.heldId(repo, agent, number, since, 'more'), `${count} more on ${repo}#${number} came while Harness held it, `
+        + `more than it keeps: read them on GitHub.`)
+      delete kept.over![thread]
+    }
+  }
+
+  /** The relay itself, counted against the pass and the thread. */
+  private async send(repo: string, agent: WatchedAgent, number: number, relays: { left: number; sent: number }, key: string, item: Json): Promise<SuperTabHostError | null> {
+    if (relays.left <= 0) throw new GitHubStop('BUSY', 'More GitHub news than one pass relays: the rest goes next pass.', true, this.now())
+    const thread = `${agent.agentId}\n${repo}#${number}`
+    const recent = this.recent(agent, repo, number)
     const operationId = `github-${createHash('sha256').update(`${repo}\n${key}\n${agent.agentId}`).digest('hex').slice(0, 40)}`
     try {
       // The repository as GitHub writes it now (its case, its name after a rename): the server refuses a link outside the repository

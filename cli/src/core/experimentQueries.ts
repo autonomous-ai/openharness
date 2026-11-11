@@ -42,12 +42,11 @@
 import type { BackendSocket } from '../backendSocket.js'
 import type { AgentCreateRequest, CoreApi } from './api.js'
 import { creationObservation } from '../lib/creationObservation.js'
-import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -113,7 +112,7 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
         ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
         : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
     }
-    // Whether its agents are in a turn: a Buddy session's idle end asks before ending one (superTabs/host.ts).
+    // Whether its agents are in a turn (superTabs/host.ts).
     case 'activity': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
       const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : []
@@ -140,11 +139,6 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return { gone: !!text(payload.agentId) && await core.agents.gone?.(text(payload.agentId)) === true }
     case 'creation_status':
       return { observation: await core.agents.creationStatus?.(text(payload.creationId)) ?? null }
-    case 'native_turns': {
-      const cursor = payload.cursor === undefined ? undefined : nativeTurnCursorIn(payload.cursor)
-      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(payload.agentId)) || cursor === null) return { error: 'INVALID_REQUEST' }
-      return { page: await core.transcripts.nativeTurns?.(text(payload.agentId), cursor) ?? null }
-    }
     case 'create': {
       if (!text(payload.engine) || !text(payload.cwd) || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
       const request: AgentCreateRequest = {

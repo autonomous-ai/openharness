@@ -2,14 +2,18 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/my_agents.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/swarm_v4_channel.dart';
 import 'support/swarm_v4_data.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// A person's first minutes in Swarm v4, in one go and by clicking, as they do it: the left pane, an agent's own chat
 /// (they write to it), its instructions and terminal beside it, a project's channel (they only read it), the project's
@@ -85,7 +89,7 @@ void main() {
     expect(find.text('Your Team'), findsOneWidget);
     expect(find.text('Projects'), findsOneWidget);
     expect(key('super-manage'), findsOneWidget);
-    for (final gone in ['Buddies', 'Members', 'Notifications', 'Threads']) {
+    for (final gone in ['Members', 'Notifications', 'Threads']) {
       expect(find.text(gone), findsNothing, reason: gone);
     }
 
@@ -185,75 +189,98 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'an agent waiting on its person is answered in its own chat: '
-    'neither the project channel nor the task chat takes the person\'s words',
-    (tester) async {
-      final (server, c, _) = await open(tester);
-      // A task chat from before v4: its agent asked its person a question, which is the only thing waiting.
-      (server.state['conversations'] as List).add({
-        ...conversationFixture('task-chat', 'Which build?'),
-        'projectId': 'lead',
-        'number': 7,
-        'task': {
-          'goal': 'Which build?',
-          'changes': '',
-          'constraints': '',
-          'owns': <String>[],
-        },
-        'agentIds': ['second'],
-        'assignment': {
-          'id': 'work-7',
-          'agentId': 'second',
-          'status': 'needs_human',
-          'askedOf': 'owner',
-          'result': 'Which build do you want?',
-        },
-      });
-      server.append('Which build do you want?', conversationId: 'task-chat');
-      server.messages.last['author'] = {
-        'kind': 'agent',
-        'id': 'second',
-        'name': 'second',
-      };
-      await tester.runAsync(c.refresh);
-      await c.select('task-chat');
-      await tester.pumpAndSettle();
-      // The task chat is read here, with a way to the question and none to answer in it.
-      expect(key('super-agents-only'), findsOneWidget);
-      expect(find.byType(EditableText), findsNothing);
-      expect(key('super-needs-human-second'), findsOneWidget);
-      // The channel is the same.
-      await c.select('lead');
-      await tester.pumpAndSettle();
-      expect(key('super-agents-only'), findsOneWidget);
-      expect(find.byType(EditableText), findsNothing);
-      // The answer goes to the agent's own chat, from the left pane.
-      await tester.tap(key('super-agent-second'));
-      await tester.pumpAndSettle();
-      final box = find.byType(EditableText);
-      expect(box, findsOneWidget);
-      await tester.tap(box);
-      await tester.enterText(box, 'The arm64 one');
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      final sent = [
-        for (final post in server.posts)
-          if ((post['command'] as Map?)?['type'] == 'message.send')
-            post['command'] as Map,
+  testWidgets('an agent waiting on its person is answered in its own chat: '
+      'the project channel takes none of the person\'s words', (tester) async {
+    final (server, c, _) = await open(tester);
+    await c.select('lead');
+    await tester.pumpAndSettle();
+    // The channel is read here, with no box to answer in.
+    expect(key('super-agents-only'), findsOneWidget);
+    expect(find.byType(EditableText), findsNothing);
+    // The answer goes to the agent's own chat, from the left pane.
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    final box = find.byType(EditableText);
+    expect(box, findsOneWidget);
+    await tester.tap(box);
+    await tester.enterText(box, 'The arm64 one');
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    final sent = [
+      for (final post in server.posts)
+        if ((post['command'] as Map?)?['type'] == 'message.send')
+          post['command'] as Map,
+    ];
+    expect(sent, isNotEmpty);
+    expect(
+      sent.map((m) => m['conversationId']),
+      everyElement('agent-chat-second'),
+      reason: 'no message of a person reaches the channel',
+    );
+    expect(sent.single['text'], 'The arm64 one');
+    // The read marks' save is on its way: let it land.
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  // Ticking Browser, Start and Install are the New agent form's (super_tab_new_agent_launch_test.dart); this is what the
+  // person sees next, in the agent's chat.
+  testWidgets('a browser agent: Browser opens its setup beside its chat, '
+      'follows it, and closes', (tester) async {
+    final app = createApp(connected: true);
+    void browser(AgentBrowser state) {
+      app.stateOf('host')!.agents = [
+        Agent(
+          id: 'session-second',
+          name: 'second',
+          engine: 'claude',
+          browser: state,
+        ),
       ];
-      expect(sent, isNotEmpty);
-      expect(
-        sent.map((m) => m['conversationId']),
-        everyElement('agent-chat-second'),
-        reason: 'no message of a person reaches the channel or a task chat',
-      );
-      expect(sent.single['text'], 'The arm64 one');
-      // The read marks' save is on its way: let it land.
-      await tester.pump(const Duration(seconds: 1));
-    },
-  );
+      app.notifyListeners();
+    }
+
+    const host = Machine(
+      machineId: 'host',
+      authMode: MachineAuthMode.managed,
+      name: 'Mac Studio',
+      status: 'online',
+    );
+    app.machineStates['host'] = MachineState(host)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded;
+    browser(const AgentBrowser(state: 'setup', step: 'installing'));
+    final server = swarmV4Server();
+    await openSwarmV4(
+      tester,
+      server,
+      saved: 'agent-chat-second',
+      size: const Size(2000, 900),
+      app: app,
+    );
+
+    await tester.tap(key('swarm-browser-button'));
+    await tester.pump();
+    expect(key('swarm-browser-panel'), findsOneWidget);
+    expect(find.text('Podman installed'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    // The chat stays beside it.
+    expect(find.byType(EditableText), findsOneWidget);
+
+    browser(const AgentBrowser(state: 'setup', step: 'building'));
+    await tester.pump();
+    expect(find.byIcon(AppIcons.circleCheck), findsNWidgets(2));
+    browser(const AgentBrowser(state: 'starting'));
+    await tester.pump();
+    expect(find.text('Starting browser…'), findsOneWidget);
+
+    await tester.tap(key('swarm-browser-close'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-browser-panel'), findsNothing);
+    expect(find.byType(EditableText), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'an agent that wrote to its person is what asks them, from read marks: '
@@ -306,73 +333,34 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a Buddy chat from before v4 stays out of the left pane and of '
-    'Option+Shift+Down, and a thread reply offers Also send, no New session',
-    (tester) async {
-      final (server, c, _) = await open(tester);
-      // The person's Buddy chat in the project, unread, on a server that still offers thread sessions.
-      server.state['threadSessions'] = true;
-      server.state['sessionsFromChat'] = true;
-      (server.state['conversations'] as List).add({
-        ...conversationFixture('buddy-owner-lead', "owner's Buddy"),
-        'projectId': 'lead',
-        'kind': 'buddy',
-        'buddyOwnerId': 'owner',
-      });
-      server.append('Your Buddy is ready', conversationId: 'buddy-owner-lead');
-      server.messages.last['author'] = {
-        'kind': 'agent',
-        'id': 'second',
-        'name': 'second',
-      };
-      (server.state['conversations'] as List)
-              .cast<Map>()
-              .last['lastMessageSequence'] =
-          1;
-      server.append('Ship the build?', conversationId: 'agent-chat-second');
-      final root = server.messages.last['id'] as String;
-      await tester.runAsync(c.refresh);
-      await tester.pumpAndSettle();
+  testWidgets("a thread reply in an agent's own chat offers Also send", (
+    tester,
+  ) async {
+    final (server, c, _) = await open(tester);
+    server.append('Ship the build?', conversationId: 'agent-chat-second');
+    final root = server.messages.last['id'] as String;
+    await tester.runAsync(c.refresh);
+    await tester.pumpAndSettle();
 
-      expect(find.text("owner's Buddy"), findsNothing);
-      expect(superTabSidebarOrder(c), isNot(contains('buddy-owner-lead')));
-      // Option+Shift+Down goes to the next unread chat the left pane lists: never the Buddy chat.
-      await tester.tap(key('super-group-lead'));
-      await tester.pumpAndSettle();
-      for (var i = 0; i < 3; i++) {
-        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
-        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-        await tester.pumpAndSettle();
-        expect(c.selectedId, isNot('buddy-owner-lead'));
-      }
-
-      // A thread in the agent's own chat: its reply box has Also send and nothing of a Buddy session.
-      await tester.tap(key('super-agent-second'));
-      await tester.pumpAndSettle();
-      c.openThread(root);
-      await tester.pumpAndSettle();
-      expect(key('super-thread-composer'), findsOneWidget);
-      expect(key('super-thread-also-send'), findsOneWidget);
-      expect(key('super-thread-new-session'), findsNothing);
-      await tester.enterText(key('super-thread-composer'), 'Yes, ship it');
-      await tester.pump();
-      await tester.tap(key('super-thread-send'));
-      await tester.pumpAndSettle();
-      final reply = server.posts
-          .map((p) => p['command'] as Map)
-          .lastWhere((m) => m['type'] == 'message.send');
-      expect(reply['conversationId'], 'agent-chat-second');
-      expect(reply['replyTo'], root);
-      expect(reply.containsKey('newSession'), isFalse);
-      expect(tester.takeException(), isNull);
-      // The read marks' save is on its way: let it land.
-      await tester.pump(const Duration(seconds: 1));
-    },
-  );
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    c.openThread(root);
+    await tester.pumpAndSettle();
+    expect(key('super-thread-composer'), findsOneWidget);
+    expect(key('super-thread-also-send'), findsOneWidget);
+    await tester.enterText(key('super-thread-composer'), 'Yes, ship it');
+    await tester.pump();
+    await tester.tap(key('super-thread-send'));
+    await tester.pumpAndSettle();
+    final reply = server.posts
+        .map((p) => p['command'] as Map)
+        .lastWhere((m) => m['type'] == 'message.send');
+    expect(reply['conversationId'], 'agent-chat-second');
+    expect(reply['replyTo'], root);
+    expect(tester.takeException(), isNull);
+    // The read marks' save is on its way: let it land.
+    await tester.pump(const Duration(seconds: 1));
+  });
 
   testWidgets('an empty Swarm says how to start, and one that cannot be read '
       'says so, neither with an error', (tester) async {

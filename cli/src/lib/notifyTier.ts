@@ -10,7 +10,7 @@ export interface TierInput {
   durationS: number | null // null: unknown start
   stats: { testsPassed?: number; testsFailed?: number; commits?: number }
   subagent: boolean; onScreen: boolean; failed: boolean
-  swarm: boolean // a Swarm agent (registry row with swarmSkill, or a Team machine)
+  swarm: boolean // a Swarm agent (registry row with swarmSkill)
 }
 export interface TierDecision { tier: Tier; by: string; detail: string; ms: number }
 

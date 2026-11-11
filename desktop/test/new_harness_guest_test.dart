@@ -88,7 +88,6 @@ class _GuestApp extends AppNotifier {
     String? claudeHome,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -98,6 +97,7 @@ class _GuestApp extends AppNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     launches.add({
       'machine': machineId,

@@ -110,6 +110,23 @@ describe('engine recognition on Windows', () => {
     }
   })
 
+  // Not recorded on Windows yet (the VM run is later): the rows OpenClaw's npm shim gives, as Codex's does above.
+  // Windows has no argv to rename, so `process.title` only names the console and the TUI is node running openclaw.mjs.
+  it('finds OpenClaw under its npm shim by its package entrypoint, from a pane Harness started and from a shell', () => {
+    const script = `${NPM}\\node_modules\\openclaw\\openclaw.mjs`
+    const typed = [
+      row(7100, 1336, 'cmd.exe', `C:\\WINDOWS\\system32\\cmd.exe /c ${NPM}\\openclaw.cmd tui`, ['C:\\WINDOWS\\system32\\cmd.exe', '/c', `${NPM}\\openclaw.cmd`, 'tui']),
+      row(7101, 7100, 'node.exe', `"node"   "${script}" tui`, ['node', script, 'tui']),
+    ]
+    expect(engineProcessMatch(typed[0], 'openclaw').score).toBe(0)
+    expect(engineProcessMatch(typed[1], 'openclaw')).toMatchObject({ score: 2, evidence: 'package-entrypoint' })
+    expect(selectEngineProcess(typed, 7100, 'openclaw')?.pid).toBe(7101)
+    // What Harness starts in a pane: the shim's node and script, no cmd.exe (lib/windows/launch.ts windowsEngineArgv).
+    const started = row(7200, 1336, 'node.exe', `"${NPM}\\node.exe" "${script}" tui --session harness-a1`, [`${NPM}\\node.exe`, script, 'tui', '--session', 'harness-a1'])
+    expect(engineProcessMatch(started, 'openclaw')).toMatchObject({ score: 2, evidence: 'package-entrypoint' })
+    for (const engine of ['claude', 'codex', 'opencode', 'pi'] as const) expect(engineProcessMatch(started, engine).score, engine).toBe(0)
+  })
+
   it('knows Claude Code\'s npm package run by node.exe', () => {
     const npmClaude = row(9000, 1, 'node.exe', `"C:\\Program Files\\nodejs\\node.exe" ${NPM}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`)
     expect(engineProcessMatch(npmClaude, 'claude')).toMatchObject({ score: 2, evidence: 'package-entrypoint' })

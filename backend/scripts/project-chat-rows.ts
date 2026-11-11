@@ -5,6 +5,7 @@ import { applyCommand, type Command } from '../src/superTabs/commands.js'
 import { removeClosedAgents, restoreSessions } from '../src/superTabs/closedAgents.js'
 import { sessionRows } from '../src/superTabs/memberRows.js'
 import { createSuperTab, type Actor, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
+import { storedTask } from '../src/superTabs/storedWork.test-support.js'
 
 const ken: Actor = { kind: 'person', userId: 'ken', email: 'ken15@example.invalid' }
 const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -34,7 +35,8 @@ const add = (harnessId: string, name: string, conversationId: string, lead = fal
 }
 
 const river = add('river', 'River', 'lead', true)
-const task = (run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits offline.', checks: [] }).at(0)!.conversationId)
+// A task as a Swarm from before v4 stored it (no command opens one now).
+const task = storedTask(state, { title: 'Offline editing', brief: 'Save edits offline.', requesterId: 'ken' })
 const finn = add('finn', 'Finn 2', task)
 const kai = add('kai', 'Kai', task)
 // An older Swarm: Finn 2 was put in the project chat before #2207. It stays until removed.

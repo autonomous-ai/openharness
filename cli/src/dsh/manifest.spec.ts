@@ -1,4 +1,5 @@
 import { PROCESS_ENGINES } from '../engines/types.js'
+import { incompatibleHarnessEngine } from './compatibility.js'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -27,10 +28,18 @@ describe('parseDshManifest', () => {
   it('treats the engine as a default and keeps spec-1 manifests compatible', () => {
     const engines = dshSupportedEngines(DshManifestSchema.parse(base))
     expect(engines[0]).toBe('codex')
-    expect(new Set(engines)).toEqual(new Set(PROCESS_ENGINES))
+    expect(new Set(engines)).toEqual(new Set(PROCESS_ENGINES.filter(engine => engine !== 'openclaw')))
     const legacy = { ...base, agent: { env: { DSH_SUPPORTED_ENGINES: 'claude,codex' }, args: ['--add-dir', '/tmp'] } }
     expect(parseDshManifest(JSON.stringify(legacy)).ok).toBe(true)
     expect(dshSupportedEngines(DshManifestSchema.parse(legacy))).toEqual(engines)
+  })
+
+  it('leaves out an engine that reads no instructions from the workspace or a flag', () => {
+    // OpenClaw's agent reads its own workspace's files, in the Gateway, which never sees the pane's environment: a harness
+    // there would run with none of its instructions.
+    expect(dshSupportedEngines(DshManifestSchema.parse(base))).not.toContain('openclaw')
+    expect(dshSupportedEngines(DshManifestSchema.parse({ ...base, engine: 'openclaw' }))).not.toContain('openclaw')
+    expect(incompatibleHarnessEngine('acme/thing', DshManifestSchema.parse(base), 'openclaw')).toMatch(/openclaw is not compatible$/)
   })
 
   it('refuses paths that leave the harness', () => {

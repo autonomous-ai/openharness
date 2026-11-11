@@ -1,5 +1,6 @@
 import { VERSION, IS_RELEASE_BUILD } from '../version.js'
 import { gatewayResourceSample } from './productHealth.js'
+import { nodeStatus } from '../lib/nodeStatus.js'
 /**
  * The gateway, started: everything that holds this machine's keys or speaks for them, built in one place
  * so that it runs the same in the core's process (`HARNESSD_SERVICES=none`, or a master that does not run
@@ -32,7 +33,6 @@ import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
 import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
-import { MACHINE_KINDS_READ_TIMEOUT_MS, MachineKinds, machineKindsOf } from '../lib/e2ee/machineKinds.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -132,15 +132,6 @@ const PAIR_STATUS: Record<string, number> = {
 export function startGateway(host: GatewayHost): StartedGateway {
   let account = host.account
   let reachable: Set<string> | null = null
-  // Which of the account's machines are team machines, whose rosters the trust group never takes (lib/e2ee/machineKinds.ts).
-  // Its own read, apart from the machine list the apps get: it changes neither that list nor which machines are reachable,
-  // and a backend that hangs holds a roster round up for seconds, not the proxy's whole bound.
-  const machineKinds = new MachineKinds({
-    read: async () => {
-      const answer = await accountHttp.backend('GET', '/api/machines', undefined, MACHINE_KINDS_READ_TIMEOUT_MS)
-      return answer.status === 200 && account.machineId ? answer.body : null
-    },
-  })
   const accountHttp = createAccountHttp({
     tokens: host.tokens, account: () => account,
     computer: { id: host.computerId, name: host.machineName, hostname: host.hostname }, environment: host.autonomousEnv,
@@ -148,12 +139,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     reachable: (ids) => { reachable = ids ? new Set(ids) : null },
     // Called on a list read, never while this is built: the pool below exists by then.
     offline: (ids) => { relayPool.listed(ids) },
-    listed: (body) => {
-      if (!body) { machineKinds.clear(); return }
-      machineKinds.adopt(body)
-      // A machine marked gone (deleted, remoteRelay.ts) that the list names again is back: pin it again from the roster now.
-      if (relayPeers.restore(machineKindsOf(body)?.keys() ?? [])) groupSyncer?.resume()
-    },
+    // A machine marked gone (deleted, remoteRelay.ts) that the list names again is back: pin it again from the roster now.
+    listed: (machineIds) => { if (relayPeers.restore(machineIds)) groupSyncer?.resume() },
     log: (line) => console.log(`[gateway] ${line}`),
   })
   const gateway = new RelayGateway({
@@ -165,6 +152,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     request: (method, path, body) => accountHttp.backend(method, path, body, 5_000),
     context: { surface: 'cli', release: VERSION, platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : process.platform === 'win32' ? 'windows' : 'other', channel: host.autonomousEnv === 'prod' && IS_RELEASE_BUILD ? 'production' : 'development' },
     sample: gatewayResourceSample(),
+    // The gateway runs on the daemon's Node, as every service of the master does.
+    node: () => nodeStatus(),
   }) : null
   // The choice is read at once, so collection starts with the gateway; its first report waits for its first
   // tick, a random 10 to 60 seconds on (gateway/productUsage.ts), rather than the second a release started it.
@@ -251,7 +240,6 @@ export function startGateway(host: GatewayHost): StartedGateway {
     // Only a list the backend answered says who is offline; otherwise try every member.
     reachable: () => reachable,
     shared: (pub) => isSharedKey(gateway.pairedPeers(), pub),
-    machineKinds,
     ready: () => devLogSyncer?.current() ?? false,
     log: (line) => console.log(line),
   })
@@ -292,8 +280,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
       // Run once, whatever it throws: the log goes on to the new account either way, and its devices
       // come back from that log. Run again, a half-done switch would put away what it already restored.
       try {
-        const epoch = account.signIn?.epoch ?? ''
-        switchAccountTrust(from, to, undefined, { forgetPrevious: epoch.startsWith('team:') || epoch.startsWith('adopted:team:') })
+        switchAccountTrust(from, to)
       } catch (err) {
         console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -547,8 +534,6 @@ export function startGateway(host: GatewayHost): StartedGateway {
       // under a new sign-in, even when both accounts happen to have the same preference revision.
       if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv
           || next.signIn?.epoch !== account.signIn?.epoch || next.signIn?.acct !== account.signIn?.acct) void usage?.stop(true)
-      // Another account's machine list says nothing of this one's machines.
-      if (next.machineId !== account.machineId || next.autonomousEnv !== account.autonomousEnv) machineKinds.clear()
       account = next
       startGroup()
       registerAndSweep()

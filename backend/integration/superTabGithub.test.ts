@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -13,10 +13,12 @@ import { superTabRoutes } from '../src/routes/superTabs.js'
 import type { Approvals, GitHubSignIn } from '../src/github/approvals.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
 import { OWNER_CHECKS_PER_MINUTE, resetOwnerChecks } from '../src/github/repositoryCreate.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeAssignment, storeCreate } from './storedWork.test-support.js'
 import { logger } from '../src/utils/logger.js'
 
 // The Harness GitHub App's token endpoint on the real control API: a fresh loopback MongoDB and a fake GitHub. This suite
@@ -67,9 +69,7 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   app.addHook('onRequest', async (request, reply) => {
     // GitHub sends a person back here without a Harness token, as the server's own gate lets it (authMiddleware.ts).
     if (request.url.startsWith('/api/github/callback')) return
-    // `x-test-team` signs in as that person's Harness Team account, where one is listed.
-    const team = request.headers['x-test-team'] === '1'
-    const user = users.find(u => `Bearer ${u.sub}` === request.headers.authorization && (u.harnessSessionKind === 'team') === team)
+    const user = users.find(u => `Bearer ${u.sub}` === request.headers.authorization)
     if (!user) return reply.code(401).send({ success: false })
     request.user = user
   })
@@ -90,8 +90,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   }
   await app.register(superTabRoutes, { store, github: options.github === false ? null : tokens, approvals, signIn: options.signIn ?? null })
   await app.ready()
-  const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
-    store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+  const run = (tab: string, command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, user, asAgentId) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const settled = async () => { await Promise.all(releases.splice(0)) }
   return { github, log, tokens, store, app, run, settled, approved }
 }
@@ -118,10 +118,10 @@ async function working(env: Env, repositoryUrl: string | null = 'https://github.
   await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'gh-host', harnessId: randomUUID(), name: 'Lead',
     configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
   const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-    checks: [{ description: 'Search works', independent: false }] } as Command)).result.conversationId)
+    checks: [{ description: 'Search works', independent: false }] })).result.conversationId)
   const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'gh-host', harnessId: randomUUID(),
     name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
-  const assignmentId = String((await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)).result.assignmentId)
+  const assignmentId = (await storeAssignment(db, tab, group, worker)).id
   return { tab, group, worker, assignmentId }
 }
 const ask = (env: Env, tab: string, agentId: string | null, machineId = 'gh-host', user = host) => env.app.inject({ method: 'POST',
@@ -142,7 +142,7 @@ describe('the GitHub token endpoint', () => {
     const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
     expect(minted.body).toEqual({ repositories: ['app'],
       permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } })
-    // A person's machine keeps its owner's git identity: the app's is for a Harness Team account.
+    // A person's machine keeps its owner's git identity.
     expect(data).not.toHaveProperty('commitAs')
     // The same task gets the same token back.
     expect((await ask(env, tab, worker)).json().data.token).toBe('ghs_fixture_1')
@@ -152,7 +152,7 @@ describe('the GitHub token endpoint', () => {
   })
 
   // Security reviews 1 and 2 of #2492: who asked for a group changes no token. The owner's email is the gate and the commits
-  // name the owner, as on main; only each task's message names its requester (projects.ts requestedByLine).
+  // name the owner, as on main.
   it('gives the token and owner trailers whoever asked, and refuses it when the owner has no email, though the requester has one', async () => {
     const env = await fresh()
     const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
@@ -160,10 +160,10 @@ describe('the GitHub token endpoint', () => {
       configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl: 'https://github.com/example/app.git' } } as Command)
     await invited(env, tab, host)
     const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field', checks: [],
-      requesterId: host.sub } as Command)).result.conversationId)
+      requesterId: host.sub })).result.conversationId)
     const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
-    await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)
+    await storeAssignment(db, tab, group, worker)
     const given = await ask(env, tab, worker, 'owner-mac', owner)
     expect(given.statusCode, given.body).toBe(200)
     expect(given.json().data).toMatchObject({ requestedBy: { name: 'Olive Owner', email: owner.email },
@@ -176,28 +176,6 @@ describe('the GitHub token endpoint', () => {
     // Refused as on main (here before the owner's own check, as this owner's account no longer matches): no token, whoever asked.
     expect(refused.json().error.code).toBe('NOT_FOUND')
     expect(env.github.calls.filter(c => c.path.endsWith('/access_tokens'))).toHaveLength(1)
-  })
-
-  // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
-  it('names Harness by Autonomous as who a Harness Team account\'s commits are by, asking GitHub nothing', async () => {
-    const env = await fresh()
-    const { tab, worker } = await working(env)
-    const computerId = createHash('sha256').update('gh-host').digest('hex').slice(0, 32)
-    await db.machine.update({ where: { machineId: 'gh-host' }, data: { computerId, sessionKind: 'team' } })
-    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'gh-host' }, data: { computerId: null, sessionKind: null } }) })
-    const team: AuthUser = { ...host, sub: host.sub, harnessSessionId: 'team-gh-host', harnessSessionKind: 'team', harnessComputerId: computerId }
-    users.push(team)
-    onTestFinished(() => { users.splice(users.indexOf(team), 1) })
-    const response = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
-      headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
-    // GitHub is not asked: not saying who the bot is changes nothing.
-    env.github.control.botId = null
-    const again = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
-      headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(again.statusCode, again.body).toBe(200)
-    expect(again.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
   })
 
   it('warns, but still gives the token, when the default branch does not require a pull request; and says when it does', async () => {
@@ -269,8 +247,8 @@ describe('the GitHub token endpoint', () => {
   })
 })
 
-// What was the start token's describe: a queued start for approvals, and an agent's token for a resumed task (slice S6 left both).
-describe('approving a repository, and a resumed task\'s token', () => {
+// What was the start token's describe: a queued start for approvals (slice S6 left it).
+describe('approving a repository', () => {
   const observed = { resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
     projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
     runningHarnessIds: [], stoppedHarnessIds: [] }
@@ -291,7 +269,7 @@ describe('approving a repository, and a resumed task\'s token', () => {
     // A group of the project, its start's conversation: no agent but the coordinator starts into the project chat (#2207).
     // [requester] asked for it, where given. The contributor joined above.
     const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-      checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
+      checks: [], ...(requester ? { requesterId: requester.sub } : {}) })).result.conversationId)
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command,
       contributor)).result.startId)
@@ -366,27 +344,6 @@ describe('approving a repository, and a resumed task\'s token', () => {
     expect(await read(owner, 'lead')).not.toHaveProperty('approvedFor')
   })
 
-  // Security re-check of #1976: a task lost to a usage limit keeps its id when it resumes, and its loss marked it ended,
-  // so after resuming it was refused GitHub tokens for 70 minutes.
-  it('gives a task resumed after a usage limit a fresh token, while the one from before the loss stays revoked', async () => {
-    const env = await fresh()
-    const { tab, group, worker, assignmentId } = await working(env)
-    const before = await ask(env, tab, worker)
-    expect(before.statusCode, before.body).toBe(200)
-    const resetAt = new Date(Date.now() + 1500).toISOString()
-    await env.run(tab, { type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt } as Command, host, worker)
-    await env.settled()
-    expect(env.github.revoked).toContain(before.json().data.token)
-    const lostAt = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.lost!.at
-    await new Promise(done => setTimeout(done, Date.parse(resetAt) - Date.now() + 50))
-    await env.run(tab, { type: 'work.resume', conversationId: group, assignmentId, lostAt } as Command, host, worker)
-    await env.settled()
-    const after = await ask(env, tab, worker)
-    expect(after.statusCode, after.body).toBe(200)
-    expect(after.json().data.token).not.toBe(before.json().data.token)
-    expect(env.github.issued.has(before.json().data.token)).toBe(false)
-  })
-
   it('says when the server cannot approve, and refuses a project not on GitHub', async () => {
     const env = await fresh({ approveAll: false })
     const { tab } = await queued(env)
@@ -394,10 +351,6 @@ describe('approving a repository, and a resumed task\'s token', () => {
       headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'swarm' } })
     expect(none.json().error).toMatchObject({ code: 'GITHUB_APPROVAL_NOT_CONFIGURED' })
   })
-
-
-
-
 })
 
 describe('revoking the token when the task ends', () => {
@@ -406,33 +359,6 @@ describe('revoking the token when the task ends', () => {
     const token = (await ask(env, work.tab, work.worker)).json().data.token as string
     return { ...work, token }
   }
-
-  it('revokes on done', async () => {
-    const env = await fresh()
-    const { tab, group, worker, assignmentId, token } = await issued(env)
-    const checkId = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await env.run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'npm test passed' } as Command, host, worker)
-    await env.run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready' } as Command, host, worker)
-    await env.settled()
-    // Out for review is still the Builder's task.
-    expect(env.github.revoked).toEqual([])
-    await env.run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Merged' } as Command, host, worker)
-    await env.settled()
-    expect(env.github.revoked).toEqual([token])
-    expect((await ask(env, tab, worker)).json().error.code).toBe('NO_ASSIGNMENT')
-  })
-
-  it('revokes on cancel, and a reassigned task gets a new token', async () => {
-    const env = await fresh()
-    const { tab, group, worker, assignmentId, token } = await issued(env)
-    await env.run(tab, { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Not needed' } as Command)
-    await env.settled()
-    expect(env.github.revoked).toEqual([token])
-    await env.run(tab, { type: 'agent.release', agentId: worker, decision: 'keep' } as Command).catch(() => undefined)
-    await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)
-    const again = (await ask(env, tab, worker)).json().data.token
-    expect(again).not.toBe(token)
-  })
 
   it('revokes when the host confirms the agent stopped', async () => {
     const env = await fresh()
@@ -454,9 +380,9 @@ describe('revoking the token when the task ends', () => {
     const env = await fresh()
     const { tab, group, assignmentId, token } = await issued(env)
     env.github.control.revokeStatus = 502
-    await env.run(tab, { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Not needed' } as Command)
+    await env.store.stopped(host, tab, assignmentId, 'fixture stop receipt')
     await env.settled()
-    expect((await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('cancelled')
+    expect((await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('stopped')
     expect(env.github.revoked).toEqual([])
     expect(env.log.warn).toHaveBeenCalledWith('[github] token revoke failed', expect.objectContaining({ tabId: tab, repository: 'example/app', why: 'task ended' }))
     expect(JSON.stringify(env.log.warn.mock.calls)).not.toContain(token)

@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
-import { isInteractiveSource } from './engines/kit/storeSource.js'
+import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
@@ -391,14 +391,16 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
   if (!HERMES_SOURCE.id.test(sessionId)) return { kind: 'accept', value: undefined }
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
-      sql: HERMES_SOURCE.query, params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
+      sql: columns => storeSourceQuery(HERMES_SOURCE, columns), params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
       columns: ['id', 'source'], pointKey: 'id', knownHome,
     })
     if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
     if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
     const { home, aliases, row } = found[0]
     if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
-    const source = row[HERMES_SOURCE.column]
+    // A unified-runtime row names its creator separately; an unstamped one waits like a row not written yet.
+    const source = rowSessionSource(HERMES_SOURCE, row)
+    if (source === null) return { kind: 'hold', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
     if (typeof source !== 'string' || source.length > 128) throw new IdentityReadUnavailable('the Hermes source record is invalid')
     if (!isInteractiveSource(HERMES_SOURCE, source)) return { kind: 'reject', reason: 'hermes_subagent' }
     return { kind: 'accept', value: knownHome ?? (home === env.HERMES_HOME ? undefined : home) }
@@ -551,12 +553,16 @@ export function startHookServer(
       // Over TCP either may have been heard by another account that held this port during a restart (audit H1), which
       // could then forge session ends or turn stops here, so it counts only from this one. Asked only once it matched.
       const suppliedHookToken = req.headers['x-harness-hook-token']
-      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await peerAccount(req.socket))
+      // One answer per request: a lookup that gave no answer is not kept on the socket (lib/peerAccount.ts), and the two
+      // checks below asking it twice waited out a slow lsof twice and could disagree.
+      let callerAnswer: Promise<boolean> | undefined
+      const callerIsThisAccount = () => (callerAnswer ??= peerAccount(req.socket))
+      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await callerIsThisAccount())
       // The loopback port takes any local OS user's process, so over TCP every route but the few below
       // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
       // read. Over the daemon's Unix socket the filesystem already said who this is. Over TCP the credential may have
       // been heard by another account that held this port during a restart (audit H1), so it counts only from this one.
-      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await peerAccount(req.socket))
+      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await callerIsThisAccount())
       // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
       // own token, above) and the native device routes (their own bearer, just below).
       const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))
@@ -1191,9 +1197,7 @@ export function startHookServer(
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
-      // A profile picture (`/avatars`) too: without it the daemon answered 404 and Desktop's Upload picture… failed
-      // with only "Could not upload the file".
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/(attachments|avatars)$/.exec(url) : null
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
       if (attachment) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }

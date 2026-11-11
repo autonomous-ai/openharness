@@ -59,7 +59,7 @@ noto-fonts-emoji
 # The sound the terminal's bell plays (foot.ini [bell]).
 sound-theme-freedesktop
 # Harness and the package tools needed to bootstrap agent engines.
-nodejs-lts-jod
+nodejs-lts-krypton
 npm
 tmux
 git

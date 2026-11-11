@@ -183,16 +183,6 @@ SwarmGitHub swarmV4GitHub({
   bool Function()? signedOut,
 }) => SwarmGitHub(
   run: (arguments) async {
-    // The channel's feed reads three REST lists with `gh api -i` (Swarm v4): nothing is in them here, and they are not among the
-    // calls these tests count.
-    if (arguments.contains('-i')) {
-      return ProcessResult(
-        1,
-        0,
-        'HTTP/2.0 200 OK\r\nEtag: W/"none"\r\n\r\n[]',
-        '',
-      );
-    }
     calls?.add(arguments);
     if (signedOut?.call() ?? false) {
       return ProcessResult(
@@ -320,7 +310,152 @@ SwarmGitHub swarmV4GitHub({
                   ],
                 },
               },
+              // No task's, as most of lampOS's builder pull requests are: its CI check failed.
+              {
+                'number': 5771,
+                'title': 'Bump gh in CI to 2.62',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5771',
+                'isDraft': false,
+                'headRefName': 'seventh/ci-gh',
+                'headRefOid': 'a1b2c3d4e5f60718293a4b5c6d7e8f9011223344',
+                'baseRefName': 'main',
+                'body':
+                    'The runners carry gh 2.40, which lacks --json for runs.',
+                'mergeable': 'MERGEABLE',
+                'updatedAt': '2026-11-09T07:10:00Z',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:seventh'},
+                  ],
+                },
+                'closingIssuesReferences': {'nodes': <Object?>[]},
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'FAILURE'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {'nodes': <Object?>[]},
+              },
+              // Green, and nobody has read it yet.
+              {
+                'number': 5772,
+                'title': 'Say the update rows out loud',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5772',
+                'isDraft': false,
+                'headRefName': 'eighth/rows-say',
+                'headRefOid': 'b2c3d4e5f60718293a4b5c6d7e8f901122334455',
+                'baseRefName': 'main',
+                'body': 'The rows are said once they are scored.',
+                'mergeable': 'MERGEABLE',
+                'updatedAt': '2026-11-09T07:00:00Z',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:eighth'},
+                  ],
+                },
+                'closingIssuesReferences': {'nodes': <Object?>[]},
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'SUCCESS'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {'nodes': <Object?>[]},
+              },
+              // Harness's train, carrying #5770: its checks run on the combined change.
+              {
+                'number': 5773,
+                'title': 'Train: #5770',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5773',
+                'isDraft': false,
+                'headRefName': 'harness-train/1794363575848',
+                'headRefOid': 'c3d4e5f60718293a4b5c6d7e8f90112233445566',
+                'baseRefName': 'main',
+                'body': "Harness's train into main, built to c3d4e5f60718293a4b5c6d7e8f90112233445566.",
+                'mergeable': 'MERGEABLE',
+                'updatedAt': '2026-11-09T07:20:00Z',
+                'labels': {'nodes': <Object?>[]},
+                'closingIssuesReferences': {'nodes': <Object?>[]},
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'PENDING'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {'nodes': <Object?>[]},
+              },
             ],
+          },
+        },
+      });
+    }
+    // #5770's own chat, as GitHub's pullRequest answers it: its text, a READ-OK, and a review that is one line comment.
+    if (query.contains('pullRequest(number:') &&
+        arguments.contains('number=5770')) {
+      return answer({
+        'repository': {
+          'pullRequest': {
+            'number': 5770,
+            'title': 'Score the update rows again',
+            'url': 'https://github.com/autonomous-ai/lampOS/pull/5770',
+            'createdAt': '2026-11-09T02:40:00Z',
+            'updatedAt': '2026-11-09T03:05:00Z',
+            'author': {'login': '69tc'},
+            'labels': {
+              'nodes': [
+                {'name': 'builder:first builder', 'color': '1d76db'},
+              ],
+            },
+            'body': 'Closes #5759\n\nScores both rows again from the lamp\'s readings.',
+            'state': 'OPEN',
+            'mergedAt': null,
+            'headRefName': 'first-builder/5759',
+            'comments': {
+              'totalCount': 1,
+              'pageInfo': {'hasPreviousPage': false, 'startCursor': 'p1'},
+              'nodes': [
+                {
+                  'author': {'login': '69tc'},
+                  'body': 'Migrate, 10:05 GMT+7: READ-OK f6edb44',
+                  'createdAt': '2026-11-09T03:05:00Z',
+                  'url': 'https://github.com/autonomous-ai/lampOS/pull/5770#issuecomment-9',
+                },
+              ],
+            },
+            'reviews': {
+              'nodes': [
+                {
+                  'state': 'COMMENTED',
+                  'submittedAt': '2026-11-09T02:50:00Z',
+                  'body': '',
+                  'url': 'https://github.com/autonomous-ai/lampOS/pull/5770#pullrequestreview-1',
+                  'author': {'login': 'deehw'},
+                  'comments': {
+                    'nodes': [
+                      {
+                        'body':
+                            'First builder, 09:50: keep the old row name too.',
+                        'createdAt': '2026-11-09T02:50:00Z',
+                        'url': 'https://github.com/autonomous-ai/lampOS/pull/5770#discussion_r1',
+                        'author': {'login': 'deehw'},
+                        'path': 'rows.py',
+                        'line': 40,
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
           },
         },
       });

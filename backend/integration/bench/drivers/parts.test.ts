@@ -8,8 +8,8 @@ import { plan } from '../plan.js'
 import { seedSwarm, type Swarm } from '../seed.js'
 import { partsDriver } from './parts.js'
 
-// A small Swarm built through the parts store's routes, read the way today's clients on the new read API read it.
-const config: BenchConfig = { ...DEFAULT_CONFIG, groups: 4, doneShare: 0.5, workers: 2, machines: 2, text: { briefChars: 200, resultChars: 50, messageChars: 40 } }
+// A small v4 Swarm built through the routes, read the way today's clients read it.
+const config: BenchConfig = { ...DEFAULT_CONFIG, agents: 4, projects: 2, machines: 2, text: { messageChars: 40 } }
 let database: LocalDatabase, driver: SwarmDriver, swarm: Swarm
 let clock = Date.now()
 
@@ -21,12 +21,18 @@ beforeAll(async () => {
 })
 afterAll(async () => { await driver?.close(); await database?.stop() })
 
-const post = (text: string) => driver.execute(swarm.tabId, swarm.people[0]!, `post-${text.replaceAll(' ', '-')}`,
-  { type: 'message.send', conversationId: swarm.workers[0]!.group, text, replyTo: null, recipientIds: [] })
+const post = (text: string) => {
+  const agent = swarm.agents[0]!
+  return driver.execute(swarm.tabId, swarm.people[agent.machine]!, `post-${text.replaceAll(' ', '-')}`,
+    { type: 'message.send', conversationId: agent.channel, text, replyTo: null, recipientIds: [] }, agent.id)
+}
 
 describe('the parts driver', () => {
-  it('seeds through the new reads: check ids from the first load, machine generations from the host form', () => {
-    for (const w of swarm.workers) expect(w.checkIds).toHaveLength(2)
+  it('seeds each agent with a chat of its own, each project with its channel and PM, and each machine\'s generation', () => {
+    expect(swarm.channels).toHaveLength(config.projects)
+    expect(new Set(swarm.agents.map(a => a.chat)).size).toBe(config.agents)
+    for (const chat of swarm.agents.map(a => a.chat)) expect(swarm.channels).not.toContain(chat)
+    expect(swarm.agents.map(a => a.pmId)).toEqual([0, 1, 0, 1].map(i => swarm.agents[i]!.id))
     expect(swarm.generations).toHaveLength(config.machines)
     for (const generation of swarm.generations) expect(generation).toMatch(/\S/)
   })
@@ -43,12 +49,12 @@ describe('the parts driver', () => {
     expect(idle.data.cursor).toMatch(/\S/)
     expect((await post('after the first load')).code).toBeNull()
     const changed = await reader.poll() as { data: { groups: Array<{ key: string }> } }
-    expect(changed.data.groups.map(g => g.key)).toContain(swarm.workers[0]!.group)
+    expect(changed.data.groups.map(g => g.key)).toContain(swarm.agents[0]!.channel)
   })
 
   it('has a host read its form in full once, then by change naming the rows it holds, and in full again after a minute', async () => {
-    const host = swarm.people[swarm.workers[0]!.machine]!
-    const reader = driver.hostReader(host, machineId(swarm.workers[0]!.machine))
+    const host = swarm.people[1]!
+    const reader = driver.hostReader(host, machineId(1))
     const first = await reader.poll() as { data: { full: boolean; tabs: Array<{ tabId: string; roster?: unknown[] }> } }
     expect(first.data.full).toBe(true)
     expect(first.data.tabs.find(t => t.tabId === swarm.tabId)?.roster?.length).toBeGreaterThan(0)

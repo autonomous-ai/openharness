@@ -149,11 +149,6 @@ describe('sign a computer in by scanning its QR', () => {
     expect((await post('/api/auth/qr/approve', { code }, asPhone())).statusCode).toBe(404)
   })
 
-  it('a computer must say which computer it is', async () => {
-    const r = await post('/api/auth/qr/start', { label: 'x', kind: 'computer' })
-    expect(r.statusCode).toBe(400)
-  })
-
   it('keeps one code alive, but not forever', async () => {
     const { pollToken } = await start()
     expect((await post('/api/auth/qr/extend', { pollToken })).json().data.expiresIn).toBeGreaterThan(0)

@@ -338,7 +338,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
       await table.deleteMany({ where: { id: { in: ids } } })
       const either = cond ? db.superTabConfiguration : tx.superTabConfiguration
       await either.findMany({ where: { tabId: { in: tabIds } } })
-      async function read(roles: Prisma.SuperTabRoleTextDelegate, typed: typeof db.swarmAgent) {
+      async function read(roles: Prisma.SuperTabStopReceiptDelegate, typed: typeof db.swarmAgent) {
         await roles.findMany({ where: { tabId: { in: tabIds } } })
         await typed.findFirst({ where: { agentId: { in: ids } } })
       }
@@ -348,7 +348,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     `)
     expect(found.map(f => [f.call, f.operator])).toEqual([
       ['swarmGroup.findMany', 'in'], ['swarmGroup.count', 'has'], ['superTabDelivery.updateMany', 'in'], ['swarmMember.findMany', 'in'],
-      ['superTabRun.findMany', 'in'], ['part.deleteMany', 'in'], ['superTabConfiguration.findMany', 'in'], ['superTabRoleText.findMany', 'in'],
+      ['superTabRun.findMany', 'in'], ['part.deleteMany', 'in'], ['superTabConfiguration.findMany', 'in'], ['superTabStopReceipt.findMany', 'in'],
       ['swarmAgent.findFirst', 'in']])
   })
 
@@ -458,10 +458,10 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     const models = hotModels(schema)
     const all = [...schema.matchAll(/^model\s+(\w+)\s*\{/gm)].map(match => match[1]!)
     expect(models).toEqual(all.filter(model => /^(SuperTab|Swarm)/.test(model)))
-    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabRoleText', 'SuperTabDelivery', 'SwarmGroup']))
+    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabStopReceipt', 'SuperTabDelivery', 'SwarmGroup']))
     expect(hotModels('model SwarmNew {\n  id String @id\n}\nmodel Machine {\n}\nmodel SuperTabLater {\n}\n')).toEqual(['SwarmNew', 'SuperTabLater'])
-    const found = lint('await db.superTabRoleText.findMany({ where: { tabId: { in: ids } } })')
-    expect(found.map(f => f.call)).toEqual(['superTabRoleText.findMany'])
+    const found = lint('await db.superTabStopReceipt.findMany({ where: { tabId: { in: ids } } })')
+    expect(found.map(f => f.call)).toEqual(['superTabStopReceipt.findMany'])
   })
 
   it('allows only the uses already listed, and the list only shrinks', () => {

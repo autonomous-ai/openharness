@@ -23,6 +23,7 @@ import {
   interactiveEngineShell,
   isPosixShell,
   commandAvailableInInteractiveShell,
+  commandOutputInInteractiveShell,
   commandSupportsFlagInInteractiveShell,
   dropPermissionFlagIfUnsupported,
   permissionFlagToVerify,
@@ -824,12 +825,9 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
-    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2), and since v3 runs
-    // as its owner on their own computer, so it skips no permission check and no sandbox (review of #3485).
-    expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten', bypassPermission: true }))
-      .toEqual([engineBin('claude'), '--setting-sources', 'user', '--strict-mcp-config'])
-    expect(buildEngineCommandArgv('codex', { permissionMode: 'teamWritten', bypassPermission: true }))
-      .toEqual([engineBin('codex'), ...CODEX_SCREEN])
+    // The Team-written mode went with Team accounts (backend #3872): no engine has it.
+    expect(permissionModeFlags('claude', 'teamWritten')).toBeNull()
+    expect(permissionModeFlags('codex', 'teamWritten')).toBeNull()
     // An older Buddy's saved mode is no mode: the registry clears it on load (task #4215).
     expect(permissionModeFlags('claude', 'buddy')).toBeNull()
     expect(permissionModeFlags('codex', 'readOnlyAsk')).toBeNull()
@@ -1027,7 +1025,7 @@ describe('a first prompt on launch', () => {
   // prompt_unsupported, 4 in the Oct 21–27 report: the refusal named the engine but not what to do instead.
   it('says what to do instead: leave the first message out, or use an agent that takes one', () => {
     expect(new FirstPromptUnsupportedError('cursor').message).toBe('Cursor cannot start with a first message. Start it without one '
-      + 'and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one.')
+      + 'and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi, Hermes or OpenClaw to start with one.')
   })
 
   it('leaves the argv unchanged with no prompt, or an empty one', () => {
@@ -1215,6 +1213,23 @@ describe('commandAvailableInInteractiveShell', () => {
       commandAvailableInInteractiveShell('cursor-agent', bashProbeShell(), recipe),
     ).resolves.toBe(true)
   })
+})
+
+describe('commandOutputInInteractiveShell', () => {
+  it('returns both streams and the exit status from the shell a launch uses, and nothing for a hung command', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-output-'))
+    dirs.push(binDir)
+    writeFileSync(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
+    chmodSync(join(binDir, 'openclaw'), 0o700)
+    writeFileSync(join(binDir, 'stuck'), '#!/bin/sh\nexec /bin/sleep 30\n')
+    chmodSync(join(binDir, 'stuck'), 0o700)
+    process.env.HARNESS_ENGINE_TEST_PATH = `${binDir}:/usr/bin:/bin`
+    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], bashProbeShell())
+    expect(ran?.code).toBe(3)
+    expect(ran?.output).toContain('OpenClaw --version')
+    expect(ran?.output).toContain('a warning')
+    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], bashProbeShell())).resolves.toBeNull()
+  }, 8_000)
 })
 
 /** A fake engine whose `--help` prints exactly `help`, and nothing else. */

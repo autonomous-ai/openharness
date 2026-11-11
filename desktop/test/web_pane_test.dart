@@ -696,6 +696,9 @@ void main() {
     ) async {
       await open(tester);
       expect(find.byKey(const ValueKey('web-pane-browser-bar')), findsNothing);
+      // The terminal's resize is coalesced against the wall clock, so a layout soon after the first one leaves its
+      // 50 ms timer pending; the session (and its dispose) belongs to the app, torn down only after this check.
+      await tester.pump(const Duration(milliseconds: 50));
     });
 
     testWidgets('Linux pane menu detaches the viewer and restores its page', (

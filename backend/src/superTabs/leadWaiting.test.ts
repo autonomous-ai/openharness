@@ -112,25 +112,19 @@ describe('a Personal Swarm project chat with no Lead', () => {
 })
 
 describe('who reads the claim', () => {
-  it('names its machine to the project\'s readers, never to a Buddy', () => {
+  it('names its machine to the project\'s readers', () => {
     const f = fixture()
     f.send('hello')
     f.claim('mac')
-    const owner = f.state.people[0]!
-    f.state.agents.push({ id: 'buddy', machineId: 'mac', harnessId: 'b1', machineOwnerId: 'owner', contributorId: 'owner',
-      membershipGeneration: owner.generation, hostGrant: null, name: 'Buddy', configuration: config, configurationVersion: 'v',
-      buddyOf: { personId: 'owner', generation: owner.generation }, buddyScope: 'swarm' } as never)
     const read = (actor: Actor) => visibleState(f.state, actor, NOW).projects!.find(p => p.id === f.projectId)!
     expect(read({ kind: 'person', userId: 'owner', email: 'owner@example.com' }).leadClaim).toMatchObject({ machineId: 'mac' })
-    expect(read({ kind: 'agent', agentId: 'buddy', machineOwnerId: 'owner' } as Actor).leadClaim).toBeUndefined()
   })
 })
 
+// A person does not post in a Team Swarm's project chat at all (agentsOnly.test.ts); a claim from an older Desktop is still refused.
 describe('a Team Swarm project chat with no Lead', () => {
-  it('keeps nothing for a Lead and refuses the claim, so it still says Not sent', () => {
+  it('refuses the claim, so a Lead joining has nothing waiting for it', () => {
     const f = fixture(false)
-    f.send('hello')
-    expect(f.project().leadWaiting).toBeUndefined()
     expect(refusal(() => f.claim('mac'))).toBe('PERSONAL_SWARM_ONLY')
     expect(f.join('h1', false).lateDeliveries).toBeUndefined()
   })

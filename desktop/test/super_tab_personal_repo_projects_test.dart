@@ -151,6 +151,12 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
       }
     }
+    // The person is in the api's channel: the Swarm's own chat, open by default, stays listed while it is open.
+    if (c.snapshot!.projects.where((p) => p.name == 'api').firstOrNull
+        case final api?) {
+      c.select(api.leadConversationId);
+      await tester.pump(const Duration(milliseconds: 20));
+    }
     return (f: f, c: c, gh: gh);
   }
 
@@ -185,8 +191,9 @@ void main() {
     'Projects are the repos the agents work in, one per repo across the computers, and a pane with no repo is in none',
     (tester) async {
       final (:f, :c, gh: _) = await open(tester);
-      // The Swarm's own first project stays; each repo is one project, the api's two computers included.
-      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
+      // Each repo is one project, the api's two computers included. The Swarm's own first project, Personal, names no
+      // repository: it is not listed (anh Dee via the lead, 2026-11-10: projects are repos only).
+      expect(listed(c), unorderedEquals(['api', 'web']));
       for (final tab in ['one', 'two', 'Tab']) {
         expect(find.text(tab), findsNothing, reason: tab);
       }
@@ -278,7 +285,7 @@ void main() {
         },
       ]);
       // The one with no message is gone; the one written in is kept on the server, read-only, and not listed.
-      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
+      expect(listed(c), unorderedEquals(['api', 'web']));
       expect(
         c.snapshot!.projects.where((p) => p.name == 'two').single.archived,
         isTrue,
@@ -354,7 +361,7 @@ void main() {
           'tabOperation': tabOperation('one'),
         },
       ]);
-      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
+      expect(listed(c), unorderedEquals(['api', 'web']));
       expect(c.snapshot!.projectById('tab-two'), isNotNull);
       await close(tester, f, c);
     },
@@ -384,7 +391,56 @@ void main() {
           });
         },
       );
-      expect(listed(c), unorderedEquals(['Personal', 'api', 'docs', 'web']));
+      expect(listed(c), unorderedEquals(['api', 'docs', 'web']));
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'the Swarm\'s own first project is listed once it has a repository, and nothing about it is deleted before',
+    (tester) async {
+      final (:f, :c, gh: _) = await open(tester);
+      expect(listed(c), isNot(contains('Personal')));
+      expect(c.snapshot!.projectById('lead'), isNotNull);
+      expect(sent(f, 'project.delete'), isEmpty);
+      expect(sent(f, 'project.closeTab'), isEmpty);
+      (f.connection.server.state['projects'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((p) => p['id'] == 'lead')['repository'] = {
+        'repositoryUrl': 'https://github.com/acme/site',
+      };
+      await c.refresh();
+      f.app.notifyListeners();
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'the Swarm\'s own first project stays in reach: listed while its chat is open, and while it has something unread',
+    (tester) async {
+      final (:f, :c, gh: _) = await open(tester);
+      Future<void> redraw() async {
+        f.app.notifyListeners();
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+      }
+
+      c.select('lead');
+      await redraw();
+      expect(listed(c), contains('Personal'));
+      c.select(leadOf(c, 'web'));
+      await redraw();
+      expect(listed(c), isNot(contains('Personal')));
+      // An agent of Your Team posts in it.
+      f.connection.server.append('free: Notes', conversationId: 'lead');
+      await tester.runAsync(c.refresh);
+      await redraw();
+      expect(listed(c), contains('Personal'));
       await close(tester, f, c);
     },
   );

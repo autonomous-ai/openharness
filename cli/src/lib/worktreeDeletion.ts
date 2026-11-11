@@ -5,7 +5,7 @@ import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { env } from '../config/env.js'
-import { insideGitCheckout } from './gitProject.js'
+import { inRepositoryTurn, insideGitCheckout } from './gitProject.js'
 import type { RegisteredSession } from './registry.js'
 
 const exec = promisify(execFile)
@@ -97,7 +97,7 @@ export async function inspectWorktree(s: RegisteredSession, sessions: readonly R
   for (const protectedPath of [env.ADAPTER_DATA_DIR, env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME,
     env.OPENCODE_DATA_DIR, env.KILO_DATA_DIR, env.HERMES_HOME, env.DEVIN_HOME, env.CURSOR_HOME,
     env.PI_HOME, env.COMMANDCODE_HOME, env.MUSE_HOME, env.GROK_HOME, env.AGY_HOME,
-    env.COPILOT_HOME, env.AMP_SESSIONS_DIR, s.transcriptPath, s.codexHome, s.hermesHome]) {
+    env.COPILOT_HOME, env.AMP_SESSIONS_DIR, env.OPENCLAW_STATE_DIR, s.transcriptPath, s.codexHome, s.hermesHome]) {
     if (protectedPath && within(root, await realpath(protectedPath).catch(() => resolve(protectedPath)))) {
       throw new Error('Session history or shared application data is inside this worktree. It cannot be removed here.')
     }
@@ -122,5 +122,5 @@ export async function removeReviewedWorktree(review: WorktreeReview, s: Register
     throw new Error('The worktree or its changes changed. Review it again before deleting.')
   }
   if (current.dirty && !discardChanges) throw new Error('Confirm discarding the listed uncommitted files before deleting this worktree.')
-  await git(current.main, ['worktree', 'remove', ...(current.dirty && discardChanges ? ['--force'] : []), '--', current.path])
+  await inRepositoryTurn(current.main, () => git(current.main, ['worktree', 'remove', ...(current.dirty && discardChanges ? ['--force'] : []), '--', current.path]))
 }
