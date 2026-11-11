@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -8,7 +10,9 @@ import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/swarm_v4_channel.dart' show openSwarmV4;
 import 'support/swarm_v4_data.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// The panes a person opens beside a v4 chat (anh Dee, 2026-11-09): an agent's Instructions, its Terminal, a project's Tasks and
 /// the task opened from them, a task's thread. From a window 1080 wide a text pane sits beside the chat, half and half, and a
@@ -32,6 +36,7 @@ void main() {
     Size size, {
     String chat = 'agent-chat-second',
     bool projects = true,
+    Brightness brightness = Brightness.light,
   }) async {
     computer = SwarmV4Computer(
       files: {'session-second/second': 'Answer in Vietnamese.\n'},
@@ -49,7 +54,7 @@ void main() {
     await tester.runAsync(controller.refresh);
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: StatefulBuilder(
             builder: (context, set) {
@@ -379,7 +384,7 @@ void main() {
             );
           }
 
-          await show(tester, size);
+          await show(tester, size, brightness: brightness);
           await tap(tester, key('swarm-info-button'));
           expectGround('swarm-info-close');
           await tap(tester, key('swarm-instructions-button'));
@@ -400,6 +405,47 @@ void main() {
           );
           await settle(tester);
           expectGround('super-thread-close');
+        },
+      );
+
+      testWidgets(
+        'a browser agent\'s Browser stands on the Swarm\'s one ground, at $at, ${brightness.name}',
+        (tester) async {
+          final app = createApp(connected: true);
+          app.machineStates['host'] =
+              MachineState(
+                  const Machine(
+                    machineId: 'host',
+                    authMode: MachineAuthMode.managed,
+                    name: 'Mac Studio',
+                    status: 'online',
+                  ),
+                )
+                ..nodeOnline = true
+                ..connectionStatus = ConnectionStatus.connected
+                ..agentLoadStatus = AgentLoadStatus.loaded
+                ..agents = [
+                  Agent(
+                    id: 'session-second',
+                    name: 'second',
+                    engine: 'claude',
+                    browser: const AgentBrowser(state: 'starting'),
+                  ),
+                ];
+          await openSwarmV4(
+            tester,
+            swarmV4Server(),
+            saved: 'agent-chat-second',
+            size: size,
+            brightness: brightness,
+            app: app,
+          );
+          await tester.tap(key('swarm-browser-button'));
+          await tester.pump();
+          expect(
+            ground(tester, key('swarm-browser-close')),
+            grid.AppPalette.swarmField,
+          );
         },
       );
     }
