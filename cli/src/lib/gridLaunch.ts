@@ -646,6 +646,8 @@ const GRID_ENGINE_REFUSALS: Partial<Record<AgentEngine, string>> = {
   muse: 'Muse Code documents no way to change its endpoint',
   commandcode: 'Command Code documents no way to change its endpoint',
   omp: 'Harness has not yet verified how omp is pointed at another endpoint',
+  // Its model is chosen in its Gateway's config, which Harness never writes (OpenClaw engine spec, non-goals).
+  openclaw: 'OpenClaw picks its own model',
   terminal: 'a terminal runs no engine to point at a grid — start one inside it and it will use its own login',
 }
 

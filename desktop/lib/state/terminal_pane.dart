@@ -104,8 +104,7 @@ class TerminalPane {
 
   TerminalSession? session;
 
-  /// Ephemeral input provenance. Never persisted in shared pane layout.
-  String? inputContext;
+  /// Whether this view only watches its terminal. Never persisted in shared pane layout.
   bool watchOnly = false;
 
   /// Browser viewer input, installed only while its renderer is mounted.

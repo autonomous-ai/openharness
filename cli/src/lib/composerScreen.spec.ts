@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { composerState } from './composerScreen.js'
+import { CODEX_SWARM_MESSAGE } from './__fixtures__/codexSwarmMessage.js'
 
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8')
 const rule = (width = 100) => `\u001b[38;5;244m${'─'.repeat(width)}\u001b[39m`
@@ -143,6 +144,26 @@ describe('Codex\'s composer', () => {
     }
     // A foreground's colour run is never read as a background: `38;2;48;…` is a colour, and the block ends.
     expect(composerState('codex', ['', '\u001b[1m›\u001b[0m\u001b[38;2;48;2;1m fix', '', '  second paragraph', '', '• Fixed it.', '  One.', '  Two.', '  Three.'].join('\n'))).toBe('absent')
+  })
+
+  it('is ready with an unshaded draft in paragraphs, as a Swarm message is typed into a pane no window shows', () => {
+    // Codex with no background to shade its composer from: blank rows inside the draft, and its footer under one more.
+    expect(composerState('codex', CODEX_SWARM_MESSAGE)).toBe('ready')
+    expect(composerState('codex', codexComposer('fix the bug', '  gpt-6 high · ~/code', ['', '  second paragraph', '', '  third', '  and fourth']))).toBe('ready')
+  })
+
+  it('is absent under an unshaded draft in paragraphs when what follows is not Codex\'s own footer', () => {
+    // A dialog under it: its choices are numbered, and a key answers it.
+    expect(composerState('codex', ['', '\u001b[1m›\u001b[0m fix the bug', '', '  second paragraph', '', '  Would you like to run the following command?', '',
+      '  $ rm -rf build', '', '  1. Yes', '  2. No', '', '  Press enter to confirm'].join('\n'))).toBe('absent')
+    expect(composerState('codex', ['', '\u001b[1m›\u001b[0m fix the bug', '', '  second paragraph', '', '  Update available', '  0.163.0 is out', '  Skip it',
+      '', '  enter continue'].join('\n'))).toBe('absent')
+    // More than a footer under its last blank row; a row not two columns in, as an answer's bullet is.
+    expect(composerState('codex', ['', '\u001b[1m›\u001b[0m fix', '', '  a', '', '  b', '  c', '  d', '  e'].join('\n'))).toBe('absent')
+    expect(composerState('codex', ['', '\u001b[1m›\u001b[0m fix', '', '  a', '', '• Fixed it.', '  b', '  c', '  d', '', '  ? for shortcuts'].join('\n'))).toBe('absent')
+    expect(composerState('codex', ['', '\u001b[1m›\u001b[0m fix', '', '  a', '  b', '  c', '  d', '', '• Fixed it.'].join('\n'))).toBe('absent')
+    // Under its last blank row, the end of something else: no blank row after the composer's first paragraph but that one.
+    expect(composerState('codex', ['', '\u001b[1m›\u001b[0m fix', '', '  a', '  b', '  c', '  d'].join('\n'))).toBe('absent')
   })
 
   it('is absent when anything else is on screen: a picker, a screen never seen, a line of the conversation, or nothing yet', () => {

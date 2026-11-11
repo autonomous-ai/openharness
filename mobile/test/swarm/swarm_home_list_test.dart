@@ -64,31 +64,6 @@ void main() {
       expect(reader.snapshot!.conversation(leadChat)!.changedAt, at(ago(90)));
     });
 
-    test('a closed chat read later carries its own', () async {
-      final swarm = FakeSwarm();
-      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
-      swarm.routes['/api/super-tabs/$tab/groups?dormant=1'] = (_) => {
-        'groups': [
-          changed(
-            part('old', 3, groupData('old', title: 'Old', dormant: true)),
-            ago(3000),
-          ),
-        ],
-        'next': null,
-      };
-      final reader = SwarmReader(
-        tabId: tab,
-        accountId: me,
-        request: swarm.request,
-      );
-      addTearDown(reader.dispose);
-      await reader.refresh();
-
-      await reader.loadDormant(project);
-
-      expect(reader.snapshot!.conversation('old')!.changedAt, at(ago(3000)));
-    });
-
     test('the Home kept keeps it, and a chat without one has none', () {
       final read = SuperTabSnapshot.fromJson({
         ...headData(),
@@ -420,8 +395,6 @@ void main() {
       expect(jsonDecode(store.values[key]!), {
         'pins': [swarmHomeProjectKey(tab, 'p1')],
         'swarm': tab,
-        // Home showing one Swarm counts as using it, for the Buddy tab.
-        'buddySwarm': tab,
       });
     });
 
@@ -566,52 +539,6 @@ void main() {
       expect(jsonDecode(store.values[key]!), {
         'pins': [swarmHomeProjectKey(tab, 'old')],
       });
-    });
-
-    test('when the person left the app is kept, a time only, the later '
-        'standing, and read back by the next start; telling no one', () async {
-      final store = MemoryKeyValueStore();
-      final first = await prefs(store);
-      var told = 0;
-      first.addListener(() => told++);
-      final left = DateTime(2026, 10, 30, 1, 30);
-
-      first.seen(left);
-      first.seen(left.subtract(const Duration(hours: 1)));
-      await settle();
-
-      expect(told, 0);
-      expect(first.seenAt, left);
-      expect(jsonDecode(store.values[key]!), {
-        'pins': <Object>[],
-        'seen': left.millisecondsSinceEpoch,
-      });
-      expect((await prefs(store)).seenAt, left);
-    });
-
-    test('a time left before the choices are read back: the later of it and '
-        'the one read stands', () async {
-      final store = _SlowStore();
-      final earlier = DateTime(2026, 10, 29, 20);
-      final later = DateTime(2026, 10, 30, 1);
-      store.values[key] = jsonEncode({
-        'pins': <Object>[],
-        'seen': earlier.millisecondsSinceEpoch,
-      });
-      final prefs0 = SwarmHomePrefs(accountId: me, store: store);
-      addTearDown(prefs0.dispose);
-
-      prefs0.seen(later);
-      expect(prefs0.loaded, isFalse);
-      store.answer();
-      await settle();
-
-      expect(prefs0.loaded, isTrue);
-      expect(prefs0.seenAt, later);
-      expect(
-        (jsonDecode(store.values[key]!) as Map)['seen'],
-        later.millisecondsSinceEpoch,
-      );
     });
 
     test('another account reads none of them', () async {

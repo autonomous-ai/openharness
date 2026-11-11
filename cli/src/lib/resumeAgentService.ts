@@ -351,6 +351,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         const options = {
           ...(built.overrides.native ? { native: built.overrides.native } : {}),
           resumeSessionId,
+          agentId: saved.agentId,
           bypassPermission: permission.bypassPermission === true,
           ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           cwd,

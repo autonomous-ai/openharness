@@ -17,18 +17,17 @@ import { configureSwarmStamps, swarmTransaction, SwarmCache } from '../src/super
 import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import { readDelta } from '../src/superTabs/cachedReads.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // GET /api/super-tabs/:tabId/groups/:conversationId (task #2875). Ken's report of 11-04 17:13 VN: ~1,500 of these in two minutes
-// each read the Swarm's change feeds (SwarmGroup and SwarmProgress by changedAt, SwarmMachine by readAt), 1.33 GB in all.
+// each read the Swarm's whole change feeds (its groups by changedAt, its machines by readAt), 1.33 GB in all.
 // The read cache patches from deltas here, as in production (server.ts, SWARM_CACHE_DELTA=on). A fresh loopback replica set,
 // created here; this suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -104,9 +103,7 @@ async function scene() {
   // Briefs about a task's size, so the change feeds carry what a busy Swarm's do.
   s.edit(state => { for (const c of state.conversations) c.brief = `${c.title}: ${'what to build and why. '.repeat(80)}` })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 }, MIGRATED)
   return { tabId, lead, web, agents, quiet, busy }
 }
 
@@ -156,7 +153,7 @@ async function profiled<T>(run: () => Promise<T>): Promise<{ value: T; rows: Pro
 }
 
 /** The Swarm's change feeds the incident named: a read of groups or progress by changedAt, or of machines by readAt. */
-const FEEDS = /\.(SwarmGroup|SwarmProgress|SwarmMachine)$/
+const FEEDS = /\.(SwarmGroup|SwarmMachine)$/
 function feedReads(rows: ProfileEntry[]): ProfileEntry[] {
   return rows.filter(r => FEEDS.test(r.ns) && r.op !== 'getmore' && (() => {
     const match = JSON.stringify((r.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? r.command?.filter ?? {})
@@ -227,11 +224,9 @@ async function everyKind() {
   })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700 }, MIGRATED)
   // Stored without a number, as 111 live groups on prod are (11-04): a whole read numbers an awake one after every other
-  // (model.ts numberConversations); a quiet one reads without. Migration numbers them, so the number goes after it.
+  // (model.ts numberConversations); a quiet one reads without. The fixture's commands numbered them, so the stored number goes.
   await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId, key: { $in: [legacy, quietLegacy] } }, u: { $unset: { 'data.number': '' } }, multi: true }] })
   const groups = (await parts.loadAll(db, tabId)).groups.filter(g => !g.deleted).map(g => g.key)
   return { tabId, groups, readers: [[owner], [peer], [outsider], [owner, lead], [owner, worker], [owner, secretWorker], [owner, sharedLead],

@@ -6,12 +6,11 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, roleFromWire, wireRole, type SavedSwarmSkill, type SwarmRole, type SwarmSkill,
-  type SwarmSkillGrant, type SwarmSkillMode, type WireRole } from './savedSkill.js'
+import { isSwarmRole, parseSwarmSkill, roleFromWire, wireRole, type SwarmRole, type SwarmSkillGrant } from './savedSkill.js'
 
 // The saved record's shape and parse live with the registry's rows (lib/savedSkill.ts), which load without the Swarm.
-export { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, roleFromWire, wireRole }
-export type { SavedSwarmSkill, SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkillMode, WireRole }
+export { isSwarmRole, parseSwarmSkill, roleFromWire, wireRole }
+export type { SwarmRole, SwarmSkillGrant }
 
 /**
  * What every Swarm agent is told as it starts (anh Dee, 2026-11-09: the Swarm's basics are the product's, not
@@ -43,23 +42,11 @@ export const SWARM_BASICS = `You are a Swarm agent: your person's agent on a tea
  *  channel, where people read the team talk (anh Dee, 2026-11-09). */
 export const PM_BASICS = `You are your project's PM. Only you open issues. Break each request into tasks, one pull request each, and label what each touches and needs (part:<area>, needs:<tool or system>), its size (size:s, size:m or size:l) and its priority (p0, p1 or p2); write "after #N" in a task that must wait for another. Harness gives each sized task to the builder who can ship it soonest, as builder:<name> with one line of why, and keeps every builder's list two deep. When Harness gives one of your issues to a builder (it sets builder:<name> and says why), announce that hand-off once in your project's channel, as "@Pip #12 is yours", so people can read the team talk; the rest of that task's record stays on its issue. Set builder:<name> yourself only when a person asks for that builder. Close an issue that is done.`
 
-/** A row from any release, read as this one keeps it; refused when it is none. */
-function skillOf(saved: SavedSwarmSkill): SwarmSkill {
-  const skill = parseSwarmSkill(saved)
-  if (!skill) throw new Error('A Swarm skill needs a role and session key')
-  return skill
-}
-
-/** A launch and every relaunch: the team's basics the agent starts with (anh Dee, 2026-11-08: every agent starts as plain
- *  Claude Code or Codex, told only these, 2026-11-09); its project's own AGENTS.md and agents/<name>.md the engine reads by
- *  itself, and they come first. */
-export function prepareSwarmSkill(saved: SavedSwarmSkill): { instructions: string } {
-  return { instructions: swarmBasics(skillOf(saved).role === 'coordinator').text }
-}
-
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
 
-/** The team's basics the Swarm starts an agent with, by whether it is its project's PM, and their name (their hash). */
+/** The team's basics the Swarm starts an agent with, at a launch and every relaunch (superTabs/inCore/launch.ts), by whether
+ *  it is its project's PM, and their name (their hash). Its project's own AGENTS.md and agents/<name>.md the engine reads by
+ *  itself, and they come first. */
 export function swarmBasics(lead: boolean): { text: string; version: string } {
   const text = lead ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
   return { text, version: textVersion(text) }

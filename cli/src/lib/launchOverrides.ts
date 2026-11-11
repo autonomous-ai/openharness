@@ -117,12 +117,12 @@ export interface LaunchOverridesDeps {
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
-  /** What the Swarm prepares on every relaunch of a session it started: its instructions
-   *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+  /** What the Swarm gives every relaunch of a session it started: the team's basics (lib/swarmSkills.ts) and the Harness
+   *  GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
    *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
    *  with a harness package that is missing, starting it without its role would silently change what it is. */
   swarm?: {
-    prepare(saved: SwarmSkill): { instructions: string }
+    basics(lead: boolean): string
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
     args(engine: string): string[]
   }
@@ -337,11 +337,7 @@ export async function prepareLaunchOverrides(
     }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
-    let swarmInstructions: string | undefined
-    if (source.swarmSkill) {
-      try { swarmInstructions = swarm!.prepare(source.swarmSkill).instructions }
-      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
-    }
+    const swarmInstructions = source.swarmSkill ? swarm!.basics(source.swarmSkill.role === 'coordinator') : undefined
     const told = agentLaunchArgs(engine, source.startedBy, {
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })

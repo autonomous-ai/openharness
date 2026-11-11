@@ -188,21 +188,6 @@ describe('the pane-process swap', () => {
     expect(setup().swap.restartJobs).toBeDefined()
   })
 
-  // A move home after a fresh move reopens the conversation the agent left, not the one it is in (retarget.ts).
-  it('prepares, frees and on a fallback keeps the conversation it reopens, while it still stops the process it found', async () => {
-    const { deps, swap } = setup(session({ sessionId: 'S2', transcriptPath: '/t/S2.jsonl' }))
-    const swapDeps = swap.paneSwapDeps(session({ sessionId: 'S2', transcriptPath: '/t/S2.jsonl' }), place(), {}, null, undefined, 'S1')
-    swapDeps.prepareResume?.()
-    // Found by its id: the row's transcript is the other conversation's.
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S1', transcriptPath: null }))
-    swapDeps.keepAbandoned?.()
-    expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S1', transcriptPath: null }))
-    await swapDeps.stopConflictingJob!()
-    expect(stopConflictingBackgroundJob).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'S1' }))
-    expect(await swapDeps.terminate()).toEqual({ ok: true })
-    expect(terminateDeletedAgent).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'S2' }), expect.anything(), undefined)
-  })
-
   it('prepares the resume, holds the pane open and respawns it in the home folder, saying why when tmux will not', async () => {
     const { deps, tmuxBackend, swap } = setup()
     const swapDeps = swap.paneSwapDeps(session(), place(), { env: { GRID_KEY: 'k' } })
@@ -363,12 +348,12 @@ describe('the pane-process swap', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const plain = swap.paneSwapDeps(session({ permissionMode: 'plan' } as Partial<RegisteredSession>), place())
     plain.buildArgv({ resumeSessionId: 's1' } as never)
-    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', { resumeSessionId: 's1', permissionMode: 'plan', cwd: '/work' })
+    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', { resumeSessionId: 's1', agentId: 'a1', permissionMode: 'plan', cwd: '/work' })
     const grid = swap.paneSwapDeps(session({ cwd: undefined }), place(), { env: { HARNESS_DSH: 'blender' }, extraArgs: ['--grid'], clearEnv: ['ANTHROPIC_API_KEY'] }, null)
     grid.buildArgv({} as never)
-    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', { extraArgs: ['--grid'], clearEnv: ['ANTHROPIC_API_KEY'], harnessNode: true })
+    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', { agentId: 'a1', extraArgs: ['--grid'], clearEnv: ['ANTHROPIC_API_KEY'], harnessNode: true })
     swap.paneSwapDeps(session(), place(), { extraArgs: [], clearEnv: [] }).buildArgv({} as never)
-    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', { cwd: '/work' })
+    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', { agentId: 'a1', cwd: '/work' })
     grid.log('swapped')
     expect(log).toHaveBeenCalledWith('swapped')
   })

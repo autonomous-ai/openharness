@@ -146,6 +146,7 @@ import '../update/desktop_updater.dart';
 import '../update/manual_update_check.dart';
 import '../ws/ws_conn.dart';
 import 'retarget_refusal.dart';
+import '../ws/daemon_node.dart';
 import '../ws/local_cli_discovery.dart';
 import '../ws/local_daemon_transport.dart';
 import '../ws/ws_pool.dart';
@@ -1567,6 +1568,9 @@ class AppNotifier extends ChangeNotifier {
   // now, not just this computer's own one (see src/lib/remoteRelay.ts in the harness CLI repo: a
   // foreign machineId is relayed to backend transparently, so the app never dials backend directly).
   LocalCliEndpoint? _cliEndpoint;
+
+  /// The Node the local daemon runs on, for Settings ▸ About; null until it answers or from an older daemon.
+  DaemonNode? get daemonNode => _cliEndpoint?.node;
   late final _localGitProjects = LocalGitProjects(
     onChanged: _applyLocalGitProjects,
   );
@@ -3014,7 +3018,8 @@ class AppNotifier extends ChangeNotifier {
     final stream = BrowserStream(
       machineId: machineId,
       agentId: agentId,
-      send: (type, payload) => _conn(machineId).sendTerminalFrame(type, payload),
+      send: (type, payload) =>
+          _conn(machineId).sendTerminalFrame(type, payload),
       sendBinary: (frame) => _sendTerminalBinary(machineId, frame),
     );
     final streams = _browserStreams.putIfAbsent(machineId, () => {})
@@ -11183,6 +11188,8 @@ class AppNotifier extends ChangeNotifier {
           prev.claudeHome != agent.claudeHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
+          prev.workspace != agent.workspace ||
+          prev.namedState != agent.namedState ||
           prev.gridModel != agent.gridModel ||
           prev.gridWebSearch != agent.gridWebSearch ||
           prev.gridBaseUrl != agent.gridBaseUrl ||
@@ -15859,7 +15866,6 @@ class AppNotifier extends ChangeNotifier {
     String? claudeHome,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -15888,10 +15894,7 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
-      if (engine == 'claude' || engine == 'codex') ...{
-        'swarmRole': ?swarmRole,
-        'swarmSkillMode': ?swarmSkillMode,
-      },
+      if (engine == 'claude' || engine == 'codex') 'swarmRole': ?swarmRole,
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
       'model': ?launch?.model,
@@ -19717,10 +19720,9 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == harnessId)
         .firstOrNull;
     if (existing != null) {
-      existing.inputContext = null;
       existing.watchOnly = true;
-      existing.session?.stageInputContext(null, watchOnly: true);
-      unawaited(existing.session?.setInputContext(null, watchOnly: true));
+      existing.session?.stageWatchOnly(true);
+      unawaited(existing.session?.setWatchOnly(true));
       return;
     }
     if (tab.panes.length >= maxPanes) return;
@@ -19824,7 +19826,6 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     bool autoTile = false,
     bool focus = true,
-    String? inputContext,
     bool watchOnly = false,
 
     /// A rail click, a drag, a picker — a person. The device's own doors pass
@@ -19872,12 +19873,8 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .firstOrNull;
     if (paneId == null && existing != null) {
-      existing.inputContext = inputContext;
       existing.watchOnly = watchOnly;
-      await existing.session?.setInputContext(
-        inputContext,
-        watchOnly: watchOnly,
-      );
+      await existing.session?.setWatchOnly(watchOnly);
       if (existing.session == null && target == activeSwarm) {
         await _attachSession(existing, intent: intent);
       }
@@ -19902,9 +19899,8 @@ class AppNotifier extends ChangeNotifier {
     }
     final replaced = targetPanes.where((p) => p.id == paneId).firstOrNull;
     if (replaced == shared && shared != null) {
-      shared.inputContext = inputContext;
       shared.watchOnly = watchOnly;
-      await shared.session?.setInputContext(inputContext, watchOnly: watchOnly);
+      await shared.session?.setWatchOnly(watchOnly);
       if (focus && target == activeSwarm) focusPane(shared.id);
       return;
     }
@@ -19957,9 +19953,8 @@ class AppNotifier extends ChangeNotifier {
     final pane =
         shared ??
         TerminalPane(id: _nextPaneId++, machineId: machineId, agentId: agentId);
-    pane.inputContext = inputContext;
     pane.watchOnly = watchOnly;
-    pane.session?.stageInputContext(inputContext, watchOnly: watchOnly);
+    pane.session?.stageWatchOnly(watchOnly);
     final firstAgent = targetPanes.every((pane) => pane.agentId == null);
     if (machine.machine.isShared) {
       pane.sharedHarness = machine.machine.sharedHarnesses
@@ -20087,7 +20082,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     if (target == activeSwarm || pane.session != null) {
       if (pane.session case final session?) {
-        await session.setInputContext(inputContext, watchOnly: watchOnly);
+        await session.setWatchOnly(watchOnly);
       }
       await _attachSession(pane, intent: intent);
     }
@@ -20153,7 +20148,6 @@ class AppNotifier extends ChangeNotifier {
       agentName: agent.displayName,
       engineId: agent.engine,
       client: localClientDescriptor(),
-      inputContext: pane.inputContext,
       watchOnly: pane.watchOnly,
       // Only a person at this window may take the terminal from whoever holds
       // it; everything else opens as a watcher. See [AttachIntent].
@@ -23404,7 +23398,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// Local discovery having found this computer's own daemon, which serves [machineId].
   @visibleForTesting
-  void ownDaemonMachineIdForTest(String? machineId) {
+  void ownDaemonMachineIdForTest(String? machineId, {DaemonNode? node}) {
     _cliEndpoint = machineId == null
         ? null
         : LocalCliEndpoint(
@@ -23413,6 +23407,7 @@ class AppNotifier extends ChangeNotifier {
             protocolVersion: localWsProtocolVersion,
             terminalProtocolVersion: localTerminalProtocolVersion,
             machineId: machineId,
+            node: node,
           );
   }
 

@@ -15,7 +15,7 @@ function base(): SwarmParts {
     tabId: 't1', head: part('head', 'head', 3, { name: 'Swarm' }),
     members: [part('member', 'p1', 1, { id: 'p1' })], agents: [part('agent', 'a1', 2, { id: 'a1' }), part('agent', 'a2', 2, { id: 'a2' })],
     groups: [part('group', 'g1', 4, { id: 'g1', title: 'One' }), part('group', 'g2', 4, { id: 'g2', title: 'Two' })],
-    machines: [], starts: [part('start', 's1', 1, { id: 's1' })], progress: [],
+    machines: [], starts: [part('start', 's1', 1, { id: 's1' })],
     sequenceBase: 10, visibilityEpoch: 1, groupCounter: 2,
   }
 }
@@ -182,7 +182,7 @@ describe('feedRule (spec 2026-11-02 poll cost, Part 1.1)', () => {
     expect(next.parts.map(p => [p.kind, p.key, p.version])).toEqual([['machine', 'm1', 2]])
     expect(next.parts[0]!.readAt).toBe(2_000)
     expect(machineFeedRule.kinds).toEqual(['machine'])
-    expect([...feedRule.kinds].sort()).toEqual(['agent', 'group', 'head', 'member', 'progress', 'start'])
+    expect([...feedRule.kinds].sort()).toEqual(['agent', 'group', 'head', 'member', 'start'])
   })
 
   it('returns what it holds when nothing is newer', () => {

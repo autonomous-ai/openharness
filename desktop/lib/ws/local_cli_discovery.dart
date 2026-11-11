@@ -13,6 +13,7 @@ import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
 import '../core/harness_file_store.dart';
 import '../core/models.dart';
+import 'daemon_node.dart';
 import 'local_daemon_transport.dart';
 
 const localWsProtocolVersion = 1;
@@ -56,6 +57,9 @@ class LocalCliEndpoint {
   /// 2026-10-01; measured 2–2.5 s of a cold start). The next probe clears it.
   final bool scanning;
 
+  /// The Node the daemon runs on; null from a daemon too old to report it.
+  final DaemonNode? node;
+
   const LocalCliEndpoint({
     required this.computerId,
     required this.wsUri,
@@ -67,6 +71,7 @@ class LocalCliEndpoint {
     this.agentProjects = const {},
     this.socketPath,
     this.scanning = false,
+    this.node,
   });
 }
 
@@ -724,6 +729,7 @@ class LocalCliDiscovery {
         ),
         socketPath: socketPath,
         scanning: scanning,
+        node: DaemonNode.fromStatus(body['node']),
       ),
       pid: pid,
       version: version,
