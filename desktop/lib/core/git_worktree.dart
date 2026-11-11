@@ -666,7 +666,11 @@ Future<String> prepareGitProject(
           'That branch is no longer available. Choose another branch.',
         );
       }
-      if (trees.any((tree) => tree.ref == 'refs/heads/$branch')) {
+      // Read again in the turn: a start just before this one may have
+      // checked the branch out.
+      final now = await git(['worktree', 'list', '--porcelain']);
+      final current = now.code == 0 ? _parseWorktrees(now.output) : trees;
+      if (current.any((tree) => tree.ref == 'refs/heads/$branch')) {
         throw RepositoryCloneException(
           '$branch is checked out in another worktree. Turn Worktree off to open it there.',
         );
