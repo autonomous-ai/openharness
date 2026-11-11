@@ -249,6 +249,50 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, HH:MM: READ-OK f6edb44"\.$/)])
   })
 
+  // Review of #3708: a writer's own HOLD, which no reader is asked to lift (githubAssign.ts askReaders), stopped the merge and
+  // nobody was told.
+  it('says once on the pull request that its writer\'s own HOLD stands, in words that read as no verdict', async () => {
+    const own = setup()
+    own.github.repo.comments.set(4, [comment('Juno, 14:20: READ-OK f6edb44'), comment('Pip, 14:25: HOLD f6edb44 wait for the schema', { created_at: '2026-11-09T12:05:00Z' })])
+    await settle(own)
+    own.clock.now += 60_000
+    await own.merger.tick()
+    expect(own.merges()).toEqual([])
+    expect(own.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: the HOLD from pip on f6edb44 is a writer's own: pip lifts it with a READ-OK on f6edb44\.$/)])
+    // Harness posts as the login that opened it, in a Swarm of one person: its note read back lifts nothing and reads nothing.
+    own.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    own.github.repo.comments.set(4, [...own.github.repo.comments.get(4)!, comment(own.comments()[0]!, { author_association: 'OWNER', created_at: '2026-11-09T12:10:00Z' })])
+    await settle(own)
+    expect(own.merges()).toEqual([])
+    // Its writer lifts it.
+    own.github.repo.comments.set(4, [...own.github.repo.comments.get(4)!, comment('Pip, 14:40: READ-OK f6edb44', { created_at: '2026-11-09T12:20:00Z' })])
+    await settle(own)
+    expect(own.merges()).toHaveLength(1)
+    // A reader's HOLD beside it is the reader's to say: nothing is said that a writer's READ-OK would not answer.
+    const both = setup()
+    both.github.repo.comments.set(4, [comment('Pip, 14:25: HOLD f6edb44 wait for the schema'), comment('Kai, 14:26: HOLD f6edb44 off by one', { user: { login: 'kenmore' } })])
+    await settle(both)
+    expect(both.comments()).toEqual([])
+  })
+
+  // Review of #3708: "@Pip, HOLD ..." speaks to Pip and was read as signed by it, so Pip's own READ-OK lifted another's HOLD
+  // and its pull request merged; "@Juno, READ-OK ..." from the login that opened it read as Juno's read.
+  it('takes a line opening with "@Name," as said to that agent, not signed by it', async () => {
+    const held = setup()
+    held.github.repo.comments.set(4, [comment('Juno, 14:20: READ-OK f6edb44'),
+      comment('@Pip, HOLD f6edb44: quotes.py:12 is off by one.', { user: { login: 'kenmore' }, created_at: '2026-11-09T12:05:00Z' }),
+      comment('Pip, 14:30: READ-OK f6edb44', { created_at: '2026-11-09T12:30:00Z' })])
+    await settle(held)
+    expect(held.merges()).toEqual([])
+    for (const line of ['@Juno, READ-OK f6edb44', '**@Juno**: READ-OK f6edb44', '＠Juno, READ-OK f6edb44', '﹫Juno: READ-OK f6edb44']) {
+      const f = setup()
+      f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.repo.comments.set(4, [comment(line)])
+      await settle(f)
+      expect(f.merges(), line).toEqual([])
+    }
+  })
+
   // lampOS #5212 (4 Nov): El posted its reads as reviews, and four pull requests each counted one read short. A review's body reads
   // exactly as a comment's, in time order with them; its state is never a read (markers.py merge_reviews, lib.sh coord_pr_comments).
   it('reads a review\'s body as a comment: a READ-OK posted as a review merges, and a HOLD posted as one stops the merge', async () => {
