@@ -1,0 +1,4 @@
+(node:30587) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+OpenClaw 2026.11.2 (b556fdf)
+Running on an unsupported Node (22.23.2); diagnostics may show truncated text

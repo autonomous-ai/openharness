@@ -16,8 +16,6 @@ export const GROUP_INDEX = {
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
   agents: { tabId: 1, agentIds: 1 },
-  /** A person's Tasks feed pages, which nothing reads since Swarm v4 retired the feed (2026-11-10): goes with its column (S19). */
-  feed: { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
   /** A command's awake conversations by the columns a held part is compared by (parts/held.ts): the listing reads no document. */
@@ -64,7 +62,6 @@ export const NAMED_INDEX = {
   /** `expiry`: live starts by finish time (the hourly sweep). `agents`: a Swarm's starts of some agents (agentTombstones.ts):
    *  unnamed, Mongo planned that read on `expiry` and read every live start of every Swarm. */
   SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 }, agents: { tabId: 1, agentId: 1 }, id: { _id: 1 } },
-  SwarmProgress: { changes: { tabId: 1, changedAt: 1 }, id: { _id: 1 }, held: { tabId: 1, deleted: 1, key: 1, version: 1, changedAt: 1 } },
   SuperTabMessage: {
     /** A conversation's page in (sequence, id) order. */
     sequence: { tabId: 1, conversationId: 1, sequence: 1, _id: 1 },
@@ -76,7 +73,6 @@ export const NAMED_INDEX = {
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
-    agentProposal: { tabId: 1, agentId: 1, status: 1, inputPriority: 1, createdAt: 1 },
     /** Finished deliveries by their last change: those old enough to compact (deliveryCompaction.ts). */
     compaction: { status: 1, updatedAt: 1 },
     /** Unfinished deliveries in id order, a page at a time (deliverySettle.ts). Named: with a fourth status Mongo planned the pass on

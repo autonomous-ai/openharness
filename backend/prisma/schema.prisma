@@ -1050,11 +1050,12 @@ model SuperTab {
   cleanupMachineIds String[] @default([])
   revision       Int      @default(0)
   state          Json
-  /// 1: the whole Swarm in `state`. 2: split into the Swarm* part collections (docs/design/2026-10-26-swarm-state-parts.md);
-  /// `state` is then `{ version: 2 }`, which every older backend refuses before writing, and the old state is kept in `legacyState`.
+  /// 1: the whole Swarm in `state`, from before 2026-10-26: never served, and deleted by the wipe (superTabs/migration/wipeJob.ts).
+  /// 2: split into the Swarm* part collections (docs/design/2026-10-26-swarm-state-parts.md); `state` is then `{ version: 2 }`,
+  /// which every older backend refuses before writing.
+  /// The default stays 1: Prisma reads a row without the field (older than it) as the default, and such a row is in one row.
+  /// Every create sets 2 (store.ts create).
   format         Int      @default(1)
-  migratedAt     DateTime?
-  legacyState    Json?
   /// The Workspace an earlier release put it in, also on its head part. Swarm v4 removed Workspaces and their collections: nothing writes
   /// or reads it, and a new Swarm has none. The column and its index go in the schema step for the shared collections (slice S19),
   /// not before 2026-12-09.
@@ -1338,8 +1339,6 @@ model SuperTabDelivery {
   // Until when its agent's host holds it while the agent works (turnEnd.ts, task #3403): another agent's post to a crew member.
   // Cleared by the agent's own status change; unset on older rows and on what goes at once.
   waitsUntil            DateTime?
-  /// Server-derived proposal priority, 0 first. Absent on rows before proposal cards; retained until existing delivery compaction.
-  inputPriority         Int?
   // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
   // the claim that gets in. The settle pass alarms on them and page reads show the sender (store.ts recordFailedClaim).
   claimFailingSince     DateTime?
@@ -1352,7 +1351,6 @@ model SuperTabDelivery {
   updatedAt             DateTime @updatedAt
 
   @@index([tabId, agentId, status, createdAt])
-  @@index([tabId, agentId, status, inputPriority, createdAt])
   @@index([machineId, status])
   // A page of messages reads its deliveries by message (pageReads.ts).
   @@index([tabId, messageId])
@@ -1521,38 +1519,24 @@ model SwarmGroup {
   /// Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it.
   dormant            Boolean   @default(false)
   agentIds           String[]
-  /// The people and agents whose Tasks feed listed it, written until Swarm v4 retired the feed (2026-11-10). Nothing reads or
-  /// writes it now; it goes with its index (slice S19).
-  feedIds            String[]  @default([])
   /// The machine running its active assignment, for the host's change read.
   executionMachineId String?
   messageSeq         Int       @default(0)
-  reportSeq          Int       @default(0)
   lastActivityAt     DateTime
-  /// Next proposal deadline/revisit; null once none is due. Existing card history lives until project/Swarm deletion.
-  proposalDueAt      DateTime?
   /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
   hostMachineIds     String[]  @default([])
   /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
   hostDigest         String?
-  /// Its task is done or cancelled: all the archive pass reads (superTabs/archive.ts). Marked at worker startup on a part
-  /// written before it (markFinishedGroups).
-  workFinished       Boolean   @default(false)
 
   /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, and every hot read
   /// keeps its plan with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
-  @@index([deleted, proposalDueAt, tabId, key])
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
-  /// A person's Tasks feed, newest activity first, then by key (read/personalTasks.ts): the person and their own agents.
-  @@index([tabId, feedIds, lastActivityAt, key])
   /// A project's quiet conversations by activity (leaderboard, digest), and their pages newest first, then by key (parts/load.ts loadDormant).
   @@index([tabId, projectId, dormant, lastActivityAt, key])
-  @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
-  @@index([workFinished, archived, lastActivityAt])
   /// A host's wake check (read/host.ts woken): the conversations its last writes concerned, by Swarm, since its cursor.
   @@index([hostMachineIds, tabId, changedAt])
   /// A Swarm's running work (parts/light.ts, the host's light load).
@@ -1660,26 +1644,6 @@ model SwarmStart {
   @@index([purgeAt], map: "part_purge")
   /// Live starts by finish time: the hourly sweep expires those finished 7 days ago (superTabs/sweeps.ts expireStarts).
   @@index([deleted, finishedAt])
-}
-
-/// One project's report watermark, and the fence a Lead's worker decisions serialize on.
-model SwarmProgress {
-  id        String    @id @map("_id")
-  tabId     String
-  key       String
-  version   Int
-  changedAt DateTime
-  deleted   Boolean   @default(false)
-  purgeAt   DateTime?
-  ordinal   Float
-  data      Json
-
-  @@unique([tabId, key])
-  @@index([tabId, changedAt])
-  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
-  @@index([tabId, deleted, key, version, changedAt])
-  /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "part_purge")
 }
 
 /// What each agent shipped, as its person's daemon read it from GitHub with that person's own gh (superTabs/shipping/), for the

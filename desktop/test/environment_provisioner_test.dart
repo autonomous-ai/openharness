@@ -13,7 +13,7 @@ void main() {
 
   setUp(() async {
     scratch = await Directory.systemTemp.createTemp('harness-env-test-');
-    managedNode = File('${scratch.path}/runtime/node-v20/bin/node');
+    managedNode = File('${scratch.path}/runtime/node-v24.22.2/bin/node');
   });
 
   tearDown(() async {
@@ -47,6 +47,7 @@ void main() {
     int linuxInstallExitCode = 0,
     String linuxInstallStderr = 'apt install failed',
     String cliVersion = '1.2.3',
+    String nodeVersion = 'v24.22.2',
   }) {
     return (executable, arguments, {environment}) async {
       final command = '$executable ${arguments.join(' ')}';
@@ -130,7 +131,7 @@ void main() {
       if (executable == managedNode.path &&
           arguments.length == 1 &&
           arguments.first == '--version') {
-        return result(0, stdout: 'v20.18.0');
+        return result(0, stdout: nodeVersion);
       }
       if (executable == managedNode.path && arguments.contains('version')) {
         return result(0, stdout: cliVersion);
@@ -164,6 +165,30 @@ void main() {
       expect(calls.where((line) => line.contains('install.sh')), isEmpty);
     },
   );
+
+  for (final (node, ready) in [('v20.18.0', false), ('v22.23.2', true)]) {
+    test(
+      'a managed Node $node is ${ready ? '' : 'not '}ready: the CLI runs on 22 and moves itself to 24',
+      () async {
+        await createManagedHarness();
+        final provisioner = EnvironmentProvisioner(
+          harnessHome: scratch,
+          isMacOS: true,
+          isLinux: false,
+          run: runner(tmuxPresent: () => true, nodeVersion: node),
+        );
+        final readiness = await provisioner.ensureReady(
+          onProgress: (_) {},
+          install: false,
+        );
+        expect(
+          readiness.isReady,
+          ready,
+          reason: readiness.output.join('\n'),
+        );
+      },
+    );
+  }
 
   for (final (version, ready) in [
     ('0.0.1-dev.7c3d6315c.startup-retry.dirty', true),
@@ -253,7 +278,7 @@ void main() {
       expect(readiness.phase, EnvironmentSetupPhase.review);
       expect(readiness.plan.map((item) => item.title), [
         'tmux',
-        'Managed Node 20+ & Harness CLI',
+        'Managed Node 22+ & Harness CLI',
       ]);
       expect(readiness.plan.first.requiresTerminal, isFalse);
       expect(readiness.plan.first.command, kHarnessHostSetupCommand);
@@ -1004,7 +1029,7 @@ void main() {
       );
       expect(readiness.plan.map((item) => item.title), [
         'Linux host dependencies',
-        'Managed Node 20+ & Harness CLI',
+        'Managed Node 22+ & Harness CLI',
       ]);
       expect(readiness.plan.first.packages, ['curl']);
       expect(readiness.plan.first.step, EnvironmentStep.harness);

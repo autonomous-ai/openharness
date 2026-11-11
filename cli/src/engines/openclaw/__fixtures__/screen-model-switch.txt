@@ -1,0 +1,45 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session model-switch
+
+ session agent:main:model-switch
+
+
+Reply with exactly: one
+
+
+one
+
+ model set to openrouter/qwen/qwen3.8-flash
+
+
+Reply with exactly: two
+
+
+ run error: This model was not found. Choose another model in the Control UI.
+
+ model set to openrouter/deepseek/deepseek-v4-flash-0731
+
+
+Reply with exactly: three
+
+
+twothree
+ connected | idle
+ agent main | session model-switch | deepseek/deepseek-v4-flash-0731 high | deliver:off | tokens 19k/1.0m (2%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

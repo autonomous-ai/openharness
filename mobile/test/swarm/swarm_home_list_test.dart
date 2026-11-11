@@ -64,31 +64,6 @@ void main() {
       expect(reader.snapshot!.conversation(leadChat)!.changedAt, at(ago(90)));
     });
 
-    test('a closed chat read later carries its own', () async {
-      final swarm = FakeSwarm();
-      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
-      swarm.routes['/api/super-tabs/$tab/groups?dormant=1'] = (_) => {
-        'groups': [
-          changed(
-            part('old', 3, groupData('old', title: 'Old', dormant: true)),
-            ago(3000),
-          ),
-        ],
-        'next': null,
-      };
-      final reader = SwarmReader(
-        tabId: tab,
-        accountId: me,
-        request: swarm.request,
-      );
-      addTearDown(reader.dispose);
-      await reader.refresh();
-
-      await reader.loadDormant(project);
-
-      expect(reader.snapshot!.conversation('old')!.changedAt, at(ago(3000)));
-    });
-
     test('the Home kept keeps it, and a chat without one has none', () {
       final read = SuperTabSnapshot.fromJson({
         ...headData(),

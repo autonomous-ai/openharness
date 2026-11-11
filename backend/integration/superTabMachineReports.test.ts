@@ -126,7 +126,7 @@ async function partOps(run: () => Promise<unknown>): Promise<Record<string, numb
   try {
     await run()
     const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } },
-      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$' } }, projection: { _id: 0, ns: 1 }, batchSize: 10_000 }) as
+      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start)$' } }, projection: { _id: 0, ns: 1 }, batchSize: 10_000 }) as
       { cursor: { firstBatch: Array<{ ns: string }> } }
     const counts: Record<string, number> = {}
     for (const { ns } of rows.cursor.firstBatch) counts[ns.slice(ns.lastIndexOf('.') + 1)] = (counts[ns.slice(ns.lastIndexOf('.') + 1)] ?? 0) + 1

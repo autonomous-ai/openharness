@@ -4,11 +4,12 @@
  * any of them", then "EVERYTHING", lampOS's Swarm included). Every Swarm created before WIPE_CUTOFF goes with all it keeps; one
  * created after it is never touched, so the first v4 Swarms are safe.
  *
- * Each is deleted as its owner deleting it is (store.ts wipeSwarm, deletion.ts), Personal Swarms too: it leaves every list at once,
- * every member's apps are told, and its hosts close every agent's session and clean up its folders. None can be restored. Then its
- * stored files, every record that carries its id and its row go (purge.ts purgeRecords) as soon as no host has anything left to
- * read of it, or once the 7 days a host has for that are over, as for any deleted Swarm. What is not a Swarm's stays: accounts and
- * sign-ins, machines and devices, terminals, Agent Messages, Models.
+ * Each in parts (format 2) is deleted as its owner deleting it is (store.ts wipeSwarm, deletion.ts), Personal Swarms too: it leaves
+ * every list at once, every member's apps are told, and its hosts close every agent's session and clean up its folders. One still
+ * in a single row (format 1, never served) is marked deleted and leaves every list in one write (retireSingleRow), due for the purge
+ * at once. None can be restored. Then its stored files, every record that carries its id and its row go (purge.ts purgeRecords)
+ * as soon as no host has anything left to read of it, or once the 7 days a host has for that are over, as for any deleted Swarm.
+ * What is not a Swarm's stays: accounts and sign-ins, machines and devices, terminals, Agent Messages, Models.
  *
  * Runs in the singleton worker: a pass every PASS_MS walks every Swarm a page at a time in id order, and logs counts only. A Swarm
  * that fails is tried again on the next pass, further apart while passes keep failing. It stops once a pass finds nothing left from
@@ -25,7 +26,6 @@ import { ms } from '../parts/light.js'
 import { purgeFiles, purgeRecords, type PurgeFiles } from '../purge.js'
 import type { SuperTabStore } from '../store.js'
 import { sleeper, START_DELAY_MS } from './dropLegacyJob.js'
-import { migrateSwarm } from './migrate.js'
 
 /** The moment this job was written: a Swarm created before it is wiped, one created after it is kept. */
 export const WIPE_CUTOFF = Date.parse('2026-11-10T14:07:00.000Z')
@@ -45,6 +45,17 @@ export interface WipePass { deleted: number; purged: number; left: number; hosts
 
 const createdOf = (row: Record<string, unknown>) => row.createdAt == null ? null : ms(row.createdAt)
 
+/** Marks single-row Swarm [tabId] deleted and due for the purge at [now], in one write that matches it only while it is still live
+ *  and in one row: false when another runner came first. Like a deletion (parts/commit.ts indexesOf), the same write empties its
+ *  member and invitation lists, so it leaves every person's lists at once. Nobody is told: no app or host ever read it, since a
+ *  single-row Swarm is never served. Raw: `deletedAt: null` matches a row that never had the field. */
+async function retireSingleRow(db: PrismaClient, tabId: string, now: number): Promise<boolean> {
+  const at = { $date: new Date(now).toISOString() }
+  const reply = await db.$runCommandRaw({ update: 'SuperTab', updates: [{ q: { _id: tabId, format: { $ne: 2 }, deletedAt: null },
+    u: { $set: { deletedAt: at, purgeAt: at, memberIds: [], invitedEmails: [] } } }] }) as unknown as { nModified?: number }
+  return Number(reply.nModified ?? 0) === 1
+}
+
 /** One pass over every Swarm. [files] is null without a bucket (a Swarm has no stored files then) and undefined when the attachment
  *  settings are invalid: Swarms are deleted, and purged once the settings are fixed. */
 export async function wipeOnce(db: PrismaClient, store: Pick<SuperTabStore, 'wipeSwarm'>, files: PurgeFiles | null | undefined,
@@ -61,10 +72,10 @@ export async function wipeOnce(db: PrismaClient, store: Pick<SuperTabStore, 'wip
       if (!beforeCutoff(createdOf(row))) continue
       try {
         if (!row.deletedAt) {
-          // One still in a single row is split first, as its first read would split it (read/service.ts).
-          if (row.format !== 2 && !(await migrateSwarm(db, tabId)).ok) throw new SuperTabError('SWARM_MIGRATING', 'This Swarm is being updated.', 503)
-          // Its hosts read the closes and cleanups now; a later pass purges it.
-          if (await store.wipeSwarm(tabId) === 'deleted') pass.deleted++
+          // Its hosts read the closes and cleanups now; a later pass purges it. One still in a single row (format 1, from before
+          // the parts of 2026-10-26) is never read by a host or served (read/service.ts): it is due for the purge at once.
+          const deleted = row.format === 2 ? await store.wipeSwarm(tabId) === 'deleted' : await retireSingleRow(db, tabId, now())
+          if (deleted) pass.deleted++
           pass.left++
           await pause()
           continue

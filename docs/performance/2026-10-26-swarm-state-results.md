@@ -177,7 +177,9 @@ Idle, a Desktop change read costs 44 KB and a host tick 5 KB.
 ## Goal 4: the migration dry run
 
 `scripts/swarm-parts/dry-run.ts` ran on its own loopback replica set. It was removed in Swarm v4 S19 with the v1/v2 migration's
-single-row Swarms: every one of them was wiped. The results below are a record.
+single-row Swarms: every one of them was wiped. The migration itself, its rollback, `integration/superTabMigration.test.ts` and
+the removal of migrated Swarms' kept old state (`SuperTab.legacyState`) went in the same slice's second part. The results below
+are a record.
 
 ### On the base that ships
 

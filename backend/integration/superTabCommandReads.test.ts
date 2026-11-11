@@ -73,7 +73,7 @@ async function swarm() {
 
 /** A whole-Swarm read: a read of one of a Swarm's part collections that names no part and examines its documents. A listing
  *  served by an index alone examines none. */
-const PART_COLLECTIONS = ['SwarmAgent', 'SwarmMachine', 'SwarmMember', 'SwarmStart', 'SwarmProgress', 'SwarmGroup']
+const PART_COLLECTIONS = ['SwarmAgent', 'SwarmMachine', 'SwarmMember', 'SwarmStart', 'SwarmGroup']
 const NAMES = ['_id', 'key', 'agentId', 'agentIds', 'projectId', 'executionMachineId', 'machineId', 'changedAt', 'readAt']
 function wholeReads(entries: ProfileEntry[]): Record<string, number> {
   const out: Record<string, number> = {}

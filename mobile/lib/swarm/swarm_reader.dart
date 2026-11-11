@@ -29,12 +29,9 @@ typedef _View = ({
 
 /// [parts] as [accountId] reads them: whose Buddies are whose depends on who
 /// reads. Each conversation carries when it last changed, which the state
-/// leaves out ([SuperTabConversation.changedAt]), and each project's board
-/// pulse, from a server that sends it in `derived` ([SuperTabSnapshot.pulses];
-/// parts.dart stays the desktop's copy).
+/// leaves out ([SuperTabConversation.changedAt]).
 _View _viewOf(SuperTabParts parts, String accountId) {
   final state = parts.state;
-  if (parts.derived['pulse'] case final Map pulse) state['pulse'] = pulse;
   for (final conversation in state['conversations'] as List) {
     if (conversation case {'id': final String id} && final Map row) {
       row['changedAt'] = parts.groupChangedAt(id);
@@ -305,9 +302,6 @@ class SwarmReader extends ChangeNotifier {
     _bigParts = _big(answer);
     _heldLoad = number;
     generation++;
-    // A new store holds no closed conversations: they are read again.
-    _dormantPages.clear();
-    _dormantReads.clear();
     return (changed: true, view: load.view);
   }
 
@@ -339,8 +333,6 @@ class SwarmReader extends ChangeNotifier {
     _parts = null;
     _heldLoad = 0;
     generation++;
-    _dormantPages.clear();
-    _dormantReads.clear();
     _poll?.cancel();
   }
 
@@ -479,57 +471,6 @@ class SwarmReader extends ChangeNotifier {
     _show(_viewOf(parts, accountId));
     notifyListeners();
     return snapshot?.conversation(id) != null;
-  }
-
-  /// Each project's closed conversations as read: where the next earlier
-  /// page starts, null when there is none. A project not here is not read.
-  final _dormantPages = <String, String?>{};
-  final _dormantReads = <String, Future<void>>{};
-
-  /// Whether [projectId]'s closed conversations have been read.
-  bool dormantLoaded(String projectId) => _dormantPages.containsKey(projectId);
-
-  /// Whether a read of [projectId]'s closed conversations is under way.
-  bool dormantLoading(String projectId) => _dormantReads.containsKey(projectId);
-
-  /// Whether [projectId] has closed conversations older than those read.
-  bool hasEarlierDormant(String projectId) => _dormantPages[projectId] != null;
-
-  /// Reads [projectId]'s closed conversations (archived, or quiet for a day),
-  /// which no first load has, newest first and a page at a time (section
-  /// 4.5): the first page once, [earlier] the next. Joins a read under way;
-  /// a read that failed throws, and asking again reads again — the desktop's
-  /// `loadDormant`.
-  Future<void> loadDormant(String projectId, {bool earlier = false}) {
-    if (_disposed || accessRevoked || _parts == null) return Future.value();
-    if (_dormantReads[projectId] case final reading?) return reading;
-    if (earlier ? !hasEarlierDormant(projectId) : dormantLoaded(projectId)) {
-      return Future.value();
-    }
-    late final Future<void> reading;
-    reading = _readDormant(projectId, earlier).whenComplete(() {
-      if (identical(_dormantReads[projectId], reading)) {
-        _dormantReads.remove(projectId);
-      }
-      if (!_disposed) notifyListeners();
-    });
-    _dormantReads[projectId] = reading;
-    notifyListeners();
-    return reading;
-  }
-
-  Future<void> _readDormant(String projectId, bool earlier) async {
-    final parts = _parts!;
-    final before = earlier ? _dormantPages[projectId] : null;
-    final answer = await _get(
-      '$_path/groups?dormant=1&projectId=${Uri.encodeQueryComponent(projectId)}'
-      '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
-    );
-    // Read again from nothing meanwhile: this page is of the parts before.
-    if (_disposed || accessRevoked || !identical(parts, _parts)) return;
-    final change = parts.addDormant(answer['groups'] as List);
-    _dormantPages[projectId] = answer['next'] as String?;
-    if (change.changed) _show(_viewOf(parts, accountId));
   }
 
   @override

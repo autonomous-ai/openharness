@@ -62,6 +62,8 @@ describe('the files an SCM is asked to prepare before Harness writes instruction
       const before = snapshot()
       prepareApiInstructions(store, ws, engine)
       const written = touched(before)
+      // OpenClaw reads its own workspace's instructions, never the pane folder's: it gets no notes there.
+      if (engine === 'openclaw') { expect(written).toEqual([]); continue }
       expect(written).toHaveLength(1)
       expect(PROJECT_INSTRUCTION_FILES).toContain(written[0])
     }

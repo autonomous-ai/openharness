@@ -46,17 +46,18 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     reattach: session => attach.attachSession(session, true), hold: (session, reason) => attach.holdInterpretation(session, reason) })
   const profile = { ingest: vi.fn(), commit: vi.fn(), config: vi.fn(async () => {}) }
   const attach = createAttach({ liveFor, normalizers, remoteLive: live, watcher, resolve: () => row,
+    setIdentityHold: () => false,
     setInterpretationHold: (_id, revision, reason, create) => {
       if (row.identityHold || row.evidenceRevision !== revision || (!row.interpretationHold && !(create && reason))) return false
       if (!row.interpretationHold) row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
       if (reason) row.interpretationHold = reason; else delete row.interpretationHold
       return true
     }, announceSession: vi.fn(), terminalGone: async () => false,
-    runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(),
+    runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(), ingest: () => false,
       ingestConfig: async () => false, ingestPane: () => false, capturePane: async () => null },
     cursorDiscovery: { add: async () => {} }, device: () => undefined, captureTerminal: async () => null,
     emit, settled, announceTurnAborted: vi.fn(), questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
-    dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db') },
+    dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db'), openclaw: async () => null },
     devinHome: root, hermesDb: async () => join(root, 'h.db'), concurrency: 1 })
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, normalizers,
     tokenUsage: { changed: vi.fn() }, device: () => undefined, runtimeProfiles: { ingest: () => false },

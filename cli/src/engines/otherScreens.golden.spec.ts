@@ -32,7 +32,7 @@ import * as rewindPickers from '../lib/__fixtures__/rewindPickers.js'
 const SRC = fileURLToPath(new URL('..', import.meta.url))
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-screens.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
-const ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'terminal'] as const satisfies readonly AgentEngine[]
+const ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'openclaw', 'terminal'] as const satisfies readonly AgentEngine[]
 /** The specs whose panes are written out whole, as literals: dialogs, pane states, input and close checks. */
 const SPECS = /^(lib\/askQuestion[\w.]*|engines\/\w+\/askQuestion|lib\/questionController|lib\/runtimeProfileController|engines\/pi\/runtimeProfile|lib\/closeAgentService|lib\/sessionInput|lib\/runtimeActivity)\.spec\.ts$/
 const NO_CAPTURE = '(no capture)'

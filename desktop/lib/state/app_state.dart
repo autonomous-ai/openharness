@@ -146,6 +146,7 @@ import '../update/desktop_updater.dart';
 import '../update/manual_update_check.dart';
 import '../ws/ws_conn.dart';
 import 'retarget_refusal.dart';
+import '../ws/daemon_node.dart';
 import '../ws/local_cli_discovery.dart';
 import '../ws/local_daemon_transport.dart';
 import '../ws/ws_pool.dart';
@@ -1567,6 +1568,9 @@ class AppNotifier extends ChangeNotifier {
   // now, not just this computer's own one (see src/lib/remoteRelay.ts in the harness CLI repo: a
   // foreign machineId is relayed to backend transparently, so the app never dials backend directly).
   LocalCliEndpoint? _cliEndpoint;
+
+  /// The Node the local daemon runs on, for Settings ▸ About; null until it answers or from an older daemon.
+  DaemonNode? get daemonNode => _cliEndpoint?.node;
   late final _localGitProjects = LocalGitProjects(
     onChanged: _applyLocalGitProjects,
   );
@@ -11184,6 +11188,8 @@ class AppNotifier extends ChangeNotifier {
           prev.claudeHome != agent.claudeHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
+          prev.workspace != agent.workspace ||
+          prev.namedState != agent.namedState ||
           prev.gridModel != agent.gridModel ||
           prev.gridWebSearch != agent.gridWebSearch ||
           prev.gridBaseUrl != agent.gridBaseUrl ||
@@ -23392,7 +23398,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// Local discovery having found this computer's own daemon, which serves [machineId].
   @visibleForTesting
-  void ownDaemonMachineIdForTest(String? machineId) {
+  void ownDaemonMachineIdForTest(String? machineId, {DaemonNode? node}) {
     _cliEndpoint = machineId == null
         ? null
         : LocalCliEndpoint(
@@ -23401,6 +23407,7 @@ class AppNotifier extends ChangeNotifier {
             protocolVersion: localWsProtocolVersion,
             terminalProtocolVersion: localTerminalProtocolVersion,
             machineId: machineId,
+            node: node,
           );
   }
 
