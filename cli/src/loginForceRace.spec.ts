@@ -11,15 +11,22 @@
  * Process-boundary tests, in the shape of cliCommand.spec.ts: a real `harness login --force --json`,
  * a real `harness start` landing mid-wait, a fake backend that records the token every call
  * carried, and a stand-in daemon (a child that idles until it is stopped) for the stop to kill.
+ *
+ * A repo run starts the daemon inline, in the CLI's own process (cli.ts `launch`), and both runs here
+ * get that far. The stand-in's private socket is what ends each of those boots at its first step
+ * (core/main.ts `refuseServedDataFolder`). They used to end at the control port, PORT=1, after
+ * booting nearly the whole daemon: two at once, in one data folder, against this machine's tmux
+ * server and the connectors' fixed port 51793. That part, which nothing here checks, took up to 10 s
+ * of this test on a loaded Mac, and the test timed out at 30 s on Linux CI (run 42939916854).
  */
 import { spawn, type ChildProcess } from 'child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
-import { createServer, type IncomingMessage, type Server } from 'http'
+import { createServer, type IncomingMessage, type RequestListener, type Server } from 'http'
 import type { AddressInfo } from 'net'
-import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
@@ -40,9 +47,10 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-/** A throwaway HOME for one scenario; every path the CLI writes is under it. */
+/** A throwaway HOME for one scenario; every path the CLI writes is under it. Under /tmp, as in
+ *  cliCommand.spec.ts: the data folder's private socket has to fit macOS's socket path limit. */
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), 'harness-login-race-'))
+  const root = mkdtempSync('/tmp/hn-login-race-')
   dirs.push(root)
   return root
 }
@@ -85,8 +93,23 @@ function idleDaemon(root: string): { pid: number; exited: Promise<void> } {
   return { pid: child.pid ?? -1, exited: new Promise((resolve) => child.once('exit', () => resolve())) }
 }
 
+/** The stand-in daemon's private socket, as a live daemon serves it: its status names a live pid. A
+ *  daemon booting on this data folder leaves at once beside it, refusing to displace it. Served by
+ *  this process, so it outlives the stop, and every relaunch in the scenario meets it. */
+async function serveDataFolder(root: string): Promise<void> {
+  const handler: RequestListener = (_req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ version: '0.0.0-test', pid: process.pid, corePid: process.pid }))
+  }
+  const dir = join(root, 'data')
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const socket = await listenLocalSocket(handler, localSocketPath(dir, 1)!)
+  servers.push(socket.server)
+}
+
 interface CliRun {
   stdout: () => string
+  stderr: () => string
   respond: (line: string) => void
   closeInput: () => void
   /** Exit status, once every stdio pipe has drained. */
@@ -101,15 +124,17 @@ function runCli(root: string, args: string[], backendBase: string, acceptsInput 
   })
   children.push(child)
   let stdout = ''
+  let stderr = ''
   const watchers = new Set<() => void>()
   child.stdout?.on('data', (chunk: Buffer) => {
     stdout += chunk.toString()
     for (const watch of [...watchers]) watch()
   })
-  child.stderr?.on('data', () => { /* drained: a full pipe would stall the child */ })
+  child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
   const exit = new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)))
   return {
     stdout: () => stdout,
+    stderr: () => stderr,
     respond: (line) => {
       if (!child.stdin) throw new Error('this CLI run does not accept input')
       child.stdin.write(line)
@@ -169,6 +194,7 @@ describe('login --force beside a start that lands mid-sign-in', () => {
     const root = tempRoot()
     seedSession(root, { accessToken: 'tok_old', machineId: 'm_old' })
     const daemon = idleDaemon(root)
+    await serveDataFolder(root)
     let redirectUri = ''
     let resolvedForNew = 0
     const backend = await fakeBackend((req, body) => {
@@ -207,11 +233,14 @@ describe('login --force beside a start that lands mid-sign-in', () => {
     await Promise.race([start.exit, start.until((out) => out.includes('waiting for it to finish'))])
     await fetch(`${redirectUri}?code=code_1&state=state_1`)
 
-    // The daemon the login stopped is started again on the new account. Here it cannot listen (the
-    // control port is 1), so the relaunch fails and the login exits with it, after its result line.
-    await login.exit
-    await start.exit
+    // The daemon the login stopped is started again on the new account, and the start goes on to
+    // start it too. Here each boot meets the stand-in's socket and leaves (`serveDataFolder`), so the
+    // login exits with it, after its result line.
+    expect(await login.exit).toBe(1)
+    expect(await start.exit).toBe(1)
     expect(login.stdout()).toContain('starting the daemon again on this account')
+    expect(login.stderr()).toContain('A Harness daemon is already serving')
+    expect(start.stderr()).toContain('A Harness daemon is already serving')
 
     // Nothing acted on the old account once its daemon was stopped: the start resolved its machine
     // with the NEW session or not at all.
@@ -231,6 +260,7 @@ describe('login after a running daemon exits cleanly during sign-in', () => {
   it('harness login --code starts it again after the new session is saved', async () => {
     const root = tempRoot()
     const daemon = idleDaemon(root)
+    await serveDataFolder(root)
     let approve = false
     const backend = await fakeBackend((req, body) => {
       switch (req.url) {
@@ -260,9 +290,11 @@ describe('login after a running daemon exits cleanly during sign-in', () => {
     login.respond('yes\n')
     await login.until((out) => out.includes('"type":"result","status":"success"'))
     login.closeInput()
-    await login.exit
+    // Its boot meets the stand-in's socket and leaves (`serveDataFolder`).
+    expect(await login.exit).toBe(1)
 
     expect(login.stdout()).toContain('starting the daemon again on this account')
+    expect(login.stderr()).toContain('A Harness daemon is already serving')
     const results = login.stdout().trim().split('\n').filter((line) => line.startsWith('{'))
       .map((line) => JSON.parse(line) as { type: string; status?: string })
       .filter((line) => line.type === 'result')
