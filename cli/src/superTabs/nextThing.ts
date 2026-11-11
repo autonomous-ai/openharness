@@ -28,7 +28,7 @@ import type { WatchedAgent } from './githubMentions.js'
 import { FailingHeads, headChecks, isHeld, pullPeople, pullTalk, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { hhmm } from './githubVerdict.js'
-import { identifier, object } from './wire.js'
+import { identifier, object, SuperTabHostError } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
 export const NEXT_SETTLE_MS = 3_000
@@ -258,7 +258,7 @@ export class NextThing {
       const pulls = items.filter(it => it.pull_request && Number.isSafeInteger(it.number)).sort((a, b) => Number(a.number) - Number(b.number))
       for (const pull of pulls) {
         const work = await this.ownWork(agent, repo, Number(pull.number))
-        if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told me that my ${repo}#${pull.number} ${work.what}` }
+        if (work) yield { key: `${repo}#${pull.number} ${work.kind} ${work.head}`, typed: work.typed, did: `told me that my pull request ${repo}#${pull.number} ${work.what}` }
       }
       // A read it was asked for and has not made, before its next task as the plan's order has it (no pull request waits 30
       // minutes for a first read): typed even while it holds a task of its own, as a read is short.
@@ -387,6 +387,16 @@ export class NextThing {
     return null
   }
 
+  /** Posts [text] in [agent]'s chat with its person. One the server already has under this id, in a release's other words with
+   *  its answer lost, is said (OPERATION_REUSED): refused, it held the agent's next thing back at every turn (review of #4102). */
+  private async sayOnce(agent: WatchedAgent, operationId: string, text: string): Promise<void> {
+    try {
+      await this.deps.say(agent, operationId, text)
+    } catch (error) {
+      if (!(error instanceof SuperTabHostError && error.code === 'OPERATION_REUSED')) throw error
+    }
+  }
+
   private askKey(agent: WatchedAgent, repo: string, ask: { number: number; sha: string }): string {
     return `${agent.agentId}:${repo}#${ask.number}@${ask.sha}`
   }
@@ -413,10 +423,10 @@ export class NextThing {
       if (ended === undefined) return true
       const wait = ended + TELL_SETTLE_MS - Date.now()
       if (wait > 0) { this.lookIn(agent.harnessId, wait); return true }
-      // As the agent says it, in its chat with its person (as the line above): what was typed to it is in its session, so an
-      // answer reaches it with what it refers to.
-      await this.deps.say(agent, this.operation(agent, key, 'told'), `When my turn ended, Harness ${did}, and nothing changed by my next turn. `
-        + 'Tell me what to do.')
+      // As the agent says it, in its chat with its person, as the give-back line in idleWith is. Said, not asked: the agent never
+      // hears what is posted in its name and is typed its next thing at once, so an answer would reach it bare, about something
+      // else (review of #4102; pmNumbers.ts toldLine).
+      await this.sayOnce(agent, this.operation(agent, key, 'told'), `When my turn ended, Harness ${did}, and my next turn changed nothing.`)
       kept.told = true
       kept.done = [...done, key].slice(-DONE_KEPT)
       this.save(memory)
