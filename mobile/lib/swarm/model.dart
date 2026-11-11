@@ -48,6 +48,9 @@ class SuperTabPerson {
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       chosenUsername = row['username'] as String?,
+      removedPanes = row['removedPanes'] is List
+          ? List.unmodifiable(row['removedPanes'] as List)
+          : const [],
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
         _ => null,
@@ -63,6 +66,7 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       chosenUsername = person.chosenUsername,
+      removedPanes = person.removedPanes,
       name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
@@ -73,6 +77,10 @@ class SuperTabPerson {
 
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
+
+  /// The sessions this person took out of the Swarm (backend `removedPanes`, on the reader's own entry), read as the
+  /// desktop's model reads it; the phone draws nothing of it.
+  final List<Object?> removedPanes;
 
   /// The name they set for the Swarm to show ("Minh Nguyen"), before choosing
   /// one went; null when they never set one, and from an older server.
