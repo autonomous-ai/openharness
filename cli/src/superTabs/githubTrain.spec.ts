@@ -66,9 +66,12 @@ function fakeRepo(now: () => number) {
   }
   const compare = (from: string, to: string): Json | null => {
     if (from === 'main') {
+      // A commit of main itself: nothing ahead of main.
+      const held = state.main.findIndex(c => c.sha === to)
+      if (held >= 0) return { ahead_by: 0, behind_by: state.main.length - 1 - held, merge_base_commit: { sha: to }, files: [] }
       const commit = state.commits.get(to)
       if (!commit) return null
-      return { behind_by: state.main.length - 1 - state.main.findIndex(c => c.sha === commit.on), merge_base_commit: { sha: commit.on },
+      return { ahead_by: 1, behind_by: state.main.length - 1 - state.main.findIndex(c => c.sha === commit.on), merge_base_commit: { sha: commit.on },
         files: commit.files.map(filename => ({ filename, status: 'modified', changes: 1, patch: `+${filename}` })) }
     }
     const at = state.main.findIndex(c => c.sha === from)
@@ -938,6 +941,54 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
     await f.settle()
     expect(f.trains()).toHaveLength(1)
+  })
+})
+
+// The second review of #3995. A closed train's title and body are still anyone's to write who can write to the repository, and
+// they were believed: a pull request named in a landed train's body afterwards was told "landed" and closed, or left alone for
+// good; a closed train retitled as red made Harness tell a pull request that it had failed alone.
+describe('a closed train is believed only as this login built it', () => {
+  const named = (f: ReturnType<typeof setup>, number: number) => `#${number} at ${f.state.pulls.get(number)!.head.sha}, READ-OK by Nobody at all`
+  it.each([
+    ['squashed', { allow_merge_commit: false }],
+    ['landed as a merge commit', {}],
+  ])('tells and closes no pull request that a train %s was made to name afterwards, and carries it as any other', async (_case, settings) => {
+    const f = setup()
+    f.state.settings = settings
+    f.add(4); f.add(5)
+    await f.settle()
+    await f.ends(PASSED)
+    f.add(9); f.add(10)
+    const landed = f.state.pulls.get(900)!
+    Object.assign(landed, { body: `${landed.body}\n${named(f, 9)}`, updated: ++f.state.edits })
+    await f.settle()
+    expect(f.said(9)).toEqual([])
+    expect(f.carried().at(-1)).toEqual([9, 10])
+  })
+
+  it('takes no closed train for a red one of fewer members than it carried, and tells nobody it failed alone', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    // Closed by hand, then written as a red train of #5 alone.
+    const train = f.train()
+    Object.assign(train, { state: 'closed', title: 'Train, red: #5', body: train.body.split('\n').filter(line => !line.startsWith('#4 ')).join('\n'), updated: ++f.state.edits })
+    await f.settle()
+    expect(f.said(5)).toEqual([])
+    expect(f.carried().at(-1)).toEqual([4, 5])
+  })
+
+  it('takes no closed train for a red one whose checks did not fail', async () => {
+    const f = setup()
+    f.add(4)
+    f.moveMain(['cli/src/other.ts'])
+    await f.settle()
+    const train = f.train()
+    f.state.runs.set(train.head.sha, PASSED)
+    Object.assign(train, { state: 'closed', title: 'Train, red: #4', updated: ++f.state.edits })
+    await f.settle()
+    expect(f.said(4)).toEqual([])
+    expect(f.train()).toMatchObject({ number: 901, title: 'Train: #4' })
   })
 })
 
