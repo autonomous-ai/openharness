@@ -566,13 +566,23 @@ void main() {
         machine.blockedAgents.clear();
         app.agentUnread.clearAll();
         await tester.pumpAndSettle();
-        // An empty list shows nothing: the heading and its close alone.
+        // An empty list shows nothing: the heading and its close alone,
+        // which a screen reader hears as none.
         expect(find.text('No notifications'), findsNothing);
         expect(
           find.descendant(of: inbox, matching: find.byType(Divider)),
           findsNothing,
         );
         expect(find.text('Notifications'), findsOneWidget);
+        // Nothing under the heading: the popover ends with its padding.
+        expect(
+          tester.getRect(inbox).bottom -
+              tester.getRect(find.byTooltip('Close notifications')).bottom,
+          lessThanOrEqualTo(24),
+        );
+        final semantics = tester.ensureSemantics();
+        expect(find.bySemanticsLabel('Notifications, none'), findsOneWidget);
+        semantics.dispose();
         expect(
           find.text('Could not open this harness. Try again.'),
           findsNothing,
@@ -585,6 +595,14 @@ void main() {
             '$capture/desktop-notifications-${brightness.name}-empty.png',
           );
         }
+        // A new one arriving is not under the last one's failure.
+        app.agentUnread.mark('m', 'a0', AlertKind.done);
+        await tester.pumpAndSettle();
+        expect(row('a0'), findsOneWidget);
+        expect(
+          find.text('Could not open this harness. Try again.'),
+          findsNothing,
+        );
         await tester.tap(find.byTooltip('Close notifications'));
         await tester.pumpAndSettle();
         expect(inbox, findsNothing);

@@ -89,6 +89,9 @@ class _NotificationInboxState extends State<NotificationInbox> {
     // the popup is open; selection follows identity rather than an index.
     _rows = [for (final row in _rows) ?next.remove(row.id), ...next.values];
     if (!_rows.any((row) => row.id == _selected)) _selected = null;
+    // A failure belongs to the rows it was shown under: once they are all
+    // gone, a new one does not arrive under it.
+    if (_rows.isEmpty) _error = null;
   }
 
   void _changed() {
@@ -226,7 +229,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _header(),
-                    // An empty list shows nothing: the heading and its close alone.
+                    // An empty list shows nothing: the heading and its close.
                     if (_rows.isNotEmpty) ...[
                       Divider(height: 1, color: DesktopChrome.rim),
                       Flexible(
@@ -240,20 +243,20 @@ class _NotificationInboxState extends State<NotificationInbox> {
                               _notificationRow(_rows[index]),
                         ),
                       ),
-                    ],
-                    if (_error != null && _rows.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
-                        child: Semantics(
-                          liveRegion: true,
-                          child: Text(
-                            _error!,
-                            style: DesktopChrome.control(
-                              color: Theme.of(context).colorScheme.error,
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+                          child: Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              _error!,
+                              style: DesktopChrome.control(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
                             ),
                           ),
                         ),
-                      ),
+                    ],
                   ],
                 ),
               ),
@@ -271,7 +274,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
         Expanded(
           child: Semantics(
             header: true,
-            label: 'Notifications${_rows.isEmpty ? '' : ', ${_rows.length}'}',
+            label: 'Notifications, ${_rows.isEmpty ? 'none' : _rows.length}',
             excludeSemantics: true,
             child: Row(
               children: [
