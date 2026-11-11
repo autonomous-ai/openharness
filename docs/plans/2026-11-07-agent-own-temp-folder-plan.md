@@ -9,7 +9,7 @@ an agent a private `TMPDIR` only on a computer with a Team account, and since v3
 `/var/folders/…/T` and stopped there (Authorder, 11-07). `cli/src/lib/agentTmp.ts` now gives every Swarm agent (not a Buddy,
 not a person's own session, not a terminal) a private 0700 folder of its own, one per agent workspace
 (`<data>/agent-tmp/<hash of its folder>`), as its `TMPDIR`, which `mktemp` uses, and adds exactly that folder to the engine's
-working directories (`--add-dir=<folder>` for Claude Code and Codex). One call, `agentTmpLaunch`, gives the variable and the
+working directories (`--add-dir=<folder>` for Claude Code; Codex, which quits on it in an untrusted folder, gets the variable alone, 2026-11-11). One call, `agentTmpLaunch`, gives the variable and the
 argument together, at `agent_create` (`core/agents/create.ts`) and at every relaunch (`lib/launchOverrides.ts`), and replaces
 `agentTmpEnv`.
 
@@ -44,7 +44,7 @@ This plan is implemented by its Engineer, task by task, test first.
 `agentTmpEnv`; `agentTmpOf(cwd, deps): string | null`.
 
 - [ ] Write failing specs: a Swarm agent gets a private folder of its own, the same for the same workspace and another for
-      another, as `TMPDIR`, with `--add-dir=<that folder>` for Claude Code and Codex and nothing for other engines; a Buddy,
+      another, as `TMPDIR`, with `--add-dir=<that folder>` for Claude Code and nothing for other engines (Codex: see above); a Buddy,
       a terminal, a person's own session and Windows get no argument; a folder that cannot be made private gives neither.
 - [ ] Watch them fail, then add `agentTmpLaunch` and `agentTmpOf`, and make the folder a root for what agents drop wherever
       it is used.
