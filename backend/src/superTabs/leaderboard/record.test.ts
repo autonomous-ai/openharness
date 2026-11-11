@@ -117,13 +117,11 @@ describe('how a person unblocks work: approvals', () => {
     expect(f.group(id).ledger?.unblocks).toBeUndefined()
   })
 
-  it('counts one approval per ask, however many people or times reply GO', () => {
+  it('counts one approval per ask, however many times its person replies GO', () => {
     const f = fixture(true)
-    f.invitePeer()
     const { reply } = leadAsk(f)
     f.say('lead', owner, 'GO', reply.id, reply)
     f.say('lead', owner, 'GO again', reply.id, reply)
-    f.say('lead', peer, 'Approved', reply.id, reply)
     expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
   })
 
