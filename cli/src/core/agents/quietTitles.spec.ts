@@ -47,6 +47,24 @@ describe('quiet titles', () => {
     expect(titles.quiet('a1')).toBe(true)
   })
 
+  // An agent stopped in its stretch and resumed shows its conversation's titles again before any turn: one it had before the
+  // quiet line is its own name, never the quiet line's.
+  it('ends the stretch when its agent ends, after one more read', async () => {
+    const seen: boolean[] = []
+    const titles = createQuietTitles({ read: async () => { seen.push(titles.quiet('a1')) }, log: vi.fn() })
+    titles.started('a1')
+    await settled()
+    titles.ended('a1')
+    expect(titles.quiet('a1')).toBe(true)
+    await settled()
+    expect(seen).toEqual([false, true])
+    expect(titles.quiet('a1')).toBe(false)
+    // An agent that ends with no stretch reads nothing.
+    titles.ended('a1')
+    await settled()
+    expect(seen).toEqual([false, true])
+  })
+
   it('moves an edge when its read fails, and says so', async () => {
     const log = vi.fn()
     let failure: unknown = new Error('no tmux server')
