@@ -137,6 +137,17 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         ? DateTime.fromMillisecondsSinceEpoch(receivedAt.toInt())
         : null;
     final native = agent == null ? null : widget.app?.stateOf(agent.machineId);
+    // In a person's own agent's 1:1 chat, that agent while Your Team shows it offline (its `downSince`), and what it has
+    // not been typed yet: said at once, delivery or none (Swarm v4).
+    final chat = c.snapshot?.conversation(message.conversationId);
+    final chatAgent =
+        chat != null && chat.isAgentChat && chat.agentIds.isNotEmpty
+        ? c.snapshot?.agent(chat.agentIds.first)
+        : null;
+    final down =
+        chatAgent?.downSince != null &&
+        delivery?.delivered != true &&
+        delivery?.status != 'cancelled';
     final direct = native?.isLocalMachine == true;
     // A computer this Desktop reads itself is known by its own connection, not by a Swarm reading it may not have.
     final offline =
@@ -241,6 +252,10 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
+    } else if (down) {
+      color = DesktopChrome.muted;
+      title = '${chatAgent!.displayName ?? chatAgent.name} is offline';
+      quiet = true;
     } else if (late) {
       // Send again would wait behind the same thing: the line says what it is,
       // and offers the terminal when its person can see to it there.

@@ -86,17 +86,3 @@ String? superTabPostOfflineLine(
     [...final first, final last] => '${first.join(', ')} and $last are offline',
   };
 }
-
-/// What waits under a person's newest message in their own agent's 1:1 chat while that agent is offline, as Your Team says it
-/// (`downSince`): "Juno is offline". Null once the agent is back, and for a message sent before it went down, which it has.
-String? superTabChatOfflineLine(
-  SuperTabSnapshot? swarm,
-  SuperTabMessage message,
-) {
-  final chat = swarm?.conversation(message.conversationId);
-  if (chat == null || !chat.isAgentChat || chat.agentIds.isEmpty) return null;
-  final agent = swarm!.agent(chat.agentIds.first);
-  final since = agent?.downSince, at = message.createdAt;
-  if (since == null || at == null || at.isBefore(since)) return null;
-  return '${agent!.displayName ?? agent.name} is offline';
-}

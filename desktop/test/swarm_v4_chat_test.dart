@@ -117,7 +117,7 @@ void main() {
   });
 
   testWidgets(
-    'writing to an agent whose computer is off says so under the message, until it is back and answers',
+    'writing to an agent whose computer is off says so under the message, until it is back',
     (tester) async {
       final server = swarmV4Channel();
       // Juno went down before what its person sends (the fixture's messages are of 18 October).
@@ -141,8 +141,13 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await look(tester, 'offline');
 
-      // Juno's computer comes back and Juno answers: the line goes.
+      // Juno's computer comes back: the line goes, before Juno says a word.
       juno.remove('downSince');
+      server.revision++;
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Juno is offline'), findsNothing);
+      // And Juno answers.
       swarmV4Post(
         server,
         'Juno',
