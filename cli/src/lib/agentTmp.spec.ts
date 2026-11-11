@@ -21,7 +21,7 @@ describe('who gets the private temporary folder', () => {
   // question for their own mktemp file (Authorder, 11-07). Each Swarm agent gets a folder of its own, added to the engine's
   // working directories: Claude Code reads an added folder's own skills and settings, so one shared folder would let an
   // agent plant them for the others.
-  it('a Swarm agent: a 0700 folder of its own as TMPDIR, added to Claude Code\'s and Codex\'s working directories', () => {
+  it('a Swarm agent: a 0700 folder of its own as TMPDIR, added to Claude Code\'s working directories', () => {
     const data = scratch()
     const launch = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data))
     const folder = launch.env.TMPDIR!
@@ -30,8 +30,12 @@ describe('who gets the private temporary folder', () => {
     expect(statSync(agentTmpFolder(data)).mode & 0o777).toBe(0o700)
     // Joined to its flag: Claude Code's takes several values and would swallow what follows it.
     expect(launch).toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`] })
+    // Codex gets it as its TMPDIR alone. Its --add-dir is a writable root, which codex-cli 0.164 refuses in a read-only folder
+    // and quits on (exit 1, "the effective permissions do not allow additional writable roots"): a Codex builder the Swarm
+    // started in its own new folder, which Harness leaves untrusted for Codex, never started (the rehearsal, 2026-11-11).
+    // Codex reads anywhere in every mode, and its workspace-write makes $TMPDIR writable by itself.
     expect(agentTmpLaunch('codex', { role: 'coordinator', key: 'one' }, deps(data, { platform: 'linux' })))
-      .toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`] })
+      .toEqual({ env: { TMPDIR: folder }, args: [] })
     // The same agent's relaunch finds the same folder; another agent has its own, in the same workspace too: a person's
     // Regular agents all start in that person's home folder (security review of #3506). On a Mac too, only that folder is
     // added, never the account's own temporary folder, which every agent and app of the account shares.

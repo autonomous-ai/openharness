@@ -1,6 +1,6 @@
 /**
  * The agents' private temporary folders. Each Swarm agent has its own (task #4395): since #4215 an agent starts in its owner's
- * own settings, which can block reads outside the working directories, so its folder is added to the engine's working
+ * own settings, which can block reads outside the working directories, so its folder is added to Claude Code's working
  * directories as well as given as its TMPDIR, which `mktemp` uses.
  */
 import { createHash } from 'node:crypto'
@@ -131,10 +131,12 @@ function sweepWhenDue(folder: string, deps: AgentTmpDeps): void {
 }
 
 /** How an engine is told of one more working directory, joined to its flag: Claude Code's `--add-dir` takes several values and
- *  would otherwise swallow what follows it. An engine not here gets the folder as its TMPDIR alone. */
+ *  would otherwise swallow what follows it. An engine not here gets the folder as its TMPDIR alone. Codex among them: its
+ *  `--add-dir` is a writable root, which codex-cli 0.164 refuses in a read-only folder and quits on, so a Codex builder the
+ *  Swarm started in its own new folder (left untrusted for Codex, core/agents/create.ts) never started (the rehearsal,
+ *  2026-11-11). Codex reads anywhere in every mode, and its workspace-write makes $TMPDIR writable by itself. */
 const ADDED_FOLDER: Partial<Record<AgentEngine, (folder: string) => string[]>> = {
   claude: folder => [`--add-dir=${folder}`],
-  codex: folder => [`--add-dir=${folder}`],
 }
 
 /** The private folder of the Swarm agent whose creation key is [key], made and closed, by its real path, or null when it cannot
