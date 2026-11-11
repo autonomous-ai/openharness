@@ -22,7 +22,7 @@ const REPO = 'acme/app', OPENER = 'deehw'
 const START = Date.parse('2026-11-10T04:30:00Z')
 const PASS_MS = 30_000, PASSES = 120
 const GiB = 1024 ** 3
-const PROJECT = { repo: REPO, pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
+const PROJECT = { repo: REPO, pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app', channel: 'lead' }
 /** Pip and Juno build on one Mac with no GPU; Faye is the PM. */
 const CREW: Crew = {
   builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },

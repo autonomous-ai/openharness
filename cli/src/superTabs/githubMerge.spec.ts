@@ -67,7 +67,7 @@ function setup() {
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
   const team = vi.fn(async () => crew)
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
-  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app', channel: 'lead' }],
     crew: team, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log) })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
@@ -830,7 +830,7 @@ describe('the rule\'s parts', () => {
     const read = async () => ({ projects: [{ id: 'app', leadConversationId: 'lead', repository: { repositoryUrl: 'git@github.com:acme/app.git' } }] })
     const found = await ledProjects({ me: 'dee', live: id => id === 'h-juno', read, roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }),
       row({ id: 'pip' }, { lead: false }), row({ id: 'gone', harnessId: 'h-gone' })] })
-    expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
+    expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app', channel: 'lead' }])
   })
 
   it('counts a PM stopped here as leading, as the service asks the core whether it is stopped', async () => {
@@ -854,7 +854,7 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
     const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
     const log = vi.fn()
-    const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+    const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app', channel: 'lead' }],
       crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, records: new VerdictRecords(authors, () => clock.now, log) })
     return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
       comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
@@ -962,9 +962,9 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
 describe('who the backend recorded for a project\'s comments', () => {
   it('asks as the project\'s PM, for the repository and the ids in the backend\'s form, and reads each name', async () => {
     const ask = vi.fn(async (_path: string) => ({ authors: { 'issue:501': { agentId: 'a1', name: 'Đức Anh' }, 'issue:502': { agentId: 'a2' } } }))
-    const authors = await recordedAuthors(ask)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, ['issue:501', 'issue:502', 'issue:503'])
+    const authors = await recordedAuthors(ask)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app', channel: 'lead' }, ['issue:501', 'issue:502', 'issue:503'])
     expect(ask).toHaveBeenCalledExactlyOnceWith('/api/super-tabs/tab/github-comments?repository=acme%2Fapp&ids=issue%3A501,issue%3A502,issue%3A503&asAgentId=juno')
     expect(authors).toEqual({ 'issue:501': { name: 'Đức Anh' }, 'issue:502': { name: '' } })
-    expect(await recordedAuthors(async () => null)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, ['issue:1'])).toEqual({})
+    expect(await recordedAuthors(async () => null)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app', channel: 'lead' }, ['issue:1'])).toEqual({})
   })
 })

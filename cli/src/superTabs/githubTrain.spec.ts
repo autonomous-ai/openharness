@@ -176,7 +176,7 @@ function setup() {
   const log = vi.fn()
   // Pip builds; Juno is the PM, and reads.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
-  const start = () => new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+  const start = () => new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app', channel: 'lead' }],
     crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log, records: new VerdictRecords(repo.authors, () => clock.now, log) })
   const f = {
     state, log, clock, merger: start(), mark: repo.mark,

@@ -10,7 +10,7 @@ import { commandRecords } from './commandRecords.fake.js'
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
 const issue = (number: number, labels: string[], extra: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...extra })
-const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
+const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app', channel: 'lead' }
 
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */

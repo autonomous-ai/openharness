@@ -52,7 +52,7 @@ const VERDICT = /(?<![\w-])(READ-OK|HOLD)\*{0,2}\s+(?:#\d+\s+)?`?([0-9a-f]{7,40}
  * (#3781: "`HOLD 73aa8b23f`"), or inside quotation marks on the line (swarm-sandbox #24: "as in "Juno, HH:MM: READ-OK
  * 239a631"", an ask's example).
  */
-function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } | null {
+export function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } | null {
   if (/^\s*>/.test(line) || /^ {0,3}(?:`{3,}|~{3,})/.test(line)) return null
   for (const found of line.matchAll(VERDICT)) {
     const before = line.slice(0, found.index)
@@ -109,7 +109,8 @@ const HOLD_LABEL = 'hold'
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
-export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string }
+/** A project whose PM runs here: its repository, its PM and the PM's Swarm, and its channel, the conversation the PM leads. */
+export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string; channel: string }
 
 /** Who the backend recorded as the writer of each of a project's GitHub comments [ids] (`issue:<id>`, at most 100), read as the
  *  project's PM through [ask], the backend's GET (backend superTabs/githubComments.ts). Ids with no record are left out. */
@@ -132,7 +133,8 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
     const repo = repositorySlug(object(project?.repository).repositoryUrl)
     if (repo && identifier(project?.id) && !found.has(repo)) {
-      found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id })
+      found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id,
+        channel: row.ledConversationId })
     }
   }
   return [...found.values()]

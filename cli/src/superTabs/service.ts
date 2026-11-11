@@ -24,6 +24,7 @@ import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githu
 import { claimAsked, takeTask } from './githubClaim.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
+import { GitHubNumbers } from './githubNumbers.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { crewOf, labelOf } from './assign/crew.js'
 
@@ -121,6 +122,8 @@ export interface SuperTabServiceOptions {
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
   githubAssign?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubAssign, 'start' | 'stop'>
+  /** What posts the daily numbers of the projects whose PM runs here (superTabs/githubNumbers.ts), for a spec. */
+  githubNumbers?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubNumbers, 'start' | 'stop'>
   /** GitHub as this computer's own gh login (superTabs/githubRest.ts), for a spec. */
   github?: () => { get: GitHubGet; send: GitHubSend }
   /** What reports what this computer's person's agents shipped to the Swarm's leaderboard (superTabs/shipping.ts), for a spec. */
@@ -202,6 +205,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     get: github.get, send: github.send, records })))(core, sources)
+  // Each project's numbers, once a day in its channel as its PM (githubNumbers.ts; Swarm plan, step 8).
+  const numbers = (options.githubNumbers ?? ((api, held) => new GitHubNumbers({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
+    post: (project, operationId, text) => backend(api, 'POST', `/api/super-tabs/${project.tabId}/commands`, { operationId, asAgentId: project.pmAgentId,
+      command: { type: 'message.send', conversationId: project.channel, text, replyTo: null, recipientIds: [] } }),
+    file: join(api.dataDir, 'super-tab-numbers.json') })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
@@ -243,7 +251,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // signature names its reader only when it names one of the team, and only a READ-OK the backend recorded is a read.
     team: async agent => new Set(list((await held().reads.read(agent.tabId, agent.agentId)).state.agents)
       .map(a => labelOf(String(a.displayName ?? a.name ?? a.id)))),
-    named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '' }, comments),
+    named: (agent, repo, comments) => records.named({ repo, pm: '', tabId: agent.tabId, pmAgentId: agent.agentId, projectId: '', channel: '' }, comments),
   })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
@@ -254,6 +262,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     mentions.start()
     merges.start()
     assigns.start()
+    numbers.start()
     shipping.start()
     firstAnswers.start()
     nextThings.start()
@@ -275,7 +284,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); numbers.stop(); shipping.stop(); firstAnswers.stop(); nextThings.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()
