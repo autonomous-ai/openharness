@@ -1319,6 +1319,16 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.submitAgent).not.toHaveBeenCalled()
     })
 
+    // Taken off the row already, it is not put back (at most once), but its failure is named rather than left to the
+    // daemon's last-resort unhandled-rejection line.
+    it('a submit that throws is said', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready, { submitAgent: vi.fn(() => { throw new Error('pane gone') }) })
+      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task not typed · pane gone'))
+    })
+
     // The reconcile pass holds registry saves back until it commits (core/main.ts): a removal not yet saved is undone
     // by a daemon that stops, and the next one would type the task again.
     it('the removal waits for the reconcile pass to commit', async () => {
