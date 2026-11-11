@@ -13,21 +13,28 @@ import 'dialog_scope.dart';
 import 'join_link.dart';
 import 'model.dart';
 
+/// The Swarm's people, titled as the button that opened it says (PSQA, 2026-11-12: Invite people opened "Share Swarm").
 Future<void> showSuperTabSharing(
   BuildContext context,
-  SuperTabController controller,
-) => showAppDialog<void>(
+  SuperTabController controller, {
+  required String title,
+}) => showAppDialog<void>(
   context: context,
   builder: (_) => SuperTabDialogScope(
     controller: controller,
     requireWrite: false,
-    child: SwarmSharingDialog(controller: controller),
+    child: SwarmSharingDialog(controller: controller, title: title),
   ),
 );
 
 class SwarmSharingDialog extends StatefulWidget {
-  const SwarmSharingDialog({super.key, required this.controller});
+  const SwarmSharingDialog({
+    super.key,
+    required this.controller,
+    required this.title,
+  });
   final SuperTabController controller;
+  final String title;
 
   @override
   State<SwarmSharingDialog> createState() => _SwarmSharingDialogState();
@@ -539,7 +546,7 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
     builder: (context, _) => SuperTabDetailDialog(
-      title: 'Share Swarm',
+      title: widget.title,
       body: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

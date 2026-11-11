@@ -32,6 +32,13 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     expect(swarmBasics(false).text).not.toMatch(/hand-off|is yours"/)
   })
 
+  // anh Dee, 2026-11-11, of the PM's chat with its person: "it should be like a human conversation". In the rehearsal the PM
+  // answered "next: --json and --top" with a table, a section on what the issues settle and three paragraphs on the goal.
+  it('tells the PM to answer its person in a few lines, the detail on the issues, and no other agent', () => {
+    expect(swarmBasics(true).text).toContain('Answer your person in a few lines, as a teammate would on Slack; the detail goes on the issues.')
+    expect(swarmBasics(false).text).not.toContain('Answer your person in a few lines')
+  })
+
   // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
   // lampOS's builders do on their Queue issue, a post's @Name waking whom it is for (Harness shows who wrote it and when); a
   // task's own record stays on GitHub, where Harness shows it in the task's chat.

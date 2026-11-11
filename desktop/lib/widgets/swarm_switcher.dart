@@ -1550,10 +1550,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                                   ? (search.query.isEmpty
                                         ? ''
                                         : 'No matching agents')
+                                  // The footer says the tab is full.
                                   : search.adding &&
                                         search.query.isEmpty &&
                                         search.capacity <= 0
-                                  ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
+                                  ? ''
                                   : search.adding && search.query.isEmpty
                                   ? desktop
                                         ? 'No harnesses yet. Start one with New Harness, or choose Machines to connect a computer.'
@@ -1688,13 +1689,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                       children: [
                         Expanded(
                           child: Text(
-                            search.adding
-                                ? search.unavailableMessage
-                                : selected!.isGroup &&
-                                      selected.members.length >
-                                          AppNotifier.maxPanes
-                                ? 'Open up to ${AppNotifier.maxPanes} harnesses at once'
-                                : 'No room to open this ${selected.isSwarm || selected.isGroup ? 'group' : 'harness'}',
+                            search.unavailableMessage,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: desktop

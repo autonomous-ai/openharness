@@ -14,17 +14,13 @@
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
  * agent's (backend superTabs/githubComments.ts).
  */
-import { labelOf, openPieces } from './assign/crew.js'
+import { CLAIM_LIMIT, labelOf, openPieces } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
 import { hhmm, projectRepository, recordOwn, type ProjectRepositories, type VerdictDeps } from './githubVerdict.js'
 import { object, SuperTabHostError } from './wire.js'
 
 export interface Claim { repository: string; number: number }
 
-/** The most tasks one builder holds at once, as lampOS set it (four, with sub-agents): past it, work sits on a busy builder
- *  while others have none. What it holds is read, then added to: takes of several tasks at the same moment can pass it by a
- *  few, as GitHub's list is a little behind its writes. */
-export const CLAIM_LIMIT = 4
 const TAKEN = 'status:taken', PAGE = 100
 /** How many pages of taken tasks are read for the limit. A builder's own fit in one; three bound the read for a name with
  *  a comma, whose tasks are found among everyone's (below). */
@@ -48,8 +44,10 @@ export const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? 
 /**
  * Takes [asked] for [builder]: marks it `status:taken`, says so in a comment under the builder's name, and records the
  * comment as the builder's. Refused, with nothing changed: a repository that is no project of the builder's, an issue that is
- * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT. `taken` is whether
- * this command changed anything: a task taken in full already is not taken again. `split` is how a task too big is cut.
+ * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT (assign/crew.ts). What
+ * the builder holds is read, then added to: takes of several tasks at the same moment can pass the limit by a few, as GitHub's
+ * list is a little behind its writes. `taken` is whether this command changed anything: a task taken in full already is not
+ * taken again. `split` is how a task too big is cut.
  */
 export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ProjectRepositories }, asked: Claim): Promise<{ url: string; taken: boolean; split: string }> {
   const name = builder.name.trim()
