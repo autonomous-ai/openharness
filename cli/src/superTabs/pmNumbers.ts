@@ -173,17 +173,37 @@ export const shortLine = (names: readonly string[], n: Numbers, at: string, goal
   + ` Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
   + 'If the work is done, tell your person.'
 
-/** What the PM's person is told once the PM was told [SHORT_TIMES] times, nothing moved since, and [names] still have nothing:
- *  as Harness, in the PM's chat, with what happens next. */
-export const toldLine = (names: readonly string[], n: Numbers, pm: string): string => `Harness: ${nothing(names)}, and ${noTask(n, names.length)}. `
-  + `${plainName(pm)} was told ${SHORT_TIMES} times, and is told no more until a task is opened or something lands.`
+// The two lines below are posted under the PM's own name, so they are said as a teammate says them: "Harness, Wed 11 Nov, the
+// last 24 hours:" and "Harness: ... Juno was told 3 times" read as no person writes (anh Dee, 2026-11-11: "we want agents to
+// talk like human"). [shortLine], typed to the PM itself, keeps its "Harness, 14:05:": the PM has to know who is speaking.
 
-/** The day's numbers, for the project's people, with the [day] they are posted on, what the day's scoreboard says ([board]:
- *  scoreboard.ts boardWords, or nothing) and how far its [goal] is. */
-export const dayLine = (n: Numbers, day: string, goal: Goal, board: string): string => `Harness, ${day}, the last 24 hours: ${landedWords(n)}`
-  + `${n.landedBy.length ? ` (${n.landedBy.slice(0, NAMES_MAX).map(([name, count]) => `${name} ${count}`).join(', ')}${n.landedBy.length > NAMES_MAX ? ', others' : ''})` : ''}`
-  + ` and ${counted(n.closed, 'task')}${n.more ? ' or more' : ''} closed.${board ? ` ${board}` : ''} Now: ${n.builders ? `${n.free.length} of ${counted(n.builders, 'builder')} with nothing to do` : 'no builder is running'}, `
-  + `${counted(Math.max(0, n.open), 'task')} open and ${n.held} in hand.${goal ? ` Goal: ${scored(goal)}.` : ''}`
+/** What the PM's person is told, in the PM's chat with them, once the PM was told [SHORT_TIMES] times, nothing moved since,
+ *  and [names] still have nothing. Said, not asked: the PM never hears what is posted in its name (the server delivers no agent
+ *  its own post), so a question would bring it a "You pick." with nothing to refer to (review of #4081). What it was typed
+ *  three times is what it answers from. */
+export const toldLine = (names: readonly string[], n: Numbers): string => `${nothing(names)}, and ${noTask(n, names.length)}.`
+
+/** A count as a teammate says it: "no task", "1 task", and "at least 94 pull requests" when the closed list read was full, so
+ *  there may be more than it held; none in a full list is "no pull request we could see". */
+const howMany = (count: number, what: string, more: boolean): string =>
+  count ? `${more ? 'at least ' : ''}${counted(count, what)}` : `no ${what}${more ? ' we could see' : ''}`
+/** The verb after a count: "no task is", "1 builder is", "3 are". */
+const isAre = (count: number): string => count > 1 ? 'are' : 'is'
+
+/** The day's numbers, for the project's people in its channel: what landed and closed, what is so now and how far its [goal]
+ *  is, then apart what the day's scoreboard says ([board]: scoreboard.ts boardWords, or nothing). A builder waits for a task
+ *  as [Numbers.free] counts it: one out of its subscription is neither waiting nor busy, and "every builder is busy" said it
+ *  was. A sized task open is one Harness did not give, which may be one no builder's machine can take: open, never "ready"
+ *  (both reviews of #4081). */
+export const dayLine = (n: Numbers, goal: Goal, board: string): string => {
+  const open = Math.max(0, n.open), waiting = n.free.length
+  const by = n.landedBy.length ? ` (${n.landedBy.slice(0, NAMES_MAX).map(([name, count]) => `${name} ${count}`).join(', ')}${n.landedBy.length > NAMES_MAX ? ', others' : ''})` : ''
+  const crew = !n.builders ? 'no builder is running'
+    : waiting ? `${waiting} of ${counted(n.builders, 'builder')} ${isAre(waiting)} waiting for a task` : 'no builder is waiting for a task'
+  return `In the last day, ${howMany(n.landed, 'pull request', n.more)} landed${by} and ${howMany(n.closed, 'task', n.more)} closed. `
+    + `Now ${crew}, ${howMany(open, 'sized task', false)} ${isAre(open)} open and ${n.held || 'none'} ${isAre(n.held)} in hand.`
+    + `${goal ? ` Goal: ${scored(goal)}.` : ''}${board ? `\n\n${board}` : ''}`
+}
 
 /** Where a project's numbers go, in the Swarm as its PM reads it ([state]): the PM's own chat with its person, or the project's
  *  channel. Null when the Swarm has none. */
@@ -220,7 +240,6 @@ export const numbersSender = (read: (project: LedProject) => Promise<Json>, post
 interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string; board?: { day: string; words?: string } }
 
 const dayOf = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export class PmNumbers {
   private memory: Record<string, Kept> | null = null
@@ -273,7 +292,7 @@ export class PmNumbers {
       const after = kept.typedAt ? `${kept.typedAt}` : `first ${Math.floor(now / SHORT_EVERY_MS)}`
       if (kept.told >= SHORT_TIMES) {
         // Refused for good, it is not said again either: the log has it.
-        if (await this.send('say', project, after, async () => toldLine(waiting, numbers, project.pm)) !== 'later') kept.said = true
+        if (await this.send('say', project, after, async () => toldLine(waiting, numbers)) !== 'later') kept.said = true
       } else {
         const sent = await this.send('tell', project, after, async () => shortLine(waiting, numbers, hhmm(now), await read()))
         // Taken, it counts; refused for good, the hour passes all the same, and nothing is counted that was not typed.
@@ -284,7 +303,7 @@ export class PmNumbers {
     if (at.getHours() >= DAY_HOUR && day > kept.day) {
       // A day in which nothing landed and no task closed has no numbers to post.
       if (!numbers.landed && !numbers.closed
-        || await this.send('post', project, day, async () => dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read(), await this.board(project, kept, day, board))) !== 'later') {
+        || await this.send('post', project, day, async () => dayLine(numbers, await read(), await this.board(project, kept, day, board))) !== 'later') {
         kept.day = day
         delete kept.board
       }
