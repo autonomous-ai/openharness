@@ -13,7 +13,7 @@ import 'package:harness/super_tabs/sharing.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../test/swarm_sharing_test.dart' show SwarmSharingServer;
+import '../test/support/swarm_sharing_server.dart';
 
 /// Real macOS controls with synthetic membership and an in-memory server only.
 /// This fixture never signs in, calls a production backend or starts an agent.
