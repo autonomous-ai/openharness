@@ -47,7 +47,7 @@ const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED',
 
 /** One of this computer's person's v4 agents and where it is heard: its Swarm, its chat with its person, the names it goes
  *  by, the label of its tasks and pull requests, and the repositories of the projects it reads. */
-export interface WatchedAgent { tabId: string; agentId: string; chat: string; names: string[]; label: string; repos: string[] }
+export interface WatchedAgent { tabId: string; agentId: string; harnessId: string; chat: string; names: string[]; label: string; repos: string[] }
 
 
 /** One thing GitHub said, before it is matched to the agents it reaches. A line comment names the review it is part of. */
@@ -129,7 +129,7 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     const projects = Array.isArray(state.projects) ? state.projects.map(object) : state.project ? [{ repository: state.project }] : []
     const repos = [...new Set(projects.map(p => repositorySlug(object(p.repository).repositoryUrl)).filter((s): s is string => !!s))]
     if (!chat || !identifier(chat.id) || !repos.length) continue
-    watched.push({ tabId: row.tabId, agentId: agent.id, chat: chat.id, names, label: builderLabel(names[0]!), repos })
+    watched.push({ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, chat: chat.id, names, label: builderLabel(names[0]!), repos })
   }
   return watched
 }
