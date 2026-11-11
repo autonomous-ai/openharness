@@ -59,7 +59,7 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir'>
+  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'afterTransaction'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
@@ -68,7 +68,7 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget'>
+  input: Pick<SessionInputController, 'forget' | 'submit'>
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
@@ -238,6 +238,19 @@ export function createBinding({
     void handleRegistered(entry, meta).catch(error => console.error(
       `[agent] ${sid(entry.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
   }
+  /**
+   * Takes the agent's first task off its row and types it as the person's own message. This pass runs inside the
+   * reconcile pass's registry transaction (core/main.ts), which holds saves back: taken after it commits, the removal is
+   * saved before the task is typed, so a daemon that stops in between never types it twice. A pass that reads the pane
+   * again before then takes nothing.
+   */
+  const handOverFirstTask = (agentId: string): void => {
+    void registry.afterTransaction(() => registry.takeFirstTask(agentId)).then((taken) => {
+      if (!taken) return
+      console.log(`[agent] ${sid(agentId)} first task handed over`)
+      input.submit(taken.sessionId, taken.task)
+    }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${error instanceof Error ? error.message : String(error)}`))
+  }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
   const bindObservedAgent = async (observed: DiscoveredTerminalAgent): Promise<void> => {
@@ -309,7 +322,7 @@ export function createBinding({
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`.
-      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
+      const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
       const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
       if (held) {
@@ -332,6 +345,10 @@ export function createBinding({
             `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
         }
       }
+      // The first task is typed once the Gateway answers, into the session the pane shows, and only with a stream
+      // attached: typed before it, its user row is history, nothing confirms it, and the person sends it again. A pane
+      // that moved to another key binds it below first, and hands the task over on the next pass.
+      if (streamed && agent.firstTask && screen.state === 'ready' && screen.key === agent.sessionId) handOverFirstTask(agent.agentId)
       const key = screen.key
       if (!key || key === agent.sessionId || isRecentlyDeleted(key)) return
       const owner = registry.bySession(key)
