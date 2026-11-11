@@ -305,7 +305,10 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
       const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download' && !forSwarm) : null
       const gridName = await privateGridName()
       if (list) {
-        const snapshot = await localModels.list(gridName, payload.refresh === true || setup)
+        // `scan: false` is a Swarm machine reading (superTabs/machines.ts), every 15 s while a Swarm has Local models
+        // on: it never starts the Model Manager's scan of other apps' models, which it ran every 30-45 s at rest, 0.6 s
+        // of CPU each (2026-11-11). A person's ask still does.
+        const snapshot = await localModels.list(gridName, payload.refresh === true || setup, payload.scan !== false)
         const needed = !grid.setUp()
         if (setup && !unready) core.clients.gridModelsChanged()
         return { ...snapshot, ...(needed ? { gridSetupNeeded: true } : {}), ...(unready ? { gridSetupError: unready } : {}) }

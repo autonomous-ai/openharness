@@ -595,7 +595,9 @@ export class ContributedMachines {
         // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows,
         // rather than left out until the grid lists it.
         const marked = (m: LocalModelReading): LocalModelReading => !live || live.has(m.model) ? m : { ...m, starting: true }
-        const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})) : null
+        // Other apps' models as the last scan a person asked for found them (`scan: false`, services/models.ts): what
+        // this machine serves there was started through such an ask, which scanned.
+        const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', { scan: false }, 20_000).catch(() => ({})) : null
         const refusedModels = typeof row.localGrid === 'string' ? refusedOn(fleet, row.localGrid) : []
         const localModels = typeof row.localGrid === 'string' ? [
           ...servedOn(fleet, row.localGrid).map(marked),

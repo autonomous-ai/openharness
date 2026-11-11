@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -18,9 +20,9 @@ import 'support/super_tab_fixture.dart';
 
 // Huy, 11-04 (task #2815, a follow-up to #2633): in his Personal Swarm,
 // # Harness Monitor had no Lead, and its empty chat said only "1 pane in this
-// project · Discuss the plan with Product Manager · Show panes". A message
-// there starts its Lead (#2633), but nothing said so. Now the empty chat
-// offers the start itself, as an agent's chat's start card does.
+// project · Discuss the plan with Product Manager · Show panes". Now the empty
+// channel offers Start PM, which opens the PM's own chat at once (Swarm v4:
+// only agents post in the channel; the person talks to the PM there).
 
 /// Set to a folder to write the PR's pictures of the empty chat.
 final _shots = Platform.environment['PERSONAL_LEAD_CARD_SHOTS'];
@@ -157,45 +159,37 @@ List<Map> _claims(SuperTabLaunchFixture f) => [
       post['command'] as Map,
 ];
 
+final _startPm = find.widgetWithText(FilledButton, 'Start PM');
+
+String _line(WidgetTester tester) =>
+    tester.widget<Text>(_key('super-lead-start-line')).data!;
+
+/// The PM's own chat its start opened (backend pmChat.ts), as the fake server keeps it.
+String _pmChat(SuperTabLaunchFixture f) =>
+    (f.connection.server.state['conversations'] as List)
+            .cast<Map>()
+            .singleWhere(
+              (g) =>
+                  g['kind'] == 'agent-chat' && g['title'] == 'Product Manager',
+            )['id']
+        as String;
+
 void main() {
   setUpAll(() => loadCaptureFonts(_shots));
   tearDown(() => PersonalLeadStarter.launchForTest = null);
 
-  testWidgets('a Personal project with no Lead offers to start one, on this '
-      'Mac with Claude Code in the repo\'s folder, above Show panes', (
-    tester,
-  ) async {
+  testWidgets('a Personal project with no PM offers Start PM, above Show '
+      'panes', (tester) async {
     final f = SuperTabLaunchFixture();
     _desk(f);
     final (c, _) = await _swarm(f);
     await _show(tester, f);
     expect(_card, findsOneWidget);
-    expect(
-      find.descendant(
-        of: _card,
-        matching: find.text('This project has no Lead yet'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: _key('super-lead-start-machine'),
-        matching: find.text('Test host'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: _key('super-lead-start-engine'),
-        matching: find.text('Claude Code'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      tester.widget<Text>(_key('super-lead-start-folder')).data,
-      'Folder: /Users/huy/harness-monitor',
-    );
-    expect(find.widgetWithText(FilledButton, 'Start Lead'), findsOneWidget);
+    expect(_line(tester), 'This project has no Product Manager.');
+    expect(_startPm, findsOneWidget);
+    // Nothing to send in: the channel is agents only.
+    expect(_key('super-agents-only'), findsOneWidget);
+    expect(_key('super-message-composer'), findsNothing);
     // Show panes stays, under the card.
     final panes = _key('super-project-show-panes');
     expect(panes, findsOneWidget);
@@ -206,67 +200,65 @@ void main() {
     await _close(tester, f, c);
   });
 
-  testWidgets('with no repo, the card says the Lead starts in a new folder '
-      'of the Harness projects folder', (tester) async {
-    final f = SuperTabLaunchFixture();
-    _desk(f, repo: false);
-    final (c, _) = await _swarm(f);
-    final plans = <PersonalLeadPlan>[];
-    PersonalLeadStarter.launchForTest = (_, _, plan) async => plans.add(plan);
-    await _show(tester, f);
-    expect(
-      tester.widget<Text>(_key('super-lead-start-folder')).data,
-      'A new folder in your Harness projects folder',
-    );
-    await tester.tap(find.widgetWithText(FilledButton, 'Start Lead'));
-    await _settle(tester);
-    expect(plans.single.folder, isNull);
-    await _close(tester, f, c);
-  });
-
-  testWidgets('Start Lead starts one Lead where the card says, however often '
-      'it is pressed', (tester) async {
+  testWidgets('Start PM starts one PM however often it is pressed, opens its '
+      'own chat, and what the person sends there waits for it', (tester) async {
     final f = SuperTabLaunchFixture();
     _desk(f);
-    final (c, chat) = await _swarm(f);
+    final (c, channel) = await _swarm(f);
     final plans = <PersonalLeadPlan>[];
     PersonalLeadStarter.launchForTest = (_, id, plan) async {
-      expect(id, chat);
+      expect(id, channel);
       plans.add(plan);
     };
     await _show(tester, f);
-    final start = find.widgetWithText(FilledButton, 'Start Lead');
-    await tester.tap(start);
-    await tester.tap(start, warnIfMissed: false);
+    await tester.tap(_startPm);
+    await tester.tap(_startPm, warnIfMissed: false);
     await _settle(tester);
     expect(_claims(f), hasLength(1));
     expect(plans, hasLength(1));
     expect(plans.single.machineId, 'm');
     expect(plans.single.engine, 'claude');
     expect(plans.single.folder, '/Users/huy/harness-monitor');
+    // The PM's own chat is open, with a box to write in.
+    final chat = _pmChat(f);
+    expect(c.selectedId, chat);
+    final composer = _key('super-message-composer');
+    expect(composer, findsOneWidget);
+    await tester.tap(composer);
+    await tester.enterText(composer, 'Make the dashboard dark');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await _settle(tester);
+    final sent = [
+      for (final post in f.connection.server.posts)
+        if ((post['command'] as Map)['type'] == 'message.send')
+          post['command'] as Map,
+    ];
+    expect(sent.single['conversationId'], chat);
+    expect(sent.single['text'], 'Make the dashboard dark');
+    expect(find.text('Waiting for the Product Manager'), findsOneWidget);
+    // The channel holds none of the person's words.
+    expect(
+      f.connection.server.messages.where((m) => m['conversationId'] == channel),
+      isEmpty,
+    );
     await _close(tester, f, c);
   });
 
-  testWidgets('the engine picked on the card is the one the Lead starts with', (
-    tester,
-  ) async {
+  testWidgets('with no repo, Start PM starts it in a new folder of the '
+      'Harness projects folder', (tester) async {
     final f = SuperTabLaunchFixture();
-    _desk(f);
+    _desk(f, repo: false);
     final (c, _) = await _swarm(f);
     final plans = <PersonalLeadPlan>[];
     PersonalLeadStarter.launchForTest = (_, _, plan) async => plans.add(plan);
     await _show(tester, f);
-    await tester.tap(_key('super-lead-start-engine'));
+    await tester.tap(_startPm);
     await _settle(tester);
-    await tester.tap(find.text('Codex').last);
-    await _settle(tester);
-    await tester.tap(find.widgetWithText(FilledButton, 'Start Lead'));
-    await _settle(tester);
-    expect(plans.single.engine, 'codex');
+    expect(plans.single.folder, isNull);
     await _close(tester, f, c);
   });
 
-  testWidgets('a project with a Lead shows no card', (tester) async {
+  testWidgets('a project with a PM shows no card', (tester) async {
     final f = SuperTabLaunchFixture();
     _desk(f);
     final (c, chat) = await _swarm(f);
@@ -298,17 +290,17 @@ void main() {
   });
 
   testWidgets('with none of the person\'s computers online, the card says '
-      'why and offers no Start Lead', (tester) async {
+      'why and offers no Start PM', (tester) async {
     final f = SuperTabLaunchFixture();
     _desk(f);
     final (c, _) = await _swarm(f);
     f.app.machineStates['m']!.nodeOnline = false;
     await _show(tester, f);
     expect(
-      tester.widget<Text>(_key('super-lead-start-unavailable')).data,
-      'Can’t start a Lead: none of your computers is online',
+      _line(tester),
+      'Can’t start a Product Manager: none of your computers is online',
     );
-    expect(find.widgetWithText(FilledButton, 'Start Lead'), findsNothing);
+    expect(_startPm, findsNothing);
     await _close(tester, f, c);
   });
 
@@ -334,34 +326,50 @@ void main() {
     await _close(tester, f, c);
   });
 
-  testWidgets('a failed start says why on the card, and Start Lead tries '
-      'again', (tester) async {
+  testWidgets('a failed start says why in its chat and back on the card, and '
+      'Start PM tries again', (tester) async {
     final f = SuperTabLaunchFixture();
     _desk(f);
-    final (c, _) = await _swarm(f);
+    final (c, channel) = await _swarm(f);
     var calls = 0;
-    PersonalLeadStarter.launchForTest = (_, _, _) async {
+    final first = Completer<void>();
+    PersonalLeadStarter.launchForTest = (_, _, _) {
       calls++;
-      if (calls == 1) {
-        throw const SuperTabFailure(
-          'CREATE_FAILED',
-          'Claude Code isn’t signed in on Test host.',
-        );
-      }
+      return calls == 1 ? first.future : Future.value();
     };
     await _show(tester, f);
-    await tester.tap(find.widgetWithText(FilledButton, 'Start Lead'));
+    await tester.tap(_startPm);
+    await _settle(tester);
+    // Its chat is open while it starts: what the person sends waits.
+    final chat = _pmChat(f);
+    expect(c.selectedId, chat);
+    final composer = _key('super-message-composer');
+    await tester.tap(composer);
+    await tester.enterText(composer, 'Make the dashboard dark');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await _settle(tester);
+    expect(find.text('Waiting for the Product Manager'), findsOneWidget);
+    first.completeError(
+      const SuperTabFailure(
+        'CREATE_FAILED',
+        'Claude Code isn’t signed in on Test host.',
+      ),
+    );
+    await _settle(tester);
+    // Back on the channel, whose card says why.
+    const why = 'Claude Code isn’t signed in on Test host';
+    expect(c.selectedId, channel);
+    expect(_line(tester), 'Couldn’t start the Product Manager: $why');
+    // Its chat says it under the message too.
+    await c.select(chat);
     await _settle(tester);
     expect(
-      find.descendant(
-        of: _card,
-        matching: find.text(
-          'Couldn’t start a Lead: Claude Code isn’t signed in on Test host',
-        ),
-      ),
+      find.text('Couldn’t start the Product Manager: $why'),
       findsOneWidget,
     );
-    await tester.tap(find.widgetWithText(FilledButton, 'Start Lead'));
+    await c.select(channel);
+    await _settle(tester);
+    await tester.tap(_startPm);
     await _settle(tester);
     expect(calls, 2);
     await _close(tester, f, c);
@@ -370,7 +378,7 @@ void main() {
   for (final brightness in Brightness.values) {
     for (final failed in [false, true]) {
       final name =
-          'personal-lead-card-${failed ? 'failed' : 'empty'}-'
+          'personal-pm-card-${failed ? 'failed' : 'empty'}-'
           '${brightness.name}';
       testWidgets(name, (tester) async {
         final previous = grid.AppTheme.brightness.value;

@@ -7,7 +7,8 @@
  * TUI, whose state folder is `~/.openclaw-<name>`. Once bound, the session is read from the folder its TUI held then
  * (`RegisteredSession.openclawStateDir`): a TUI keeps its folder for life, and its pid, once it exits, can name another
  * TUI with another store. Where neither is known (Windows reads no open files), OpenClaw's own default is used:
- * `OPENCLAW_STATE_DIR`, else `~/.openclaw`.
+ * `env.OPENCLAW_STATE_DIR`, resolved as OpenClaw resolves it (`OPENCLAW_STATE_DIR`, else
+ * `<OPENCLAW_HOME or home>/.openclaw`).
  *
  * The agent's folder is `<stateDir>/agents/<agentId>/agent/` unless `openclaw.json` moves it
  * (`agents.entries.<id>.agentDir`). The config is read, never written.

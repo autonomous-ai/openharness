@@ -23,12 +23,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function store(scenario: string): { path: string; db: DatabaseLike } {
-  const path = join(dir, `${scenario}.sqlite`)
+/** A store holding a recorded scenario; with none, the schema alone, as before the Gateway wrote any session. */
+function store(scenario?: string): { path: string; db: DatabaseLike } {
+  const path = join(dir, `${scenario ?? 'empty'}.sqlite`)
   const db = new (builtinSqlite()!)(path, { readOnly: false })
   open.push(db)
   db.exec(fixture('schema'))
-  db.exec(fixture(scenario))
+  if (scenario) db.exec(fixture(scenario))
   return { path, db }
 }
 const windowOf = (db: DatabaseLike, key: string): string =>
@@ -139,16 +140,16 @@ describe('OpenclawLive', () => {
     status(db, 'agent:main:tool', 'running')
     const tail = live(path, 'agent:main:tool')
     await tail.stream.start()
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
     expect(ended(tail.events)).toEqual([])
     // After a reconnect, the run's next row comes between two idle passes: still going.
-    tail.stream.paneRead({ ready: false, gatewayLost: true })
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: false, gatewayLost: true, running: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
     db.exec(`INSERT INTO transcript_events SELECT * FROM later WHERE seq = 7`)
     await vi.waitFor(() => expect(tail.events.length).toBeGreaterThan(1))
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
     tail.stream.stop()
     expect(ended(tail.events)).toEqual([])
     expect(tail.stream.turnOpen).toBe(true)
@@ -160,17 +161,17 @@ describe('OpenclawLive', () => {
     status(db, 'agent:main:tool', 'running')
     const tail = live(path, 'agent:main:tool')
     await tail.stream.start()
-    tail.stream.paneRead({ ready: false, gatewayLost: true })
+    tail.stream.paneRead({ ready: false, gatewayLost: true, running: false })
     // An idle pass, then a busy one, then an idle one again: no close.
-    tail.stream.paneRead({ ready: true, gatewayLost: true })
-    tail.stream.paneRead({ ready: false, gatewayLost: false })
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: true, running: false })
+    tail.stream.paneRead({ ready: false, gatewayLost: false, running: true })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
     expect(ended(tail.events)).toEqual([])
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
     expect(ended(tail.events)).toEqual([{ type: 'turn_ended', payload: { aborted: true } }])
     expect(tail.stream.turnOpen).toBe(false)
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
-    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false, running: false })
     tail.stream.stop()
     expect(ended(tail.events)).toHaveLength(1)
   })
@@ -183,27 +184,27 @@ describe('OpenclawLive', () => {
       const { stream } = live(path, 'agent:main:plain')
       await stream.start()
       expect(stream.paneDue(), 'a pane never read').toBe(true)
-      stream.paneRead({ ready: true, gatewayLost: false })
+      stream.paneRead({ ready: true, gatewayLost: false, running: false })
       await vi.advanceTimersByTimeAsync(5_000)
       expect(stream.paneDue()).toBe(false)
       // A Gateway that dropped or a run going shows on the screen alone: read on every pass until it reads idle again.
-      stream.paneRead({ ready: false, gatewayLost: true })
+      stream.paneRead({ ready: false, gatewayLost: true, running: false })
       expect(stream.paneDue()).toBe(true)
-      stream.paneRead({ ready: true, gatewayLost: true })
+      stream.paneRead({ ready: true, gatewayLost: true, running: false })
       expect(stream.paneDue()).toBe(true)
-      stream.paneRead({ ready: true, gatewayLost: false })
+      stream.paneRead({ ready: true, gatewayLost: false, running: false })
       expect(stream.paneDue()).toBe(false)
       await vi.advanceTimersByTimeAsync(30_000)
       expect(stream.paneDue(), 'half a minute').toBe(true)
-      stream.paneRead({ ready: true, gatewayLost: false })
+      stream.paneRead({ ready: true, gatewayLost: false, running: false })
       db.exec("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = 'agent:main:plain'")
       await vi.advanceTimersByTimeAsync(10)
       expect(stream.paneDue(), 'the store changed').toBe(true)
-      stream.paneRead({ ready: true, gatewayLost: false })
+      stream.paneRead({ ready: true, gatewayLost: false, running: false })
       userRow(db, windowOf(db, 'agent:main:plain'), 100, 'next')
       await vi.advanceTimersByTimeAsync(10)
       expect(stream.turnOpen).toBe(true)
-      stream.paneRead({ ready: true, gatewayLost: false })
+      stream.paneRead({ ready: true, gatewayLost: false, running: false })
       expect(stream.paneDue(), 'a turn is open').toBe(true)
       stream.stop()
     } finally {
@@ -230,5 +231,152 @@ describe('OpenclawLive', () => {
     await none.start()
     none.stop()
     expect(headers).toHaveLength(2)
+  })
+
+  // A TUI and a Gateway with different state folders (the lamp, 2026-11-11: the Gateway under systemd with its own
+  // OPENCLAW_STATE_DIR, the TUI with harnessd's): the store Harness reads never gets the session, and the pane works on.
+  describe('a run in progress with no session in the store', () => {
+    const RUNNING = { ready: false, gatewayLost: false, running: true }
+    const IDLE = { ready: true, gatewayLost: false, running: false }
+    const CONNECTING = { ready: false, gatewayLost: false, running: false }
+    const streams: OpenclawLive[] = []
+    let started = 0
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+    })
+    afterEach(() => {
+      for (const stream of streams.splice(0)) stream.stop()
+      vi.useRealTimers()
+    })
+
+    async function watch(path: string) {
+      const onSessionMissing = vi.fn()
+      const onSessionFound = vi.fn()
+      const stream = new OpenclawLive({ ...live(path, 'agent:main:plain').deps, pollMs: 1_000, onSessionMissing, onSessionFound })
+      streams.push(stream)
+      await stream.start()
+      started = Date.now()
+      return { stream, onSessionMissing, onSessionFound }
+    }
+    /** The clock on to `seconds` after the stream started; the reader polls on the way. */
+    const at = (seconds: number) => vi.advanceTimersByTimeAsync(started + seconds * 1_000 - Date.now())
+
+    async function saidOnceAfter30s(path: string): Promise<void> {
+      const { stream, onSessionMissing } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(29)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+      await at(35)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    }
+
+    it('a run in progress for 30 s with no session in the store is said once', () => saidOnceAfter30s(store().path))
+
+    it('a store file that is not there counts as no session', () => saidOnceAfter30s(join(dir, 'missing.sqlite')))
+
+    // Found end to end (2026-11-11): bind passes 5 s apart measured a little under it by `Date.now()`, so the pass 30 s
+    // on fell a few ms short and the hold came one pass, 5 s, late.
+    it('the pass 30 s on says it, a few ms short by the clock or not', async () => {
+      const { stream, onSessionMissing } = await watch(store().path)
+      for (let pass = 0; pass < 6; pass++) {
+        stream.paneRead(RUNNING)
+        await vi.advanceTimersByTimeAsync(4_999)
+      }
+      expect(onSessionMissing).not.toHaveBeenCalled()
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    })
+
+    // A store this version cannot read is said as that (`onFatal`); told it holds no session, the person would be sent to
+    // fix a state folder that is right.
+    it('a store that cannot be read says nothing of its sessions', async () => {
+      const { path, db } = store('plain')
+      db.exec('ALTER TABLE session_nodes RENAME COLUMN label TO label_renamed')
+      const { stream, onSessionMissing } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+    })
+
+    // The unreadable store's own state replaces the hold on the agent (core/transcripts/attach.ts), and its recovery
+    // clears it: a store that still holds no session is said again, never left at no state.
+    it('a store read again after it could not be says again that it holds no session', async () => {
+      const { path, db } = store()
+      const { stream, onSessionMissing } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+      db.exec('ALTER TABLE session_nodes RENAME COLUMN status TO status_renamed')
+      await at(33)
+      stream.paneRead(RUNNING)
+      db.exec('ALTER TABLE session_nodes RENAME COLUMN status_renamed TO status')
+      await at(36)
+      stream.paneRead(RUNNING)
+      await at(66)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledTimes(2)
+    })
+
+    it('connecting or ready with no session says nothing', async () => {
+      // A fresh session reads `ready` before its first message, and `connecting` is no run yet: no node is due.
+      const { stream, onSessionMissing } = await watch(store().path)
+      for (let seconds = 0; seconds <= 60; seconds += 5) {
+        await at(seconds)
+        stream.paneRead(seconds % 10 ? CONNECTING : IDLE)
+      }
+      expect(onSessionMissing).not.toHaveBeenCalled()
+    })
+
+    it('a pass that reads no run starts the 30 s again', async () => {
+      const { stream, onSessionMissing } = await watch(store().path)
+      stream.paneRead(RUNNING)
+      await at(20)
+      stream.paneRead(IDLE)
+      await at(25)
+      stream.paneRead(RUNNING)
+      await at(50)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+      await at(55)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    })
+
+    it('a Gateway that is only slow writes the session within 30 s', async () => {
+      const { path, db } = store()
+      const { stream, onSessionMissing } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(20)
+      stream.paneRead(RUNNING)
+      db.exec(fixture('plain'))
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).not.toHaveBeenCalled()
+    })
+
+    it('it clears once the store shows the session', async () => {
+      const { path, db } = store()
+      const { stream, onSessionMissing, onSessionFound } = await watch(path)
+      stream.paneRead(RUNNING)
+      await at(30)
+      stream.paneRead(RUNNING)
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+      db.exec(fixture('plain'))
+      await at(31)
+      stream.paneRead(RUNNING)
+      expect(onSessionFound).toHaveBeenCalledOnce()
+      await at(65)
+      stream.paneRead(RUNNING)
+      expect(onSessionFound).toHaveBeenCalledOnce()
+      expect(onSessionMissing).toHaveBeenCalledOnce()
+    })
   })
 })

@@ -289,6 +289,19 @@ describe('forking an agent', () => {
     expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ defaultName: 'Builder 2' })
   })
 
+  it('a fork of an OpenClaw agent keeps its handoff for typing', async () => {
+    const realPlan = await vi.importActual<typeof import('../../lib/forkAgent.js')>('../../lib/forkAgent.js')
+    const realLaunch = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
+    vi.mocked(planFork).mockImplementationOnce(realPlan.planFork)
+    // The argv the pane really gets, without the install step whose recipe this spec stubs.
+    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => realLaunch.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+    const { fork } = setup(source({ engine: 'openclaw', sessionId: 'agent:main:harness-a1' }))
+    expect(await fork({ agentId: 'a1', name: null, prompt: 'next' })).toMatchObject({ level: 'handoff' })
+    const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+    expect(pane.firstTask).toEqual(expect.stringContaining('next'))
+    expect(pane.argv.some(arg => arg.includes(pane.firstTask!))).toBe(false)
+  })
+
   it('forks an agent with no session from what little it has, and opens a native fork with no first prompt', async () => {
     const { deps, fork } = setup(source({ sessionId: '', transcriptPath: undefined } as Partial<RegisteredSession>))
     await fork({ agentId: 'a1', name: null, prompt: null })
