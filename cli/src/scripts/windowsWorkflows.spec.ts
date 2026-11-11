@@ -56,7 +56,14 @@ describe('the Windows release workflows', () => {
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)
     expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]/)
     expect(release).not.toMatch(/METADATA_PATH=harness\/pty\/metadata\.json/)
-    expect(release).not.toContain('upload-install-ps1.sh --production')
+    // The production installer goes up only in promote-pty, after the host it installs, and only for the live CLI's
+    // version: never on a tag push.
+    const promote = release.match(/\n  promote-pty:\n[\s\S]*?(?=\n  [a-z][a-z-]*:\n)/)?.[0] ?? ''
+    expect(release.split('bash cli/scripts/upload-install-ps1.sh --production')).toHaveLength(2)
+    expect(promote).toContain('bash cli/scripts/upload-install-ps1.sh --production')
+    expect(promote.indexOf('upload-install-ps1.sh --production')).toBeGreaterThan(promote.indexOf('bash cli/scripts/promote-pty-payload.sh'))
+    expect(promote).toContain('if [ "$live" != "$VERSION" ]; then')
+    expect(promote).toContain('cmp cli/scripts/install.ps1 "$RUNNER_TEMP/install.ps1"')
   })
 
   it('lets the Node runtime workflow write only a runtime manifest, and fail plainly when the read-back is not served', () => {
