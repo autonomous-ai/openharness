@@ -37,6 +37,16 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
   const api = { ...base, account: { ...base.account, backend: async (method: string, path: string, body?: unknown) => {
     await ready()
     return base.account.backend(method, path, body)
+  } },
+  // An agent's last turn as its engine wrote it, which the core reads (core/experimentQueries.ts `last_turn`): the host asks it after a
+  // restart that cut a message off in the middle of typing, to type it again only if the agent did not take it (superTabs/host.ts).
+  // An answer that says no turn is null; one that says nothing it can read is a failure, which the host reads as unknown.
+  transcripts: { ...base.transcripts, lastTurn: async (sessionId: string) => {
+    const { turn } = await ask('last_turn', { sessionId })
+    if (turn === null) return null
+    const { userMessage, assistantText } = (turn ?? {}) as Record<string, unknown>
+    if (typeof userMessage !== 'string' || typeof assistantText !== 'string') throw new Error('The core did not say the last turn.')
+    return { userMessage, assistantText }
   } } }
   const ports = emptyPorts()
   const requests = (options.start ?? startSuperTabs)(api, ports)
