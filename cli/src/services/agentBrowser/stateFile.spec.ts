@@ -33,6 +33,15 @@ describe('StateFile', () => {
     expect(readFileSync(path, 'utf8')).toBe(before)
   })
 
+  it('a file with no told reads as nobody told, and update keeps a told it does not know', () => {
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings }, deleting: [], setup: null }))
+    const file = new StateFile(path)
+    expect(file.read().told?.a1).toBeUndefined()
+    file.update(s => { s.told = { a1: true } })
+    file.update(s => { s.deleting.push('a2') })
+    expect(file.read()).toEqual({ browsers: { a1: settings }, deleting: ['a2'], setup: null, told: { a1: true } })
+  })
+
   it('a file that cannot be parsed throws state_unreadable and is not rewritten', () => {
     for (const broken of ['{"browsers": {', '[]', '{"browsers": {}, "deleting": "a1", "setup": null}']) {
       writeFileSync(path, broken)
