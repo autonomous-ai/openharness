@@ -1856,11 +1856,13 @@ export class SuperTabHost {
     const body = `${String(message.text)}${files ? `${message.text ? '\n\n' : ''}${files}` : ''}`
     // Swarm v4 (anh Dee 2026-11-08): one plain message, the way lampOS's agents wrote to each other: who, then the text.
     const said = (otherAccount ? OTHER_ACCOUNT : '') + `@${shownName(message.author, 'someone')}, to you:\n${body}`
-    // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation. Nor
-    // does what GitHub said to it (backend githubRelay.ts), which its person's Harness relays under their name: typed as it came,
-    // it is answered on GitHub. Typed as theirs, with where it was and how to answer in the chat, it read as words its person
-    // never wrote ("@Dee, to you: New task for you on GitHub ...", anh Dee, 2026-11-11: "what are those extra verbose things").
-    if (source.kind === 'agent-only' || source.kind === 'github') return String(message.text)
+    // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.
+    if (source.kind === 'agent-only') return String(message.text)
+    // Nor does what GitHub said to it (backend githubRelay.ts), which its person's Harness relays under their name, its words
+    // opening with where on GitHub and who: typed as it came, it is answered on GitHub. Typed as theirs, with where it was and how
+    // to answer in the chat, it read as words its person never wrote ("@Dee, to you: New task for you on GitHub ...", anh Dee,
+    // 2026-11-11: "what are those extra verbose things").
+    if (source.kind === 'github') return body
     // A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless
     // that is the poster (#2963, #3038). So --to is for an agent that must act or answer; the coordinator is named only when it
     // is needed, and the reader's status (work.status) is how it hears the work. A reply to an agent that asked something is
