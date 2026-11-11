@@ -3,7 +3,8 @@
  *
  * The first plan is list scheduling: tasks by weight, then by how much work waits behind them (the critical path, which
  * bounds how soon everything can end), then by when they are ready; each goes to the builder and model where it ends
- * soonest, the cheaper on a tie. Local search then moves one thing at a time (a task to another builder or model, with or
+ * soonest, the cheaper on a tie (its model's cost, and its spend of its subscription's windows at their prices, as the
+ * plan's score counts them). Local search then moves one thing at a time (a task to another builder or model, with or
  * without a new place in the order, two tasks' places, a task to another place, two tasks' builders) and keeps a move by
  * simulated annealing: always when the plan is better, sometimes when it is a little worse, less often as it goes on, so it
  * leaves a local best. It runs as four chains, the first from the list plan and the others from list plans of shuffled
@@ -76,8 +77,9 @@ export function solve(problem: Problem, options: SolveOptions = {}): Solved {
   return { plan: bestPlan, choice: best, iterations: tried, first }
 }
 
-/** List scheduling: in priority order, each task where it ends soonest given those before it, the cheaper on a tie. With
- *  [random], the priorities are shuffled a little first, for another chain's start. */
+/** List scheduling: in priority order, each task where it ends soonest given those before it, the cheaper on a tie (its
+ *  model's cost, and what it spends of its subscription's windows at their prices). With [random], the priorities are
+ *  shuffled a little first, for another chain's start. */
 export function firstChoice(problem: Problem, choices: Map<string, Option[]>, random?: () => number): Choice {
   const order = priorityOrder(problem)
   if (random) for (let i = order.length - 1; i > 0; i--) {
@@ -94,10 +96,12 @@ export function firstChoice(problem: Problem, choices: Map<string, Option[]>, ra
     let best: { option: Option; end: number; cost: number; span: { start: number; end: number } } | null = null
     for (const option of choices.get(id) ?? []) {
       const span = timeline.earliest(task, option.builder, option.mode)
-      if ('why' in span) continue
+      // One that ends later is never taken: its cost is not counted.
+      if ('why' in span || (best && span.end > best.end)) continue
       const mode = builders.get(option.builder)!.modes[option.mode]!
-      const cost = mode.cost * (span.end - span.start) + (task.queuedOn && task.queuedOn !== option.builder ? (problem.switchCost ?? 15) : 0)
-      if (!best || span.end < best.end || (span.end === best.end && cost < best.cost)) best = { option, end: span.end, cost, span }
+      const cost = mode.cost * (span.end - span.start) + timeline.priceFor(task, option.builder, option.mode, span)
+        + (task.queuedOn && task.queuedOn !== option.builder ? (problem.switchCost ?? 15) : 0)
+      if (!best || span.end < best.end || cost < best.cost) best = { option, end: span.end, cost, span }
     }
     const pick = best?.option ?? choices.get(id)?.[0]
     if (pick) { choice.builder[id] = pick.builder; choice.mode[id] = pick.mode }
