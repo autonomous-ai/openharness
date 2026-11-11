@@ -1134,6 +1134,39 @@ void main() {
       expect(PersonalProjects.of(team.app).hidden(tc, 'lead'), isFalse);
     });
 
+    // Personal is its person's alone: they own it, and still see no Invite people there (review of #4067).
+    testWidgets('Personal shows no Invite people, though its person owns it', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      expect(c.isOwner, isTrue);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 260,
+              child: ProjectSidebar(
+                controller: c,
+                app: f.app,
+                onSelect: c.select,
+                onInvite: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Invite people'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    });
+
     testWidgets('the list leaves it out, but keeps it while its chat is open', (
       tester,
     ) async {

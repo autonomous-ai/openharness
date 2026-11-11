@@ -42,6 +42,18 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(head.data.invitations).toEqual([])
   })
 
+  // anh Dee 2026-11-11 (removedPanes.ts): the sessions a person took out of the Swarm are theirs alone to read, until they lapse.
+  it('sends a person\'s records of the sessions they took out to them alone', () => {
+    const { s } = scene()
+    s.edit(state => { state.people.find(p => p.id === peer.userId)!.removedPanes = [{ machineId: 'mac', harnessId: 'h1', removedAt: NOW }] })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const member = (reader: Actor, now = NOW) => readerView(parts, reader, now, {}).parts.members.find(m => m.key === peer.userId)!.data
+    expect(member(peer).removedPanes).toEqual([{ machineId: 'mac', harnessId: 'h1', removedAt: NOW }])
+    expect(member(owner)).not.toHaveProperty('removedPanes')
+    expect(member(agentActor(s.worker))).not.toHaveProperty('removedPanes')
+    expect(member(peer, NOW + 30 * 24 * 60 * MINUTE)).not.toHaveProperty('removedPanes')
+  })
+
   it('shows invitations and the private project only to those who may read them', () => {
     const { s, parts } = scene()
     s.run({ type: 'invite.create', email: 'new@example.com', role: 'viewer', conversationId: 'lead' })

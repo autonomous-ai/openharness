@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/swarm_layout.dart';
+import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -102,6 +103,21 @@ void main() {
     },
   );
 
+  // anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible".
+  testWidgets(
+    'Invite people, in the left pane, opens the Swarm\'s people for its owner',
+    (tester) async {
+      await show(tester);
+      await tester.tap(find.text('Invite people'));
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(SwarmSharingDialog), findsOneWidget);
+      // The owner's own form, where an invitation is made.
+      expect(find.byKey(const Key('swarm-invite-email')), findsOneWidget);
+    },
+  );
+
   testWidgets('a long message in an agent\'s chat shows whole, with no More', (
     tester,
   ) async {
@@ -193,9 +209,12 @@ void main() {
       await tester.tap(key('swarm-tasks-button'));
       await tester.pumpAndSettle();
       expect(key('swarm-task-board'), findsOneWidget);
-      // One GraphQL read for the board, of the project's repository.
-      expect(calls.first.take(2), ['api', 'graphql']);
-      expect(calls.first, containsAll(['owner=autonomous-ai', 'name=lampOS']));
+      // One GraphQL read for the board, of the project's repository. The bar reads the project's goal before it, over
+      // REST as the daemon does.
+      final board = calls.firstWhere((call) => call.contains('graphql'));
+      expect(board.take(2), ['api', 'graphql']);
+      expect(board, containsAll(['owner=autonomous-ai', 'name=lampOS']));
+      expect(calls.first.last, endsWith('/contents/agents/GOAL.md'));
       Finder inBoard(Finder f) =>
           find.descendant(of: key('swarm-task-board'), matching: f);
       // Three columns: nobody has it, it is for an agent, someone is on it.
