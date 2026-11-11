@@ -22,11 +22,15 @@
 // is very soon.
 //
 // WHAT COUNTS AS "IT RUNS" is a judgement, not a formality. Call it once the display is up and the USB
-// link has been started: that is everything needed for the dial to be FIXABLE again — it can draw, and
-// the daemon can reach it to offer another image. Waiting for something further out, a `welcome` say,
-// would roll a perfectly good image back because nobody had a daemon running yet, and an idle cable is
-// this device's resting state rather than a fault.
-void fw_mark_valid(void);
+// link has been started (or failed to): that is everything needed for the dial to be FIXABLE again — it
+// can draw, and the daemon can reach it to offer another image. Waiting for something further out, a
+// `welcome` say, would roll a perfectly good image back because nobody had a daemon running yet, and an
+// idle cable is this device's resting state rather than a fault.
+//
+// link_started false on a fresh install rolls back and reboots into the previous image: a new image that
+// cannot open the cable could never be replaced over it. On any other boot it does nothing, and a dial
+// with no link keeps running and says so on screen.
+void fw_confirm_boot(bool link_started);
 
 // An image the daemon is offering. Answering is optional: declining is simply not answering, and the
 // daemon offers again on the next `hello`.
