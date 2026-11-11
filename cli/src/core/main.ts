@@ -845,9 +845,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const ports = emptyPorts()
   // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts),
-  // attached again on any look at its running agent that finds it left out (`observed`, from discovery), and turned on
-  // and off by its person through the core (`CoreApi.agents.setBrowser`), so it is made before the core API.
-  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser, registry)
+  // attached again on any look at its running agent that finds it left out (`observed`, from discovery), turned on
+  // and off by its person through the core (`CoreApi.agents.setBrowser`), and moved with its pane to the agent that
+  // takes it (`taken`, from discovery; `CoreApi.agents.moveBrowser`), so it is made before the core API.
+  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser, registry, stoppedAgents)
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
   // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
   // answer it sends a device are here (core/wifi.ts). Its doors are the calls it made when it ran here.
@@ -1036,8 +1037,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
     // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
-    // The person's Start and Stop of an agent's browser, which the agent browser asks of the core.
+    // The person's Start and Stop of an agent's browser, which the agent browser asks of the core; and its flag, moved
+    // with its pane once the agent browser moved its entry.
     setBrowser: agentBrowsers.set,
+    moveBrowser: agentBrowsers.move,
     // The process a pane runs, as `terminal_info` reads it: `harness browser`'s parents are held to it (`agents.ofPane`).
     panePid: (session) => {
       const runtime = primaryRuntime(session)
@@ -2001,6 +2004,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     registry,
     attachDsh,
     attachBrowser: agentBrowsers.observed,
+    moveBrowser: agentBrowsers.taken,
     forgetSession,
     announceSession,
     bindObservedAgent,

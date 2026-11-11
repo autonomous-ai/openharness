@@ -3,13 +3,15 @@
  * process (services/agentBrowser.ts). Podman's calls and its event stream, image builds that run for minutes and a
  * setup that waits on a password dialog all cost this process, never the core.
  *
- * The core tells it what happens to agents (`service_event` `attached`, `stopped`, `deleted`) and reads each browser's
- * state from what this process last told it (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it.
+ * The core tells it what happens to agents (`service_event` `attached`, `stopped`, `deleted`, and `moved`: a pane whose
+ * agent ended has a new one, decision 19) and reads each browser's state from what this process last told it
+ * (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it.
  * It asks the core for what only the core knows: its agents' ids (`agent_ids`), the agent of a pane and whether it is a
  * guest's, held to the parents of the command that names it (`agent_of_pane`), and to hand on a product counter
- * (`count`). It asks the core to turn an agent's Browser on or off, its person's Start and Stop (`set_browser`): the core
- * tells it `attached` or `stopped` before it answers. And it has the core type its two lines into an agent (`deliver`,
- * services/turnsLink.ts), and hears what became of them.
+ * (`count`). It asks the core to turn an agent's Browser on or off, its person's Start and Stop (`set_browser`), and to
+ * move the flag after a browser it moved to a pane's new agent (`move_browser`): the core tells it `attached` or
+ * `stopped` before it answers. And it has the core type its two lines into an agent (`deliver`, services/turnsLink.ts),
+ * and hears what became of them.
  */
 import type { BrowserSwitch, CoreApi, CorePorts } from '../core/api.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -24,7 +26,8 @@ type Ask = (query: string, payload: Payload) => Promise<Payload>
 
 // The service's start waits on this before it deletes anything; no answer in time is no answer.
 const IDS_TIMEOUT_MS = 10_000
-// The core switches in the same turn it is asked: a person's Start or Stop it does not answer in this is a failed one.
+// The core switches in the same turn it is asked: a person's Start or Stop, or a move, it does not answer in this is a
+// failed one.
 const SWITCH_TIMEOUT_MS = 10_000
 // The core reads the pane's process from tmux within 2 s. An agent's command waits on this answer: a core that does not
 // give it in time names no agent, and the command is refused rather than left hanging.
@@ -80,6 +83,11 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: Retur
         if (!answer) throw new Error('the core gave no answer for the switch')
         return answer
       },
+      moveBrowser: async (from, to) => {
+        const answer = switchOf(await within(SWITCH_TIMEOUT_MS, ask('move_browser', { from, to })))
+        if (!answer) throw new Error('the core gave no answer for the move')
+        return answer
+      },
     },
     // A count the core cannot take now is lost: counters are measures, never state.
     count: (metric: ProductUsageMetric) => { void ask('count', { metric }).catch(() => {}) },
@@ -116,6 +124,11 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       if (deliveries.heard(payload)) return
       if (payload.kind === 'attached') {
         if (isSession(payload.session)) port.attached(payload.session)
+        return
+      }
+      if (payload.kind === 'moved') {
+        const { from, session, on } = payload
+        if (typeof from === 'string' && from && isSession(session) && typeof on === 'boolean') port.moved(from, session, on)
         return
       }
       if (typeof payload.agentId !== 'string' || !payload.agentId) return

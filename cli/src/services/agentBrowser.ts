@@ -10,6 +10,13 @@
  * the person asked, and comes back with its agent while the flag is on. The agent learns of it from two lines typed
  * into it (agentBrowser/notices.ts): when its person's Start is ready, and at its person's Stop.
  *
+ * The browser moves with its pane (decision 19): when a new agent takes the pane its previous agent ended in, the core
+ * tells this port both ids (`moved`). The entry and its profile go to the new agent in both agents' queues
+ * (agentBrowser/browsers.ts `move`), and then the core is asked to move the flag (`CoreApi.agents.moveBrowser`, the
+ * process's `move_browser`), which attaches the new agent: its browser starts on the same volume and it is typed the
+ * ready line. Every name in Podman comes from the entry's profile, so the stream and the tool server exec into the
+ * container the profile names.
+ *
  * The agent drives it with `harness browser <command>` from its own pane (`agent_browser_run`, from this computer only):
  * the core proves the pane and names its agent, and the command runs on that agent's tool server, which this service
  * holds while the browser is ready (agentBrowser/toolServers.ts), one at a time. A command never starts or stops a
@@ -26,7 +33,7 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -115,6 +122,7 @@ function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
     attached: () => {},
     stopped: () => {},
     deleted: () => {},
+    moved: () => {},
     frameContext: () => undefined,
     streamCommand: () => ({ error: 'NO_BROWSER' }),
     onCloseViewers: () => {},
@@ -138,8 +146,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
 
   const containers = new Containers(podman, daemonId, log)
   const notices = new Notices({ state, turns: core.turns, measure: count, log })
-  // podman.spawn pipes all three: the child's stdin and stdout are there.
-  const toolServers = new ToolServers({ spawn: agentId => podman.spawn(containers.execArgs(agentId, TOOL_SERVER)) as ToolChild, log })
+  // podman.spawn pipes all three: the child's stdin and stdout are there. Only a ready browser's is started, and a
+  // ready browser has an entry, so a profile; a state file that cannot be read is a tool server that cannot start.
+  const toolServers = new ToolServers({ spawn: agentId => podman.spawn(containers.execArgs(browsers.profile(agentId)!, TOOL_SERVER)) as ToolChild, log })
   /** The commands an agent may run: the tools of `browser-tools.json`, by the name `harness browser` gives them. */
   const tools: ReadonlySet<string> = new Set(browserTools().tools.map(tool => tool.name))
   /**
@@ -186,6 +195,27 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   }
   const hasBrowser = (agentId: string) => attached.has(agentId) || listed(agentId) === true
 
+  /**
+   * [to] took the pane [from] ended in (decision 19). A move that fails is said once, by its name only: the state file
+   * could not be read or written (both agents as they were), or the core refused or did not answer (the entry is the
+   * new agent's, and its Start finds the logins). Nothing is started here: the core's `attached` starts it.
+   */
+  const move = async (from: string, to: string, on: boolean): Promise<void> => {
+    const failed = (why: string) => log(`agent browser ${to}: browser_move_failed (${why})`)
+    let moved: boolean
+    try {
+      moved = await browsers.move(from, to)
+    } catch (error) {
+      return failed(error instanceof PodmanError ? error.state : 'state_unwritable')
+    }
+    // No entry, or one of [to]'s own; or no flag to move.
+    if (!moved || !on) return
+    let answer: BrowserSwitch | null = null
+    try { answer = await core.agents.moveBrowser!(from, to) } catch { /* named below */ }
+    if (!answer) failed('no_answer')
+    else if ('error' in answer) failed(answer.error.toLowerCase())
+  }
+
   let begun = false
   let stopped = false
   let events: { close(): void; wake(): void } | null = null
@@ -228,13 +258,23 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       attached.delete(agentId)
       void browsers.delete(agentId)
     },
+    // A move never begins Podman's watch: with no state file there is no entry, and it ends at one read.
+    moved(from, to, on) {
+      // The agent that ended is typed nothing more, and keeps no browser.
+      notices.ended(from)
+      attached.delete(from)
+      void move(from, to.agentId, on)
+    },
     frameContext: agentId => browsers.state(agentId),
     streamCommand(agentId) {
       const shown = browsers.state(agentId)
       if (!shown) return { error: 'NO_BROWSER' }
       if (shown.state !== 'ready') return { error: 'NOT_READY' }
+      // A ready browser has an entry, so a profile; one whose state file cannot be read now has no stream to open.
+      let profile: string
+      try { profile = browsers.profile(agentId)! } catch { return { error: 'NOT_READY' } }
       // Ready means Podman was found: it started this container.
-      return { argv: podman.argv(containers.execArgs(agentId, VNC_PIPE)) }
+      return { argv: podman.argv(containers.execArgs(profile, VNC_PIPE)) }
     },
     onCloseViewers: listener => { viewerListeners.push(listener) },
     stop() {

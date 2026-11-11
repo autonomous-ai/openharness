@@ -3,7 +3,9 @@
  * registry. A process no row owns opens an agent; a row's own process updates it (runtimes, identity,
  * permissions, profile homes, DSH), gives it back its DSH and a browser its person left on, and wakes a
  * dormant one; a row whose engine exited keeps its conversation or goes dormant; a row whose pane is gone
- * is removed, unless restore never ran.
+ * is removed, unless restore never ran. A new agent that takes the pane its previous agent ended in (an
+ * engine typed into the shell an exit left, or a process opened over a bound agent) takes that agent's
+ * browser with the pane (decision 19).
  *
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
@@ -32,6 +34,9 @@ export interface DiscoveryDeps {
   attachDsh: (session: RegisteredSession) => void
   /** The agent browser's look at a running agent whose Browser is on (agents/lifecycle.ts `observed`). */
   attachBrowser: (session: RegisteredSession) => void
+  /** [to] took the pane [from] ended in, whose Browser was [on]: its browser goes with the pane (agents/lifecycle.ts
+   *  `taken`). */
+  moveBrowser: (from: string, to: RegisteredSession, on: boolean) => void
   forgetSession: (id: string, opts?: { force?: boolean; agentId?: string }) => void
   announceSession: (session: RegisteredSession) => void
   bindObservedAgent: (observed: DiscoveredTerminalAgent) => Promise<void>
@@ -43,7 +48,7 @@ export interface DiscoveryDeps {
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   stopHeartbeat: (sessionId: string) => void
   retainExitedSession: (agent: RegisteredSession, announce: boolean) => void
-  stoppedAgents: Pick<StoppedAgentStore, 'finishResume' | 'list' | 'remove' | 'resumeReservedAt'>
+  stoppedAgents: Pick<StoppedAgentStore, 'finishResume' | 'get' | 'list' | 'remove' | 'resumeReservedAt'>
   /** The app: a terminal row that gave its pane back to an archived harness is gone, and names it as its successor. */
   send: (frame: { type: string; payload: Record<string, unknown> }) => void
   /** Whether restore did not get to this agent this boot (it did not run, or could not look at its row):
@@ -54,7 +59,7 @@ export interface DiscoveryDeps {
 }
 
 export function createDiscoveryHandlers({
-  registry, attachDsh, attachBrowser, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
+  registry, attachDsh, attachBrowser, moveBrowser, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
   stoppedAgents, send, restoreDegraded, terminals,
 }: DiscoveryDeps) {
@@ -82,6 +87,20 @@ export function createDiscoveryHandlers({
       && sameProcessIdentity(saved.processIdentity, observed.processIdentity)
       && saved.runtimes.some((runtime) => terminal.runtimes.some((own) => sameTerminalPlacement(runtime, own)))
       && stoppedAgents.resumeReservedAt(saved.agentId) === null)
+  }
+  /**
+   * The agent the shell an exit left named ([previous]) has a new agent, [adopted], in its pane: the browser goes with
+   * the pane, with the flag its saved record kept. Not while a resume of it is under way (its browser comes back with
+   * it), and not once it is purged.
+   */
+  const paneTaken = (previous: string, adopted: RegisteredSession): void => {
+    if (stoppedAgents.resumeReservedAt(previous) !== null) return
+    let saved: RegisteredSession | null
+    try { saved = stoppedAgents.get(previous) } catch (error) {
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes no browser: ${error instanceof Error ? error.message : error}`)
+      return
+    }
+    if (saved) moveBrowser(previous, adopted, saved.browser === true)
   }
   /**
    * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
@@ -125,6 +144,8 @@ export function createDiscoveryHandlers({
         force: true,
         agentId: opened.evicted.agentId,
       })
+      // A new agent in its pane takes its browser. After the forget, so its browser's stop comes first.
+      if (opened.isNew) moveBrowser(opened.evicted.agentId, opened.entry, opened.evicted.browser === true)
     }
 
     if (opened.isNew || launching) {
@@ -163,10 +184,13 @@ export function createDiscoveryHandlers({
     // same pane — and from here on is handled exactly like one the app launched: bound by its
     // hooks, watched for turns, listed on the dial. `adopted` makes the announce below
     // unconditional, since the engine changing is the one fact the app must not miss.
+    // The agent whose engine ended in this pane, read before the adopt takes it off the row.
+    const previous = current.previousAgentId
     const adopted = isTerminalEngine(current.engine) && !isTerminalEngine(observed.engine)
       ? registry.adoptEngine(current.agentId, observed.engine, observed.processIdentity)
       : null
     if (adopted) console.log(`[discovery] ${sid(current.agentId)} terminal → ${observed.engine} · ${observed.primaryRuntimeKey}`)
+    if (adopted && previous) paneTaken(previous, adopted)
     registry.updateRuntimes(current.agentId, observed.runtimes, observed.primaryRuntimeKey)
     registry.updateProcessIdentity(current.agentId, observed.processIdentity, observed.gateway, observed.grid)
     // The live argv is the truth about the bypass flag, and this is the one place every running

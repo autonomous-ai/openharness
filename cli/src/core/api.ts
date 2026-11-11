@@ -234,6 +234,11 @@ export interface CoreApi {
      *  (`AgentBrowserPort.attached`, `stopped`) in the same turn: the flag changes in the order the agent browser asks.
      *  Only a live agent that is not a guest's is turned on. Absent where the core is not asked it. */
     setBrowser?(agentId: string, on: boolean): Promise<BrowserSwitch>
+    /** The agent browser moved [from]'s entry to [to], the agent that took the pane [from] ended in, and [from]'s Browser
+     *  was on (decision 19): [from]'s flag is cleared and [to]'s is set, each where its row is, live or stopped; a live
+     *  [to] is attached in the same turn. Whole or not at all: it rejects with both flags as they were. Absent where the
+     *  core is not asked it. */
+    moveBrowser?(from: string, to: string): Promise<BrowserSwitch>
   }
   /** A fixed-name product counter (`GatewayPort.usageCounter`): no id, URL, host, reason or content. Absent where the
    *  core offers a service none. */
@@ -1096,9 +1101,12 @@ export interface AgentBrowserPort {
   stopped(agentId: string): void
   /** The agent was purged: its browser and its profile go. */
   deleted(agentId: string): void
+  /** The pane [from] ended in has a new agent, [to] (decision 19): [from]'s settings and profile go to [to], and then
+   *  the service asks `agents.moveBrowser`. [on]: [from]'s Browser was on. */
+  moved(from: string, to: RegisteredSession, on: boolean): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
   /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
-   *  `exec -i harness-browser-<id> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
+   *  `exec -i harness-browser-<profile> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
   streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
   /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
   onCloseViewers(listener: (agentId: string) => void): void
@@ -1109,9 +1117,10 @@ export interface AgentBrowserPort {
 export type BrowserSwitch = { ok: true; changed: boolean } | { error: 'NOT_RUNNING' | 'NOT_ALLOWED' }
 
 /** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream to open. A
- *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. */
+ *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. A move it
+ *  misses leaves the browser with the agent that ended, whose resume brings it back. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, streamCommand: { error: 'NO_BROWSER' }, onCloseViewers: undefined, stop: undefined,
+  attached: undefined, stopped: undefined, deleted: undefined, moved: undefined, frameContext: undefined, streamCommand: { error: 'NO_BROWSER' }, onCloseViewers: undefined, stop: undefined,
 }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
@@ -2058,6 +2067,9 @@ export interface CoreApiDeps {
   /** An agent's Browser turned on or off (core/agents/lifecycle.ts `createAgentBrowserLifecycle`), for `setBrowser`;
    *  absent, the core offers none. */
   setBrowser?: (agentId: string, on: boolean) => BrowserSwitch
+  /** A pane's browser's flag moved to its new agent (the same lifecycle's `move`), for `moveBrowser`; absent, the core
+   *  offers none. */
+  moveBrowser?: (from: string, to: string) => BrowserSwitch
   /** The process a session's pane runs, from its own terminal backend (`TerminalBackend.paneInfo`), or null: what
    *  `ofPane` holds a command's parents to. Absent, no pane is proven. */
   panePid?: (session: RegisteredSession) => Promise<number | null>
@@ -2101,7 +2113,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, panePid,
+  closeAgent, activityAt, resumeAgent, swarmAgents, setBrowser, moveBrowser, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -2166,6 +2178,7 @@ export function createCoreApi({
         return { agentId: session.agentId, guest: !!session.guest }
       },
       ...(setBrowser ? { setBrowser: async (agentId: string, on: boolean) => setBrowser(agentId, on) } : {}),
+      ...(moveBrowser ? { moveBrowser: async (from: string, to: string) => moveBrowser(from, to) } : {}),
     },
     ...(count ? { count } : {}),
     turns,
