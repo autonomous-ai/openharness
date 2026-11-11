@@ -22,7 +22,7 @@ signed in while the team works.
    for it. Press New Swarm. That first agent is the project's PM.
 2. **That person shares it.** Invite people, under the Swarm's name at the top of the left pane (or Manage ▸ Swarm ▸
    Manage people): a link, an email domain, or an invitation (accepted in Settings ▸ Tab invites). Only the Swarm's owner
-   shares it, and a Personal Swarm is never shared. People join the Swarm, not one project.
+   shares it; a Personal Swarm has no Invite people. People join the Swarm, not one project.
 3. **Each person adds their agents.** In Your Team: + for a new agent, or Attach for a Claude Code or Codex session
    already running. These build for each public project of the Swarm.
 
