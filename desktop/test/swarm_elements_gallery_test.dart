@@ -22,6 +22,7 @@ import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
+import 'package:harness/super_tabs/terminal_button.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -929,6 +930,27 @@ class _Gallery extends StatelessWidget {
               ),
             ],
           ),
+          // anh Dee, 2026-11-11: a terminal stuck on its person carries a red 1 on its button, as a notification does.
+          section('terminal-button', 'Terminal: at rest, and waiting on you', [
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  SwarmTerminalButton(
+                    stuck: false,
+                    selected: false,
+                    onPressed: () {},
+                  ),
+                  const SizedBox(width: 24),
+                  SwarmTerminalButton(
+                    stuck: true,
+                    selected: false,
+                    onPressed: () {},
+                  ),
+                ],
+              ),
+            ),
+          ]),
           // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
           // is not there.
           section('empty-row', 'Empty: a row', [

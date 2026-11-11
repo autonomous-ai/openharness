@@ -543,6 +543,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,
   Instructions, Terminal and Browser are one at a time: each closes the others.
+- **A stuck terminal** (`SwarmTerminalButton`, `super_tabs/terminal_button.dart`).
+  While an agent's terminal waits on its person, its chat bar's Terminal carries
+  a red `1` (`SuperTabCountBadge`) over its top right corner, as a notification
+  does, and its tooltip reads `Terminal · waiting on you`. Waiting is a question
+  on its screen, as its computer's daemon tells this Desktop, or a prompt its
+  computer has seen it sit on for 3 minutes (`SuperTabAgent.atPrompt`, the
+  backend's `alerting`). The badge is drawn only; the button is what is pressed.
 - **Browser in New agent** (`BrowserPill`, `browser/browser_pill.dart`). Swarm
   New agent alone, and never on the web build or on Windows, has a `Browser`
   pill after

@@ -161,6 +161,9 @@ class SuperTabAgent {
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      atPrompt =
+          row['alerting'] is List &&
+          (row['alerting'] as List).contains('prompt'),
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
@@ -185,6 +188,10 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
+
+  /// Whether its computer has seen its terminal sit on a prompt for 3 minutes: a question, a menu or a screen only its person
+  /// can answer (the Swarm host's terminal watch, cli superTabs/terminal.ts; the backend's `alerting`).
+  final bool atPrompt;
 
   /// A Product Manager's engine switch that is asked for and not yet
   /// done (backend `switchRequest`); null otherwise.
