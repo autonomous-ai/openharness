@@ -214,4 +214,110 @@ void main() {
       await end(tester, f);
     },
   );
+
+  testWidgets(
+    'closing an agent\'s terminal closes the view and leaves it running; '
+    'its session ending stops it, and Terminal then offers Resume',
+    (tester) async {
+      final f = await mountSwarm(
+        tester,
+        before: (f) {
+          f.connection.nativeSurface = true;
+          f.app.machineStates['m']!
+            ..terminalCapabilityAvailable = true
+            ..localEndpoint = LocalCliEndpoint(
+              computerId: 'fixture',
+              machineId: 'm',
+              wsUri: Uri.parse('ws://fixture.invalid'),
+              protocolVersion: 1,
+              terminalProtocolVersion: 3,
+            );
+          // Pip runs on this computer.
+          f.connection.native = {
+            'id': 'native-lead',
+            'name': 'Pip',
+            'engine': 'claude',
+            'status': 'running',
+            'sessionId': 'saved-native',
+            'createdAt': '2026-11-10T08:00:00.000Z',
+            'closeSupported': true,
+            'terminal': {'available': true},
+          };
+          f.app.machineStates['m']!.agents = [
+            Agent.fromJson(f.connection.native!),
+          ];
+          f.connection.server.state['agents'] = [
+            {
+              'id': 'pip',
+              'name': 'Pip',
+              'displayName': 'Pip',
+              'machineId': 'm',
+              'harnessId': 'native-lead',
+              'contributorId': 'owner',
+              'configuration': {'engine': 'claude'},
+              'kind': 'regular',
+              'chatId': 'agent-chat-pip',
+              'myAgent': true,
+            },
+          ];
+          (f.connection.server.state['conversations'] as List).add({
+            'id': 'agent-chat-pip',
+            'title': 'Pip',
+            'leadId': null,
+            'agentIds': ['pip'],
+            'archived': false,
+            'brief': '',
+            'checks': <dynamic>[],
+            'assignment': null,
+            'lastMessageSequence': 0,
+            'kind': 'agent-chat',
+          });
+        },
+      );
+      Agent pip() => f.app.machineStates['m']!.agents.single;
+      bool live() => f.app.panes.firstOrNull?.session?.streamId != null;
+      // Its person opens its chat from Your Team, then its terminal: the session is live.
+      await tester.tap(key('super-agent-pip'));
+      await until(
+        tester,
+        () => find
+            .byKey(const ValueKey('swarm-terminal-button'))
+            .evaluate()
+            .isNotEmpty,
+      );
+      await tester.tap(key('swarm-terminal-button'));
+      await until(tester, live);
+      expect(live(), isTrue);
+      expect(find.text('Resume'), findsNothing);
+      // Closing the terminal closes the view: nothing is stopped, and Pip runs on.
+      await tester.tap(key('swarm-terminal-button'));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_close'),
+        isEmpty,
+      );
+      expect(pip().isStopped, isFalse);
+      // Its terminal opens again on the same running session.
+      await tester.tap(key('swarm-terminal-button'));
+      await until(tester, live);
+      expect(find.text('Resume'), findsNothing);
+      // The session ends in its terminal (its person quits Claude Code): its computer lists it stopped, and Terminal
+      // offers Resume, which is the person's to press.
+      f.connection.native = {
+        ...f.connection.native!,
+        'status': 'stopped',
+        'terminal': {'available': false},
+      };
+      f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+      await until(tester, () => find.text('Resume').evaluate().isNotEmpty);
+      expect(pip().isStopped, isTrue);
+      expect(find.text('Resume'), findsOneWidget);
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_resume'),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+      await end(tester, f);
+    },
+  );
 }
