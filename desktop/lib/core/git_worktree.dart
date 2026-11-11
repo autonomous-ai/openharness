@@ -640,157 +640,191 @@ Future<String> prepareGitProject(
   final repository = trees.firstOrNull?.usable == true
       ? p.basename(trees.first.path)
       : p.basename(root.output);
-  final locals = await git([
-    'for-each-ref',
-    '--format=%(refname)',
-    'refs/heads',
-  ]);
-  final taken = locals.output.split('\n').toSet();
-  var branch = branchName ?? placeholderBranch(taken, random: random);
-  final madeUp = branchName == null || placeholder;
-  // The composer keeps the placeholder it drew, so a start that made it and
-  // was then cancelled leaves it taken for the next press. Nobody chose that
-  // name: take the next free number, as the CLI does (gitProject.ts).
-  if (madeUp && !existingBranch) {
-    final base = branch;
-    for (var suffix = 2; taken.contains('refs/heads/$branch'); suffix++) {
-      branch = '$base-$suffix';
-    }
-  }
-  if (existingBranch) {
-    if (!taken.contains('refs/heads/$branch')) {
-      throw const RepositoryCloneException(
-        'That branch is no longer available. Choose another branch.',
-      );
-    }
-    if (trees.any((tree) => tree.ref == 'refs/heads/$branch')) {
-      throw RepositoryCloneException(
-        '$branch is checked out in another worktree. Turn Worktree off to open it there.',
-      );
-    }
-  } else {
-    if (taken.contains('refs/heads/$branch')) {
-      throw RepositoryCloneException(
-        'A branch named $branch already exists. Choose another name.',
-      );
-    }
-    final format = await git(['check-ref-format', '--branch', branch]);
-    if (format.code != 0) {
-      throw RepositoryCloneException('$branch is not a valid branch name.');
-    }
-  }
-  late final String destination;
-  try {
-    final home = Directory(p.join(projectHome, 'worktrees'));
-    final parent = Directory(p.join(home.path, repository));
-    await parent.create(recursive: true);
-    // Spotlight would index every checkout again.
-    if (Platform.isMacOS) {
-      await File(p.join(home.path, '.metadata_never_index'))
-          .writeAsString('', flush: true)
-          .catchError((_) => File(''));
-    }
-    final leaf = worktreeFolderName(branch);
-    for (var attempt = 1; ; attempt++) {
-      if (attempt > 100) {
-        throw FileSystemException('No free worktree name', parent.path);
+  // One start at a time per repository: [taken] is read before the branch is
+  // made, so two at once could draw the same name, and Git refuses a second
+  // writer of .git/config rather than waiting for the first.
+  final destination = await _oneStartAtATime(
+    await _realPath(trees.firstOrNull?.path ?? root.output),
+    () async {
+      final locals = await git([
+        'for-each-ref',
+        '--format=%(refname)',
+        'refs/heads',
+      ]);
+      final taken = locals.output.split('\n').toSet();
+      var branch = branchName ?? placeholderBranch(taken, random: random);
+      final madeUp = branchName == null || placeholder;
+      // The composer keeps the placeholder it drew, so a start that made it and
+      // was then cancelled leaves it taken for the next press. Nobody chose that
+      // name: take the next free number, as the CLI does (gitProject.ts).
+      if (madeUp && !existingBranch) {
+        final base = branch;
+        for (var suffix = 2; taken.contains('refs/heads/$branch'); suffix++) {
+          branch = '$base-$suffix';
+        }
       }
-      final folder = p.join(
-        parent.path,
-        attempt == 1 ? leaf : '$leaf-$attempt',
-      );
-      // Directory.create accepts an existing directory; mkdir reserves the
-      // name exclusively, so concurrent starts never share a worktree.
-      final reservation = await reserveDirectory(folder);
-      if (reservation.exitCode == 0) {
-        destination = folder;
-        break;
+      if (existingBranch) {
+        if (!taken.contains('refs/heads/$branch')) {
+          throw const RepositoryCloneException(
+            'That branch is no longer available. Choose another branch.',
+          );
+        }
+        if (trees.any((tree) => tree.ref == 'refs/heads/$branch')) {
+          throw RepositoryCloneException(
+            '$branch is checked out in another worktree. Turn Worktree off to open it there.',
+          );
+        }
+      } else {
+        if (taken.contains('refs/heads/$branch')) {
+          throw RepositoryCloneException(
+            'A branch named $branch already exists. Choose another name.',
+          );
+        }
+        final format = await git(['check-ref-format', '--branch', branch]);
+        if (format.code != 0) {
+          throw RepositoryCloneException('$branch is not a valid branch name.');
+        }
       }
-      if (_diskFullMessage(reservation.stderr.toString())) {
-        throw const RepositoryCloneException(_worktreeDiskFull);
-      }
-      if (await FileSystemEntity.type(folder, followLinks: false) ==
-          FileSystemEntityType.notFound) {
-        throw FileSystemException('Could not create folder', folder);
-      }
-    }
-  } on FileSystemException catch (error) {
-    if ([28, 69, 122].contains(error.osError?.errorCode)) {
-      throw const RepositoryCloneException(_worktreeDiskFull);
-    }
-    throw const RepositoryCloneException(
-      'Could not create a worktree folder. Check folder permissions, then retry.',
-    );
-  } on ProcessException {
-    throw const RepositoryCloneException(
-      'Could not create a worktree folder. Check folder permissions, then retry.',
-    );
-  }
-  if (!existingBranch && remote != null && remote.branch == branch) {
-    // Single-branch clones need a tracking rule for this branch. Add only
-    // the selected branch, at Start, never while reading search results.
-    final key = 'remote.${remote.remote}.fetch';
-    final configured = await git(['config', '--get-all', key]);
-    final mappings = configured.output
-        .split('\n')
-        .map((ref) => ref.replaceFirst(RegExp(r'^\+'), ''));
-    if (!mappings.contains(remote.refspec.substring(1)) &&
-        !mappings.contains('refs/heads/*:refs/remotes/${remote.remote}/*')) {
-      final configured = await git(['config', '--add', key, remote.refspec]);
-      if (configured.code != 0) {
+      late final String destination;
+      try {
+        final home = Directory(p.join(projectHome, 'worktrees'));
+        final parent = Directory(p.join(home.path, repository));
+        await parent.create(recursive: true);
+        // Spotlight would index every checkout again.
+        if (Platform.isMacOS) {
+          await File(p.join(home.path, '.metadata_never_index'))
+              .writeAsString('', flush: true)
+              .catchError((_) => File(''));
+        }
+        final leaf = worktreeFolderName(branch);
+        for (var attempt = 1; ; attempt++) {
+          if (attempt > 100) {
+            throw FileSystemException('No free worktree name', parent.path);
+          }
+          final folder = p.join(
+            parent.path,
+            attempt == 1 ? leaf : '$leaf-$attempt',
+          );
+          // Directory.create accepts an existing directory; mkdir reserves the
+          // name exclusively, so concurrent starts never share a worktree.
+          final reservation = await reserveDirectory(folder);
+          if (reservation.exitCode == 0) {
+            destination = folder;
+            break;
+          }
+          if (_diskFullMessage(reservation.stderr.toString())) {
+            throw const RepositoryCloneException(_worktreeDiskFull);
+          }
+          if (await FileSystemEntity.type(folder, followLinks: false) ==
+              FileSystemEntityType.notFound) {
+            throw FileSystemException('Could not create folder', folder);
+          }
+        }
+      } on FileSystemException catch (error) {
+        if ([28, 69, 122].contains(error.osError?.errorCode)) {
+          throw const RepositoryCloneException(_worktreeDiskFull);
+        }
         throw const RepositoryCloneException(
-          'Could not set up branch tracking. Check Git permissions, then retry.',
+          'Could not create a worktree folder. Check folder permissions, then retry.',
+        );
+      } on ProcessException {
+        throw const RepositoryCloneException(
+          'Could not create a worktree folder. Check folder permissions, then retry.',
         );
       }
-    }
-  }
-  final result = await git(
-    existingBranch
-        ? ['worktree', 'add', '--', destination, branch]
-        // A remote branch checked out under its own name tracks it; a new
-        // branch from one must not, or it would push onto the base.
-        : remote != null && remote.branch == branch
-        ? [
-            'worktree',
-            'add',
-            '--track',
-            '-b',
-            branch,
-            '--',
-            destination,
-            branchRef!,
-          ]
-        : [
-            'worktree',
-            'add',
-            '--no-track',
-            '-b',
-            branch,
-            '--',
-            destination,
-            head.output,
-          ],
-    timeout: const Duration(minutes: 2),
+      if (!existingBranch && remote != null && remote.branch == branch) {
+        // Single-branch clones need a tracking rule for this branch. Add only
+        // the selected branch, at Start, never while reading search results.
+        final key = 'remote.${remote.remote}.fetch';
+        final configured = await git(['config', '--get-all', key]);
+        final mappings = configured.output
+            .split('\n')
+            .map((ref) => ref.replaceFirst(RegExp(r'^\+'), ''));
+        if (!mappings.contains(remote.refspec.substring(1)) &&
+            !mappings.contains(
+              'refs/heads/*:refs/remotes/${remote.remote}/*',
+            )) {
+          final configured = await git([
+            'config',
+            '--add',
+            key,
+            remote.refspec,
+          ]);
+          if (configured.code != 0) {
+            throw const RepositoryCloneException(
+              'Could not set up branch tracking. Check Git permissions, then retry.',
+            );
+          }
+        }
+      }
+      final result = await git(
+        existingBranch
+            ? ['worktree', 'add', '--', destination, branch]
+            // A remote branch checked out under its own name tracks it; a new
+            // branch from one must not, or it would push onto the base.
+            : remote != null && remote.branch == branch
+            ? [
+                'worktree',
+                'add',
+                '--track',
+                '-b',
+                branch,
+                '--',
+                destination,
+                branchRef!,
+              ]
+            : [
+                'worktree',
+                'add',
+                '--no-track',
+                '-b',
+                branch,
+                '--',
+                destination,
+                head.output,
+              ],
+        timeout: const Duration(minutes: 2),
+      );
+      if (result.code != 0) {
+        // A partial checkout or branch stays available for recovery.
+        throw RepositoryCloneException(
+          _diskFullMessage(result.errorOutput)
+              ? _worktreeDiskFull
+              : 'Could not create the worktree at $destination. Check Git and folder permissions, then retry.',
+        );
+      }
+      // Harness made this branch: its cleanup may remove it, and a made-up name
+      // gives way to the session's.
+      if (!existingBranch) {
+        await git([
+          'config',
+          'branch.$branch.$kHarnessBranchKey',
+          madeUp ? 'placeholder' : 'created',
+        ]);
+      }
+      return destination;
+    },
   );
-  if (result.code != 0) {
-    // A partial checkout or branch stays available for recovery.
-    throw RepositoryCloneException(
-      _diskFullMessage(result.errorOutput)
-          ? _worktreeDiskFull
-          : 'Could not create the worktree at $destination. Check Git and folder permissions, then retry.',
-    );
-  }
-  // Harness made this branch: its cleanup may remove it, and a made-up name
-  // gives way to the session's.
-  if (!existingBranch) {
-    await git([
-      'config',
-      'branch.$branch.$kHarnessBranchKey',
-      madeUp ? 'placeholder' : 'created',
-    ]);
-  }
   await _copyIncluded(root.output, destination, startProcess);
   return inside(destination);
+}
+
+final _repositoryStarts = <String, Future<void>>{};
+
+/// Runs [start] after every start already queued for the repository [key].
+Future<T> _oneStartAtATime<T>(String key, Future<T> Function() start) async {
+  final previous = _repositoryStarts[key];
+  final done = Completer<void>();
+  _repositoryStarts[key] = done.future;
+  try {
+    await previous;
+    return await start();
+  } finally {
+    done.complete();
+    if (identical(_repositoryStarts[key], done.future)) {
+      _repositoryStarts.remove(key);
+    }
+  }
 }
 
 /// Takes back a worktree [prepareGitProject] made for a start that was then

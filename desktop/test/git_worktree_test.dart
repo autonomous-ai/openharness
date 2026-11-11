@@ -219,6 +219,27 @@ void main() {
     expect(await git(['branch', '--show-current']), 'main');
   });
 
+  test('concurrent starts that draw the same name both start, each marked as Harness made it', () async {
+    Future<String> start() => prepareGitProject(
+      repo,
+      p.join(root.path, 'harnesses'),
+      worktree: true,
+      branchRef: 'refs/heads/feature',
+      random: _First(),
+    );
+    final paths = await Future.wait([start(), start()]);
+    final branches = [
+      for (final path in paths) await git(['branch', '--show-current'], path),
+    ];
+    expect(branches.toSet(), {'amber-badger', 'amber-badger-2'});
+    for (final branch in branches) {
+      expect(
+        await git(['config', '--get', 'branch.$branch.harness']),
+        'placeholder',
+      );
+    }
+  });
+
   test(
     'a subfolder follows the selected branch into its new worktree',
     () async {
