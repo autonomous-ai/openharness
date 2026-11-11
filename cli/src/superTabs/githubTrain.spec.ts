@@ -38,6 +38,9 @@ function fakeRepo(now: () => number) {
     settings: {} as Json,
     /** Answers a write in GitHub's place, which then changes nothing: a test refuses a call here. */
     answer: null as ((method: string, path: string) => Partial<GitHubReply> | undefined) | null,
+    /** Whether GitHub has marked as merged the pull requests whose commits a merge commit brought into main: it does so by
+     *  itself, a moment after the merge. A test holds it back here. */
+    marks: true,
     /** Runs before each merge into a train's branch: a test pushes onto the branch here. */
     beforeMerge: null as ((branch: string) => void) | null,
     sent: [] as Array<{ method: string; path: string; body: Json }>,
@@ -48,6 +51,13 @@ function fakeRepo(now: () => number) {
   }
   const tip = () => state.main.at(-1)!.sha
   const iso = () => new Date(now()).toISOString()
+  /** As GitHub does: every open pull request whose head main now holds, by a merge commit's second parents, is merged. */
+  const mark = () => {
+    if (!state.marks) return
+    const held = new Set<string>()
+    for (const commit of state.main) for (let at = state.parents.get(commit.sha)?.[1]; at; at = state.parents.get(at)?.[0]) { held.add(at); const second = state.parents.get(at)?.[1]; if (second) held.add(second) }
+    for (const pull of state.pulls.values()) if (pull.state === 'open' && held.has(pull.head.sha)) Object.assign(pull, { state: 'closed', merged_at: iso(), merge_commit_sha: pull.head.sha, updated: ++state.edits })
+  }
   const compare = (from: string, to: string): Json | null => {
     if (from === 'main') {
       const commit = state.commits.get(to)
@@ -122,8 +132,11 @@ function fakeRepo(now: () => number) {
       if (!pull || pull.state !== 'open' || !allowed) return reply(405)
       if (body.sha !== pull.head.sha) return reply(409)
       const landed = sha(`${tip()}#${number}`)
+      // A merge commit keeps the branch's commits under it; a squash is one commit on main's tip.
+      state.parents.set(landed, body.merge_method === 'merge' ? [tip(), pull.head.sha] : [tip()])
       state.main.push({ sha: landed, files: state.commits.get(pull.head.sha)?.files ?? [] })
       Object.assign(pull, { state: 'closed', merged_at: iso(), merge_commit_sha: landed, updated: ++state.edits })
+      mark()
       return reply(200, { merged: true, sha: landed })
     }
     if (method === 'POST' && /^\/issues\/\d+\/comments$/.test(p)) {
@@ -137,7 +150,7 @@ function fakeRepo(now: () => number) {
     if (method === 'DELETE' && p.startsWith('/git/refs/heads/')) return reply(state.branches.delete(p.slice('/git/refs/heads/'.length)) ? 204 : 422, null)
     return reply(404)
   }
-  return { state, get, send, tip }
+  return { state, get, send, tip, mark }
 }
 
 function setup() {
@@ -149,7 +162,7 @@ function setup() {
   const start = () => new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
     crew: async () => crew, get: repo.get, send: repo.send, now: () => clock.now, log })
   const f = {
-    state, log, clock, merger: start(),
+    state, log, clock, merger: start(), mark: repo.mark,
     /** A daemon restart: a new merger, which remembers nothing. */
     restart: () => { f.merger = start() },
     say: (number: number, body: string) => state.comments.set(number, [...state.comments.get(number) ?? [],
@@ -352,20 +365,22 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.writes(built)[0]).toBe('PUT /pulls/900/merge')
   })
 
-  it('lands pinned to the head its checks passed, squashed, closing the members\' issues, then tells and closes each member and deletes its branch', async () => {
+  // Squashed (as first built), a train's members were closed, not merged: to GitHub nobody shipped them, and the commit was the
+  // PM's person's (shippingRead.ts counts a pull request merged under its author's login). A merge commit brings each member's
+  // own commits into main, and GitHub marks each merged by itself.
+  it('lands pinned to the head its checks passed, as a merge commit, closing the members\' issues; tells each member, closes none (GitHub marks each merged), and deletes its branch', async () => {
     const f = setup()
     const a = f.add(4, { body: 'Closes #2' }), b = f.add(5, { body: 'What it does.\n\nFixes #7 and resolves: #9\nSee #11. Closes #2' })
     await f.settle()
     const train = f.train(), built = f.state.sent.length
     await f.ends(PASSED)
-    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'POST /issues/4/comments', 'PATCH /pulls/4', 'POST /issues/5/comments', 'PATCH /pulls/5',
-      `DELETE /git/refs/heads/${train.head.ref}`])
-    expect(f.state.sent[built]!.body).toEqual({ sha: train.head.sha, merge_method: 'squash', commit_title: 'Train: #4 #5',
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'POST /issues/4/comments', 'POST /issues/5/comments', `DELETE /git/refs/heads/${train.head.ref}`])
+    expect(f.state.sent[built]!.body).toEqual({ sha: train.head.sha, merge_method: 'merge', commit_title: 'Train: #4 #5',
       commit_message: '* Change 4 (#4)\n* Change 5 (#5)\n\nCloses #2\nCloses #7\nCloses #9' })
     const landed = f.state.main.at(-1)!
     expect(landed.files).toEqual(['cli/src/f4.ts', 'cli/src/f5.ts'])
     for (const pull of [a, b]) {
-      expect(pull.state).toBe('closed')
+      expect(pull).toMatchObject({ state: 'closed', merged_at: expect.any(String) })
       expect(f.said(pull.number)).toEqual([expect.stringMatching(new RegExp(
         `^Harness, \\d\\d:\\d\\d: landed in #900 as ${landed.sha.slice(0, 7)}\\. READ-OK on ${pull.head.sha.slice(0, 7)} by Juno, checks green\\.$`))])
     }
@@ -374,18 +389,43 @@ describe('a train waits for its own checks, then lands or is closed', () => {
   })
 
   it.each([
-    ['a merge commit where the repository allows no squash', { allow_squash_merge: false }, { merge_method: 'merge', commit_title: 'Train: #4 #5' }],
+    ['a squash where the repository allows no merge commit', { allow_merge_commit: false }, { merge_method: 'squash', commit_title: 'Train: #4 #5' }],
     ['a rebase, which takes no message, where it allows neither', { allow_squash_merge: false, allow_merge_commit: false }, { merge_method: 'rebase' }],
-  ])('lands with %s', async (_case, settings, sent) => {
+  ])('lands with %s, and closes each member itself: GitHub marks none merged', async (_case, settings, sent) => {
     const f = setup()
     f.state.settings = settings
-    f.add(4); f.add(5)
+    const a = f.add(4), b = f.add(5)
     await f.settle()
+    const built = f.state.sent.length, branch = f.train().head.ref
     await f.ends(PASSED)
     const merge = f.state.sent.find(s => s.method === 'PUT')!.body
     expect(merge).toMatchObject(sent)
     expect('commit_message' in merge).toBe(sent.merge_method !== 'rebase')
     expect(f.train()).toBeUndefined()
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'POST /issues/4/comments', 'PATCH /pulls/4', 'POST /issues/5/comments', 'PATCH /pulls/5', `DELETE /git/refs/heads/${branch}`])
+    for (const pull of [a, b]) expect(pull).toMatchObject({ state: 'closed', merged_at: null })
+  })
+
+  // GitHub marks a member merged a moment after the merge commit, not with it. Closed by Harness in between, it would stay
+  // closed and never read as merged; taken for a ready pull request, it would be carried again.
+  it('leaves alone a member GitHub has not yet marked merged: told once, never closed, and carried on no other train', async () => {
+    const f = setup()
+    f.add(4); const b = f.add(5)
+    await f.settle()
+    f.state.marks = false
+    await f.ends(PASSED)
+    expect(b).toMatchObject({ state: 'open', merged_at: null })
+    // To GitHub it may read as conflicting or as ready meanwhile: neither is acted on.
+    const landed = f.state.sent.length
+    for (const state of ['dirty', 'clean']) { b.mergeable_state = state; await f.settle() }
+    expect(f.writes(landed)).toEqual([])
+    expect(f.said(5)).toEqual([expect.stringContaining('landed in #900 as ')])
+    f.state.marks = true
+    f.mark()
+    await f.settle()
+    expect(b).toMatchObject({ state: 'closed', merged_at: expect.any(String) })
+    expect(f.writes(landed)).toEqual([])
+    expect(f.trains()).toHaveLength(1)
   })
 
   // No stored state: each release restarts the PM's daemon (seven on 2026-11-10), and the train it left open is read back.
@@ -627,8 +667,9 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.said(5)).toHaveLength(1)
   })
 
-  it('finishes on the next pass a landing whose close GitHub refused: each member told once, the merge not sent again', async () => {
+  it('finishes on the next pass a squashed landing whose close GitHub refused: each member told once, the merge not sent again', async () => {
     const f = setup()
+    f.state.settings = { allow_merge_commit: false }
     f.add(4); const b = f.add(5)
     await f.settle()
     const branch = f.train().head.ref
