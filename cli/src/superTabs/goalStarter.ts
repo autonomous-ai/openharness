@@ -112,7 +112,7 @@ export async function startGoal(cwd: string, git: (cwd: string, args: readonly s
   const head = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.replace(/^origin\//, '')
   const base = head && /^[\w./-]{1,200}$/.test(head) ? head : 'main'
   const files = [[GOAL_FILE, GOAL_TEXT], [GOAL_WORKFLOW, goalWorkflow(base)]] as const
-  // Both files' folders are looked at before either file is written, so the answer is never half of what was done.
+  // Both files' folders are looked at before either file is written: a link refuses the whole command, not its second half.
   for (const [path] of files) {
     for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) {
       if (lstatSync(join(root, folder), { throwIfNoEntry: false })?.isSymbolicLink()) return { ok: false, said: `${folder} is a link: nothing was written.` }

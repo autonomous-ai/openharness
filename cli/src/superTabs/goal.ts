@@ -10,7 +10,8 @@
  * checks it, in backticks. The repository's own CI runs each command on its main branch as a check named `goal: <milestone>`
  * (the workflow `harness super-tab goal` writes does, goalStarter.ts); Harness runs nothing. Here the file is read from the
  * default branch, and the checks from the newest of that branch's last landings on which every milestone's check has ended: a
- * milestone passes when its check concluded success there, fails when it concluded in failure, and waits otherwise. The
+ * milestone passes when its check concluded success there, fails when it concluded any other way that is a verdict (a failure, or cancelled as one that ran past its limit is), and waits
+ * otherwise. The
  * branch's tip has no run yet in the minutes after each landing, and never when it was pushed with `[skip ci]`: scored alone,
  * a goal read "0 of 60 pass, 60 wait" most of the time (its first review). A landing is a commit on the branch's first-parent
  * line: a train that lands as a merge commit brings its members' commits with it, which were never pushed to the branch and
