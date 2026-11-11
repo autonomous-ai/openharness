@@ -156,7 +156,8 @@ turn" was only a sentence. v4 says the opposite ("when you wait, end your turn")
 hours, and waits 2 hours on a reader.
 
 - When an agent's turn ends, Harness types its next thing at once, in lampOS's order: a message to it not yet
-  answered; a HOLD on its pull request; its pull request behind or red; a read it owes; its next task.
+  answered; a HOLD on its pull request; its pull request red, behind (a fork's only) or in conflict; a read it owes;
+  its next task.
 - What Harness knows is a state anyone can see: at a task, working, waiting on a build, waiting on its person, out of
   quota until a time, idle, not running.
 - A reader is asked only if it is running. No verdict in 30 minutes: another is asked.

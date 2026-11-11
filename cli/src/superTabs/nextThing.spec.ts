@@ -34,7 +34,7 @@ function setup(options: { items?: Json[]; working?: boolean | null; watched?: Wa
     // The team's builder labels, and who the backend recorded as each verdict comment's writer, by its id.
     team: new Set<string>(), recorded: {} as Record<number, string>, recordsDown: false }
   const pullOf = (number: number): Json => ({ number, state: 'open', draft: false, body: '', user: { login: 'dee' },
-    head: { sha: HEAD, ref: `pip/${number}` }, base: { ref: 'main' }, mergeable_state: 'clean', ...state.pulls[number] })
+    head: { sha: HEAD, ref: `pip/${number}`, repo: { full_name: 'acme/app' } }, base: { ref: 'main', repo: { full_name: 'acme/app' } }, mergeable_state: 'clean', ...state.pulls[number] })
   const listeners = new Set<(end: TurnEnd) => void>()
   const onEnd = vi.fn((listener: (end: TurnEnd) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } })
   const calls: string[] = []
@@ -165,20 +165,27 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
-  // The allocator's design (docs/design/2026-11-11-swarm-allocator), package 4: a branch only behind its base rides the train as
-  // it is (githubMerge.ts), so its builder is typed nothing of it.
-  it('says its checks failed at its head, then its branch conflicting with its base, each with the command that helps, and nothing of one only behind', async () => {
+  // The allocator's design (docs/design/2026-11-11-swarm-allocator), package 4: a branch of the repository's own that is only
+  // behind its base rides the train as it is (githubMerge.ts), so its builder is typed nothing of it. A fork's is typed to update,
+  // as every one was: the merger leaves it off the train, and says so on it.
+  it('says its checks failed at its head, then a fork\'s branch behind its base or any conflicting with it, each with the command that helps, and nothing of the repository\'s own only behind', async () => {
     const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
     f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }, { name: 'lint', status: 'completed', conclusion: 'success' }]
     f.next.start()
     await f.end()
     f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'success' }]
-    for (const mergeable of ['behind', 'dirty', 'clean']) {
-      f.state.pulls[30] = { mergeable_state: mergeable }
+    // Behind, as a branch of the repository's own: nothing more.
+    f.state.pulls[30] = { mergeable_state: 'behind' }
+    await f.end()
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    // Behind as a fork's, then in conflict, then clean.
+    for (const pull of [{ mergeable_state: 'behind', head: { sha: HEAD, ref: 'pip/30', repo: { full_name: 'pip/app' } } }, { mergeable_state: 'dirty' }, { mergeable_state: 'clean' }]) {
+      f.state.pulls[30] = pull
       await f.end()
     }
     expect(f.told()).toEqual([
       `Your acme/app#30 failed its checks at ${HEAD.slice(0, 7)}: ci/required. Fix them and push: gh pr checks 30 --repo acme/app`,
+      'Your acme/app#30 is behind main: merge main into it and push: git fetch origin main && git merge origin/main && git push',
       'Your acme/app#30 conflicts with main: merge main into it, fix the conflicts and push: git fetch origin main && git merge origin/main'])
     f.next.stop()
   })
@@ -554,7 +561,7 @@ describe('what waits for an agent, as harness super-tab inbox lists it (nextThin
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('lists its own pull requests\' HOLD and not a branch only behind, the reads it owes and the task it holds, and types nothing', async () => {
+  it('lists its own pull requests\' HOLD and not a branch of the repository\'s own only behind, the reads it owes and the task it holds, and types nothing', async () => {
     const f = setup({ items: [item(14, 'Tidy the docs', ['status:taken']), item(15, 'Next one'),
       { ...item(30, 'Fix the login bug', [], true), body: 'Closes #12' }, item(12, 'Fix the login bug', ['status:taken']),
       { ...item(31, 'Add the export', [], true), body: 'Closes #13' }, item(13, 'Add the export', ['status:taken'])] })

@@ -719,23 +719,6 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     }
   })
 
-  // The allocator's design (docs/design/2026-11-11-swarm-allocator), package 4: one only behind main rides a train as it is
-  // (githubTrain.spec.ts), so its author is told nothing. And it never merges on its own: here the compare reads it as holding
-  // main's tip while GitHub calls it behind, and its checks may have run on an older main.
-  it('says nothing to the author of a pull request GitHub calls behind main, and never merges it on its own', async () => {
-    const f = setup()
-    f.github.repo.state = 'behind'
-    await settle(f)
-    f.clock.now += 30_000
-    await f.merger.tick()
-    expect([...f.merges(), ...f.comments()]).toEqual([])
-    // GitHub calls it up to date: it merges as any other that is alone on main's tip.
-    f.github.repo.state = 'clean'
-    f.clock.now += 30_000
-    await f.merger.tick()
-    expect(f.merges()).toHaveLength(1)
-  })
-
   it('reads a refused merge again next pass and says nothing on the pull request', async () => {
     const f = setup()
     f.github.repo.mergeAnswer = 409
@@ -834,7 +817,6 @@ describe('the rule\'s parts', () => {
     expect(verdictOf(said(`Kai, 14:20: READ-OK ${HEAD}`, 'NONE'))).toBeNull()
     expect(verdictOf({})).toBeNull()
     const note = (words: string) => said(`Harness, 14:20, to **Pip**: not merged yet at ${HEAD.slice(0, 7)}: ${words}`)
-    // Said no more, and still read: the scoreboard counts the ones said before on changes that land later.
     expect(noteOf(note('it is behind main: update the branch and push.'))).toBe('behind')
     expect(noteOf(note('it conflicts with main: rebase it on main and push.'))).toBe('dirty')
     expect(noteOf(note('checks failed: unit. Fix them and push.'))).toBe('checks')

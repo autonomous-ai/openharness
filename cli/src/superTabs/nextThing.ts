@@ -9,13 +9,13 @@
  * When a turn of one of this computer's person's agents ends, and a few seconds on nothing else has set it working (a message
  * typed the moment it ended comes first), its project's repository is read as GitHub has it now: its open tasks and pull
  * requests labelled builder:<its name>, one read, a 304 when nothing changed. Its own work comes first, as lampOS's order has it:
- * for each pull request of its that is not a draft, a reader's HOLD on its head, then its checks failed at its head, then its
- * branch conflicting with its base, as the merger reads them (githubMerge.ts verdicts, checksOf, mergeable_state),
- * which the merger has said on the pull request once and GitHub news brought it, and it slept on. Then a task it took
- * (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed. Then the oldest task
- * given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness types does. The same
- * thing typed three times with no change (a push changes a pull request's head) goes to its person instead, once, and is not
- * typed a fourth time; the counts outlive a restart.
+ * for each pull request of its that is not a draft, a reader's HOLD on its head, then its checks failed at its head, then a
+ * fork's branch behind its base, then its branch conflicting with its base, as the merger reads them (githubMerge.ts verdicts,
+ * checksOf, mergeable_state), which the merger has said on the pull request once and GitHub news brought it, and it slept on.
+ * Then a task it took (status:taken) with no pull request of its yet, which is its own work to go on with: nothing is typed.
+ * Then the oldest task given to it and not taken. What it is typed ends with the command that answers it, as every ask Harness
+ * types does. The same thing typed three times with no change (a push changes a pull request's head) goes to its person
+ * instead, once, and is not typed a fourth time; the counts outlive a restart.
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -25,7 +25,7 @@ import { named } from './agentReplies.js'
 import { openPieces, readerKey, tasksOf } from './assign/crew.js'
 import { backLine, giveBack, labelNames } from './githubAssign.js'
 import type { WatchedAgent } from './githubMentions.js'
-import { checksOf, pullPeople, pullTalk, verdicts } from './githubMerge.js'
+import { checksOf, pullPeople, pullTalk, repoOf, verdicts } from './githubMerge.js'
 import { GitHubReads, GitHubStop, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { hhmm } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
@@ -268,10 +268,10 @@ export class NextThing {
   }
 
   /** What stands in the way of [number], a pull request of the agent's, that it fixes itself, the first of: a reader's HOLD on its
-   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, its branch conflicting
-   *  with its base. Not its branch only behind its base, which the train carries as it is (githubMerge.ts): typed to merge the
-   *  base in, a builder pushed a new head after every landing, for its checks to run again. Null for a draft, which is work
-   *  going on, and for one with none of them, or none known yet. */
+   *  head (one on an earlier head waits for its reader to read the push), its checks failed at its head, a fork's branch behind
+   *  its base, its branch conflicting with its base. Not a branch of the repository's own only behind its base, which the train
+   *  carries as it is (githubMerge.ts): typed to merge the base in, a builder pushed a new head after every landing, for its
+   *  checks to run again. Null for a draft, which is work going on, and for one with none of them, or none known yet. */
   private async ownWork(agent: WatchedAgent, repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
     const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
@@ -291,6 +291,11 @@ export class NextThing {
         typed: `Your ${repo}#${number} failed its checks at ${short}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
     }
     const state = String(pull.mergeable_state ?? '')
+    // A fork's only, which the merger leaves off the train and tells to update (githubMerge.ts mergeReady).
+    if (state === 'behind' && repoOf(pull.head) !== repoOf(pull.base)) {
+      return { kind: 'behind', head: short, what: `is behind ${base}`,
+        typed: `Your ${repo}#${number} is behind ${base}: merge ${base} into it and push: git fetch origin ${base} && git merge origin/${base} && git push` }
+    }
     if (state === 'dirty') {
       return { kind: 'dirty', head: short, what: `conflicts with ${base}`,
         typed: `Your ${repo}#${number} conflicts with ${base}: merge ${base} into it, fix the conflicts and push: git fetch origin ${base} && git merge origin/${base}` }

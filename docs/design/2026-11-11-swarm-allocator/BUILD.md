@@ -166,6 +166,12 @@ package 4 lets ride.
 
 ### 4. Behind is not a reason to rework
 
+**Built** (#NNNN): in `cli/src/superTabs/githubMerge.ts` and `nextThing.ts`, a branch of the repository's own that is
+only behind rides the train as it is, with nothing told or typed. *A fork's keeps the `behind` note and its typed line,
+and is not ready: ready, one whose head GitHub takes into no train would merge alone on its older checks or, refused
+there too, stop the repository's landings, a branch made and deleted on each try, with nobody told. The scoreboard's
+count of changes told they were behind is then of forks' only.*
+
 **Why.** Each landing puts every other change behind `main`; each is then told to update, rebuilds and runs CI again
 (its READ-OK carries over a plain update: `sameChange`). On this repository `main` took up to ten landings in an
 hour.

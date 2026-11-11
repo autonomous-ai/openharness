@@ -509,23 +509,39 @@ describe('the ready pull requests ride a train (githubTrain.ts)', () => {
     expect(f.writes().filter(w => w === 'POST /git/refs').length - before).toBeLessThan(6)
   })
 
-  // A fork's pull request GitHub does not take into a train merges on its own checks, as before the train. Not one GitHub calls
-  // behind main (the allocator's design, package 4): those checks ran on an older main, so that merge is never asked for,
-  // whatever GitHub would answer. This fake would merge it.
-  it('merges on its own no fork\'s pull request GitHub calls behind main, though GitHub takes its head into no train', async () => {
+  // A fork's pull request GitHub calls behind main keeps what every pull request had before the allocator's design, package 4:
+  // it is told once to update, and is not ready. Ready as a branch of this repository is, one whose head GitHub takes into no
+  // train was handed back to merge on its own, on checks that ran on an older main; and one GitHub takes neither way stopped
+  // the repository's landings, a branch made and deleted on each try, with nobody told.
+  it('tells a fork\'s pull request GitHub calls behind main once for its head, and neither carries it on a train nor merges it on its own', async () => {
     const f = setup()
-    const fork = f.add(4, { fork: true })
+    // Two of them. GitHub would take the head of one into a train. The other's it would not, and would merge it on its own; and
+    // its fork is gone, which GitHub lists as a head with no repository. Neither is asked for.
+    const taken = f.add(4, { fork: true }), untaken = f.add(5, { fork: true })
     f.moveMain(['cli/src/other.ts'])
-    fork.mergeable_state = 'behind'
-    f.state.untaken.add(fork.head.sha)
+    taken.mergeable_state = untaken.mergeable_state = 'behind'
+    f.state.untaken.add(untaken.head.sha)
+    Object.assign(untaken.head, { repo: null })
+    const told = (pull: FakePull) => expect.stringMatching(new RegExp(`^Harness, \\d\\d:\\d\\d, to \\*\\*pip\\*\\*: not merged yet at ${pull.head.sha.slice(0, 7)}: it is behind main: update the branch and push\\.$`))
+    const first = [told(taken), told(untaken)]
     await f.settle()
-    expect(f.logged()).toContainEqual(expect.stringContaining('FORK_REFUSED acme/app: GitHub takes #4 neither into a train nor on its own'))
-    // Tried again with the merger's waits, as any fork GitHub takes neither way.
-    const before = f.writes().filter(w => w === 'POST /git/refs').length
+    // Ten minutes of passes, then a restart, which finds each note on its pull request.
     for (let pass = 0; pass < 20; pass++) await f.tick()
-    expect(f.writes().filter(w => w === 'POST /git/refs').length - before).toBeLessThan(6)
+    f.restart()
+    await f.settle()
+    expect([f.said(4), f.said(5)]).toEqual([[first[0]], [first[1]]])
+    // Nothing else was written, no train's branch and no merge, and the repository is not left alone for them.
+    expect(f.writes().sort()).toEqual(['POST /issues/4/comments', 'POST /issues/5/comments'])
+    expect(f.logged().filter(line => line.includes('merging by rule stopped'))).toEqual([])
+    // Each is pushed. The one GitHub now calls clean rides a train, as any fork's; the other, behind again, is told for its
+    // new head.
+    f.push(4); f.push(5)
+    taken.mergeable_state = 'clean'
+    await f.settle()
+    for (let pass = 0; pass < 20; pass++) await f.tick()
+    expect(f.carried()).toEqual([[4]])
+    expect(f.said(5)).toEqual([first[1], told(untaken)])
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
-    expect(fork.state).toBe('open')
   })
 
   it('stops, and merges nothing on its own, when GitHub does not take the head of a pull request of this repository', async () => {
