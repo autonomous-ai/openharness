@@ -7,29 +7,17 @@ import 'package:harness/super_tabs/join_dialog.dart';
 import 'package:harness/super_tabs/join_link.dart';
 import 'package:harness/super_tabs/sharing.dart';
 
-import 'support/super_tab_fixture.dart';
+import 'support/swarm_sharing_server.dart';
 
-const _token = 'abcdefghijabcdefghijabcdefghijabcdefghijabc';
-
-/// One Swarm's server as the backend answers sharing and joining (backend sharing.ts, join.ts): its access, the link it
-/// hands out, and a join by that link adding the person who opened it.
-class _JoinServer extends ConversationServer {
-  Map<String, dynamic> access = {'mode': 'invited', 'role': 'collaborator'};
-  int sharingRevision = 0;
-
-  /// Who opens the link: the person on the other computer.
-  final joiner = {'id': 'leo', 'email': 'leo@example.com'};
-
+/// The Swarm's sharing, and a join by its link (backend join.ts): the link's token lets the account asking in, as the
+/// role the link gives; the owner's address is at example.com, as the backend tells Sharing (`ownDomain`).
+class _JoinServer extends SwarmSharingServer {
+  @override
   Map<String, dynamic> get settings => {
-    'revision': sharingRevision,
-    'access': Map<String, dynamic>.from(access),
-    'joinUrl': access['mode'] == 'link'
-        ? const SwarmJoinLink('tab', token: _token).url
-        : null,
+    ...super.settings,
+    'ownDomain': 'example.com',
+    'ownDomainPublic': false,
   };
-
-  bool _valid(Map<String, dynamic>? body) =>
-      access['mode'] == 'link' && body?['token'] == _token;
 
   @override
   Future<Map<String, dynamic>> request(
@@ -37,22 +25,19 @@ class _JoinServer extends ConversationServer {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    if (path.endsWith('/sharing')) {
-      if (method == 'GET') return settings;
-      access = Map<String, dynamic>.from(body!['access'] as Map);
-      sharingRevision++;
-      return settings;
-    }
     if (path.endsWith('/join/preview') || path.endsWith('/join')) {
-      if (!_valid(body)) {
+      if (access['mode'] != 'link' || body?['token'] != token) {
         throw const SuperTabFailure('FORBIDDEN', 'No', statusCode: 403);
       }
+      final who = reader!;
       if (path.endsWith('/join')) {
         final people = state['people'] as List;
-        if (!people.any((p) => (p as Map)['id'] == joiner['id'])) {
-          people.add({...joiner, 'role': access['role']});
-          // The Swarm changed: its next read carries it, as the backend's revision does.
-          revision++;
+        if (!people.any((p) => (p as Map)['id'] == who)) {
+          people.add({
+            'id': who,
+            'email': '$who@example.com',
+            'role': access['role'],
+          });
         }
         return {'id': 'tab', 'role': access['role']};
       }
@@ -68,10 +53,13 @@ class _JoinServer extends ConversationServer {
 }
 
 /// Readiness row 31, clicked through on both computers: the owner turns on the join link in Sharing and copies it; the
-/// person it is sent to opens it, sees the Swarm's name, and joins; the owner's Sharing then lists them.
+/// person it is sent to opens it under their own account, sees the Swarm by name, and joins; the owner's Sharing then
+/// lists them with the link's role.
 void main() {
-  testWidgets('the owner copies the join link; the person who opens it joins, '
-      'and Sharing lists them', (tester) async {
+  Finder key(String k) => find.byKey(Key(k));
+
+  testWidgets('the owner copies the join link; the person who opens it joins '
+      'under their own account, and Sharing lists them', (tester) async {
     await tester.binding.setSurfaceSize(const Size(900, 700));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     String? copied;
@@ -94,6 +82,9 @@ void main() {
     final owner = server.controller();
     addTearDown(owner.dispose);
     await owner.refresh();
+    // The other computer, signed in as leo: what it asks goes as leo.
+    final leo = server.controller(account: 'leo');
+    addTearDown(leo.dispose);
     String? joined;
     await tester.pumpWidget(
       MaterialApp(
@@ -106,7 +97,7 @@ void main() {
                   onPressed: () => showSuperTabSharing(context, owner),
                   child: const Text('Share'),
                 ),
-                // The other computer: the link, as the app's link handler hands it on (SwarmJoinHost).
+                // The link as the app reads it from a click (SwarmJoinLink.parse), in the join dialog.
                 TextButton(
                   onPressed: () => showDialog<void>(
                     context: context,
@@ -114,7 +105,7 @@ void main() {
                       link: SwarmJoinLink.parse(copied!)!,
                       accountEmail: 'leo@example.com',
                       isCurrent: () => true,
-                      request: server.request,
+                      request: leo.request,
                       onJoined: (id, name) => joined = '$id $name',
                     ),
                   ),
@@ -127,43 +118,56 @@ void main() {
       ),
     );
 
-    // The owner: Share, Anyone with the link, Save, Copy link.
+    // The owner: Share, Anyone with the link, Save, Copy link; their people are only themselves.
     await tester.tap(find.text('Share'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('swarm-general-access')));
+    await tester.tap(key('swarm-general-access'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Anyone with the link').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('swarm-sharing-save')));
+    await tester.tap(key('swarm-sharing-save'));
     await tester.pumpAndSettle();
     expect(server.access['mode'], 'link');
-    await tester.tap(find.byKey(const Key('swarm-copy-link')));
+    await tester.tap(key('swarm-copy-link'));
     await tester.pumpAndSettle();
-    expect(copied, const SwarmJoinLink('tab', token: _token).url);
+    expect(copied, SwarmJoinLink('tab', token: server.token).url);
     await tester.tap(find.text('People with access'));
     await tester.pumpAndSettle();
     expect(find.text('owner@example.com'), findsOneWidget);
     expect(find.text('leo@example.com'), findsNothing);
-    await tester.tapAt(Offset.zero);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
+    expect(find.byType(SwarmSharingDialog), findsNothing);
 
     // The person it was sent to opens it: the Swarm by name, then Join.
     await tester.tap(find.text('Open link'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Pilot'), findsWidgets);
-    await tester.tap(find.byKey(const Key('swarm-join-confirm')));
+    expect(
+      find.descendant(
+        of: find.byType(SwarmJoinDialog),
+        matching: find.textContaining('Pilot'),
+      ),
+      findsWidgets,
+    );
+    await tester.tap(key('swarm-join-confirm'));
     await tester.pumpAndSettle();
     expect(joined, 'tab Pilot');
     expect(find.byType(SwarmJoinDialog), findsNothing);
 
-    // The owner's Sharing lists them.
+    // The owner's Swarm reads the change (in the app, its change feed does), and Sharing lists leo with the link's role.
     await owner.refresh();
     await tester.tap(find.text('Share'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('People with access'));
     await tester.pumpAndSettle();
-    expect(find.text('leo@example.com'), findsOneWidget);
-    expect(find.text('Can collaborate'), findsWidgets);
+    final leoRow = find.ancestor(
+      of: find.text('leo@example.com'),
+      matching: find.byType(Column),
+    );
+    expect(
+      find.descendant(of: leoRow.first, matching: find.text('Can collaborate')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }
