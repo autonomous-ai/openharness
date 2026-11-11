@@ -142,7 +142,13 @@ void main() {
       app.localInventory = {'models': [], 'busy': false};
       await tester.tap(find.text('Try again'));
       await tester.pump();
-      expect(find.text('No shared models'), findsOneWidget);
+      // Read, and none: an empty list shows nothing (design doc, Swarm elements rule 7).
+      expect(find.text('Finding shared models…'), findsNothing);
+      expect(
+        find.text('Connect this computer to see its models.'),
+        findsNothing,
+      );
+      expect(find.text('No shared models'), findsNothing);
       await tester.tap(find.text('Local 0'));
       await tester.pump();
       expect(find.text('No compatible models found'), findsOneWidget);
@@ -171,7 +177,7 @@ void main() {
       expect(field.focusNode!.hasFocus, isTrue);
       await tester.tap(find.text('Shared 0'));
       await tester.pump();
-      expect(find.text('No shared models'), findsOneWidget);
+      expect(find.text('No shared models'), findsNothing);
       app.inventory = const GridModels(
         gridName: 'home',
         models: [],
@@ -235,7 +241,8 @@ void main() {
       app.inventory = const GridModels(gridName: 'home', models: []);
       await tester.tap(find.text('Try again'));
       await tester.pump();
-      expect(find.text('No shared models'), findsOneWidget);
+      expect(find.text('Shared models are unavailable.'), findsNothing);
+      expect(find.text('No shared models'), findsNothing);
       await tester.tap(find.byTooltip('Close Models'));
       expect(closed, 1);
       expect(tester.takeException(), isNull);
@@ -445,7 +452,8 @@ void main() {
     expect(find.text('Downloading · 42%').hitTestable(), findsNothing);
     await tester.tap(find.text('Subscriptions 0'));
     await tester.pump();
-    expect(find.text('No subscriptions').hitTestable(), findsOneWidget);
+    // An empty list shows nothing (design doc, Swarm elements rule 7).
+    expect(find.text('No subscriptions'), findsNothing);
     expect(find.text('Downloading · 42%'), findsNothing);
     await tester.tap(find.text('Local 5'));
     await tester.pump();

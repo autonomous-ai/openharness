@@ -1,7 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/parts.dart';
-import 'package:harness/super_tabs/leaderboard/model.dart';
-import 'package:harness/super_tabs/leaderboard/person_row.dart';
 import 'package:harness/super_tabs/model.dart';
 
 import 'super_tab_parts_test.dart' show recorded;
@@ -129,16 +127,5 @@ void main() {
     expect(swarm.authorName(from('peer', 'dee@autonomous.ai')), 'dee');
     // Someone who left keeps the name their address gives.
     expect(swarm.authorName(from('gone', 'tony@autonomous.ai')), 'tony');
-  });
-
-  test('the leaderboard names a person by their username', () {
-    final person = _swarm([_person('owner', 'ken15@autonomous.ai', 'river')])
-        .people
-        .single;
-    final score = SuperTabPersonScore.fromJson({
-      'personId': 'owner',
-      'displayName': 'Ken Nguyen at Autonomous',
-    });
-    expect(leaderboardName(person, score), 'river');
   });
 }

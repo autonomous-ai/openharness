@@ -1,7 +1,7 @@
 /**
  * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=` or `&period=`), the `data` of
  * the usual envelope. Asked for a period (rolling.ts), "week" below means that period and "last week" the one of the same
- * length before it. Desktop/web (`desktop/lib/super_tabs/leaderboard`) mirror it by hand. Times are epoch milliseconds; people are
+ * length before it. The phone (`mobile/lib/swarm/swarm_leaderboard_reader.dart`) mirrors it by hand. Times are epoch milliseconds; people are
  * member ids. The only conversation text in it is the titles of conversations the reader may read (details); no message text.
  */
 import type { PeriodName } from './rolling.js'
