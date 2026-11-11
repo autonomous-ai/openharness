@@ -23,6 +23,7 @@ import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
@@ -60,6 +61,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
+vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
 vi.mock('../../engines/kit/nativePlugin.js', () => ({
   prepareNativePlugin: vi.fn(() => ({ verify: () => {}, commit: async () => ({ verify: () => {} }) })),
@@ -463,6 +465,19 @@ describe('creating an agent', () => {
     expect(await run.create(request({ engine: 'opencode', agent: 'named' }))).toMatchObject({ error: 'AGENT_UNSUPPORTED' })
     expect(await run.create(request())).toMatchObject({ unavailable: 'native', detail: expect.stringContaining('hooks') })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  // #3954: every install refuses while notify.mjs is missing, and the create said only "Waiting to confirm the engine's
+  // native hooks", which waiting never changes.
+  it('names a missing notify.mjs, and what to do, where a held create says why', async () => {
+    vi.mocked(missingHookScript).mockReturnValue('/opt/harness/hook/notify.mjs')
+    try {
+      const launch = { current: () => true, environment: { HOME: root }, prepareHooks: async () => false } as unknown as NativeLaunch
+      expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request())).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD',
+        unavailable: 'native', detail: 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.' })
+      expect(missingHookScript).toHaveBeenLastCalledWith('claude')
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    } finally { vi.mocked(missingHookScript).mockReturnValue(null) }
   })
 
   it('refuses, with the engine\'s own reason, an engine that ran and failed instead of holding the creation', async () => {
