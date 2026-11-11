@@ -16,8 +16,10 @@ export const EMPTY_CHAT_MS = 60 * 60_000
 export const paneChatId = (person: { id: string; generation: string }, machineId: string, harnessId: string): string =>
   stableId('agent-chat', person.id, person.generation, 'pane', machineId, harnessId)
 
-/** Archives the agents' chats of [state] that hold no agent and never had a message for EMPTY_CHAT_MS, as an archive by hand
- *  does (it leaves the active set): not one a PM or a start is coming to. The number archived. */
+/** Archives the agents' chats of [state] that hold no agent and never had a message for EMPTY_CHAT_MS since they opened or were
+ *  opened again, as an archive by hand does (it leaves the active set): not one a PM or a start is coming to. The number archived.
+ *  It clears what Desktops before Attach sent `harnessId` made: it goes, with its call in store.ts runTimeChecks, on or after
+ *  2026-12-12, 30 days after the Desktop that sends it (due 2026-11-12). */
 export function archiveEmptyChats(state: SuperTabState, now: number): number {
   const awaited = new Set([...projectsOf(state).flatMap(p => p.pmChat ? [p.pmChat.id] : []),
     ...(state.starts ?? []).filter(s => !s.harnessId && !s.error).map(s => s.request.conversationId)])

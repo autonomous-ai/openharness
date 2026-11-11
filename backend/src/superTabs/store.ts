@@ -594,8 +594,11 @@ export class SuperTabStore {
     }
     if (command.type === 'agent.remove') agentIds.push(command.agentId)
     // A session's own chat, which an archive by hand may have put to sleep: joining it again opens it again (paneChats.ts).
-    const joining = command.type === 'agent.new' && command.harnessId && state.people.find(p => p.id === personId)
-    if (joining) groupIds.push(paneChatId(joining, command.machineId, command.harnessId!))
+    const joining = command.type === 'agent.new' && command.local && command.harnessId ? state.people.find(p => p.id === personId) : undefined
+    if (joining && command.type === 'agent.new') {
+      const kept = state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)?.chatId
+      groupIds.push(...kept ? [kept] : [], paneChatId(joining, command.machineId, command.harnessId!))
+    }
     // These only ask about the agent. A coordinator's project chat, always loaded, answers them, and every group it was ever in is
     // what a read by agent gave: 1,668 on prod, growing with every task (Ken's profile, 2026-11-02, up to 1.66 s a read). Filtering
     // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).

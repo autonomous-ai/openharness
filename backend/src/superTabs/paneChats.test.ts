@@ -77,6 +77,33 @@ describe('joining a running session (Attach)', () => {
       .toThrow(expect.objectContaining({ code: 'ALREADY_SHARED' }))
   })
 
+  it('counts a reopened chat\'s quiet from when it opened again', () => {
+    const f = fixture()
+    const chat = f.chatFor('juno').conversationId as string
+    archiveEmptyChats(f.state, 1000 + EMPTY_CHAT_MS)
+    f.run({ type: 'agent.new', kind: 'regular', machineId: 'owner-mac', engine: 'claude', name: 'juno', local: true, harnessId: 'juno' }, owner,
+      { ...own(owner), now: 2 * EMPTY_CHAT_MS })
+    expect(archiveEmptyChats(f.state, 2 * EMPTY_CHAT_MS + 60_000)).toBe(0)
+    f.run({ type: 'conversation.archive', conversationId: chat, archived: true })
+    f.run({ type: 'conversation.archive', conversationId: chat, archived: false }, owner, { now: 3 * EMPTY_CHAT_MS })
+    expect(archiveEmptyChats(f.state, 3 * EMPTY_CHAT_MS + 60_000)).toBe(0)
+  })
+
+  it('answers a session already in a paused Swarm, a rebound one by its session, and names a session only from its computer', () => {
+    const f = fixture()
+    const chat = f.chatFor('juno').conversationId as string
+    const agentId = f.add(chat, 'juno')
+    f.run({ type: 'tab.pause', paused: true })
+    expect(f.chatFor('juno')).toEqual({ conversationId: chat, agentId })
+    expect(() => f.chatFor('pip')).toThrow(expect.objectContaining({ code: 'PAUSED' }))
+    f.run({ type: 'tab.pause', paused: false })
+    // agent.rebind keeps its first id on a new session.
+    f.state.agents[0]!.harnessId = 'juno-2'
+    expect(f.add(chat, 'juno-2')).toBe(agentId)
+    expect(() => f.run({ type: 'agent.new', kind: 'regular', machineId: 'owner-mac', engine: 'claude', name: 'Ada', harnessId: 'h' }, owner, own(owner)))
+      .toThrow(expect.objectContaining({ code: 'HARNESS_LOCAL_ONLY' }))
+  })
+
   it('still opens a new chat for each + New agent, which names no session', () => {
     const f = fixture()
     const fresh = (name: string) => f.run({ type: 'agent.new', kind: 'regular', machineId: 'owner-mac', engine: 'claude', name, local: true }, owner, own(owner)).result.conversationId
