@@ -970,12 +970,27 @@ describe('a closed train is believed only as this login built it', () => {
     const f = setup()
     f.add(4); f.add(5)
     await f.settle()
-    // Closed by hand, then written as a red train of #5 alone.
+    // Closed by hand, then written as a red train of #5 alone; its checks did fail, so only what it carried tells.
     const train = f.train()
+    f.state.runs.set(train.head.sha, FAILED)
     Object.assign(train, { state: 'closed', title: 'Train, red: #5', body: train.body.split('\n').filter(line => !line.startsWith('#4 ')).join('\n'), updated: ++f.state.edits })
     await f.settle()
     expect(f.said(5)).toEqual([])
     expect(f.carried().at(-1)).toEqual([4, 5])
+  })
+
+  it('takes no closed train for a red one whose tip this login did not mark', async () => {
+    const f = setup()
+    f.add(4)
+    f.moveMain(['cli/src/other.ts'])
+    await f.settle()
+    const train = f.train()
+    f.state.runs.set(train.head.sha, FAILED)
+    f.state.statuses.delete(train.head.sha)
+    Object.assign(train, { state: 'closed', title: 'Train, red: #4', updated: ++f.state.edits })
+    await f.settle()
+    expect(f.said(4)).toEqual([])
+    expect(f.train()).toMatchObject({ number: 901, title: 'Train: #4' })
   })
 
   it('takes no closed train for a red one whose checks did not fail', async () => {
