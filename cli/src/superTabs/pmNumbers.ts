@@ -17,7 +17,8 @@
  * waits at the hour, the PM is told each hour, as anh Dee asked. Once a day the counts are posted in the project's channel,
  * where its people read the team's talk. Nothing is read for it that the pass did not read already, but the project's goal
  * (goal.ts), and that only as a line that says it is sent: how many of its milestones pass on its main branch. A project
- * with no goal is told in the line how to state one; a goal that could not be read is left out of it.
+ * with no goal is told in the line how to state one; a goal that could not be read is left out of it. Under the day's counts go
+ * each builder's steps (daySteps.ts), read as that post goes, once a day, and left out when they cannot be read.
  *
  * It says only what is so now: who has nothing, what is open, what landed. Its first three reviews found what more memory and
  * more rules cost: a person told of a night nobody watched, a message kept and typed three hours late, a file written every
@@ -217,6 +218,8 @@ export class PmNumbers {
   constructor(private readonly deps: {
     /** Sends [text] [how] it goes (messageOf), under [operationId]: the server takes each operation once. */
     send: (how: How, project: LedProject, operationId: string, text: string) => Promise<unknown>
+    /** Each builder's steps over the last 24 hours, the lines under the day's counts (daySteps.ts); null for none. */
+    steps: (project: LedProject) => Promise<string | null>
     file: string
     now?: () => number
     log?: (line: string) => void
@@ -265,13 +268,22 @@ export class PmNumbers {
     if (at.getHours() >= DAY_HOUR && day > kept.day) {
       // A day in which nothing landed and no task closed has no numbers to post.
       if (!numbers.landed && !numbers.closed
-        || await this.send('post', project, day, async () => dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read())) !== 'later') kept.day = day
+        || await this.send('post', project, day, async () => [dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read()),
+          await this.steps(project)].filter(Boolean).join('\n')) !== 'later') kept.day = day
     }
     if (JSON.stringify(kept) === before) return
     // Kept in the order they were last written, so the ones dropped past MAX_KEPT are the ones longest untouched.
     delete memory[id]
     memory[id] = kept
     this.save(memory)
+  }
+
+  /** Each builder's steps for the day's post, left out, and said once, when they cannot be read: the counts go all the same. */
+  private steps(project: LedProject): Promise<string | null> {
+    return this.deps.steps(project).catch(error => {
+      this.once(`[super-tab] numbers: STEPS_UNREAD ${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    })
   }
 
   /**

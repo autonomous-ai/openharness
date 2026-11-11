@@ -14,6 +14,8 @@ const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   'src/superTabs/nextThing.ts',
   // A project's numbers, told to its PM when work runs short and posted once a day (anh Dee, 11-11).
   'src/superTabs/pmNumbers.ts',
+  // Each builder's steps under the day's counts (Swarm plan, step 8, 11-11).
+  'src/superTabs/daySteps.ts',
   // A piece cut off a task by its builder (anh Dee, 11-11).
   'src/superTabs/githubSplit.ts',
   // A project's goal, scored from main's checks, and the file and workflow it starts from (anh Dee, 11-11).

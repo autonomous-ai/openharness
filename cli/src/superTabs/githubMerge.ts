@@ -52,7 +52,7 @@ const VERDICT = /(?<![\w-])(READ-OK|HOLD)\*{0,2}\s+(?:#\d+\s+)?`?([0-9a-f]{7,40}
  * (#3781: "`HOLD 73aa8b23f`"), or inside quotation marks on the line (swarm-sandbox #24: "as in "Juno, HH:MM: READ-OK
  * 239a631"", an ask's example).
  */
-function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } | null {
+export function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } | null {
   if (/^\s*>/.test(line) || /^ {0,3}(?:`{3,}|~{3,})/.test(line)) return null
   for (const found of line.matchAll(VERDICT)) {
     const before = line.slice(0, found.index)

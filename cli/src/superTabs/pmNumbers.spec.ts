@@ -217,10 +217,12 @@ describe('the numbers, told as they are due', () => {
       sent.push([how, id, text])
     }
     const file = join(folder, 'numbers.json')
-    const make = () => new PmNumbers({ send, file, now: () => clock.now, log })
+    /** Each builder's steps for the day's post: none, unless a test gives some. */
+    const steps = vi.fn(async (_project: LedProject): Promise<string | null> => null)
+    const make = () => new PmNumbers({ send, steps, file, now: () => clock.now, log })
     /** The project's goal, read when a line that says it is sent: one that cannot be read, unless a test gives another. */
     const goal = vi.fn(async (): Promise<Score | null> => { throw new Error('No goal is read in this test.') })
-    return { clock, sent, log, failing, tried, ids, file, make, numbers: make(), goal }
+    return { clock, sent, log, failing, tried, ids, file, make, numbers: make(), goal, steps }
   }
   /** A pass every minute for [minutes], as the assigner makes them. */
   const passes = async (t: ReturnType<typeof setup>, minutes: number, counted: Numbers, pm = t.numbers) => {
@@ -530,6 +532,29 @@ describe('the numbers, told as they are due', () => {
     expect(new Set(all.sent.map(([, id]) => id)).size).toBe(5)
   })
 
+  // Swarm plan, step 8: "Numbers posted daily, per builder and per person". One post: the steps go under the day's counts.
+  it('posts each builder\'s steps under the day\'s counts, and the counts alone when the steps cannot be read', async () => {
+    const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
+    t.steps.mockResolvedValueOnce('Steps · ready → first verdict 6 min (p90 6 min)\nPip: 7 landed · free → next task 4 min')
+    await passes(t, 1, landed)
+    expect(t.steps).toHaveBeenCalledWith(PROJECT)
+    expect(t.sent).toEqual([['post', expect.any(String), `${dayLine(landed, 'Wed 11 Nov', undefined)}\nSteps · ready → first verdict 6 min (p90 6 min)\n`
+      + 'Pip: 7 landed · free → next task 4 min']])
+    // The next day GitHub cannot be read: the counts go all the same, and that is said once.
+    t.clock.now = new Date(2026, 10, 12, 9, 0).getTime()
+    t.steps.mockRejectedValue(new Error('GitHub did not answer.'))
+    await passes(t, 1, landed)
+    expect(t.sent.at(-1)).toEqual(['post', expect.any(String), dayLine(landed, 'Thu 12 Nov', undefined)])
+    t.clock.now = new Date(2026, 10, 13, 9, 0).getTime()
+    t.steps.mockRejectedValue('no words')
+    await passes(t, 1, landed)
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('STEPS_UNREAD'))).toEqual([['[super-tab] numbers: STEPS_UNREAD acme/app: GitHub did not answer.'],
+      ['[super-tab] numbers: STEPS_UNREAD acme/app: no words']])
+    // Asked only as the day's post goes.
+    await passes(t, 30, landed)
+    expect(t.steps).toHaveBeenCalledTimes(3)
+  })
+
   it('posts the day\'s numbers once, from nine, and none for a day with nothing to say', async () => {
     const t = setup(new Date(2026, 10, 11, 8, 58).getTime()), landed = numbers({ free: [] })
     await passes(t, 2, landed)
@@ -589,7 +614,7 @@ describe('the numbers, told as they are due', () => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
     try {
       const sent: string[] = []
-      const ofNow = new PmNumbers({ file: t.file, send: async (_how, _project, _id, text) => { if (!sent.length) { sent.push(text); throw new Error('Not yet.') } sent.push(text) } })
+      const ofNow = new PmNumbers({ file: t.file, steps: async () => null, send: async (_how, _project, _id, text) => { if (!sent.length) { sent.push(text); throw new Error('Not yet.') } sent.push(text) } })
       await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal)
       expect(warn).toHaveBeenCalledWith('[super-tab] numbers: NOT_SENT acme/app: Not yet.')
       vi.setSystemTime(NOW + MINUTE)

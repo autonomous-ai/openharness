@@ -20,11 +20,12 @@ import { FirstAnswers } from './firstAnswers.js'
 import { NextThing } from './nextThing.js'
 import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { GitHubReads, GitHubStop, githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { claimAsked, takeTask } from './githubClaim.js'
 import { Cuts, sameCut, splitAsked, splitTask } from './githubSplit.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
+import { daySteps } from './daySteps.js'
 import { GitHubMerge, ledProjects, recordedAuthors, VerdictRecords, type LedProject } from './githubMerge.js'
 import { numbersSender, PmNumbers } from './pmNumbers.js'
 import { crewOf, labelOf } from './assign/crew.js'
@@ -207,7 +208,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const assigns = (options.githubAssign ?? ((api, held) => {
     // A project's numbers, sent as its PM into the Swarm as the PM reads it (pmNumbers.ts messageOf).
     const numbers = new PmNumbers({ file: join(api.dataDir, 'super-tab-numbers.json'),
-      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)) })
+      send: numbersSender(async project => (await held().reads.read(project.tabId, project.pmAgentId)).state, (path, body) => backend(api, 'POST', path, body)),
+      // Each builder's steps under the day's counts, read with the PM's person's gh as that post goes (daySteps.ts; Swarm plan, step 8).
+      steps: daySteps({ reads: new GitHubReads(github.get), crew: crewOfProject(held) }) })
     return new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held), get: github.get, send: github.send, records, numbers })
   }))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
