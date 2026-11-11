@@ -2579,6 +2579,9 @@ it('releases a finished worker through its execution host, cancels deliveries an
   // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
   await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Renewed worker', configuration: config, lead: false })
   await run(tab, { type: 'agent.remove', agentId: worker })
+  // Taken out, its session keeps running, recorded for its person until it ends (removedPanes.ts).
+  const removedPanes = async () => (await store.read(owner, tab)).state.people.find(p => p.id === owner.sub)!.removedPanes
+  expect(await removedPanes()).toEqual([{ machineId: 'test-host', harnessId: native, removedAt: expect.any(Number) }])
   const hostPool = (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!
   expect(hostPool.harnessIds).toContain(native)
   const reservation = hostPool.reservations.find(r => r.harnessId === native)!
@@ -2587,9 +2590,11 @@ it('releases a finished worker through its execution host, cancels deliveries an
   // A machine's room is its free memory since saved counts went (2026-11-10): the reservation is read where its host reads it.
   const reserved = async () => (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.reservations.some(r => r.harnessId === native)
   expect(await reserved()).toBe(true)
+  expect(await removedPanes()).toHaveLength(1)
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [reservation] })
   expect(await reserved()).toBe(false)
+  expect(await removedPanes()).toBeUndefined()
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   expect(await reserved()).toBe(false)
 })
@@ -2796,6 +2801,8 @@ describe('Lead safety on the host roster', () => {
     await expect(run(tab, { type: 'agent.remove', agentId: lead })).rejects.toMatchObject({ code: 'LEAD_PROTECTED',
       message: expect.stringContaining('is the Product Manager of project Pilot. Delete the project first.') })
 
+    // Only a Stop its person asked for closes its session (anh Dee 2026-11-11); a plain removal leaves it running.
+    await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
     await run(tab, { type: 'agent.remove', agentId: worker })
     const closing = (id: string, harnessId: string) => ({ tabId: tab, agent: { id, harnessId, machineId: 'test-host' }, closeSession: true, active: false })
     expect(await rows()).toEqual([expect.objectContaining({ agent: expect.objectContaining({ id: lead }) }), closing(worker, harness)])
@@ -3296,7 +3303,8 @@ describe('machine removal', () => {
     const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
     expect((await store.read(owner, tab)).state.machines!.map(m => [m.removal?.state, m.paused])).toEqual([['cleaning', true]])
     expect(await cleanups(tab)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
-    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    // Its agent leaves the roster with its session still running: the cleanup closes only the Swarm's own sessions in its folders.
+    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker)).toEqual([])
     expect((await rosterRows(store, owner, 'test-host').catch(() => []))).toEqual([])
     // The machine owner's host acknowledges even after leaving the Swarm.
     await run(tab, { type: 'member.remove', userId: host.sub }, host)
@@ -3398,7 +3406,7 @@ describe('machine removal', () => {
     await run(tab, { type: 'member.remove', userId: host.sub }, host)
     const [row] = await cleanups(tab)
     expect(row).toEqual({ tabId: tab, cleanup: { machineId: 'test-host', removalId: expect.any(String) } })
-    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    expect((await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker)).toEqual([])
     expect((await store.read(owner, tab)).state.machines!.map(m => m.removal?.state)).toEqual(['cleaning'])
     expect((await cleaned(tab, (row as { cleanup: { removalId: string } }).cleanup.removalId)).statusCode).toBe(200)
     expect(await cleanups(tab)).toEqual([])

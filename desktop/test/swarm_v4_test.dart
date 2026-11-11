@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/swarm_layout.dart';
+import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -99,6 +100,21 @@ void main() {
       ]) {
         expect(find.text(gone), findsNothing, reason: gone);
       }
+    },
+  );
+
+  // anh Dee, 2026-11-11: "it's quite difficult to invite people. i have no idea where to find it. invite should be visible".
+  testWidgets(
+    'Invite people, in the left pane, opens the Swarm\'s people for its owner',
+    (tester) async {
+      await show(tester);
+      await tester.tap(find.text('Invite people'));
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(SwarmSharingDialog), findsOneWidget);
+      // The owner's own form, where an invitation is made.
+      expect(find.byKey(const Key('swarm-invite-email')), findsOneWidget);
     },
   );
 
