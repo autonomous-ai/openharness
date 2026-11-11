@@ -56,6 +56,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     parentAgentId?: string | null
     guest?: string | null
     browser?: boolean
+    firstTask?: string
   }) => RegisteredSession | null }
   nativeToken?: string
   /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
@@ -111,6 +112,9 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   guest?: string | null
   /** Browser ticked, recorded on the row (registry.ts `browser`). */
   browser?: boolean
+  /** The first task an engine takes typed, not in argv (engineLaunch.ts `typedFirstPrompt`): kept on the row until the
+   *  bind pass types it (registry.ts `firstTask`). */
+  firstTask?: string
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
   onDispatch?: () => void
@@ -173,6 +177,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
       ...(deps.guest ? { guest: deps.guest } : {}),
       ...(deps.browser ? { browser: true } : {}),
+      ...(deps.firstTask ? { firstTask: deps.firstTask } : {}),
     })
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `

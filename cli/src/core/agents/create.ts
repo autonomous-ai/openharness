@@ -28,7 +28,7 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
-  refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, NamedAgentUnsupportedError,
+  refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
@@ -392,6 +392,8 @@ export function createAgentCreator({
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
+    // An engine that takes it typed gets it on its row instead, typed once its pane is ready (core/agents/bind.ts).
+    const firstTask = typedFirstPrompt(engine, firstPrompt ?? undefined)
     // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
     const agentId = randomUUID()
     const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
@@ -450,6 +452,7 @@ export function createAgentCreator({
       startedBy: startedBy ?? null,
       parentAgentId: parentAgentId ?? null,
       ...(browser ? { browser: true } : {}),
+      ...(firstTask ? { firstTask } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result

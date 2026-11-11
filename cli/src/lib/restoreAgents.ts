@@ -56,6 +56,9 @@ export interface RestoreLaunch {
    *  so the caller prepares and relaunches with the same overrides once the engine has stopped, without asking the
    *  grid or the Store again. */
   deferred?: DeferredLaunch
+  /** The first task an engine takes typed, not in argv (engineLaunch.ts `typedFirstPrompt`): committed to the row with
+   *  the dispatch (registry.ts `beginExternalDispatch`), so the bind pass types it once the pane is ready. */
+  firstTask?: string
 }
 
 export interface DeferredLaunch {
@@ -103,7 +106,7 @@ export interface RestoreAgentsDeps {
     clearProcessIdentity(agentId: string): boolean
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
     setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null
-    beginExternalDispatch?(agentId: string): RegisteredSession | null
+    beginExternalDispatch?(agentId: string, firstTask?: string): RegisteredSession | null
     updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity): boolean
     unbindSession(sessionId: string): boolean
     inheritName(fromSessionId: string, toSessionId: string): void
@@ -651,7 +654,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         try {
           const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : entry.launch?.state === 'held' && entry.launch.nativeToken ? { expectedHeldToken: entry.launch.nativeToken } : {}), onDispatch: () => {
             if (entry.externalResume?.phase === 'admitted') {
-              const committed = deps.registry.beginExternalDispatch?.(entry.agentId)
+              const committed = deps.registry.beginExternalDispatch?.(entry.agentId, launch.firstTask)
               if (!committed) throw new Error('External resume dispatch could not be committed')
               owns = restoreOwner(deps, committed, !!deps.paneOperation)
             }
