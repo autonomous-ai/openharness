@@ -87,7 +87,7 @@ void main() {
       integration:
           HarnessLaunchIntegration(
               creationId: 'swarm-form-fixture',
-              actionLabel: 'New Project',
+              actionLabel: 'New project',
               projectVisibility: 'public',
               projectVisibilityLocked: visibilityLocked,
               prepare: (_, task, _) async => task,
@@ -178,7 +178,7 @@ void main() {
           tester.getCenter(_visibility).dy,
           closeTo(tester.getCenter(_start).dy, 1),
         );
-        expect(find.text('New Project'), findsOneWidget);
+        expect(find.text('New project'), findsOneWidget);
         expect(
           find.byKey(const ValueKey('new-harness-attach')),
           findsOneWidget,

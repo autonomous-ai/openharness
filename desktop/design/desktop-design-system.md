@@ -749,7 +749,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   in each agent's chat.
 - **A PM's chat before its PM.** Asking for a project's PM opens the person's
   1:1 chat with it at once (backend `lead.start` and `lead.claim` answer its
-  id), before the PM is up. New Project sends its task and files there and
+  id), before the PM is up. New project sends its task and files there and
   opens it. What the person sends there waits for the PM, and their newest
   message's receipt says `Waiting for the Product Manager` in muted grey with
   a clock; a row the server wrote there (a start that failed) carries none. A
