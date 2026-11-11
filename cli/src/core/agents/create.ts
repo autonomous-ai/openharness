@@ -8,6 +8,7 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { agentTmpLaunch } from '../../lib/agentTmp.js'
+import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -391,7 +392,9 @@ export function createAgentCreator({
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
-    const launchOptions = { ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
+    const agentId = randomUUID()
+    const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
     let command: string[], argv: string[]
     try {
@@ -416,7 +419,7 @@ export function createAgentCreator({
     return { ok: true, dispatch: async () => {
     if (!current()) return stale()
     const result = await createAndRegisterPane({
-      current, ...(native ? { nativeToken: native.token } : {}),
+      current, agentId, ...(native ? { nativeToken: native.token } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,

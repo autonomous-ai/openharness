@@ -1,5 +1,5 @@
 /**
- * What the core makes of the twelve other engines' conversations, recorded from main before their transcript
+ * What the core makes of the other engines' conversations, recorded from main before their transcript
  * code left the core's static imports (docs/design/2026-10-08-other-engines-out-of-core.md, (o3)). Every case
  * goes through the core's own entries, wired as core/main.ts wires them:
  *
@@ -39,6 +39,8 @@ const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
 const FILE_ENGINES = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode'] as const
 type FileEngine = (typeof FILE_ENGINES)[number]
 const DB_ENGINES = ['opencode', 'kilo', 'hermes', 'devin'] as const
+/** OpenClaw's recorded stores (engines/openclaw/__fixtures__/, OpenClaw 2026.11.2). */
+const OPENCLAW_SCENARIOS = ['plain', 'tool', 'multi-tool', 'fail', 'abort', 'model-switch', 'reset', 'rewind', 'approval', 'main-heartbeat', 'two-panes-main'] as const
 type DbEngine = (typeof DB_ENGINES)[number]
 /** The specs whose transcripts are written out line by line. */
 const SPECS = /^engines\/(cursor|muse|amp|grok|agy|copilot|pi|commandcode)\/(normalizer|history)\.spec\.ts$/
@@ -207,7 +209,10 @@ async function loadCore() {
   return { createAttach, createIngest, createHistory, createLastTurnReader, createSessionNormalizers, createAgyBackstop, createCursorTaskHooks }
 }
 
-const dbs = () => ({ opencode: join(root, 'db', 'opencode.db'), kilo: join(root, 'db', 'kilo.db'), devin: join(root, 'db', 'devin.db') })
+/** OpenClaw's store is found per session (lib/openclawStore.ts); here it is always the one the case built. */
+const OPENCLAW_DB = () => join(root, 'db', 'openclaw-agent.sqlite')
+const dbs = () => ({ opencode: join(root, 'db', 'opencode.db'), kilo: join(root, 'db', 'kilo.db'), devin: join(root, 'db', 'devin.db'),
+  openclaw: async () => OPENCLAW_DB() })
 const hermesDb = async (): Promise<string> => join(root, 'db', 'hermes.db')
 
 /** The core's live path for one session: attach, then each later line through ingest. */
@@ -220,7 +225,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
   }
   const announceTurnAborted = (...args: unknown[]): void => { out.push(['aborted', ...args]) }
   const attach = core.createAttach({
-    setInterpretationHold: () => false, announceSession: () => {},
+    setInterpretationHold: () => false, setIdentityHold: () => false, announceSession: () => {},
     liveFor: () => undefined,
     resolve: () => session,
     terminalGone: async () => false,
@@ -235,7 +240,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     device: () => undefined,
     runtimeProfiles: {
       transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {},
-      ingestConfig: async () => {}, ingestPane: () => false,
+      ingest: () => false, ingestConfig: async () => {}, ingestPane: () => false,
       capturePane: async () => pane,
     } as never,
     captureTerminal: async () => pane,
@@ -480,6 +485,49 @@ describe('the other engines\' conversations, through the core', () => {
       await check(`${engine} history`, { out, events })
     }, 120_000)
   }
+
+  it('openclaw: each recorded store read live from half of its window, polled once, then history and the last turn', async () => {
+    const { DatabaseSync } = (process as unknown as { getBuiltinModule(name: string): unknown }).getBuiltinModule('node:sqlite') as {
+      DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { all(...params: unknown[]): Array<Record<string, unknown>> }; close(): void }
+    }
+    const fixtures = join(SRC, 'engines', 'openclaw', '__fixtures__')
+    for (const scenario of OPENCLAW_SCENARIOS) {
+      rmSync(OPENCLAW_DB(), { force: true })
+      const db = new DatabaseSync(OPENCLAW_DB())
+      db.exec(readFileSync(join(fixtures, 'schema.sql'), 'utf8'))
+      db.exec(readFileSync(join(fixtures, `${scenario}.sql`), 'utf8'))
+      const [{ key, window }] = db.prepare('SELECT session_key AS key, current_session_id AS window FROM session_nodes ORDER BY created_at LIMIT 1').all() as Array<{ key: string; window: string }>
+      const [{ last }] = db.prepare('SELECT max(seq) AS last FROM transcript_events WHERE session_id = ?').all(window) as Array<{ last: number }>
+      const half = Math.ceil(last / 2)
+      db.exec(`CREATE TABLE held_events AS SELECT * FROM transcript_events WHERE session_id = '${window}' AND seq > ${half};
+        CREATE TABLE held_active AS SELECT * FROM session_transcript_active_events WHERE session_id = '${window}' AND event_seq > ${half};
+        DELETE FROM session_transcript_active_events WHERE session_id = '${window}' AND event_seq > ${half};
+        DELETE FROM transcript_events WHERE session_id = '${window}' AND seq > ${half};`)
+      const session = { ...sessionOf('openclaw', null), sessionId: key } as RegisteredSession
+      const live = livePath(core, session, null)
+      await live.attach.attachSession(session)
+      db.exec('BEGIN; INSERT INTO transcript_events SELECT * FROM held_events; INSERT INTO session_transcript_active_events SELECT * FROM held_active; COMMIT;')
+      db.close()
+      const reader = live.normalizers.openclawReaders.get(key) as unknown as { reader: { tick(): Promise<void> } } | undefined
+      await reader?.reader.tick()
+      live.normalizers.stopPollers()
+      await check(`openclaw live: ${scenario} @${half}/${last}`, live)
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, readerFor: () => undefined, dbs: dbs(), hermesDb })
+      const out: unknown[] = []
+      const events: Array<{ type?: string }> = []
+      const ask = async (payload: Record<string, unknown>) => {
+        const reply = await history.sessionGet({ sessionId: key, ...payload })
+        out.push(reply); events.push(...((reply.events as Array<{ type?: string }>) ?? []), { type: '|' })
+        return reply
+      }
+      await ask({})
+      let page = await ask({ limit: 4 })
+      for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 4, before: page.oldestCursor })
+      await ask({ limit: 4, before: 'a-stale-cursor' })
+      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(key)])
+      await check(`openclaw history: ${scenario}`, { out, events })
+    }
+  }, 120_000)
 
   it('has a recorded outcome for every case, and no other', () => {
     if (RECORD) return

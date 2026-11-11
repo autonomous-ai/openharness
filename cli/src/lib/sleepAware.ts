@@ -2,7 +2,7 @@
  * Telling a machine that SLEPT apart from a peer that went silent.
  *
  * Node's clocks do not stop while a Mac sleeps: `performance.now()`, `process.hrtime` and the event
- * loop's own timer clock all run on the clock that keeps counting (measured on Node 22.23 and 23.11
+ * loop's own timer clock all run on the clock that keeps counting (measured on Node 22.23 and 23.11; awake clocks agree on 24.22.2
  * against CLOCK_UPTIME_RAW / CLOCK_MONOTONIC_RAW — they match the second). A lid closed for forty
  * minutes therefore arrives, on the first loop turn after the wake, as forty minutes of "silence" on
  * every deadline at once: every socket judged dead, every terminal lease expired, the safe-mode clock

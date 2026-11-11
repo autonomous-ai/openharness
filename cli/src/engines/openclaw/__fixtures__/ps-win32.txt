@@ -1,0 +1,40 @@
+# OpenClaw 2026.11.2, Node 24.22.2 win32-arm64 (Windows 11 26200), state folder C:\work\e2e-openclaw\home\.openclaw
+# TUI started in a console as: openclaw tui --session win-check (npm's openclaw.cmd, pane folder C:\work\e2e-openclaw\proj)
+$ Get-CimInstance Win32_Process  (pid, parent, session, name, command line)
+ 9872  3460 1 cmd.exe      "C:\WINDOWS\System32\cmd.exe" /d /c ""C:\work\e2e-openclaw\tools\tui.cmd""
+ 5368  9872 1 node.exe     "node"   "C:\work\e2e-openclaw\npm\\node_modules\openclaw\openclaw.mjs" tui --session win-check
+ 5672  5368 1 node.exe     C:\work\e2e-openclaw\node\node-v24.22.2-win-arm64\node.exe --stack-size=8192 C:\work\e2e-openclaw\npm\node_modules\openclaw\openclaw.mjs tui --session win-check
+# The command line is not renamed on Windows: the session is in it. The launcher (5368) respawns itself with
+# --stack-size=8192; the child (5672) is the TUI.
+
+$ open disk files (system handle table, duplicated as the same user, GetFinalPathNameByHandle; handle.exe not installed)
+5368	1	C:\work\e2e-openclaw\proj
+5672	1	C:\work\e2e-openclaw\home\.openclaw\state\openclaw-quarantine.sqlite
+5672	3	C:\work\e2e-openclaw\home\.openclaw\state\openclaw.sqlite
+5672	3	C:\work\e2e-openclaw\home\.openclaw\state\openclaw.sqlite-shm
+5672	2	C:\work\e2e-openclaw\home\.openclaw\state\openclaw.sqlite-wal
+5672	1	C:\work\e2e-openclaw\proj
+# The launcher holds no database; the child holds the state DB, as on Linux.
+
+# Gateway process (holds the agent DB; the TUI does not): openclaw gateway run
+  824  3020 1 node.exe     "node"   "C:\work\e2e-openclaw\npm\\node_modules\openclaw\openclaw.mjs" gateway run
+ 9440   824 1 node.exe     C:\work\e2e-openclaw\node\node-v24.22.2-win-arm64\node.exe C:\work\e2e-openclaw\npm\node_modules\openclaw\dist\process\spawn-broker\worker.js
+824	10	C:\work\e2e-openclaw\home\.openclaw\agents\main\agent\openclaw-agent.sqlite
+824	10	C:\work\e2e-openclaw\home\.openclaw\agents\main\agent\openclaw-agent.sqlite-shm
+824	9	C:\work\e2e-openclaw\home\.openclaw\agents\main\agent\openclaw-agent.sqlite-wal
+824	1	C:\work\e2e-openclaw\home\.openclaw\state\openclaw-quarantine.sqlite
+824	9	C:\work\e2e-openclaw\home\.openclaw\state\openclaw.sqlite
+824	9	C:\work\e2e-openclaw\home\.openclaw\state\openclaw.sqlite-shm
+824	8	C:\work\e2e-openclaw\home\.openclaw\state\openclaw.sqlite-wal
+
+# Launched by Harness (harness new openclaw, terminal host 0.5.80): no cmd.exe, node runs the script directly
+ 9900  7968 1 harness-pty.exe "C:\work\e2e-openclaw\home\.harness\runtime\pty\0.5.80\harness-pty.exe" serve --home C:\work\e2e-openclaw\home\.harness\pty --history-limit 2000 --no-reexec
+ 5292  9900 1 OpenConsole.exe "C:\work\e2e-openclaw\home\.harness\runtime\pty\0.5.80\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1bc --server 0x1b4
+10104  9900 1 node.exe     C:\work\e2e-openclaw\node\node-v24.22.2-win-arm64\node.exe C:\work\e2e-openclaw\npm\node_modules\openclaw\openclaw.mjs tui --session harness-6664610f-931f-4b9b-94ae-7ce9edfdcf6e --message "Reply with exactly: windows ok"
+ 5340 10104 1 node.exe     C:\work\e2e-openclaw\node\node-v24.22.2-win-arm64\node.exe --stack-size=8192 C:\work\e2e-openclaw\npm\node_modules\openclaw\openclaw.mjs tui --session harness-6664610f-931f-4b9b-94ae-7ce9edfdcf6e --message "Reply with exactly: windows ok"
+
+# Typed in a Harness terminal pane (PowerShell): openclaw.cmd tui --session pane-check
+ 6140  9900 1 powershell.exe powershell.exe -NoLogo
+ 6636  6140 1 cmd.exe      C:\WINDOWS\system32\cmd.exe /c ""C:\work\e2e-openclaw\npm\openclaw.cmd" tui --session pane-check"
+ 8080  6636 1 node.exe     "node"   "C:\work\e2e-openclaw\npm\\node_modules\openclaw\openclaw.mjs" tui --session pane-check
+ 4916  8080 1 node.exe     C:\work\e2e-openclaw\node\node-v24.22.2-win-arm64\node.exe --stack-size=8192 C:\work\e2e-openclaw\npm\node_modules\openclaw\openclaw.mjs tui --session pane-check

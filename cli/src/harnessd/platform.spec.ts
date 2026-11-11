@@ -442,6 +442,56 @@ describe('Harness OS\'s own unit', () => {
   })
 })
 
+describe('following the managed Node', () => {
+  const node24 = '/Users/demo/.harness/runtime/node-v24.22.2-darwin-arm64/bin/node'
+  const log = definition().logFile
+
+  it('repoints the launchd agent and the systemd unit that name Node 22 at Node 24, changing nothing else and running nothing', () => {
+    for (const platform of ['launchd', 'systemd'] as const) {
+      const { deps, calls, files } = stubDeps({})
+      const service = new PlatformService(platform, deps)
+      const carried = { env: { ADAPTER_DATA_DIR: '/Users/demo/data', HARNESS_ENV_FILE: '/Users/demo/%h $x "q".env' } }
+      service.write(definition(carried))
+      expect(service.repointNode(node24, log)).toEqual({ ok: true })
+      expect(files[service.file]).toBe(service.render(definition({ ...carried, nodePath: node24 })))
+      // Once it names Node 24 there is nothing to do.
+      expect(service.repointNode(node24, log)).toBeNull()
+      expect(calls).toEqual([])
+    }
+  })
+
+  it('leaves another data folder\'s definition, none at all, Windows\' task and Harness OS\'s unit alone', () => {
+    for (const platform of ['launchd', 'systemd'] as const) {
+      const { deps, files } = stubDeps({})
+      const service = new PlatformService(platform, deps)
+      service.write(definition({ logFile: '/elsewhere/harness.log' }))
+      const before = { ...files }
+      expect(service.repointNode(node24, log)).toBeNull()
+      expect(files).toEqual(before)
+      expect(new PlatformService(platform, stubDeps({}).deps).repointNode(node24, log)).toBeNull()
+    }
+    const unit = { [OS_UNIT_FILE]: '[Service]\nExecStart=/usr/bin/harness start --foreground\n' }
+    const os = stubDeps({}, { ...unit })
+    expect(new PlatformService('systemd', os.deps, true).repointNode(node24, log)).toBeNull()
+    expect(os.files).toEqual(unit)
+    const task = stubDeps({ whoami: ok('"PC\\demo","S-1-5-21-1-2-3-1001"\r\n') }, {}, { user: 'demo', dataDir: 'C:\\Users\\demo\\.harness\\cli\\data' })
+    expect(new PlatformService('taskscheduler', task.deps).repointNode('C:\\Users\\demo\\.harness\\runtime\\node-v24\\node.exe', log)).toBeNull()
+    expect(task.files).toEqual({})
+  })
+
+  it('says why when it cannot: a definition edited by hand, a Node it cannot write, a file it cannot replace', () => {
+    const edited = stubDeps({})
+    const launchd = new PlatformService('launchd', edited.deps)
+    edited.files[launchd.file] = launchdPlist(definition()).replace('<key>ProgramArguments</key>\n\t<array>', '<key>ProgramArguments</key>\n<array>')
+    expect(launchd.repointNode(node24, log)).toEqual({ ok: false, detail: `${launchd.file} does not run its Node where harness service install writes it` })
+    const { deps } = stubDeps({}, {}, { writeFile: () => { throw new Error('EACCES: permission denied') } })
+    const systemd = new PlatformService('systemd', deps)
+    ;(deps as { readFile: PlatformDeps['readFile'] }).readFile = (path) => path === systemd.file ? systemdUnit(definition()) : null
+    expect(systemd.repointNode('relative/node', log)).toEqual({ ok: false, detail: 'the node path for the service must be absolute, on one line: "relative/node"' })
+    expect(systemd.repointNode(node24, log)).toEqual({ ok: false, detail: 'EACCES: permission denied' })
+  })
+})
+
 describe('discarding a definition that could not be registered', () => {
   it('removes the file alone, and has systemd forget it', () => {
     for (const platform of ['launchd', 'systemd'] as const) {

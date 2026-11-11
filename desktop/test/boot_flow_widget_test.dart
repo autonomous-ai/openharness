@@ -815,7 +815,7 @@ void main() {
       await tester.pump();
 
       expect(find.text('Finish setup in Terminal'), findsOneWidget);
-      expect(find.text('Managed Node 20+ & Harness CLI'), findsOneWidget);
+      expect(find.text('Managed Node 22+ & Harness CLI'), findsOneWidget);
       expect(find.text('Recheck now'), findsOneWidget);
       expect(find.text('Harness cannot see your password'), findsOneWidget);
     },
@@ -931,7 +931,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('tmux'), findsOneWidget);
-    expect(find.text('Managed Node 20+ & Harness CLI'), findsNothing);
+    expect(find.text('Managed Node 22+ & Harness CLI'), findsNothing);
     expect(find.text('Install 1 tool'), findsOneWidget);
     // Nothing on macOS needs a password any more: no Terminal notice.
     expect(find.text('Admin prompts stay in Terminal'), findsNothing);
@@ -969,7 +969,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Managed Node 20+ & Harness CLI'), findsOneWidget);
+    expect(find.text('Managed Node 22+ & Harness CLI'), findsOneWidget);
     expect(find.text('Homebrew'), findsNothing);
     expect(find.text('tmux'), findsNothing);
     expect(find.text('Install 1 tool'), findsOneWidget);
@@ -999,7 +999,7 @@ void main() {
       await tester.pump();
 
       expect(find.text('tmux'), findsOneWidget);
-      expect(find.text('Managed Node 20+ & Harness CLI'), findsOneWidget);
+      expect(find.text('Managed Node 22+ & Harness CLI'), findsOneWidget);
       expect(find.text('Install 2 tools'), findsOneWidget);
       expect(find.text('Admin prompts stay in Terminal'), findsNothing);
       expect(find.text('Apple developer tools'), findsNothing);
@@ -1007,7 +1007,7 @@ void main() {
       expect(
         tester.getTopLeft(find.text('tmux')).dy,
         lessThan(
-          tester.getTopLeft(find.text('Managed Node 20+ & Harness CLI')).dy,
+          tester.getTopLeft(find.text('Managed Node 22+ & Harness CLI')).dy,
         ),
       );
     },

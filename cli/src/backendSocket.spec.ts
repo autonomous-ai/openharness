@@ -3827,6 +3827,16 @@ describe('the models lists pushed to the windows', () => {
     await socket.stop()
   })
 
+  // `agents_list`, the launch replies and the updates build frames here; only pushed frames carried it (E2E 2026-11-10).
+  it('carries the engine\'s own workspace in every frame it builds', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-ws', sessionId: 'agent:main:plain', engine: 'openclaw', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).workspace).toBeUndefined()
+    socket.workspaceProvider = (s) => (s.sessionId === 'agent:main:plain' ? '/root/.openclaw/workspace' : null)
+    expect((await socket.toProject(agent)).workspace).toBe('/root/.openclaw/workspace')
+    await socket.stop()
+  })
+
   it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {
     const socket = relaySocket('token')
     socket.models = () => MODELS_OFF
