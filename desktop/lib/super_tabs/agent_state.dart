@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import 'controller.dart';
 import 'github_issues.dart';
+import 'github_pulls.dart';
 import 'model.dart';
 import 'my_agents.dart';
 
@@ -80,6 +81,9 @@ class SwarmAgentStates extends ChangeNotifier {
   /// once a run, not once a row.
   final _taken = <String, Map<String, int>>{};
   final _repositories = <String, String?>{};
+
+  /// Each repository's taken tasks whose pull request's checks run (the board's Checks), read with its taken tasks.
+  final _building = <String, Set<int>>{};
   final _boardRead = <String, DateTime>{};
 
   /// Waits after a failed read, by what was read: its failures so far and when it may be asked again.
@@ -95,8 +99,8 @@ class SwarmAgentStates extends ChangeNotifier {
   /// What [agent]'s row says in a word or two, the first of (Swarm plan, step 1, item 1: "What Harness knows is a state
   /// anyone can see"): not running (`offline`); `starting`; waiting on its person (`needs you` to them, `waiting on its
   /// person` to anyone else: a question on its screen, or its terminal waits on their input); out of quota until a time (`limited until
-  /// 15:40`, what its machine saw on its screen); at a task (`on #12`); `working` (a turn runs); `free`. Idle, or nothing
-  /// known, says nothing. What its computer's daemon says of it is known where [app] reads that computer; tasks and free
+  /// 15:40`, what its machine saw on its screen); `waiting on a build` (at a task whose pull request's checks run, while no turn
+  /// of its runs); at a task (`on #12`); `working` (a turn runs); `free`. Idle, or nothing known, says nothing. What its computer's daemon says of it is known where [app] reads that computer; tasks and free
   /// come from [states], read while Your Team is open.
   static String? rowOf(
     SuperTabAgent agent, {
@@ -123,7 +127,13 @@ class SwarmAgentStates extends ChangeNotifier {
       String two(int n) => n.toString().padLeft(2, '0');
       return 'limited until ${two(until.hour)}:${two(until.minute)}';
     }
-    if (states?.taskOf(agent) case final number?) return 'on #$number';
+    if (states?.taskOf(agent) case final number?) {
+      final idle =
+          activity == HarnessActivity.idle || activity == HarnessActivity.done;
+      return idle && states!._buildingOf(agent, number)
+          ? 'waiting on a build'
+          : 'on #$number';
+    }
     if (activity == HarnessActivity.working) return 'working';
     return states?._free[agent.id] == true ? 'free' : null;
   }
@@ -147,6 +157,10 @@ class SwarmAgentStates extends ChangeNotifier {
     _said = said;
     notifyListeners();
   }
+
+  /// Whether the pull request for [agent]'s task [number] has its checks running.
+  bool _buildingOf(SuperTabAgent agent, int number) =>
+      _building[_repositories[agent.id]]?.contains(number) ?? false;
 
   /// The task [agent] has taken on its project's board, by number, whether it is online or not; null for none.
   int? taskOf(SuperTabAgent agent) =>
@@ -239,6 +253,9 @@ class SwarmAgentStates extends ChangeNotifier {
     _free.removeWhere((agent, _) => !agents.contains(agent));
     _channelRead.removeWhere((channel, _) => !channels.contains(channel));
     _taken.removeWhere((repository, _) => !repositories.contains(repository));
+    _building.removeWhere(
+      (repository, _) => !repositories.contains(repository),
+    );
     _boardRead.removeWhere(
       (repository, _) => !repositories.contains(repository),
     );
@@ -320,7 +337,8 @@ class SwarmAgentStates extends ChangeNotifier {
     }
   }
 
-  /// Reads [repository]'s taken tasks when they are older than [boardEvery]; whether they changed.
+  /// Reads [repository]'s taken tasks when they are older than [boardEvery], and while one is taken its pull requests, for the
+  /// ones whose checks run; whether they changed.
   Future<bool> _readBoard(String repository) async {
     final at = _boardRead[repository];
     final every = boardEvery;
@@ -330,11 +348,23 @@ class SwarmAgentStates extends ChangeNotifier {
     }
     try {
       final taken = await github.taken(repository);
+      final building = taken.isEmpty
+          ? <int>{}
+          : {
+              for (final MapEntry(:key, :value) in (await github.pulls(
+                repository,
+              )).entries)
+                if (value.status == SwarmPullStatus.checks) key,
+            };
       if (_disposed) return false;
       _boardRead[repository] = clock.now();
       _recovered('board/$repository');
-      if (mapEquals(_taken[repository], taken)) return false;
+      if (mapEquals(_taken[repository], taken) &&
+          setEquals(_building[repository], building)) {
+        return false;
+      }
       _taken[repository] = taken;
+      _building[repository] = building;
       return true;
     } on Object catch (error) {
       _failed('board/$repository', 'a board', error);
