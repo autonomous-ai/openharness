@@ -11,7 +11,6 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
-import 'personal_lead.dart';
 
 /// How long a queued delivery's claims fail before its sender is told, and how
 /// long a queued message waits with no claim fields before the same (prod 10-30,
@@ -62,16 +61,9 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     _listen(widget.app);
   }
 
-  /// [app], and the Lead its Personal project starts (personal_lead.dart).
-  void _listen(AppNotifier? app) {
-    app?.addListener(_changed);
-    if (app != null) PersonalLeadStarter.of(app).addListener(_changed);
-  }
+  void _listen(AppNotifier? app) => app?.addListener(_changed);
 
-  void _unlisten(AppNotifier? app) {
-    app?.removeListener(_changed);
-    if (app != null) PersonalLeadStarter.of(app).removeListener(_changed);
-  }
+  void _unlisten(AppNotifier? app) => app?.removeListener(_changed);
 
   @override
   void didUpdateWidget(SuperTabMessageReceipt oldWidget) {
@@ -225,29 +217,24 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               : null,
         ));
       }
-    } else if (waitingFor case final project?) {
+    } else if (waitingFor != null) {
       // Its PM's own chat while the PM starts (backend pmChat.ts): the server
-      // keeps the message for it. A Personal Swarm's start that failed here
-      // says why.
-      final app = widget.app;
-      final start = app == null
-          ? null
-          : PersonalLeadStarter.of(app).statusOf(c, project.leadConversationId);
-      if (start?.reason case final reason?) {
-        title = 'Couldn’t start the Product Manager: $reason';
-      } else {
-        color = DesktopChrome.muted;
-        icon = AppIcons.clock;
-        title = 'Waiting for the Product Manager';
-      }
+      // keeps the message for it.
+      color = DesktopChrome.muted;
+      icon = AppIcons.clock;
+      title = 'Waiting for the Product Manager';
     } else if (delivery == null &&
         c.selected?.leadId == null &&
         // An agent's own chat has no Lead: its agent takes the message.
         c.selected?.isAgentChat != true) {
-      // A Personal project's PM starts from its channel's card, and its
-      // person talks to it in its own chat (personal_lead.dart).
+      // A project's channel: its owner chooses its PM from their agents
+      // (choose_pm.dart), and nothing new is started.
       title = 'Not sent · this chat has no Lead';
-      actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
+      final channel = c.snapshot?.isProjectLead(c.selectedId) == true;
+      actions.add((
+        channel ? 'Choose PM' : 'Add a Lead',
+        c.canWrite ? widget.onAddLead : null,
+      ));
     } else if (delivery?.status == 'cancelled') {
       title = 'Not sent';
     } else if (delivery?.pending == true && offline) {
