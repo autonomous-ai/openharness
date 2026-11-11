@@ -497,6 +497,17 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(await told('agent')).toBe(SWARM_BASICS)
     expect(await told('coordinator')).toBe(`${SWARM_BASICS}\n${PM_BASICS}`)
   })
+
+  // Its own agents/<name>.md comes after the basics at every relaunch (superTabs/inCore/launch.ts): the row's folder and the name
+  // it was started under go to the Swarm, which reads the file again each time.
+  it('hands the Swarm the row\'s folder and the name it was started under, for the agent\'s own instructions', async () => {
+    const basics = vi.fn((_lead: boolean, _own?: { cwd: string | null; name: string | null }) => 'basics')
+    const swarm = { basics, github: () => null, args: () => [] }
+    await buildLaunchOverrides(deps({ readAttribution: () => null, swarm }).d, 'claude', { startedBy: null, cwd: '/work', name: 'Faye',
+      swarmSkill: { role: 'agent', key: 'harness-claude-x' } }, 'a', () => true)
+    await buildLaunchOverrides(deps({ readAttribution: () => null, swarm }).d, 'claude', { startedBy: null, swarmSkill: { role: 'agent', key: 'harness-claude-x' } }, 'a', () => true)
+    expect(basics.mock.calls).toEqual([[false, { cwd: '/work', name: 'Faye' }], [false, { cwd: null, name: null }]])
+  })
 })
 
 describe('buildLaunchOverrides — opencode v2', () => {
