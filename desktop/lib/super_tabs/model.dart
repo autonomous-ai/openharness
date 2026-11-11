@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cryptography/dart.dart' show DartSha256;
 
+import '../core/models.dart' show machineIdKey;
 import 'identity.dart' show superTabPersonName;
 import 'profile_model.dart';
 
@@ -518,6 +519,14 @@ class SuperTabSnapshot {
         for (final id in row['removedMachines'] as List? ?? const [])
           if (id is String) id,
       ],
+      removedPanes = {
+        for (final pane in row['removedPanes'] as List? ?? const [])
+          if (pane case {
+            'machineId': final String machine,
+            'harnessId': final String harness,
+          })
+            (machineIdKey(machine), harness),
+      },
       autoJoin = row['autoJoin'] == true,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
@@ -603,6 +612,10 @@ class SuperTabSnapshot {
   /// leaves them out (backend model.ts removedMachines). Empty from an older
   /// backend.
   final List<String> removedMachines;
+
+  /// The reader's own sessions they took out of this Swarm, by machine ([machineIdKey]) and session: Your Team leaves them
+  /// out, and only the person's own Attach brings one back (backend `removedPanes`). Empty from an older backend.
+  final Set<(String, String)> removedPanes;
 
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.

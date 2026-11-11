@@ -164,11 +164,14 @@ const _nameRefusals = {
 /// one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways
 /// once it is in (cli superTabs/host.ts). A join the connection lost is tried again as the same operation, which never adds
 /// it twice; one that failed is finished by the next try ([_Join]).
+///
+/// [name] is the name its row in Your Team showed (personal_agents.dart), which it keeps as its own.
 Future<String> swarmAttachAgent(
   AppNotifier app,
   String tabId,
   String machineId,
   Agent native, {
+  String? name,
   Future<void> Function(Duration) wait = Future<void>.delayed,
 }) async {
   final engine = native.engine;
@@ -195,7 +198,7 @@ Future<String> swarmAttachAgent(
   var join = joins[key];
   if (join == null) {
     final names = await taken();
-    final own = native.name.trim();
+    final own = (name ?? native.name).trim();
     final keepOwn =
         own.isNotEmpty &&
         !isAutomaticHarnessName(own) &&
@@ -238,10 +241,12 @@ Future<String> swarmAttachAgent(
     }
   }
 
+  // Its session named, so a try from another view or computer of the person's finds the same chat (backend agent.new).
   Future<Map<String, dynamic>> newChat(String step) => run(step, {
     'type': 'agent.new',
     'kind': 'regular',
     'machineId': machineId,
+    'harnessId': native.id,
     'engine': engine,
     'name': current.name,
     'local': true,
