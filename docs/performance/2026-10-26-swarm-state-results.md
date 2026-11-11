@@ -258,7 +258,10 @@ containers removed, with no port left open.
 All of these run from `backend/` after `npm ci`. Each starts its own MongoDB replica set on 127.0.0.1 and reads no
 other database.
 
-**Benchmark, new store** (at the integration head, about 3 minutes each, one after the other on a quiet machine):
+**Benchmark, new store** (at the integration head, about 3 minutes each, one after the other on a quiet machine). These
+are the v1-v3 bench's commands, run at that head: `--lane cross-group`, `--done-share` and the drivers went in Swarm v4
+S19c, and today's bench builds a Swarm v4. Its equivalents are `npm run bench:swarm-state` and
+`npm run bench:swarm-state -- --lane cross-chat` (goal 1); it has no hot-Swarm option, `--agents` and `--projects` size it.
 
 ```bash
 npm run bench:swarm-state                          # mixed, run 1; run it again for run 2
