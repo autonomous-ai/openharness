@@ -699,7 +699,7 @@ void main() {
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final localId = f.app.activeSwarmId;
       final box = await f.box(newProject: true);
-      expect(box.actionLabel, 'New Project');
+      expect(box.actionLabel, 'New project');
       box.integration!.projectVisibility = 'private';
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
       expect(f.app.swarms, hasLength(1));

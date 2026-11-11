@@ -169,7 +169,7 @@ class SuperTabLaunch {
             initialTask: saved['initialMessage'] as String?,
             swarmRole: saved['lead'] == true ? 'lead' : 'dev',
             actionLabel: saved['newProject'] == true
-                ? 'New Project'
+                ? 'New project'
                 : saved['lead'] == true && saved['coordinator'] != true
                 ? 'New Swarm'
                 : 'New Harness',
