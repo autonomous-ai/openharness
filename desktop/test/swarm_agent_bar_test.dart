@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/swarm_v4_data.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// An agent's chat bar and a project's (Swarm v4): the name, and where the agent runs, are cut with an ellipsis, so a long name
 /// never pushes the buttons off the bar; a short name keeps what runs it beside it and the buttons at the bar's edge; and a
@@ -22,6 +25,8 @@ void main() {
     String chat = 'agent-chat-second',
     Map<String, String> names = const {},
     String? project,
+    List<String> alerting = const [],
+    AppNotifier? app,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -29,6 +34,9 @@ void main() {
     for (final agent
         in (server.state['agents'] as List).cast<Map<String, dynamic>>()) {
       if (names[agent['id']] case final name?) agent['displayName'] = name;
+      if (agent['id'] == 'second' && alerting.isNotEmpty) {
+        agent['alerting'] = alerting;
+      }
     }
     if (project != null) {
       (server.state['projects'] as List)
@@ -52,6 +60,7 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
+            app: app,
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
@@ -98,6 +107,75 @@ void main() {
         tester.getRect(find.text('Mac Studio · Claude Code')).right,
         lessThanOrEqualTo(first.left),
       );
+    },
+  );
+
+  // anh Dee, 2026-11-11: "if the terminal is stuck, add a red notification icon on top of the terminal icon". Stuck is a prompt
+  // its computer has seen it sit on for 3 minutes (the Swarm host's watch, backend `alerting`), or a question on its screen.
+  testWidgets(
+    'a terminal stuck on a prompt, or with a question on its screen, has a red 1 on its button, and only then',
+    (tester) async {
+      await show(tester, const Size(1080, 700));
+      expect(key('swarm-terminal-stuck'), findsNothing);
+      await show(tester, const Size(1080, 700), alerting: ['limit']);
+      expect(key('swarm-terminal-stuck'), findsNothing);
+      await show(tester, const Size(1080, 700), alerting: ['prompt']);
+      expect(
+        find.descendant(
+          of: key('swarm-terminal-stuck'),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
+      // On the button's top right corner, over its edge.
+      final button = tester.getRect(key('swarm-terminal-button'));
+      final badge = tester.getRect(key('swarm-terminal-stuck'));
+      expect(badge.center.dx, greaterThan(button.center.dx));
+      expect(badge.top, lessThan(button.top + button.height / 2));
+      expect(find.byTooltip('Terminal · waiting on you'), findsOneWidget);
+      // A question on its screen, from its computer's daemon, before 3 minutes are up.
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      const machine = Machine(
+        machineId: 'host',
+        authMode: MachineAuthMode.remote,
+        name: 'Host',
+      );
+      app.machines = [...app.machines, machine];
+      app.machineStates['host'] = MachineState(machine)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agentLoadStatus = AgentLoadStatus.loaded
+        ..agents = [
+          const Agent(
+            id: 'session-second',
+            name: 'second',
+            engine: 'claude',
+            terminalAvailable: true,
+          ),
+        ];
+      await show(tester, const Size(1080, 700), app: app);
+      expect(key('swarm-terminal-stuck'), findsNothing);
+      await tester.runAsync(
+        () => app.handleEventForTest('host', {
+          'type': 'commander_question',
+          'agentId': 'session-second',
+          'dbSessionId': 's1',
+          'payload': {
+            'requestId': 'q_1',
+            'questions': [
+              {
+                'key': 'Which branch?',
+                'q': 'Which branch?',
+                'options': ['main', 'dev'],
+                'multi': false,
+              },
+            ],
+          },
+        }),
+      );
+      await tester.pump();
+      expect(key('swarm-terminal-stuck'), findsOneWidget);
     },
   );
 

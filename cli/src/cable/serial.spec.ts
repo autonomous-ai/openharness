@@ -7,7 +7,7 @@ vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:
 vi.mock('./portStream.js', () => ({ portStream: io.stream }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
-import { SerialLink, findDialPorts } from './serial.js'
+import { SerialLink, SerialToolTimeoutError, createDarwinDialFinder, findDialPorts } from './serial.js'
 
 function port(nativeFd = 43) {
   const stream = Object.assign(new EventEmitter(), {
@@ -28,7 +28,7 @@ describe('event-driven serial link', () => {
     vi.useFakeTimers()
     io.open.mockReturnValue(42)
     if (claimsPort) io.open.mockReturnValueOnce(41)
-    io.configure.mockImplementation((_cmd, _args, callback) => callback(null, '', ''))
+    io.configure.mockImplementation((_cmd, _args, _options, callback) => callback(null, '', ''))
     // The far end is there and has said nothing yet.
     io.read.mockImplementation(() => { throw Object.assign(new Error('EAGAIN'), { code: 'EAGAIN' }) })
   })
@@ -97,12 +97,27 @@ describe('event-driven serial link', () => {
   })
 
   it('does not open a port that could not be configured raw', async () => {
-    io.configure.mockImplementation((_cmd, _args, callback) => callback(new Error('stty failed')))
+    io.configure.mockImplementation((_cmd, _args, _options, callback) => callback(new Error('stty failed')))
     await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toThrow('stty failed')
     if (claimsPort) {
       expect(io.open).toHaveBeenCalledTimes(1)
       expect(io.close).toHaveBeenCalledExactlyOnceWith(41)
     } else expect(io.open).not.toHaveBeenCalled()
+    expect(io.stream).not.toHaveBeenCalled()
+  })
+
+  it('gives up on an stty that never answers, kills it and lets the claim go', async () => {
+    io.configure.mockImplementation(() => {}) // stty hangs: no callback, ever
+    let outcome: unknown
+    SerialLink.open('/dev/fake', vi.fn(), vi.fn()).then(() => { outcome = 'opened' }, (error) => { outcome = error })
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(outcome).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(outcome).toBeInstanceOf(SerialToolTimeoutError)
+    expect(String(outcome)).toBe('SerialToolTimeoutError: stty did not answer in 5 s')
+    // execFile's own timeout is what kills the child; the race above only ends the wait.
+    expect(io.configure.mock.calls[0][2]).toMatchObject({ timeout: 5000 })
+    if (claimsPort) expect(io.close).toHaveBeenCalledExactlyOnceWith(41)
     expect(io.stream).not.toHaveBeenCalled()
   })
 
@@ -244,6 +259,7 @@ describe('macOS dial discovery wiring', () => {
     await findDialPorts()
     expect(io.configure).toHaveBeenCalledTimes(1)
     expect(io.configure.mock.calls[0].slice(0, 2)).toEqual(['ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l']])
+    expect(io.configure.mock.calls[0][2]).toMatchObject({ timeout: 5000 })
     expect(io.lstat.mock.calls.every(([path]) => path === '/dev/cu.usbmodem1101')).toBe(true)
     expect(io.lstat).toHaveBeenCalled()
 
@@ -253,5 +269,30 @@ describe('macOS dial discovery wiring', () => {
     io.configure.mockImplementation((_c, _a, _o, cb) => cb(null, { stdout: dump, stderr: '' }))
     await expect(findDialPorts()).resolves.toHaveLength(1)
     expect(io.configure).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('an ioreg that never answers', () => {
+  const dump = `+-o Tim <class IOUSBHostDevice>
+  "idVendor" = 12346
+  "idProduct" = 4097
+  +-o serial
+    "IOCalloutDevice" = "/dev/cu.usbmodem1101"`
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('rejects with a named error after 5 s, and the next scan runs ioreg again', async () => {
+    const runIoreg = vi.fn<() => Promise<string>>().mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(dump)
+    const find = createDarwinDialFinder({ listDev: () => ['cu.usbmodem1101:900:7'], runIoreg, now: () => Date.now() })
+    let outcome: unknown
+    find().then(() => { outcome = 'found' }, (error) => { outcome = error })
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(outcome).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(outcome).toBeInstanceOf(SerialToolTimeoutError)
+    expect(String(outcome)).toBe('SerialToolTimeoutError: ioreg did not answer in 5 s')
+    expect(await find()).toEqual([{ path: '/dev/cu.usbmodem1101', vendorId: 0x303a, productId: 0x1001 }])
+    expect(runIoreg).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
