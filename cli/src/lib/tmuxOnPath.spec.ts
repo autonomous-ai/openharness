@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
-import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell, tmuxAvailableNow, tmuxInstallDirectories } from './tmuxOnPath.js'
+import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories } from './tmuxOnPath.js'
 
 const dirs: string[] = []
 const originalPath = process.env.PATH
@@ -268,4 +268,17 @@ esac
       .toMatchObject({ state: 'adopted', path: join(working, 'tmux') })
     expect(env.PATH?.split(delimiter)[0]).toBe(working)
   })
+
+  // Under load a working tmux's `-V` took past the 2 s it was given and read as absent (flipped absent/adopted on a loaded Mac).
+  it('adopts an install candidate whose version check is slow but answers, and never one that does not answer', async () => {
+    const slow = scratch('tmux-onpath-slow-')
+    writeFileSync(join(slow, 'tmux'), '#!/bin/sh\n/bin/sleep 2.5\nprintf "tmux 3.7c\\n"\n', { mode: 0o700 })
+    const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
+    expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [slow]))
+      .toMatchObject({ state: 'adopted', path: join(slow, 'tmux') })
+    const hung = scratch('tmux-onpath-hung-')
+    writeFileSync(join(hung, 'tmux'), '#!/bin/sh\nexec /bin/sleep 60\n', { mode: 0o700 })
+    expect(await ensureTmuxOnPath({ PATH: '/nonexistent' }, '/nonexistent/shell', noManagedTmux(), [hung]))
+      .toMatchObject({ state: 'absent' })
+  }, 2.5_000 + TMUX_CHECK_MS + 20_000) // A slow answer, then the whole limit for one that never answers.
 })

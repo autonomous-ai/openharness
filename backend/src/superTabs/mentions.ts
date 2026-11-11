@@ -68,12 +68,33 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
  *  project goes by its name, joined or not: agents there talk to each other by name, as lampOS's did in its issues. */
 export function agentsNamedIn(state: SuperTabState, group: Conversation, text: string, names: ReadonlyMap<string, string>): string[] {
   const people = new Set([...names.values()].map(name => name.toLowerCase()))
-  const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
-  if (!tokens.length) return []
+  // No tag that could be an agent's: most posts, and one that only tags a person. Nothing of the Swarm is read for them.
+  const said = new Set(tagTokens(text).filter(token => !token.includes('@') && !people.has(token)))
+  if (!said.size) return []
   const project = projectsOf(state).find(p => p.leadConversationId === group.id)
   const members = state.agents.filter(a => group.agentIds.includes(a.id) || (project && inChannelOf(state, a, project)))
+  // A name of several words ("first builder", lampOS's PM; "a2a swarm" in the sandbox) is no one tag by TAG, which reads a
+  // word: `@first builder` named nobody, or the agent called "first". Such a name is looked for whole where the text tags its
+  // first word, the longest first, on one line (a tag does not run on into the next paragraph), and what it covered is no
+  // shorter tag. A first word that is a person's username is not in [said]: their tag stays theirs.
+  const spaced = new Map<string, string[]>()
+  for (const name of members.flatMap(a => [a.displayName, a.name])) {
+    const words = name?.trim().split(/\s+/) ?? []
+    if (words.length > 1 && said.has(words[0]!.toLowerCase())) spaced.set(words.join(' ').toLowerCase(), words)
+  }
+  let rest = prose(text)
+  const whole: string[] = []
+  for (const [name, words] of [...spaced].sort((a, b) => b[0].length - a[0].length)) {
+    const tagged = new RegExp(`(?<![\\w@/])@${words.map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^\\S\\n]+')}(?![\\w+-]|\\.[\\w+-])`, 'gi')
+    if (!tagged.test(rest)) continue
+    whole.push(name)
+    rest = rest.replace(tagged, match => blank(match))
+  }
+  const tokens = [...whole, ...new Set([...rest.matchAll(TAG)].map(match => `${match[1]}${match[2] ?? ''}`.toLowerCase())
+    .filter(token => !token.includes('@') && !people.has(token)))]
+  const spoken = (name: string | null | undefined) => name?.trim().split(/\s+/).join(' ').toLowerCase()
   return [...new Set(tokens.flatMap(token => {
-    const matches = members.filter(a => a.displayName?.toLowerCase() === token || a.name.toLowerCase() === token)
+    const matches = members.filter(a => spoken(a.displayName) === token || spoken(a.name) === token)
     return matches.length === 1 ? [matches[0]!.id] : []
   }))]
 }

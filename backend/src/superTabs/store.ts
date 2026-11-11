@@ -2080,15 +2080,16 @@ export class SuperTabStore {
 
   /** A project's Lead's first deliveries (leadStart.ts leadArrived): its person's messages sent in its chat while it had none,
    *  each written once (its id is the message's and the agent's, as writeMessages makes it), only for a stored main-chat message
-   *  of that conversation by that person. */
+   *  of that conversation by that person that they did not delete. Also a PM's first deliveries in its 1:1 chat (pmChat.ts). */
   private async writeLateDeliveries(tx: Transaction, tabId: string, state: SuperTabState, late: NonNullable<CommandEffects['lateDeliveries']>) {
     const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     // A few, each by its primary key (hotFilters.test.ts: no `in` filter on a hot collection).
     for (const l of late) {
-      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true } })
+      const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true, deletedAt: true } })
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
-      if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !l.lead || author?.kind !== 'person' || author.id !== l.author.id
+      // A message its person deleted while it waited, kept only as a thread's root, is not theirs to type any more.
+      if (!row || row.deletedAt || row.tabId !== tabId || row.conversationId !== l.conversationId || !l.lead || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
       deliveries.push({ id: stableId(l.messageId, l.agentId), tabId, conversationId: l.conversationId, messageId: l.messageId, agentId: l.agentId,

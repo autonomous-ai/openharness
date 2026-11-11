@@ -553,12 +553,16 @@ export function startHookServer(
       // Over TCP either may have been heard by another account that held this port during a restart (audit H1), which
       // could then forge session ends or turn stops here, so it counts only from this one. Asked only once it matched.
       const suppliedHookToken = req.headers['x-harness-hook-token']
-      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await peerAccount(req.socket))
+      // One answer per request: a lookup that gave no answer is not kept on the socket (lib/peerAccount.ts), and the two
+      // checks below asking it twice waited out a slow lsof twice and could disagree.
+      let callerAnswer: Promise<boolean> | undefined
+      const callerIsThisAccount = () => (callerAnswer ??= peerAccount(req.socket))
+      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await callerIsThisAccount())
       // The loopback port takes any local OS user's process, so over TCP every route but the few below
       // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
       // read. Over the daemon's Unix socket the filesystem already said who this is. Over TCP the credential may have
       // been heard by another account that held this port during a restart (audit H1), so it counts only from this one.
-      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await peerAccount(req.socket))
+      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await callerIsThisAccount())
       // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
       // own token, above) and the native device routes (their own bearer, just below).
       const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))

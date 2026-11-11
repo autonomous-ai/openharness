@@ -179,6 +179,27 @@ describe('core engine stream authority', () => {
     expect(prepared.state.handle.turnOpen).toBe(true)
   })
 
+  it('answers a caller only with a read that started after it asked, sharing one among callers waiting together', async () => {
+    const t = await setup(prompt('one') + done)
+    await t.attach()
+    const entered = deferred<void>(), release = deferred<void>()
+    let reads = 0
+    t.intercept(async (method, reply) => {
+      if (method !== LIVE_READ) return reply
+      if (++reads === 1) { entered.resolve(); await release.promise }
+      return reply
+    })
+    const earlier = t.live.pollSession(t.session.sessionId)
+    await entered.promise // That read's page was taken before the next turn was written.
+    await appendFile(t.file, prompt('two'))
+    const drains = [t.live.pollSession(t.session.sessionId), t.live.pollSession(t.session.sessionId)]
+    release.resolve()
+    await earlier
+    await Promise.all(drains)
+    expect(t.events().filter(event => event.type === 'turn_started')).toHaveLength(1)
+    expect(reads).toBe(2)
+  })
+
   it('accepts a read across a Linux clock correction but rejects a changed process start tick', async () => {
     const t = await setup()
     t.session.processIdentity = { pid: 7, executable: 'claude', startMarker: 'one', startTicks: 42 }
