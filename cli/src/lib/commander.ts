@@ -12,6 +12,7 @@
  *                             and handed to the NEXT turn's summariser as its previous recap)
  *   turn_ended (no device)  → local recap + desktop notification when notifyWithoutDevice is on
  *   turn_ended (empty text) → {kind:'done'}                          (clear busy)
+ *   turn_ended (quiet)      → {kind:'done'}, and the apps a silent tier alone (no recap, no notification)
  *
  * Every frame carries top-level `agentId` + `dbSessionId` (= the tmux session id). The recap
  * writer (`summarize`) is injected so it's unit-testable with a stub; the daemon's is an excerpt. Mirrors the hosted runtime's
@@ -141,6 +142,11 @@ interface SessionState {
   /** Backstop: a sub-agent that never reports back must not cost the turn its recap. */
   endDeadline: NodeJS.Timeout | null
   abort: AbortController | null
+  /** The turn's end was said quiet (`ingest`'s `quiet`): set at that end, so a held end keeps it until it is
+   *  let go; cleared by the next turn_started, so it never reaches the turn after. */
+  quiet: boolean
+  /** The person's questions as they were before this turn's own was recorded: what a quiet end puts back. */
+  asksBefore: string[] | undefined
 }
 
 interface TodoInput {
@@ -362,7 +368,7 @@ export class CommanderMirror {
   private stateFor(sessionId: string): SessionState {
     let st = this.states.get(sessionId)
     if (!st) {
-      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, commands: new Map(), startedAt: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
+      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, commands: new Map(), startedAt: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null, quiet: false, asksBefore: undefined }
       this.states.set(sessionId, st)
     }
     return st
@@ -398,8 +404,13 @@ export class CommanderMirror {
     ;(isError ? console.error : console.log)(`[recap] ${line}`)
   }
 
-  /** Fold one session's LiveEvents into device commander_event frames (live cards + async recap). */
-  ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean }): void {
+  /**
+   * Fold one session's LiveEvents into device commander_event frames (live cards + async recap).
+   *
+   * `quiet`: the turn that ends in this batch was started by a line typed for the agent alone (a delivery marked
+   * quiet, core/api.ts `DeliveryOptions`): nobody asked for it, so its end makes no recap and no notification.
+   */
+  ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean; quiet?: boolean }): void {
     const st = this.stateFor(sessionId)
     if (!options?.replay && st.turnOpen) this.notifications.continued(sessionId)
     for (const e of events) {
@@ -428,8 +439,10 @@ export class CommanderMirror {
           //
           // The question is a fact about the TURN, not about the recap, so it is kept on its own list
           // and no longer has to wait for, or stay in step with, anything else.
+          st.asksBefore = this.asks.get(sessionId)
           this.rememberAsk(sessionId, e.payload.userMessage || '')
           this.stored(sessionId)
+          st.quiet = false
           st.turnOpen = true
           st.everOpened = true
           st.abandoned = false
@@ -511,6 +524,7 @@ export class CommanderMirror {
 
         case 'turn_ended':
           if (options?.replay) this.notifications.cancelled(sessionId)
+          if (options?.quiet) st.quiet = true
           // A killed turn takes the cancel path, not the recap path: clear the tile and stay silent. There
           // is nothing to summarize, and a beep for output the user just threw away is worse than nothing.
           if (e.payload.aborted) {
@@ -669,6 +683,10 @@ export class CommanderMirror {
       }
       return
     }
+    if (st.quiet) {
+      this.endQuietly(sessionId, st)
+      return
+    }
     const fallbackText = st.lastAssistantText.trim()
     const fallbackUserMessage = st.lastUserMessage
     st.turnOpen = false
@@ -714,6 +732,29 @@ export class CommanderMirror {
         this.trace(sessionId, `${sid} JSON session read failed: ${err instanceof Error ? err.message : String(err)} — no verified final result`, true)
         this.startSummary(sessionId, st, ac, t0, sid, '', fallbackUserMessage, device, 'session-json', localOnly)
       })
+  }
+
+  /**
+   * The end of a turn a line typed for the agent alone started. Nobody asked for it, so it is nobody's news: the
+   * turn closes and the card clears as an empty turn's end does, and nothing is read, cut or kept, so the agent's
+   * last recap stays its last real turn's. The apps hear one silent tier and no notification: Desktop alerts only
+   * on a notification, and a phone that waits for a tier files nothing for `silent` instead of telling the end by
+   * its own rule. The line is not the person's question either, so the questions a router reads are put back.
+   */
+  private endQuietly(sessionId: string, st: SessionState): void {
+    st.quiet = false
+    st.turnOpen = false
+    st.lastTool = null
+    st.lastTodos = null
+    st.lastAssistantText = ''
+    this.notifications.cancelled(sessionId) // a second close of this turn cannot ring
+    if (st.asksBefore) this.asks.set(sessionId, st.asksBefore)
+    else this.asks.delete(sessionId)
+    this.stored(sessionId)
+    this.trace(sessionId, `${sessionId.slice(0, 8)} turn-end · quiet → done, no recap`)
+    this.emit(sessionId, { kind: 'done', text: 'done' })
+    this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
+      dbSessionId: sessionId, payload: { sessionId, tier: 'silent' } })
   }
 
   /**
