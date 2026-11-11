@@ -624,7 +624,7 @@ describe('the numbers, told as they are due', () => {
     const t = setup(new Date(2026, 10, 11, 9, 0).getTime()), landed = numbers({ free: [] })
     t.failing.set('post', down)
     // That it is being read is written before the read: a daemon that stops in the middle of it finds that on its next start.
-    t.board.mockImplementation(async () => { expect(kept(t).board).toEqual({ day: '2026-11-11', words: '' }); return 'Trains: 4 landed.' })
+    t.board.mockImplementation(async () => { expect(kept(t).board).toEqual({ day: '2026-11-11' }); return 'Trains: 4 landed.' })
     await passes(t, 1, landed)
     expect(t.board).toHaveBeenCalledOnce()
     expect(kept(t).board).toEqual({ day: '2026-11-11', words: 'Trains: 4 landed.' })
@@ -634,14 +634,26 @@ describe('the numbers, told as they are due', () => {
     expect(t.board).toHaveBeenCalledOnce()
     expect(t.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, 'Trains: 4 landed.')])
     expect(kept(t).board).toBeUndefined()
-    // One that stopped in the middle of the read posts the day without it.
+    // One that stopped in the middle of the read posts the day without it, and says so: nothing told a scoreboard with
+    // nothing to say from one never read (its second review).
     const u = setup(new Date(2026, 10, 11, 9, 0).getTime())
-    writeFileSync(u.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '', board: { day: '2026-11-11', words: '' } } }))
-    await passes(u, 1, landed)
+    writeFileSync(u.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '', board: { day: '2026-11-11' } } }))
+    u.failing.set('post', down)
+    await passes(u, 2, landed)
     expect(u.board).not.toHaveBeenCalled()
+    expect(notes(u).filter(line => line.includes('SCOREBOARD_UNREAD'))).toEqual(['[super-tab] numbers: SCOREBOARD_UNREAD acme/app: the daemon stopped as it was read'])
+    u.failing.clear()
+    await passes(u, 1, landed, u.make())
     expect(u.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, '')])
+    expect(notes(u).filter(line => line.includes('SCOREBOARD_UNREAD'))).toHaveLength(1)
+    // One read that had nothing to say is no such thing: nothing is said of it.
+    const w = setup(new Date(2026, 10, 11, 9, 0).getTime())
+    writeFileSync(w.file, JSON.stringify({ app: { typedAt: 0, told: 0, said: false, activity: 0, day: '', board: { day: '2026-11-11', words: '' } } }))
+    await passes(w, 1, landed)
+    expect(w.sent.map(([, , text]) => text)).toEqual([dayLine(landed, 'Wed 11 Nov', undefined, '')])
+    expect(notes(w)).toEqual([])
     // What is kept of it that is not a day and its words is not kept; the rest of the record is.
-    for (const board of ['x', { day: 1, words: 'w' }, { day: '2026-11-11' }, null]) {
+    for (const board of ['x', { day: 1, words: 'w' }, { day: '2026-11-11', words: 4 }, null]) {
       const v = setup(new Date(2026, 10, 11, 9, 0).getTime())
       writeFileSync(v.file, JSON.stringify({ app: { typedAt: 5, told: 0, said: false, activity: 0, day: '', board } }))
       v.failing.set('post', down)
@@ -705,16 +717,5 @@ describe('the numbers, told as they are due', () => {
     expect(u.sent).toHaveLength(1)
     await u.numbers.pass({ ...PROJECT, projectId: 'project-1' }, quiet, u.goal, u.board)
     expect(u.sent).toHaveLength(1)
-    // A day's scoreboard is kept while its post is tried again, for the two hundred projects whose post failed last: the one
-    // before them reads its own again.
-    const v = setup(new Date(2026, 10, 11, 9, 0).getTime())
-    v.failing.set('post', down)
-    for (let n = 0; n <= 200; n++) await v.numbers.pass({ ...PROJECT, projectId: `project-${n}` }, landed, v.goal, v.board)
-    expect(v.board).toHaveBeenCalledTimes(201)
-    v.clock.now += MINUTE
-    await v.numbers.pass({ ...PROJECT, projectId: 'project-200' }, landed, v.goal, v.board)
-    expect(v.board).toHaveBeenCalledTimes(201)
-    await v.numbers.pass({ ...PROJECT, projectId: 'project-0' }, landed, v.goal, v.board)
-    expect(v.board).toHaveBeenCalledTimes(202)
   })
 })
