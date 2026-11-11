@@ -33,8 +33,8 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   })
 
   // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
-  // lampOS's builders do on their Queue issue, each post opening with @Name for whom it is for (Harness shows who wrote it and
-  // when); a task's own record stays on GitHub, where Harness shows it in the task's chat.
+  // lampOS's builders do on their Queue issue, a post's @Name waking whom it is for (Harness shows who wrote it and when); a
+  // task's own record stays on GitHub, where Harness shows it in the task's chat.
   // Step 1, item 7 of docs/plans/2026-11-10-swarm-plan.md: every agent's basics held 507 words and grew with each incident.
   // What code does left them, and they are held under 200 words: the next rule is code, or the project's own AGENTS.md.
   it('holds every agent\'s basics under 200 words', () => {
@@ -64,7 +64,9 @@ describe('Swarm sessions without skill files (task #4673)', () => {
       const rules = swarmBasics(saved.role === 'coordinator').text
       expect(rules).toContain('Your project\'s channel is the team\'s chat')
       expect(rules).toContain('harness super-tab post CHANNEL \'message\' NEW_ID')
-      expect(rules).toContain('Write briefly, as on Slack; @Name wakes someone.')
+      expect(rules).toContain('@Name wakes someone.')
+      // anh Dee, 2026-11-11: "it should be like a human conversation", of a PM's replies that read as its own narration.
+      expect(rules).toContain('answer there, briefly, as on Slack.')
     }
   })
   // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team

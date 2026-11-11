@@ -554,7 +554,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           if (!AGENT_COMMANDS.has(String(object(payload.command).type))) return { error: 'INVALID_REQUEST' }
           const tagged = await mentionCommand(object(payload.command), async () => (await swarm()).state)
-          // Its post as its channel and its person's chat show it: who wrote it, and when, are beside it (signature.ts).
+          // A post it sends by command, as the channel and its person's chat show it: who wrote it, and when, are beside it
+          // (signature.ts).
           const command = tagged.type === 'message.send' && typeof tagged.text === 'string'
             ? { ...tagged, text: unsigned(tagged.text, [agent.displayName as string | undefined, agent.name as string | undefined]) } : tagged
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
