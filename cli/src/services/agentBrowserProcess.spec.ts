@@ -231,6 +231,21 @@ describe('the agent browser in its own process', () => {
     expect(port.deleted).not.toHaveBeenCalled()
   })
 
+  // A line asked of no core was never written, so it is not counted as perhaps written (`unknown`): its next try types
+  // it. One the core was asked and never confirmed may have been, and stays `unknown`.
+  it('a line with no core to ask is refused, and one the link lost is unknown', async () => {
+    const { options, api } = setup()
+    const heard = vi.fn()
+    api.turns.onDelivery(heard)
+    api.turns.deliver('a1', 'Your browser is ready', 'agent-browser:a1:ready:1')
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledTimes(1))
+    expect(heard).toHaveBeenLastCalledWith(expect.objectContaining({ deliveryId: 'agent-browser:a1:ready:1', sessionId: 'a1', state: 'rejected' }))
+    options.onConnected!({ query: vi.fn(async () => { throw new Error('not connected to the core') }) } as CoreConnection)
+    api.turns.deliver('a1', 'Your browser is ready', 'agent-browser:a1:ready:2')
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledTimes(2))
+    expect(heard).toHaveBeenLastCalledWith(expect.objectContaining({ deliveryId: 'agent-browser:a1:ready:2', state: 'unknown' }))
+  })
+
   it('counts through the core, and loses a count it cannot hand over', async () => {
     const { options, api } = setup()
     api.count!('agent_browser_enabled')
