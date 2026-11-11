@@ -156,6 +156,23 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
     expect(contextOf(['mobile'], undefined, null)).toEqual({})
   })
 
+  // The allocator's design, package 5: `part:Backend` was no area of an agent that "Works on: backend", as the label's side was
+  // compared as written.
+  it('reads a part: label\'s value as an area, however it is spelled: the area an agent works on, and the one it finished tasks in', () => {
+    const team: Crew = { ...crew(), builders: [{ ...crew().builders[0]!, worksOn: worksOnOf('Works on: backend, Mobile app') }, crew().builders[1]!] }
+    const closed = [issue(10, ['builder:juno', 'part:Backend']), issue(11, ['builder:juno', 'part:BACKEND']), issue(12, ['builder:juno', 'part:backend engine'])]
+    const read = readProblem({ now: NOW, crew: team, closed, withReaders: new Set(),
+      issues: [issue(1, ['size:s', 'part:Backend']), issue(2, ['size:s', 'part:Mobile App']), issue(3, ['size:s', 'part:Backend Engine']), issue(4, ['size:s'])] })
+    expect(read.problem.tasks.map(t => t.part)).toEqual(['backend', 'mobile-app', 'backend-engine', undefined])
+    // Juno's two finished backend tasks are one area's, whatever their labels' case. Words that differ stay two areas.
+    expect(Object.fromEntries(read.done.get('juno')!)).toEqual({ backend: 2, 'backend-engine': 1 })
+    expect(read.problem.builders.find(b => b.id === 'juno')!.context).toEqual({ backend: 0.7, 'backend-engine': 0.85 })
+    // Pip is quick in the two areas its person named, and slow in the third.
+    expect(read.problem.builders.find(b => b.id === 'pip')!.context).toEqual({ backend: 0.5, 'mobile-app': 0.5, 'backend-engine': 1.5 })
+    expect(reasonOf({ task: '#2', builder: 'pip', start: 0 }, read)).toBe('it can start now, and it works on mobile-app')
+    expect(reasonOf({ task: '#1', builder: 'juno', start: 0 }, read)).toBe('it can start now, and it finished 2 part:backend tasks')
+  })
+
   it('gives a builder the tasks of its area first; another takes one only when the first is far behind', () => {
     const team = (worksOn: string[] | null): Crew => ({ ...crew(), builders: [
       { id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude', worksOn },
