@@ -24,11 +24,12 @@ import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
-import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
+import { createSuperTab, stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS, TERMINAL_RECHECK_MS } from '../src/superTabs/terminal.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
+import { EMPTY_CHAT_MS } from '../src/superTabs/paneChats.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
@@ -283,6 +284,48 @@ describe('Change agent on a Swarm member', () => {
     const occupied = (await store.read(owner, second.tab)).state.agents[0]!
     await expect(run(first.tab, { type: 'agent.rebind', agentId: first.lead, machineId: 'test-host', projectId: 'lead',
       previousHarnessId: previous.harnessId, harnessId: occupied.harnessId, configuration: config }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_CONTRIBUTED' })
+  })
+})
+
+// PSW-B review (2026-11-11): a session's chat is named by the session, so Attach retried, or from the person's other computer,
+// opens the one chat; an archived one opens again; the empty chats random requests made are archived by the time checks.
+describe('a session\'s one chat', () => {
+  it('is the same on every ask, opens again from an archive, and an empty chat is archived after an hour', async () => {
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    const tab = (await timed.create(owner, randomUUID(), 'Pane chats')).id
+    const exec = (command: Command) => timed.execute(owner, tab, { operationId: randomUUID(), command })
+    const harnessId = randomUUID()
+    const attach = async () => String((await exec({ type: 'agent.new', kind: 'regular', machineId: OWN_MAC, engine: 'codex', name: 'Juno', local: true, harnessId }))
+      .result.conversationId)
+    const chat = await attach()
+    expect(await attach()).toBe(chat)
+    await exec({ type: 'conversation.archive', conversationId: chat, archived: true })
+    expect(await attach()).toBe(chat)
+    const shown = async (id: string) => (await storedState(tab)).conversations.find(c => c.id === id)
+    expect(await shown(chat)).toMatchObject({ archived: false })
+    expect(await shown(chat)).not.toHaveProperty('dormant')
+    now += EMPTY_CHAT_MS
+    await timed.runTimeChecks(tab)
+    expect(await shown(chat)).toMatchObject({ archived: true, dormant: true })
+    expect((await timed.read(owner, tab)).state.conversations.some(c => c.id === chat)).toBe(false)
+  })
+})
+
+// PS-D (2026-11-11): Desktop asks for a repo's project by one request on every computer of its person's; a deleted one came back
+// once its receipt was gone (30 days). The Swarm remembers it.
+describe('a deleted project\'s request', () => {
+  it('makes nothing again, before its receipt goes and after', async () => {
+    const { tab } = await fixture()
+    const op = `personal-repo-${randomUUID()}`
+    const create = () => run(tab, { type: 'project.create', name: 'openharness', visibility: 'private', brief: '' }, owner, undefined, op)
+    const projectId = String((await create()).result.projectId)
+    await run(tab, { type: 'project.delete', projectId })
+    await expect(create()).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // Its receipt expires (operations.ts, 30 days).
+    expect((await db.superTabOperation.deleteMany({ where: { tabId: tab, result: { equals: { projectId, conversationId: `project-${projectId}` } } } })).count).toBe(1)
+    await expect(create()).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await store.read(owner, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
   })
 })
 
@@ -2746,6 +2789,35 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
     await run(tab, { ...join, maxAgents: 8, cwd: '/elsewhere' })
     expect((await store.read(owner, tab)).state.machines!.find(m => m.machineId === machineId)).toEqual(added)
+  })
+
+  // PSW-B review (2026-11-11): a Personal Swarm is made without the repo-less "Personal" project; the one-time job deletes the
+  // one made before wherever nothing is in it, dormant chats read too, and keeps any other.
+  it('makes a Personal Swarm without a project, and removes the old "Personal" project only where nothing is in it', async () => {
+    const person = (n: number): AuthUser => ({ sub: `36000000000000000000000${n}`, email: `personal-${n}@example.com`, autonomousEnv: 'prod', role: 'user' })
+    /** [who]'s Personal Swarm as one made before: with the first project every Swarm is made with. */
+    const old = async (who: AuthUser, said: boolean) => {
+      const tab = (await store.create(who, PERSONAL_SWARM_OPERATION, 'Personal')).id
+      const made = await storedState(tab)
+      expect(made.projects).toEqual([])
+      const first = createSuperTab(tab, 'Personal', { id: who.sub, email: who.email }, 'prod')
+      made.projects = first.projects
+      made.conversations.push(...first.conversations, { id: 'old-task', title: 'Old', leadId: null, agentIds: [], archived: true, dormant: true, brief: '',
+        checks: [], assignment: null, lastMessageSequence: said ? 2 : 0 })
+      await saveState(tab, made)
+      return tab
+    }
+    const empty = await old(person(1), false), spoken = await old(person(2), true)
+    const remove = (tab: string, who: AuthUser) => store.removePersonalProject({ id: tab, ownerId: who.sub, autonomousEnv: 'prod' })
+    expect(await remove(empty, person(1))).toBe('removed')
+    expect((await storedState(empty)).projects).toEqual([])
+    expect(await remove(empty, person(1))).toBe('removed')
+    expect(await remove(spoken, person(2))).toBe('kept')
+    expect((await store.read(person(2), spoken)).state.projects!.map(p => p.id)).toEqual(['lead'])
+    // A Team Swarm's first project is no Personal one.
+    const team = (await store.create(person(3), randomUUID(), 'Team')).id
+    expect(await remove(team, person(3))).toBe('gone')
+    expect((await storedState(team)).projects!.map(p => p.id)).toEqual(['lead'])
   })
 
   // Swarm v4: a plain agent leads no conversation, and a Personal Swarm may hold nothing else. Its host joined the machine only for a

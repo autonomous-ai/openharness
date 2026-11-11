@@ -62,6 +62,15 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(t.journal.replies).toBeUndefined()
   })
 
+  // Its person's chat shows who wrote an answer, and when, beside it, as the channel does (signature.ts).
+  it('posts the answer without the agent\'s own name and time at its start', async () => {
+    const t = setup()
+    t.answerOf.mockResolvedValueOnce('Mia, 16:25: Shipped.')
+    t.owe()
+    await t.end()
+    expect(texts(t)).toEqual(['Shipped.'])
+  })
+
   it('answers a message in a thread in that thread, as the Answer line said --reply-to', async () => {
     const t = setup()
     t.owe('d1', 'Ship it.', { thread: 'root' })

@@ -132,3 +132,27 @@ describe('a person\'s request handed over with the agent that takes it, in a Tea
     expect(rows.find(m => m.id === added.messageId)).toMatchObject({ text: 'Fix the docs', author: { kind: 'person', id: owner.sub } })
   })
 })
+
+// anh Dee 2026-11-11: a project's PM is one of its person's agents, chosen in its settings, and choosing again switches it. The
+// person's waiting messages go to the one chosen; the one replaced stays in their team. Its GitHub repository is the project's.
+describe('a project\'s PM, chosen from its person\'s agents', () => {
+  it('takes the waiting messages, switches, and keeps the project\'s repository for every computer', async () => {
+    const f = await personal()
+    const pane = async (name: string) => {
+      const chat = String((await f.execute({ type: 'agent.new', kind: 'regular', machineId: 'huy-mac', engine: 'claude', name, local: true })).result.conversationId)
+      return String((await f.execute({ type: 'agent.add', conversationId: chat, machineId: 'huy-mac', harnessId: randomUUID(), name, lead: false,
+        configuration: config })).result.agentId)
+    }
+    const juno = await pane('Juno'), pip = await pane('Pip')
+    const first = await f.send('make the landing page dark')
+    await f.execute({ type: 'project.pm', projectId: f.games.projectId, agentId: juno })
+    expect(await delivered(f.tab, juno)).toEqual([first])
+    await f.execute({ type: 'project.pm', projectId: f.games.projectId, agentId: pip })
+    await f.execute({ type: 'project.github', projectId: f.games.projectId, repository: 'huy/games' })
+    const state = (await f.store.read(owner, f.tab)).state
+    const channel = state.conversations.find(c => c.id === f.games.conversationId)!
+    expect([channel.leadId, channel.agentIds]).toEqual([pip, [pip]])
+    expect(state.agents.find(a => a.id === juno)).toMatchObject({ regular: true })
+    expect(state.projects!.find(p => p.id === f.games.projectId)!.githubRepository).toBe('huy/games')
+  })
+})

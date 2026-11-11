@@ -30,6 +30,7 @@ import '../core/project_folder.dart';
 import '../core/launch_setup.dart';
 import '../core/test_run.dart';
 import '../core/windows_status_tray.dart';
+import '../logging/app_log.dart';
 import '../logging/debug_surface.dart';
 import '../models/api_connections_controller.dart' show agentOnApiModel;
 import '../models/models_panel.dart';
@@ -86,6 +87,8 @@ import '../super_tabs/new_agent.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/workspace.dart';
+import '../super_tabs/swarm_switcher.dart'
+    show PersonalSwarm, kPersonalSwarmRow, swarmsToOpen;
 import '../super_tabs/actions.dart';
 import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
 import 'swarm_menu_bus.dart';
@@ -539,7 +542,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
       WorkspaceLearning(storage: kUnderTest ? null : HarnessFileStore.shared);
   final _newTabSources = <String, TerminalPane>{};
 
-  Widget _startGuide() => WorkspaceWelcome(
+  /// Redrawn as well when Personal is known here, so its own row in Recent Swarms goes ([swarmsToOpen]).
+  Widget _startGuide() => ListenableBuilder(
+    listenable: PersonalSwarm.of(app),
+    builder: (context, _) => _welcome(),
+  );
+
+  Widget _welcome() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
     swarmDraft: app.activeSwarm.isSuperTab,
@@ -594,9 +603,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // as itself, a conversation Harness did not start as a harness resuming it.
     // Swarm creation uses the same form as Cmd-N, without recent sessions.
     app: app.activeSwarm.isSuperTab ? null : app,
-    // The palette lists the same getter. A Swarm draft has no recents but
+    // The palette lists the same Swarms. A Swarm draft has no recents but
     // still offers these.
-    closedSuperTabs: app.closedSuperTabs,
+    closedSuperTabs: swarmsToOpen(app, personal: widget.chrome == null),
     onOpenSuperTab: _openClosedSuperTab,
     projects: _projects.projects,
     onOpen: (row) {
@@ -4539,7 +4548,33 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _openClosedSuperTab(String tabId) {
     if (_newHarness?.requestDismiss() == false) return;
     _closeNewHarness(restoreFocus: false);
+    if (tabId == kPersonalSwarmRow) {
+      unawaited(_openPersonalSwarm());
+      return;
+    }
     app.openClosedSuperTab(tabId, intoSwarmId: app.activeSwarmId);
+  }
+
+  /// Personal from [swarmsToOpen]: made the first time it is asked for; a failure is said where the person is.
+  Future<void> _openPersonalSwarm() async {
+    try {
+      await PersonalSwarm.of(app).open();
+    } catch (failure) {
+      // Asked by the account that left: nothing to say to the next.
+      if (failure is SuperTabFailure && failure.code == 'ACCOUNT_CHANGED') {
+        return;
+      }
+      appLog.warn(
+        'super-tab',
+        'Personal Swarm did not open '
+            '(${failure is SuperTabFailure ? failure.code : failure.runtimeType})',
+      );
+      _showPaneActionHint(
+        failure is SuperTabFailure
+            ? failure.message
+            : 'Could not create your Personal Swarm.',
+      );
+    }
   }
 
   /// Closing a Swarm asks nothing, so the way back is said right after.
@@ -8233,7 +8268,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ),
     // Where New Swarm lives: the tabs closed here, back by name.
     if (_canExecuteCommand('super_tab.new'))
-      for (final tab in app.closedSuperTabs)
+      for (final tab in swarmsToOpen(app, personal: widget.chrome == null))
         SwarmDestination(
           id: 'command:$_closedSuperTabCommand${tab.id}',
           title: tab.name,

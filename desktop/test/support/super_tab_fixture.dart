@@ -456,6 +456,9 @@ class ConversationServer {
 
   int revision = 0;
 
+  /// The agents `project.pm` made a project's PM, in order.
+  final projectPms = <String>[];
+
   /// The Swarm reads this server answers, worked out from [state].
   final parts = SwarmPartsBackend();
 
@@ -543,7 +546,7 @@ class ConversationServer {
   /// refuses a machine that cannot take the Product Manager (leadStart.ts).
   Map<String, String>? leadRefusal;
 
-  /// The 1:1 chat with [project]'s next PM, as backend pmChat.ts opens it on lead.start and lead.claim: the one already
+  /// The 1:1 chat with [project]'s next PM, as backend pmChat.ts opens it on lead.start: the one already
   /// waiting, else a new one for [reader], with no agent while the PM starts.
   String _pmChat(Map<String, dynamic>? project, String? reader) {
     if (project?['pmChat'] case final Map waiting) {
@@ -1198,6 +1201,38 @@ class ConversationServer {
         }
         revision++;
         agent['displayName'] = (command['name'] as String).trim();
+      } else if (command['type'] == 'project.pm') {
+        // As the backend's (project.pm): the project's owner makes one of their own agents its PM; the one before stays an
+        // agent. The answer names the PM's own chat.
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        final agent = (state['agents'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((a) => a['id'] == command['agentId'])
+            .firstOrNull;
+        if (project == null || project['ownerId'] != (reader ?? 'owner')) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Only the project’s owner chooses its PM.',
+            statusCode: 403,
+          );
+        }
+        if (agent == null || agent['contributorId'] != (reader ?? 'owner')) {
+          throw const SuperTabFailure(
+            'AGENT_NOT_YOURS',
+            'Choose one of your own agents.',
+            statusCode: 403,
+          );
+        }
+        final channel = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == project['leadConversationId']);
+        channel['leadId'] = agent['id'];
+        projectPms.add(command['agentId'] as String);
+        output['chatId'] = agent['chatId'] ?? 'pm-chat-${agent['id']}';
+        revision++;
       } else if (command['type'] == 'agent.remove') {
         // As the backend's: its contributor or the Swarm's owner withdraws it, and it leaves every chat it was in.
         final agents = (state['agents'] as List).cast<Map<String, dynamic>>();
@@ -1222,21 +1257,6 @@ class ConversationServer {
         agents.remove(agent);
         for (final chat in (state['conversations'] as List).cast<Map>()) {
           (chat['agentIds'] as List).remove(agent['id']);
-        }
-      } else if (command['type'] == 'lead.claim') {
-        // One start of a project's Lead (backend commands.ts lead.claim):
-        // another machine's claim is the one; the same machine claims again.
-        final project = (state['projects'] as List?)
-            ?.cast<Map<String, dynamic>>()
-            .where((p) => p['id'] == command['projectId'])
-            .firstOrNull;
-        final held = project?['leadClaim'];
-        output['chatId'] = _pmChat(project, reader);
-        if (held is Map && held['machineId'] != command['machineId']) {
-          output['leadStart'] = 'waiting';
-        } else {
-          project?['leadClaim'] = {'machineId': command['machineId']};
-          output['leadStart'] = 'start';
         }
       } else if (command['type'] == 'lead.start') {
         if (leadRefusal case final refusal?) {
