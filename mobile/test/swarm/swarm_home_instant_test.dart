@@ -49,7 +49,7 @@ void main() {
     return (
       id: tab,
       name: 'Phone Swarm',
-      view: swarmHomeSwarm(SuperTabSnapshot.fromJson(state)),
+      state: swarmHomeSwarm(SuperTabSnapshot.fromJson(state)),
     );
   }
 

@@ -4,7 +4,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -40,12 +39,6 @@ FakeSwarm backend(List<Map<String, dynamic>> page) {
     ],
   );
   fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-  fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
-    'decisions': <Object>[],
-  };
-  fake.routes['/api/super-tabs/$tab/mentions'] = (_) => {
-    'mentions': <Object>[],
-  };
   fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (_) =>
       {'messages': page.reversed.toList(), 'threads': <Object>[], 'next': null};
   return fake;
@@ -88,95 +81,6 @@ String textOf(WidgetTester tester, String id) => [
 ].join('\n');
 
 void main() {
-
-  group('a terminal note', () {
-    testWidgets('of input: a quiet line, what was typed in the mono face', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        backend([
-          row('t1', 2, 'River typed `echo `date`` into the terminal', {
-            'kind': 'terminal-input',
-          }),
-        ]),
-      );
-      expect(inRow('t1', find.byIcon(LucideIcons.keyboard300)), findsOneWidget);
-      expect(inRow('t1', find.text('River')), findsNothing);
-      // Only the first and last backtick are the wrapper.
-      final spans = <TextSpan>[];
-      for (final text in tester.widgetList<RichText>(
-        inRow('t1', find.byType(RichText)),
-      )) {
-        text.text.visitChildren((span) {
-          if (span is TextSpan) spans.add(span);
-          return true;
-        });
-      }
-      expect(
-        spans.where((s) => s.text == 'echo `date`').single.style?.fontFamily,
-        isNotNull,
-      );
-    });
-
-    testWidgets('of an alert: a warning mark, and no author', (tester) async {
-      await show(
-        tester,
-        backend([
-          row('t1', 2, 'Nico is waiting at a prompt', {
-            'kind': 'terminal-alert',
-            'alert': 'other',
-          }),
-        ]),
-      );
-      expect(
-        inRow('t1', find.byIcon(LucideIcons.triangleAlert300)),
-        findsOneWidget,
-      );
-      expect(inRow('t1', find.text('River')), findsNothing);
-    });
-
-    testWidgets('of the coordinator\'s usage limit says until when', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        backend([
-          row('t1', 2, 'River hit its usage limit', {
-            'kind': 'terminal-alert',
-            'alert': 'limit',
-            'lead': true,
-            'agentId': 'agent-River',
-            'limitedUntil': DateTime(2026, 11, 3, 18, 5).toIso8601String(),
-          }),
-        ]),
-      );
-      expect(textOf(tester, 't1'), contains('until'));
-      expect(textOf(tester, 't1'), contains('18:05'));
-    });
-  });
-
-  testWidgets('a worker\'s usage limit says only what its text says', (
-    tester,
-  ) async {
-    await show(
-      tester,
-      backend([
-        row(
-          't1',
-          2,
-          'Nico hit its usage limit. Routing skips it until 14:30 UTC.',
-          {
-            'kind': 'terminal-alert',
-            'alert': 'limit',
-            'agentId': 'agent-Nico',
-            'limitedUntil': DateTime.utc(2026, 11, 3, 14, 30).toIso8601String(),
-          },
-        ),
-      ]),
-    );
-    expect(textOf(tester, 't1'), endsWith('Routing skips it until 14:30 UTC.'));
-  });
 
   group('a proposal', () {
     // A Buddy's proposal from before plain chat (#2294): its whole text, from
@@ -298,8 +202,8 @@ void main() {
     expect(find.textContaining('See revision'), findsNothing);
   });
 
-  testWidgets('a v3 routing note, its override and a ship line are no chat '
-      'row, as the backend removes them', (tester) async {
+  testWidgets('a v3 routing note, its override, a ship line and a terminal '
+      'note are no chat row, as the backend removes them', (tester) async {
     await show(
       tester,
       backend([
@@ -311,7 +215,21 @@ void main() {
         }),
         row('override', 4, 'Route changed to Ivy', {'kind': 'route-override'}),
         row('shipped', 5, 'Shipped #12', {'kind': 'ship'}),
-        row('later', 6, 'Next', {}),
+        row('typed', 6, 'River typed `2` + Enter into Nico\'s terminal', {
+          'kind': 'terminal-input',
+        }),
+        row('waits', 7, 'Nico is waiting at a prompt', {
+          'kind': 'terminal-alert',
+          'alert': 'prompt',
+          'agentId': 'agent-nico',
+        }),
+        row('limit', 8, 'River hit a usage limit.', {
+          'kind': 'terminal-alert',
+          'alert': 'limit',
+          'agentId': 'agent-lead',
+          'lead': true,
+        }),
+        row('later', 9, 'Next', {}),
       ]),
     );
     expect(inRow('said', find.text('A real update')), findsOneWidget);
@@ -320,6 +238,9 @@ void main() {
       'Routed to Nico',
       'Route changed to Ivy',
       'Shipped #12',
+      'River typed',
+      'waiting at a prompt',
+      'usage limit',
     ]) {
       expect(find.textContaining(gone), findsNothing, reason: gone);
     }

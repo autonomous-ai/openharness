@@ -126,8 +126,7 @@ void main() {
           part(member['id'] as String, 1, member),
       ],
     };
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': next,
@@ -344,66 +343,6 @@ void main() {
     );
     expect(face('m1').pm, isTrue);
     expect(face('m2').pm, isFalse);
-  });
-
-  // Swarm v4 posts no prompt warning: the agent is marked instead. Those
-  // v1-v3 stored are no chat row while the backend removes them.
-  testWidgets('a v1-v3 prompt warning is no chat row, its agent waiting or '
-      "not; a usage limit's note still is", (tester) async {
-    Map<String, dynamic> alert(String id, int sequence, String kind) => {
-      ...message(
-        id,
-        sequence,
-        text: kind == 'prompt'
-            ? 'Nova is waiting at a prompt in its terminal.'
-            : 'Nova hit a usage limit. Routing skips it until 15:00 UTC.',
-        minute: sequence,
-      ),
-      'source': {
-        'kind': 'terminal-alert',
-        'agentId': 'agent-builder',
-        'alert': kind,
-      },
-    };
-    Map<String, dynamic> nova(List<String> alerting) => {
-      ...agent('agent-builder', displayName: 'Nova'),
-      'alerting': alerting,
-    };
-    final fake = backend([
-      alert('a1', 1, 'prompt'),
-      message('m2', 2, text: 'Here is what I found', minute: 2),
-      alert('a3', 3, 'limit'),
-      alert('a4', 4, 'prompt'),
-    ]);
-    final parts = fake.routes['/api/super-tabs/$tab/parts']!;
-    fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
-      ...(await parts(body))! as Map<String, dynamic>,
-      'agents': [
-        part(
-          'agent-lead',
-          1,
-          agent('agent-lead', name: 'Lead', displayName: 'River'),
-        ),
-        part('agent-builder', 1, nova(['prompt'])),
-      ],
-    };
-    final host = await pump(tester, fake);
-
-    expect(key('swarm-message-a1'), findsNothing);
-    expect(key('swarm-message-a4'), findsNothing);
-    expect(key('swarm-message-a3'), findsOneWidget);
-
-    // Answered: the backend clears the agent's alert.
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
-      ...changes(cursor: 'c3', lastChangedAt: 200),
-      'agents': [part('agent-builder', 2, nova([]))],
-    };
-    await host.session!.inbox.reader(tab)!.refresh();
-    await tester.pumpAndSettle();
-    expect(key('swarm-message-a4'), findsNothing);
-    expect(key('swarm-message-a1'), findsNothing);
-    expect(key('swarm-message-a3'), findsOneWidget);
-    expect(find.text('Here is what I found'), findsOneWidget);
   });
 
   testWidgets('a file in a message opens', (tester) async {
@@ -1187,7 +1126,6 @@ void main() {
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
       cursor: 'c3',
       lastChangedAt: 200,
-      derived: {'decisionsWaiting': 0},
       groups: [
         part(
           'g1',
@@ -2949,7 +2887,6 @@ void main() {
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
         lastChangedAt: 200,
-        derived: {'decisionsWaiting': 0},
         groups: [
           part(
             leadChat,
@@ -2993,7 +2930,6 @@ void main() {
         fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
           cursor: 'c3',
           lastChangedAt: 200,
-          derived: {'decisionsWaiting': 0},
           groups: [
             part(
               'g1',

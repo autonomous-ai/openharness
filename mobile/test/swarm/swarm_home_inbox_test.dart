@@ -42,7 +42,7 @@ void main() {
     return (
       id: 'a',
       name: 'Swarm a',
-      view: swarmHomeSwarm(SuperTabSnapshot.fromJson(state)),
+      state: swarmHomeSwarm(SuperTabSnapshot.fromJson(state)),
     );
   }
 
@@ -85,7 +85,7 @@ void main() {
 
   Future<List<String>> keptTitles(SwarmHomeCache cache) async => [
     for (final s in await cache.read(me) ?? const <SwarmHomeEntry>[])
-      for (final c in SuperTabSnapshot.fromJson(s.view.state).conversations)
+      for (final c in SuperTabSnapshot.fromJson(s.state).conversations)
         c.title,
   ];
 
@@ -124,7 +124,7 @@ void main() {
         (
           id: 'a',
           name: 'Swarm a',
-          view: swarmHomeSwarm(
+          state: swarmHomeSwarm(
             SuperTabSnapshot.fromJson(state),
             buddies: SwarmBuddies.read(state, me),
           ),

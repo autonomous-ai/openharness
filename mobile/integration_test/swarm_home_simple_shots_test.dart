@@ -73,10 +73,8 @@ void main() {
         ],
         'next': null,
       };
-      const derived = {'decisionsWaiting': 2};
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => timed(
         firstLoad(
-          derived: derived,
           head: headData(
             name: 'autonomous.ai',
             projects: [
@@ -104,7 +102,7 @@ void main() {
         },
       );
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-          changes(cursor: 'c2', derived: derived);
+          changes(cursor: 'c2');
       fake.routes['/api/super-tabs/$personal/parts'] = (_) => timed(
         firstLoad(
           tabId: personal,
@@ -168,7 +166,6 @@ void main() {
       // Read once: what was there is read; then openharness moves on.
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
-        derived: const {'decisionsWaiting': 2},
         groups: [
           {
             ...part('lead-openharness', 30, leadOf('openharness', sequence: 6)),

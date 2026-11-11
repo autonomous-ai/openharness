@@ -10,12 +10,9 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'swarm_style.dart';
 
 /// One row of a Swarm card ([SwarmGroup]), as the approved prototype draws
-/// it: maybe a mark at its left (an avatar, a project's tile, a need's
-/// glyph), its title — after a work number in the terminal's face — and a
-/// line under it, then at its right what it holds or a chevron. Never under
-/// 56 points. Something new in it ([news]) sets its title in bold, with no
-/// dot, and the tags waiting in it as `@N` before its right edge (desktop
-/// design system: Unread, Mentions).
+/// it: maybe a mark at its left (an avatar or a project's tile), its title —
+/// after a work number in the terminal's face — and a line under it, then at
+/// its right what it holds or a chevron. Never under 56 points.
 class SwarmRow extends StatelessWidget {
   const SwarmRow({
     super.key,

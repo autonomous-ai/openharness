@@ -48,7 +48,7 @@ void main() {
     test('draws Home as the Swarm did', () {
       final snapshot = read();
 
-      final back = SuperTabSnapshot.fromJson(swarmHomeSwarm(snapshot).state);
+      final back = SuperTabSnapshot.fromJson(swarmHomeSwarm(snapshot));
 
       expect(back.name, snapshot.name);
       expect([for (final p in back.projects) p.name], ['Mobile']);
@@ -63,13 +63,13 @@ void main() {
     test('keeps nothing Home does not draw', () {
       final snapshot = read();
 
-      final text = jsonEncode(swarmHomeSwarm(snapshot).state);
+      final text = jsonEncode(swarmHomeSwarm(snapshot));
 
       expect(text, isNot(contains('The secret plan')));
       expect(text, isNot(contains('Keys rotated')));
       expect(text, isNot(contains('Which vault')));
       expect(text, isNot(contains('@example.com')));
-      final back = SuperTabSnapshot.fromJson(swarmHomeSwarm(snapshot).state);
+      final back = SuperTabSnapshot.fromJson(swarmHomeSwarm(snapshot));
       expect(back.conversation('g1')!.lastMessageSequence, 0);
     });
   });
@@ -94,7 +94,7 @@ void main() {
       final kept = swarmHomeSwarm(
         SuperTabSnapshot.fromJson(state),
         buddies: buddies,
-      ).state;
+      );
       final back = SwarmBuddies.read(kept, me);
 
       expect(back.ownChats, {project: 'buddy-me'});
@@ -109,7 +109,7 @@ void main() {
     test('keep none where there are none', () {
       final state = SuperTabParts.firstLoad(firstLoad()).state;
 
-      final kept = swarmHomeSwarm(SuperTabSnapshot.fromJson(state)).state;
+      final kept = swarmHomeSwarm(SuperTabSnapshot.fromJson(state));
 
       expect(SwarmBuddies.read(kept, me).chatOwners, isEmpty);
       expect(SwarmBuddies.read(kept, me).ownBuddies, isEmpty);
@@ -149,7 +149,7 @@ void main() {
 
     test('a built-in picture is kept by its name', () {
       final back = SuperTabSnapshot.fromJson(
-        swarmHomeSwarm(faces()).state,
+        swarmHomeSwarm(faces()),
       );
       expect(
         (back.agent('agent-builder')!.avatar! as SuperTabPresetAvatar).key,
@@ -167,11 +167,11 @@ void main() {
 
       final kept = swarmHomeSwarm(
         named({...person(me), 'username': 'river'}),
-      ).state;
+      );
       expect(jsonEncode(kept), isNot(contains('$me@example.com')));
       expect(SuperTabSnapshot.fromJson(kept).people.single.username, 'river');
 
-      final older = swarmHomeSwarm(named(person(me))).state;
+      final older = swarmHomeSwarm(named(person(me)));
       expect(
         (older['people'] as List).single as Map,
         isNot(contains('username')),
@@ -185,7 +185,7 @@ void main() {
         snapshot.agent('agent-lead')!.avatar,
         isA<SuperTabUploadedAvatar>(),
       );
-      final kept = swarmHomeSwarm(snapshot).state;
+      final kept = swarmHomeSwarm(snapshot);
       final text = jsonEncode(kept);
       expect(text, isNot(contains('storage.googleapis.com')));
       expect(text, isNot(contains('sig=secret')));
@@ -208,7 +208,7 @@ void main() {
     });
 
     List<SwarmHomeEntry> home() {
-      return [(id: tab, name: 'Phone Swarm', view: swarmHomeSwarm(read()))];
+      return [(id: tab, name: 'Phone Swarm', state: swarmHomeSwarm(read()))];
     }
 
     test('reads back for its account', () async {
@@ -217,7 +217,7 @@ void main() {
       final back = await cache.read(me);
 
       expect([for (final s in back!) s.name], ['Phone Swarm']);
-      final snapshot = SuperTabSnapshot.fromJson(back.single.view.state);
+      final snapshot = SuperTabSnapshot.fromJson(back.single.state);
       expect(snapshot.projects.single.name, 'Mobile');
     });
 

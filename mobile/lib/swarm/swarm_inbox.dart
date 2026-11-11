@@ -76,11 +76,11 @@ class SwarmInbox extends ChangeNotifier {
     for (final swarm in kept) {
       final SuperTabSnapshot snapshot;
       try {
-        snapshot = SuperTabSnapshot.fromJson(swarm.view.state);
+        snapshot = SuperTabSnapshot.fromJson(swarm.state);
       } on FormatException {
         continue;
       }
-      final buddies = SwarmBuddies.read(swarm.view.state, accountId);
+      final buddies = SwarmBuddies.read(swarm.state, accountId);
       swarmMarkBuddies(snapshot, buddies);
       _readers.putIfAbsent(swarm.id, () => _open(swarm.id))
         ..snapshot = snapshot

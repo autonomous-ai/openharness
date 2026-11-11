@@ -1735,18 +1735,19 @@ class SuperTabMessage {
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
 
   /// A note v1-v3 posted that v4 has no row for: an instructions save (#3165),
-  /// a routing note and its override, a ship line, a "waiting at a prompt"
-  /// warning (v4 marks the agent instead). No chat row and nothing unread: the
+  /// a routing note and its override, a ship line, a Lead's typing into a
+  /// terminal or a machine's alert about one (v4 marks the agent instead;
+  /// Desktop's `leadTerminalNote`). No chat row and nothing unread: the
   /// backend posts none now and removes the old ones a page at a time, so one
   /// may still be read until it is gone.
-  bool get retiredNotice =>
-      _retiredKinds.contains(source['kind']) ||
-      (source['kind'] == 'terminal-alert' && source['alert'] == 'prompt');
+  bool get retiredNotice => _retiredKinds.contains(source['kind']);
   static const _retiredKinds = {
     'instructions',
     'route',
     'route-override',
     'ship',
+    'terminal-alert',
+    'terminal-input',
   };
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
@@ -1754,18 +1755,6 @@ class SuperTabMessage {
   /// is unread for them as anyone else's message is.
   bool get postedForAuthor => _taskRootKinds.contains(source['kind']);
 
-  /// The Product Manager a usage-limit note is about; null for any other row
-  /// (desktop model.dart).
-  String? get leadLimitAgentId =>
-      source['kind'] == 'terminal-alert' &&
-          source['alert'] == 'limit' &&
-          source['lead'] == true
-      ? source['agentId'] as String?
-      : null;
-
-  /// A note the backend writes about a terminal: a Lead's typing, or an alert.
-  bool get terminalEvent =>
-      source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

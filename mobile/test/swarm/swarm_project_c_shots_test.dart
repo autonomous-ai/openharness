@@ -112,7 +112,6 @@ void main() {
         'next': null,
       };
       const derived = {
-        'decisionsWaiting': 1,
         'readMarks': {leadChat: 5},
       };
       final load = firstLoad(

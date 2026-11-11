@@ -228,10 +228,9 @@ void main() {
         agents: [agentIn('p-brand', 'agent-ivy', 'Ivy', name: 'Lead')],
         groups: [chat('p-brand', 'lead-p-brand', 'brand', leadId: 'agent-ivy')],
       );
-      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 1};
       for (final id in [tab, other]) {
         fake.routes['/api/super-tabs/$id/changes'] = (_) =>
-            changes(cursor: 'c2', derived: id == tab ? derived : const {});
+            changes(cursor: 'c2');
       }
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
@@ -261,7 +260,6 @@ void main() {
       // Read once: what was there is read; then web-2's work moves on.
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
-        derived: derived,
         groups: [
           {
             ...part(

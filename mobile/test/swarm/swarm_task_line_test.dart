@@ -98,12 +98,6 @@ FakeSwarm taskLineBackend(
     ],
   };
   fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-  fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
-    'decisions': <Object>[],
-  };
-  fake.routes['/api/super-tabs/$tab/mentions'] = (_) => {
-    'mentions': <Object>[],
-  };
   fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (_) =>
       {
         'messages': page.reversed.toList(),

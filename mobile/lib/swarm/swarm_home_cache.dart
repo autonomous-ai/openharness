@@ -13,8 +13,12 @@ import 'swarm_home_view.dart';
 
 export 'swarm_home_view.dart';
 
-/// One Swarm of the Home kept: its listing and its view.
-typedef SwarmHomeEntry = ({String id, String name, SwarmHomeSwarm view});
+/// One Swarm of the Home kept: its listing and its state ([swarmHomeSwarm]).
+typedef SwarmHomeEntry = ({
+  String id,
+  String name,
+  Map<String, dynamic> state,
+});
 
 /// The Keychain item the kept Home is sealed under.
 abstract interface class SwarmHomeKey {
@@ -114,7 +118,7 @@ class SwarmHomeCache {
                   {
                     'id': s.id,
                     'name': s.name,
-                    'state': s.view.state,
+                    'state': s.state,
                   },
               ],
             }),
@@ -182,7 +186,7 @@ class SwarmHomeCache {
           'name': final String name,
           'state': final Map<String, dynamic> state,
         })
-          (id: id, name: name, view: (state: state)),
+          (id: id, name: name, state: state),
     ];
   }
 }

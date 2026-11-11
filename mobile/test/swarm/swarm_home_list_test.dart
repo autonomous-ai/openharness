@@ -75,7 +75,7 @@ void main() {
       });
 
       final back = SuperTabSnapshot.fromJson(
-        jsonDecode(jsonEncode(swarmHomeSwarm(read).state))
+        jsonDecode(jsonEncode(swarmHomeSwarm(read)))
             as Map<String, dynamic>,
       );
 

@@ -395,11 +395,6 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Notes that are not chat from their author, as Desktop draws them.
-    final special = ValueKey('swarm-message-${message.id}');
-    if (message.terminalEvent) {
-      return SwarmTerminalRow(key: special, message: message);
-    }
     // A row kept as it was is not built again: it follows a theme or font
     // change itself.
     AppTheme.watch(context);

@@ -107,13 +107,11 @@ void main() {
       ],
       'next': null,
     };
-    const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 1};
     Map<String, dynamic> inWeb(Map<String, dynamic> row) => {
       ...row,
       'projectId': web,
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      derived: derived,
       head: headData(
         projects: [
           {
@@ -182,8 +180,7 @@ void main() {
         ),
       ],
     );
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes['/api/super-tabs/$tab/commands'] = (body) => {
       'result': switch (body?['command']) {
         {'type': 'buddy.chat', 'projectId': web} => {
@@ -293,7 +290,6 @@ void main() {
   void moveOn(FakeSwarm fake, Map<String, Map<String, dynamic>> groups) =>
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
-        derived: const {'decisionsWaiting': 1, 'mentionsWaiting': 1},
         groups: [
           for (final MapEntry(:key, :value) in groups.entries)
             part(key, 30, value),
@@ -541,8 +537,8 @@ void main() {
       );
     });
 
-    testWidgets('projects with nothing new are quiet, each on one line, with no '
-        'people and no time', (
+    testWidgets('projects with nothing new are quiet, each on one line, with '
+        'no people and no time', (
       tester,
     ) async {
       final semantics = tester.ensureSemantics();

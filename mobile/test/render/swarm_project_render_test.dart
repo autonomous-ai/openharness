@@ -72,10 +72,8 @@ void main() {
       ],
       'next': null,
     };
-    const derived = {'decisionsWaiting': 0};
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
-        derived: derived,
         agents: [
           agent('agent-lead', name: 'Lead', displayName: 'River'),
           agent('agent-builder', displayName: 'Nova'),
@@ -169,8 +167,7 @@ void main() {
         ],
       };
     };
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     Map<String, dynamic> message(
       int sequence,
       String text,

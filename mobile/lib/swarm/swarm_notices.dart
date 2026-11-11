@@ -33,7 +33,7 @@ class SwarmAnnouncer {
   /// The person sees Swarm where they are: no notice.
   final bool Function() quiet;
 
-  /// What this phone has told the account already: never told again.
+  /// The server's pushes still shown, which a chat's notice follows.
   final SwarmTold told;
 
   /// The app icon's count was taken off this session.

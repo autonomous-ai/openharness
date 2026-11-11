@@ -24,9 +24,7 @@ void main() {
       ],
       'next': null,
     };
-    const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 0};
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      derived: derived,
       head: headData(
         projects: [
           // One line each since 2026-11-03: ten fit on the phone now.
@@ -44,8 +42,7 @@ void main() {
       ),
       agents: [agent('agent-lead', name: 'Lead', displayName: 'River')],
     );
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived);
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     return fake;
   }
 

@@ -44,19 +44,19 @@ typedef SwarmNoticeMessage = ({
   bool quiet,
 });
 
-/// The notification centre's Swarm notices: decisions asked of the person,
-/// Lead tags, work waiting on them.
+/// The notification centre's Swarm notices: new messages in an agent's 1:1
+/// chat and in chats set to All new messages.
 ///
 /// Not on [SystemNotices], whose stand-ins would all have to answer it:
 /// [LocalSystemNotices] and [SilentSystemNotices] carry both.
 abstract interface class SwarmNotices {
   Future<void> showSwarm(SwarmNoticeMessage message);
 
-  /// Takes the notice [key] names back down: its need was met somewhere else.
+  /// Takes the notice [key] names back down: what it told was read.
   Future<void> cancelSwarm(String key);
 
-  /// Shows [count] on the app icon: what the Swarms ask of the person, the
-  /// drawer's waiting count. Zero takes it off.
+  /// Shows [count] on the app icon. Only zero is set now, taking off the count
+  /// v1-v3 left there (what waited on the person).
   Future<void> setSwarmBadge(int count);
 
   /// The Swarm notice tapped last — what the shell opens. Reset to null by
@@ -161,9 +161,9 @@ const _swarmChannel = 'swarm-needs-you';
 const _swarmQuietChannel = 'swarm-quiet';
 
 /// How Android names the Swarm channel, here and when a notice makes it.
-const _swarmChannelName = 'Swarm needs you';
+const _swarmChannelName = 'Swarm messages';
 const _swarmChannelDescription =
-    'A Swarm asks you to decide, tags you, or has work waiting on you.';
+    'New messages from your agents, and in chats set to All new messages.';
 
 /// Android draws an FCM push under its tag with this id (the server tags it with the notice's key), so a
 /// Swarm notice posted under the same tag and id replaces the push, and the other way round.

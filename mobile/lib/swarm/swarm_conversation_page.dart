@@ -131,13 +131,11 @@ Future<void> attachSwarmFiles(
 
 /// One conversation: its messages, newest at the foot, older ones on demand —
 /// each with who wrote it, their role and when, follow-ups grouped, a reply's
-/// quote leading to its original; in the person's own Buddy chat, the
-/// decisions asked of them in its project, as Desktop shows them there (no
-/// other chat shows decisions: they are answered in Activity); and, for a
-/// writer, a composer that posts text, as a reply or with
-/// @mentions of the conversation's agents picked as they are typed, and with
-/// files from the photo library, the camera or Files ([swarmSendsFiles]). A
-/// post shows at once and says when it is not confirmed.
+/// quote leading to its original; and, for a writer, a composer that posts
+/// text, as a reply or with @mentions of the conversation's agents picked as
+/// they are typed, and with files from the photo library, the camera or Files
+/// ([swarmSendsFiles]). A post shows at once and says when it is not
+/// confirmed.
 class SwarmConversationPage extends StatefulWidget {
   const SwarmConversationPage({
     super.key,
@@ -1827,7 +1825,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  /// The messages, newest at the foot, with the decisions asked among them.
+  /// The messages, newest at the foot.
   /// The entries are made again only when what they are made from changed,
   /// and each row is the one built before while it draws the same ([_row]):
   /// a new message builds its own row alone.
@@ -2469,11 +2467,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   }
 }
 
-/// What the chat draws of its Swarm's read and of what is asked of the
-/// person in it: its header, whether they can post, the names an @mention is
-/// marked for, each agent's role and the decisions open in it. Made again at
-/// each read and equal to the one before when nothing drawn changed, so a read
-/// that moved nothing here draws nothing again.
+/// What the chat draws of its Swarm's read: its header, whether the person can
+/// post, the names an @mention is marked for and each agent's role. Made again
+/// at each read and equal to the one before when nothing drawn changed, so a
+/// read that moved nothing here draws nothing again.
 @immutable
 class _ChatView {
   const _ChatView({
@@ -2493,8 +2490,8 @@ class _ChatView {
     required this.hint,
   });
 
-  /// [c] as its Swarm's read and asks have it now. The decisions of [before]
-  /// are kept while each still draws the same.
+  /// [c] as its Swarm's read has it now. The mentions of [before] are kept
+  /// while its names are the same.
   factory _ChatView.of(
     SwarmSession session,
     SwarmConversation c,
@@ -2737,7 +2734,6 @@ Set<String> swarmGroupedMessages(
     // A tagged row's header is where its tag shows.
     if (tagged != null && (tagged(current) || tagged(previous))) return false;
     bool plain(SuperTabMessage m) =>
-        !m.terminalEvent &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&
