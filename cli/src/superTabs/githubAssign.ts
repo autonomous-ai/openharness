@@ -8,13 +8,14 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { ASKED, DEEP, labelOf, machineHas, nextPicks, openPieces, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Pick, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, RECORD_SETTLE_MS, sameChange, verdicts, type LedProject, type VerdictRecords } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
+import { numbersOf, type Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
 
@@ -91,7 +92,9 @@ export class GitHubAssign {
   constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>
     get: GitHubGet; send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number
     /** Who made each verdict by command, the merger's own (githubMerge.ts VerdictRecords): only such a READ-OK is a read. */
-    records: VerdictRecords }) {
+    records: VerdictRecords
+    /** Takes what a pass counted of a project, for its PM and its people (pmNumbers.ts PmNumbers). */
+    numbers: { pass: (project: LedProject, numbers: Numbers) => Promise<void> } }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -173,7 +176,16 @@ export class GitHubAssign {
     // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
     // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
     await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
-    if (!read.problem.builders.length) return
+    const { short, picks } = await this.plan(project, issues, pulls, crew, read, withReaders)
+    // What this pass read, counted: who has nothing after it, what is open, what landed.
+    await this.deps.numbers.pass(project, numbersOf({ now: this.now(), crew, pm: project.pm, issues, read, withReaders, short, picks, closed }))
+  }
+
+  /** Gives the free tasks to the builders who can start them soonest, after taking back what waits on a builder that cannot
+   *  work; the builders out of quota, and the tasks it gave. */
+  private async plan(project: LedProject, issues: Json[], pulls: Json[], crew: Crew, read: Read, withReaders: ReadonlySet<number>): Promise<{ short: AwayBuilder[]; picks: Pick[] }> {
+    const { repo } = project
+    if (!read.problem.builders.length) return { short: [], picks: [] }
     // Only while another builder has room: a team's one builder would be given its task straight back.
     const short = outOfQuota(read)
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
@@ -181,15 +193,16 @@ export class GitHubAssign {
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
     await this.sayWaiting(project, issues)
     await this.openWaiting(repo, issues, crew, read, short)
-    if (!read.free.size) return
+    if (!read.free.size) return { short, picks: [] }
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
-    if (![...read.open.values()].some(count => count < DEEP)) return
+    if (![...read.open.values()].some(count => count < DEEP)) return { short, picks: [] }
     // As many steps as the problem is worth, within the second: a few thousand for a small team, the whole second for a large.
     const solved = solve(read.problem, { budgetMs: SOLVE_MS, iterations: Math.min(MAX_STEPS, STEPS_PER_TASK * read.problem.tasks.length), seed: 1,
       ...(this.last.has(repo) ? { start: this.last.get(repo) } : {}) })
     this.last.set(repo, solved.choice)
-    for (const pick of nextPicks(solved.plan, read)) await this.give(project, read, pick)
+    const picks: Pick[] = []
+    for (const pick of nextPicks(solved.plan, read)) if (await this.give(project, read, pick)) picks.push(pick)
     let told = 0
     for (const { task, why } of solved.plan.unplaced) {
       if (!read.free.has(task)) continue
@@ -197,6 +210,7 @@ export class GitHubAssign {
       const blocked = blockedWhy(issues.find(issue => `#${issue.number}` === task), why, crew, read, task)
       if (blocked && told < BLOCKED_PER_PASS && await this.sayBlocked(project, Number(task.slice(1)), blocked)) told++
     }
+    return { short, picks }
   }
 
   /**
@@ -545,21 +559,22 @@ export class GitHubAssign {
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
   }
 
-  /** Labels the task for its builder and says why on it, as Harness, in its PM's person's name. */
-  private async give(project: LedProject, read: Read, pick: { task: string; builder: string; start: number }): Promise<void> {
+  /** Labels the task for its builder and says why on it, as Harness, in its PM's person's name. Whether it was given. */
+  private async give(project: LedProject, read: Read, pick: Pick): Promise<boolean> {
     const builder = read.builders.get(pick.builder)
     const number = Number(pick.task.slice(1))
-    if (!builder || !Number.isSafeInteger(number)) return
+    if (!builder || !Number.isSafeInteger(number)) return false
     const { name, label } = builder
     const labelled = await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/labels`, { labels: [label] })
     if (labelled.status !== 200) {
       this.once(`[super-tab] Task assignment: LABEL_REFUSED ${project.repo}#${number}: GitHub answered ${labelled.status}`)
-      return
+      return false
     }
     this.given.set(`${project.repo}#${number}`, label)
     await this.deps.send('POST', `/repos/${project.repo}/issues/${number}/comments`,
       { body: `${SELF}, ${this.clock()}: for **${name}**: ${reasonOf(pick, read)}.` })
     this.log(`[super-tab] gave ${project.repo}#${number} to ${name} (${reasonOf(pick, read)})`)
+    return true
   }
 
   private clock(): string {
