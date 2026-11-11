@@ -32,8 +32,11 @@ import { identifier, object } from './wire.js'
 
 /** How long after a turn ends its agent is looked at: what was queued for it is typed the moment it ends, and comes first. */
 export const NEXT_SETTLE_MS = 3_000
-/** How many times the same next thing is typed with no change before it goes to the agent's person instead. */
-export const NEXT_TIMES = 3
+/** How many times the same next thing is typed with no change before it goes to the agent's person instead: once. An agent that
+ *  heard it and ended its turn with nothing changed is blocked or has chosen, and typing it again each turn spent its turns and
+ *  tokens on the same line (Finn, 2026-11-11: "fix and push" on a pull request it could not fix, every minute; anh Dee: "why are
+ *  we spamming agents?"). */
+export const NEXT_TIMES = 1
 /** How long an agent may sit idle holding a task it took, with no pull request yet, before it is asked once; and before its person
  *  is told and the task goes back for another builder (Swarm plan, step 1, item 1: "An agent with work that is idle 20 minutes is
  *  asked once; at an hour its person is told and its work is free to take"). The assigner's own watch, by GitHub's quiet alone,
@@ -273,7 +276,9 @@ export class NextThing {
   private async ownWork(agent: WatchedAgent, repo: string, number: number): Promise<{ kind: string; head: string; typed: string; what: string } | null> {
     const pull = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
     const head = String(object(pull.head).sha ?? ''), short = head.slice(0, 7), base = String(object(pull.base).ref ?? '')
-    if (pull.draft === true || !head || !base) return null
+    // One on hold waits for a person: nothing of it is the agent's to fix now.
+    const held = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).some(label => String(label.name).toLowerCase() === 'hold')
+    if (pull.draft === true || held || !head || !base) return null
     // A HOLD stands made by command or typed, so one whose records cannot be read is still said, its reader as the comment shows it.
     const talk = await pullTalk(this.reads, repo, number)
     const { readers } = verdicts(await this.deps.named(agent, repo, talk) ?? talk, String(pull.body ?? ''), pullPeople(pull, await this.deps.team(agent)))
@@ -286,7 +291,7 @@ export class NextThing {
     const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
     if (checks.state === 'failed') {
       return { kind: 'checks', head: short, what: `failed its checks at ${short}`,
-        typed: `Your ${repo}#${number} failed its checks at ${short}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
+        typed: `Your ${repo}#${number} failed its checks at ${short}: ${[...new Set(checks.failed)].slice(0, 3).join(', ')}. Fix them and push: gh pr checks ${number} --repo ${repo}` }
     }
     const state = String(pull.mergeable_state ?? '')
     if (state === 'behind') {
@@ -375,8 +380,8 @@ export class NextThing {
     if (kept.times >= NEXT_TIMES) {
       if (kept.told) return
       const name = agent.names[0]!
-      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} ${NEXT_TIMES} times as its turns ended, and nothing `
-        + `changed. Harness stops: tell ${name} what to do.`)
+      await this.deps.say(agent, this.operation(agent, key, 'told'), `Harness ${did} as its turn ended, and nothing changed by its next. `
+        + `Harness says it no more: tell ${name} what to do.`)
       kept.told = true
     } else {
       await this.deps.tell(agent, this.operation(agent, key, String(kept.times)), typed)

@@ -197,10 +197,10 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     one(15, /: merged\. READ-OK on \w+ by Juno, checks green\./)
     one(3, /nobody can start this yet: it needs gpu/)
     one(4, /nothing has moved on this task for/)
-    // Failed checks are said for the head Juno read; after Pip's push Juno is asked to read the new one, once, and its checks
-    // wait for that read.
+    // Failed checks are said for the head Juno read. Pip's push fails its checks again: Juno is not asked to read the new head
+    // while they fail, as a fix is another head, read again (anh Dee, 2026-11-11: "never spam github").
     one(11, /not merged yet at \w+: checks failed/)
-    one(11, /to \*\*Juno\*\*: the head is now \w+, after your READ-OK on \w+: please read it again/)
+    expect((harness.get(11) ?? []).filter(body => /please read it again/.test(body)), '#11').toEqual([])
     expect(gh.sent.filter(s => s.method === 'PUT')).toHaveLength(1)
     expect(harness.get(16) ?? []).toEqual([])
   }, 60_000)

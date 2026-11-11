@@ -27,7 +27,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const state = { open, closed, asked: [] as string[], labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
     /** Runs as a label's DELETE arrives, before it is answered: a test changes the issue here, or refuses the call with a status. */
     deleted: null as ((issue: Json, label: string) => number | void) | null,
-    files: new Map<string, string>(), checks: [] as Json[], labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
+    files: new Map<string, string>(), checks: [] as Json[], headChecks: new Map<string, Json[]>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     state.asked.push(path)
@@ -41,6 +41,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       // Main's last commit and its checks, where a project's goal is scored (goal.ts).
       : url.pathname === '/repos/acme/app/commits' ? url.searchParams.get('sha') === 'main' ? [{ sha: TIP, parents: [] }] : null
       : url.pathname === `/repos/acme/app/commits/${TIP}/check-runs` ? { check_runs: state.checks }
+      // A pull request's head's checks, none unless a test gives some; and its combined status.
+      : /^\/repos\/acme\/app\/commits\/[0-9a-f]{40}\/check-runs$/.test(url.pathname) ? { check_runs: state.headChecks.get(url.pathname.split('/')[5]!) ?? [] }
+      : /^\/repos\/acme\/app\/commits\/[0-9a-f]{40}\/status$/.test(url.pathname) ? { state: 'success', statuses: [] }
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
@@ -570,30 +573,35 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toHaveLength(1)
     })
 
-    it('asks the only reader again after 30 silent minutes, at most twice more for a head, after a restart too', async () => {
-      // Half the wait for a verdict.
-      const STEP = 15 * 60_000
+    // #4055, anh Dee, 2026-11-11: "never spam github as user accounts could be banned". Asked again each silent half hour, the
+    // pull request had one more comment, in its person's name, each time; its reader is reminded in its own terminal instead.
+    it('asks the only reader once for a head, and not again however long it is silent, after a restart too', async () => {
       const askedAt = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Faye**: please read this pull request, and start your `
         + 'comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
-      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since (stopped when it was asked).
+      // Pip builds alone; Faye, its PM, was asked 45 minutes ago and has said nothing since.
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
-      const iso = (ms: number) => new Date(ms).toISOString()
-      const first = iso(f.clock.now - 3 * STEP)
-      f.github.state.comments.set(30, [askedAt(first)])
+      f.github.state.comments.set(30, [askedAt(new Date(f.clock.now - 45 * 60_000).toISOString())])
+      for (const later of [0, 60, 240]) {
+        f.clock.now += later * 60_000
+        await f.make().tick()
+      }
+      expect(asks(f)).toEqual([])
+    })
+
+    it('asks nobody to read a pull request on hold, nor one whose checks failed at its head, until they pass', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip' }, { name: 'hold' }] })]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now))])
-      f.clock.now += STEP
+      expect(asks(f)).toEqual([])
+      const failing = pull()
+      f.github.state.pulls = [failing]
+      f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+      f.github.state.headChecks.set(String((failing.head as Json).sha), [{ name: 'ci/required', status: 'completed', conclusion: 'success' }])
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
-      f.clock.now += STEP + 60_000
-      await f.make().tick()
-      expect(asks(f)).toHaveLength(2)
-      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * STEP)), askedAt(iso(f.clock.now))])
-      f.clock.now += 3 * STEP
-      await f.make().tick()
-      expect(asks(f)).toHaveLength(2)
     })
 
     it('measures a reader asked again after a push from that ask, and one that never answered from its last', async () => {

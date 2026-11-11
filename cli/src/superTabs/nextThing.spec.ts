@@ -182,6 +182,21 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
+  // Finn, 2026-11-11: "fix and push" every minute on #4055, held, whose failing check needed a Mac it did not have.
+  it('says nothing of a pull request on hold, which waits for a person, and its checks once it is lifted', async () => {
+    const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
+    f.state.runs[HEAD] = [{ name: 'ci/required', status: 'completed', conclusion: 'failure' }, { name: 'ci/required', status: 'completed', conclusion: 'failure' }]
+    f.state.pulls[30] = { labels: [{ name: 'Hold' }] }
+    f.next.start()
+    await f.end()
+    expect(f.told()).toEqual([])
+    f.state.pulls[30] = { labels: [{ name: 'size:s' }] }
+    await f.end()
+    // Each failed check named once, however GitHub lists it.
+    expect(f.told()).toEqual([`Your acme/app#30 failed its checks at ${HEAD.slice(0, 7)}: ci/required. Fix them and push: gh pr checks 30 --repo acme/app`])
+    f.next.stop()
+  })
+
   it('says nothing of a draft, which is work going on, nor of a pull request GitHub gives no head or base, nor of one it says nothing of', async () => {
     const f = setup({ items: [30, 31, 32, 33].map(number => item(number, 'Fix the login bug', [], true)) })
     f.state.pulls[30] = { draft: true, mergeable_state: 'dirty' }
@@ -196,14 +211,16 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.stop()
   })
 
-  it('says the same HOLD three times, then to its person once; a push starts it over', async () => {
+  // anh Dee, 2026-11-11: "never spam agents because we burn user token". Said once; the next turn's end with nothing changed goes
+  // to its person, once, and the agent is typed it no more.
+  it('says the same HOLD once, then to its person once; a push starts it over', async () => {
     const f = setup({ items: [item(30, 'Fix the login bug', [], true)] })
     f.state.comments[30] = [said(`Juno, 05:00: HOLD ${HEAD.slice(0, 7)}: src/login.ts:12.`)]
     f.next.start()
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([`Harness told Pip that its acme/app#30 has a HOLD from Juno at ${HEAD.slice(0, 7)} `
-      + '3 times as its turns ended, and nothing changed. Harness stops: tell Pip what to do.'])
+      + 'as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
     const pushed = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2'
     f.state.pulls[30] = { head: { sha: pushed } }
     f.state.comments[30] = [said(`Juno, 05:30: HOLD ${pushed.slice(0, 7)}: still the old token.`, '2026-11-11T05:30:00Z')]
@@ -385,14 +402,14 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
   })
 
   // "The same next thing, typed three times with no change, goes to its person and is not typed a fourth time."
-  it('gives the same task three times, then tells its person once, and types it no more; another task starts over', async () => {
+  it('gives the same task once, then tells its person once, and types it no more; another task starts over', async () => {
     const f = setup()
     f.next.start()
     for (let i = 0; i < NEXT_TIMES + 2; i++) await f.end()
     expect(f.tell).toHaveBeenCalledTimes(NEXT_TIMES)
     expect(new Set(f.tell.mock.calls.map(([, id]) => id)).size).toBe(NEXT_TIMES)
     expect(f.say.mock.calls.map(([, , text]) => text)).toEqual([
-      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task 3 times as its turns ended, and nothing changed. Harness stops: tell Pip what to do.'])
+      'Harness gave Pip acme/app#12 (Fix the login bug) as its next task as its turn ended, and nothing changed by its next. Harness says it no more: tell Pip what to do.'])
     expect(f.say.mock.calls[0]![0]).toBe(PIP)
     f.state.items = [item(15, 'Write the docs')]
     await f.end()
@@ -452,8 +469,8 @@ describe('an agent\'s next thing, typed as its turn ends (nextThing.ts)', () => 
     f.next.start()
     for (let i = 0; i <= NEXT_TIMES; i++) await f.end()
     expect(f.told()[0]).toBe(`Next: acme/app#12. It is given to you and nobody has taken it: ${TAKE} acme/app#12`)
-    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task 3 times as its turns ended, and nothing changed. '
-      + 'Harness stops: tell Pip what to do.')
+    expect(f.say.mock.calls[0]![2]).toBe('Harness gave Pip acme/app#12 as its next task as its turn ended, and nothing changed by its next. '
+      + 'Harness says it no more: tell Pip what to do.')
     f.next.stop()
   })
 

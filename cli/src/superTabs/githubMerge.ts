@@ -660,7 +660,7 @@ export class GitHubMerge {
       }
       const checks = await this.checks(repo, at, head)
       if (checks.state === 'running') { waiting.add(`${number}@${head}`); continue }
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${[...new Set(checks.failed)].slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
       if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
