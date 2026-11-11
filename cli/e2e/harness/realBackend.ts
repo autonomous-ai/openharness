@@ -11,6 +11,8 @@ import { mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { IsolatedDaemon, until as untilDaemon } from './daemon.js'
 import { LocalClient } from './client.js'
+import { forgetGroup, watchGroup } from './reaper.js'
+import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 
 const exec = promisify(execFile)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -100,9 +102,15 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   t = Date.now()
   const logPath = join(mkdtempSync(join(tmpdir(), 'spike-backend-')), 'backend.log')
   const logFd = openSync(logPath, 'a')
+  // Ended by the worker's reaper should the worker go without stopping it (reaper.ts): one killed run's backend was
+  // still running 1.5 days later (2026-11-11).
   const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
-    cwd: join(repo, 'backend'), stdio: ['ignore', logFd, logFd],
+    cwd: join(repo, 'backend'), stdio: ['ignore', logFd, logFd], ...ownProcessGroup(),
     env: { ...env, PORT: String(port), PORT_APP_PROXY: String(proxyPort), BACKEND_INSTANCE_ID: 'spike-0' } })
+  if (child.pid) {
+    watchGroup(child.pid)
+    child.once('exit', () => forgetGroup(child.pid!))
+  }
   // Wait for the exit, with a SIGKILL after 5 s (as IsolatedDaemon.stop does), before Mongo and Redis go.
   stops.push(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return
