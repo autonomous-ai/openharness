@@ -68,7 +68,9 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget' | 'submit'>
+  input: Pick<SessionInputController, 'forget'>
+  /** Types a person's message into an agent's pane (core/input.ts `submitAgent`). */
+  submitAgent: (agentId: string, content: string) => void
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
@@ -88,7 +90,7 @@ export interface BindDeps {
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir,
+  input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -251,16 +253,17 @@ export function createBinding({
       `[agent] ${sid(entry.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
   }
   /**
-   * Takes the agent's first task off its row and types it as the person's own message. This pass runs inside the
+   * Takes the agent's first task off its row and types it as the person's own message, under the agent: its turn is
+   * confirmed there (core/turns/funnel.ts), and under the session key it was failed as not accepted. This pass runs inside the
    * reconcile pass's registry transaction (core/main.ts), which holds saves back: taken after it commits, the removal is
    * saved before the task is typed, so a daemon that stops in between never types it twice. A pass that reads the pane
    * again before then takes nothing.
    */
   const handOverFirstTask = (agentId: string): void => {
-    void registry.afterTransaction(() => registry.takeFirstTask(agentId)).then((taken) => {
-      if (!taken) return
+    void registry.afterTransaction(() => registry.takeFirstTask(agentId)).then((task) => {
+      if (!task) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
-      input.submit(taken.sessionId, taken.task)
+      submitAgent(agentId, task)
     }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${error instanceof Error ? error.message : String(error)}`))
   }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>

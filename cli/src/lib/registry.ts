@@ -2553,14 +2553,13 @@ class Registry {
    * agent that is gone, has no session bound yet (nothing to type into) or has no task. A save that fails puts the task
    * back and throws; inside a registry transaction every strict save does, so the caller takes it in `afterTransaction`.
    */
-  takeFirstTask(agentId: string): { sessionId: string; task: string } | null {
+  takeFirstTask(agentId: string): string | null {
     const row = this.agents.get(agentId)
     const task = row?.firstTask
     if (!row?.sessionId || !task) return null
-    const sessionId = row.sessionId
     delete row.firstTask
     try { this.save(true) } catch (error) { row.firstTask = task; throw error }
-    return { sessionId, task }
+    return task
   }
 
   setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null): RegisteredSession | null {
