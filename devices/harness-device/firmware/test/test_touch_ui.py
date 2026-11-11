@@ -1738,6 +1738,12 @@ static void swarm_voice_checks(const char *dir) {
     dispatch((action_t){.kind = A_VOICE_ABORT}); s.voice_waiting = false; scene_take();
     assert(s.view == HOME && swarm_mode() && !strcmp(sw.lead, "L0") && title_is("mobile"));
     FOCUS_PAGE("swarm-5d");
+    // Text carried from a pane does not redirect a Swarm face's voice: it still goes to the Lead's harness.
+    ht_carry_open(&carry,"carried-passage","a","pick-test",1,fake_ms,carry_emit,NULL);
+    assert(ht_carry_reply(&carry,carry.id,carry.request,true,"Research helper","Keep this paragraph",3,300000,NULL,fake_ms+50));
+    scene_take(); tap(fake_ms += 1000, 233, 260);
+    assert(s.view == VOICE && !strcmp(target, "h0") && !strcmp(s.voice_target, "mobile") && !s.voice_carry);
+    dispatch((action_t){.kind = A_VOICE_ABORT}); ht_carry_close(&carry); scene_take();
     // 5e an engine with no listening scene: the seven bars.
     card_begin("s2", "", "playground"); card_lead("P0", "agents", "opencode", "h9", "work", 0, 12); card_send();
     fake_ms += 3000; enter_at("s2", "P0"); tap(fake_ms, 233, 260);
