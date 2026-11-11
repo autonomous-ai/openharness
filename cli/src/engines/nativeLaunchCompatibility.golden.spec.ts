@@ -66,7 +66,7 @@ it('preserves native arguments, first messages and healthy installer effects', a
   for (const kind of ['installed', 'vendor', 'fallback', 'npm'] as const) {
     const directory = join(root, kind); mkdirSync(directory)
     const trace = join(directory, 'trace'), binary = join(directory, 'engine'), source = join(directory, 'source')
-    writeFileSync(source, `#!/bin/sh\ncase "$1" in --version) printf '1.0.0\\n'; exit 0;; esac\nprintf 'engine\\n' >>${shellSingleQuote(trace)}\nprintf '%s\\n' "$@" >>${shellSingleQuote(trace)}\n`, { mode: 0o700 })
+    writeFileSync(source, `#!/bin/sh\ncase "$1" in --version) printf '1.0.0\\n'; exit 0;; --help) printf 'Usage: engine\\n'; exit 0;; esac\nprintf 'engine\\n' >>${shellSingleQuote(trace)}\nprintf '%s\\n' "$@" >>${shellSingleQuote(trace)}\n`, { mode: 0o700 })
     if (kind === 'installed') writeFileSync(binary, readFileSync(source), { mode: 0o700 })
     const install = `printf 'install:%s\\n' "\${npm_config_prefix:-vendor}" >>${shellSingleQuote(trace)}; cp ${shellSingleQuote(source)} ${shellSingleQuote(binary)}`
     const recipe = { source: 'private fixture',

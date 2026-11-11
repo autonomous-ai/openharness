@@ -159,8 +159,11 @@ describe('forking an agent', () => {
 
   it.each(['claude', 'codex'] as const)('keeps real %s launch preparation authorized and records its final harness-selected home', async engine => {
     const executable = await import('../../engines/kit/launchExecutable.js')
+    // An engine that runs: a launch that names no mode still asks for its help (nativeLaunch.ts).
+    const engineFile = join(root, 'engine')
+    writeFileSync(engineFile, '#!/bin/sh\necho "Usage: engine"\n', { mode: 0o755 })
     vi.spyOn(executable, 'captureLaunchExecutable').mockResolvedValue({ state: 'ready',
-      executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
+      executable: { command: engineFile, identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')

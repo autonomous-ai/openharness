@@ -70,6 +70,8 @@ it('keeps a complete permission answer across a core stall without refusing or r
 it('holds inherited output pipes within a bound and recovers probe capacity after closing only its own streams', async () => {
   const prepared = await inspectNativeLaunch('claude')
   if (!prepared.ok) throw Error(prepared.detail)
+  // The inspection's own probe (no mode: does it run) is not one of these.
+  fixture.calls = 0
   fixture.pipes = true
   const pending = Array.from({ length: 8 }, () => prepared.launch.permission({ permissionMode: 'auto' }))
   expect(await prepared.launch.permission({ permissionMode: 'auto' })).toBe('unknown')
@@ -97,4 +99,20 @@ it('says in the engine\'s own words why an engine that ran and failed cannot run
   fixture.help = 'broken'
   expect(await inspectNativeLaunch('codex', { permissionMode: 'auto' })).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native',
     detail: 'Codex is installed but cannot run: /usr/bin/env: ‘node’: No such file or directory', refusal: 'ENGINE_CANNOT_RUN' })
+}, 15_000)
+
+// #3466 sends no permission mode by default: a launch with no flag of its own still asks the engine for its help, as auto
+// mode's flag would, since that is what tells an engine that cannot run (or is still being downloaded) from one that can.
+it('refuses, with its own reason, an engine that cannot run when the launch names no mode', async () => {
+  fixture.help = 'broken'
+  expect(await inspectNativeLaunch('codex', {})).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native',
+    detail: 'Codex is installed but cannot run: /usr/bin/env: ‘node’: No such file or directory', refusal: 'ENGINE_CANNOT_RUN' })
+}, 15_000)
+
+it('starts an engine that runs when the launch names no mode, with one probe of its help, whatever its help lists', async () => {
+  const prepared = await inspectNativeLaunch('codex', {})
+  expect(prepared).toMatchObject({ ok: true })
+  if (!prepared.ok) throw Error(prepared.detail)
+  expect(await prepared.launch.permission({})).toBe('supported')
+  expect(fixture.calls).toBe(1)
 }, 15_000)

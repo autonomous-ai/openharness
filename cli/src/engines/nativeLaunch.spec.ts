@@ -235,7 +235,8 @@ it('answers an expired probe while retaining its slot until the actual child set
     for (const settle of fixture.pending.splice(0)) settle()
     fixture.stalled = false
     expect(await inspectNativeLaunch('opencode')).toMatchObject({ ok: true })
-    expect(fixture.calls).toHaveLength(9)
+    // Its version, then its help: a launch that names no mode still asks whether it runs.
+    expect(fixture.calls).toHaveLength(10)
   } finally {
     for (const settle of fixture.pending.splice(0)) settle()
     fixture.stalled = false; vi.useRealTimers()
@@ -357,14 +358,15 @@ describe('the startup probe on Windows', () => {
     expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, unavailable: 'native' })
   })
 
-  it('probes no engine without a startup probe, and nothing elsewhere', async () => {
+  it('probes no engine without a startup probe, and nothing elsewhere but whether it runs', async () => {
+    // One probe of each: whether the engine runs, as a launch that names no mode asks; never one for startup options.
     const claude = await inspectNativeLaunch('claude')
     expect(claude.ok && claude.launch.startupArgs).toBeUndefined()
-    expect(fixture.calls).toEqual([])
+    expect(fixture.calls).toEqual(['/fixture/engine'])
     Object.defineProperty(process, 'platform', platform)
     if (process.platform === 'win32') return
     const codex = await inspectNativeLaunch('codex')
     expect(codex.ok && codex.launch.startupArgs).toBeUndefined()
-    expect(fixture.calls).toEqual([])
+    expect(fixture.calls).toEqual(['/fixture/engine', '/fixture/engine'])
   })
 })

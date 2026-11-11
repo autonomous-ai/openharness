@@ -109,6 +109,9 @@ async function read(executable: string, args: readonly string[], environment: Re
   })
 }
 
+/** The answer of a launch's help probe that confirms no flag (`permission`): the engine ran and printed its help. */
+const RUNS = ''
+
 /** The location variables every engine's homes derive from. */
 const SHARED_LOCATIONS: ReadonlySet<string> = new Set(['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'])
 /** The variables `nativeHookLocations` derives each engine's own homes from (kit/nativeLocations.ts). */
@@ -193,6 +196,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   let preparing = false, valid = true, prepared = false, revision = 0
   const current = () => valid && !preparing && executable.current() && [...dependencies, ...proofs].every(proof => proof.current())
   const permissions = new Map<string, 'supported' | 'unsupported'>()
+  // Windows read this executable's help for its startup options just now: it runs.
+  if (startupArgs) permissions.set(RUNS, 'supported')
   /** Why the latest help probe's executable failed, when it ran and exited non-zero. */
   let failed: string | null = null
   const launch: NativeLaunch = {
@@ -243,10 +248,14 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       } finally { preparing = false }
     },
     async permission(choice) {
+      // A launch that names no mode (#3466: the owner's own) has no flag to confirm, and is still probed as auto mode's flag
+      // would be: the engine's help is what tells one that cannot run, or that the Desktop is still downloading, from one
+      // that can. Any help it prints will do. The same one probe a launch made before, by default in auto.
       const flag = permissionFlagToVerify(engine, choice)
-      if (!flag) return 'supported'
+      if (!flag && !permissionFlagToVerify(engine, { permissionMode: 'auto' })) return 'supported'
       if (!current()) return 'unknown'
-      const known = permissions.get(flag)
+      const key = flag ?? RUNS
+      const known = permissions.get(key)
       if (known) return known
       const observedRevision = revision
       failed = null
@@ -259,8 +268,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       // for good, waiting to confirm its permission flags.
       const help = `${probe.stdout}\n${probe.stderr}`
       if (!help.trim()) return 'unknown'
-      const answer = helpLists(help, flag) ? 'supported' : 'unsupported'
-      permissions.set(flag, answer)
+      const answer = !flag || helpLists(help, flag) ? 'supported' : 'unsupported'
+      permissions.set(key, answer)
       return answer
     },
   }
