@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Crew } from './assign/crew.js'
 import { parseSuperTabArgs } from './command.js'
@@ -6,7 +9,7 @@ import { GitHubAssign } from './githubAssign.js'
 import { VerdictRecords, type LedProject } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { commandRecords } from './commandRecords.fake.js'
-import type { Numbers } from './pmNumbers.js'
+import { PmNumbers, type Numbers } from './pmNumbers.js'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -81,14 +84,14 @@ const crew = (): Crew => ({
   machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }],
 })
 
-function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
+function setup(open: Json[], options: { closed?: Json[]; crew?: Crew; numbers?: { pass: (project: LedProject, numbers: Numbers) => Promise<void> } } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
   /** What each pass counted (pmNumbers.ts). */
   const numbers = vi.fn(async (_project: LedProject, _numbers: Numbers) => {})
   const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
-    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: { pass: numbers } })
+    now: () => clock.now, log, records: new VerdictRecords(github.authors, () => clock.now, log), numbers: options.numbers ?? { pass: numbers } })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
@@ -145,6 +148,25 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await giving.assigner.tick()
     expect(giving.labelled()).toEqual([[3, 'builder:pip']])
     expect(giving.numbers.mock.calls.at(-1)![1]).toMatchObject({ free: [] })
+  })
+
+  // The assigner and the numbers together, as the daemon runs them (the fourth review: no test did, and one open task that no
+  // free builder could take silenced the rule for every builder).
+  it('tells the PM of builders that wait beside a task only another\'s machine can take', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'assign-numbers-'))
+    try {
+      const sent: string[] = [], clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+      const mac = { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB, os: 'macOS' } }
+      const team: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }, { id: 'kai', name: 'Kai', label: 'builder:kai', machineId: 'linux', engine: 'claude' },
+        { id: 'ada', name: 'Ada', label: 'builder:ada', machineId: 'linux', engine: 'codex' }],
+      machines: [{ machineId: 'mac', observation: mac }, { machineId: 'linux', observation: { resources: { ...mac.resources, os: 'Linux' } } }] }
+      const numbers = new PmNumbers({ file: join(dir, 'numbers.json'), now: () => clock.now, log: () => {}, send: async (_how, _project, _id, text) => { sent.push(text) } })
+      // Pip's list is full; #9 needs a Mac, which only Pip has; Kai and Ada have nothing.
+      const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken']), issue(2, ['size:s', 'builder:pip']), issue(9, ['size:s', 'needs:macos'])], { crew: team, numbers })
+      for (let minute = 0; minute <= 16; minute++) { f.clock.now = clock.now += 60_000; await f.assigner.tick() }
+      expect(f.labelled()).toEqual([])
+      expect(sent).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: Ada and Kai have nothing to do, and the 1 sized task open cannot go to any of them\. /)])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('counts as having nothing a builder whose one task waits on its pull request\'s readers, and not one whose subscription has no room', async () => {
