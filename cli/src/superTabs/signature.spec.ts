@@ -23,8 +23,9 @@ describe('an agent\'s post without its own signature', () => {
       ['*Ray*: done.', ['Ray'], 'done.'],
       ['Ray, 16:25:30: done.', ['Ray'], 'done.'],
       ['Juno, 12:17: on it.', ['juno'], 'on it.'],
-      // An indented code block on the next line keeps its indent.
-      ['Ray:\n    npm test\n    ok', ['Ray'], '    npm test\n    ok'],
+      // From its first word: the server trims a post's ends, so no indent kept here would reach anyone (review of #4074).
+      ['Ray:\n\n    done.', ['Ray'], 'done.'],
+      ['Ray, 4:05 pm: done.', ['Ray'], 'done.'],
     ] as const) {
       expect(unsigned(text, names), text).toBe(left)
     }
@@ -43,6 +44,11 @@ describe('an agent\'s post without its own signature', () => {
       // An agent's stored name can be only its engine's, which no agent signs with: the post is about the engine.
       ['Claude Code: --resume drops the cwd; Codex keeps it.', ['Ray', 'Claude Code']],
       ['Codex, 16:25: rebuilt.', ['codex']],
+      // A name written as no name is, and a time's word that is no zone, say something (review of #4074): Vale is a linter.
+      ['vale: 3 errors in README.md', ['Vale']],
+      ['dune: build failed', ['Dune']],
+      ['dev: vite\nbuild: vite build', ['dev']],
+      ['Ray, 9:00 call: agenda', ['Ray']],
     ] as const) {
       expect(unsigned(text, names), text).toBe(text)
     }
@@ -52,6 +58,12 @@ describe('an agent\'s post without its own signature', () => {
   it('leaves what follows its signature as it is', () => {
     expect(unsigned('Ray: **Heads up**: the train is red.', ['Ray'])).toBe('**Heads up**: the train is red.')
     expect(unsigned('**Ray**: **Heads up**: the train is red.', ['Ray'])).toBe('**Heads up**: the train is red.')
+  })
+  // A name only of markup, which a rename allows, took 3 s on a post of 200,000 underscores (review of #4074).
+  it('reads a long post at once, whatever the name', () => {
+    const started = performance.now()
+    expect(unsigned('_'.repeat(200_000), ['__'])).toBe('_'.repeat(200_000))
+    expect(performance.now() - started).toBeLessThan(250)
   })
   it('reads a name as a name, never as a pattern', () => {
     expect(unsigned('R.y, 16:25: done.', ['R.y'])).toBe('done.')
