@@ -1,44 +1,207 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { FIRST_ANSWER_GIVE_UP_MS, FirstAnswers, launchLine, type FirstAnswerAgent } from './firstAnswers.js'
+import type { TurnEnd } from '../core/api.js'
+import { MAX_FIRST_PROMPT_CHARS } from '../lib/engineLaunch.js'
+import { promptHash } from '../lib/promptIdentity.js'
+import { FIRST_ANSWER_GIVE_UP_MS, FirstAnswers, launchHashes, launchLine, type FirstAnswerAgent } from './firstAnswers.js'
 import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
+type Turn = { userMessage: string; assistantText: string }
 const root = mkdtempSync(join(tmpdir(), 'super-tab-first-answers-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 let files = 0
 
 const ARLO_ANSWER = 'I\'m Arlo, the PM for the openharness Swarm. Tell me what you want shipped.'
+const ARLO = { id: 'arlo', harnessId: 'h-arlo', name: 'Claude Code', displayName: 'Arlo', regular: true, contributorId: 'dee', machineOwnerId: 'dee' }
 
 /** This computer's person's agent Arlo, running here, in a Swarm that gives it a chat with its person. */
-function setup(options: { working?: boolean | null; lastTurn?: { userMessage: string; assistantText: string } | null; row?: Json } = {}) {
+function setup(options: { working?: boolean | null; lastTurn?: Turn | null; row?: Json; words?: string[]; file?: string; intervalMs?: number } = {}) {
   const state = { working: options.working ?? false as boolean | null, lastTurn: options.lastTurn === undefined
-    ? { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER } : options.lastTurn, live: true }
+    ? { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER } as Turn | null : options.lastTurn, live: true,
+  rows: [{ tabId: 'tab', agent: ARLO, ...options.row }] as Json[], me: 'dee' as string | null }
   const clock = { now: Date.parse('2026-11-10T23:31:00Z') }
-  const row: Json = { tabId: 'tab', agent: { id: 'arlo', harnessId: 'h-arlo', name: 'Claude Code', displayName: 'Arlo', regular: true,
-    contributorId: 'dee', machineOwnerId: 'dee' }, ...options.row }
   const post = vi.fn(async (_agent: FirstAnswerAgent, _operationId: string, _text: string) => ({}))
   const log = vi.fn()
-  const file = join(root, `first-answers-${files++}.json`)
-  const read = vi.fn(async () => ({ conversations: [{ id: 'chat-arlo', kind: 'agent-chat', agentIds: ['arlo'] }, { id: 'lead', agentIds: ['arlo'] }] }))
-  const make = () => new FirstAnswers({ me: async () => 'dee', live: () => state.live, roster: async () => [row], read,
-    working: async () => state.working, lastTurn: async () => state.lastTurn, post, file, now: () => clock.now, log })
-  return { state, clock, post, log, read, file, make, answers: make() }
+  const file = options.file ?? join(root, `first-answers-${files++}.json`)
+  const read = vi.fn(async (_tab: string, _agent: string): Promise<Json> => ({ conversations: [{ id: 'chat-arlo', kind: 'agent-chat', agentIds: ['arlo'] },
+    { id: 'lead', agentIds: ['arlo'] }] }))
+  const words = vi.fn(async (_agent: FirstAnswerAgent) => options.words ?? [])
+  // The core's turn ends, and what each said as it went (core/turns/ends.ts).
+  const listeners = new Set<(end: TurnEnd) => void>()
+  const said = new Map<number, string | null>()
+  const answerOf = vi.fn(async (end: TurnEnd) => said.get(end.turnId) ?? null)
+  let turns = 0
+  /** A live turn of Arlo's terminal (or [terminal]) ending, asked [prompt], which said [answer]. */
+  const end = (prompt: string, answer: string | null, extra: Partial<TurnEnd> = {}): TurnEnd => {
+    const event: TurnEnd = { agentId: 'h-arlo', sessionId: 's-arlo', aborted: false, prompt: promptHash(prompt), turnId: ++turns, ...extra }
+    said.set(event.turnId, answer)
+    for (const listener of listeners) listener(event)
+    return event
+  }
+  const onEnd = vi.fn((listener: (end: TurnEnd) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } })
+  const make = () => new FirstAnswers({ me: async () => state.me, live: () => state.live, roster: async () => state.rows, read, onEnd, answerOf,
+    words, working: async () => state.working, lastTurn: async () => state.lastTurn, post, file, now: () => clock.now, log,
+    intervalMs: options.intervalMs ?? 60 * 60_000 })
+  return { state, clock, post, log, read, words, answerOf, onEnd, listeners, end, file, make, answers: make() }
 }
+const posted = (post: ReturnType<typeof setup>['post']) => post.mock.calls.map(([, id, text]) => [id, text])
 
 describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)', () => {
   // anh Dee, 2026-11-10: "in the terminal i can see that arlo has the first message but i didn't see it in the chat. my "hi" was
-  // the first message in the chat".
-  it('posts what an agent answered "You are Arlo." in its chat with its person, as the agent, once, and not again after a restart', async () => {
-    const f = setup()
+  // the first message in the chat". A person who writes while the first turn runs has their message typed the moment it ends, so
+  // by the time anyone reads the transcript its last turn is theirs (core/turns/ends.ts).
+  it('posts what its first turn answered "You are Arlo." even when its person\'s "hi" was typed the moment it ended', async () => {
+    const f = setup({ working: true, lastTurn: { userMessage: 'hi', assistantText: '' } })
+    f.answers.start()
+    f.end('You are Arlo.', ARLO_ANSWER)
+    await f.answers.tick()
+    expect(posted(f.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
+    expect(f.post.mock.calls[0]![0]).toEqual({ tabId: 'tab', agentId: 'arlo', harnessId: 'h-arlo', chat: 'chat-arlo', names: ['Arlo', 'Claude Code'] })
+    // Its answer to "hi" is the host's to post (agentReplies.ts): nothing more here.
+    f.end('hi', 'Hi.')
     await f.answers.tick()
     expect(f.post).toHaveBeenCalledTimes(1)
-    const [agent, operationId, text] = f.post.mock.calls[0]!
-    expect(agent).toEqual({ tabId: 'tab', agentId: 'arlo', harnessId: 'h-arlo', chat: 'chat-arlo', names: ['Arlo', 'Claude Code'] })
-    expect(operationId).toBe('first-answer-arlo')
-    expect(text).toBe(ARLO_ANSWER)
+    f.answers.stop()
+  })
+
+  it('knows its launch line with its person\'s request as their chat keeps it, whole, or cut as Desktop cuts a long one', async () => {
+    const request = 'A home for the docs.'
+    const f = setup({ words: ['', `  ${request}\n`] })
+    f.answers.start()
+    f.end(`You are Arlo.\n\n${request}`, 'On it: three issues.')
+    await f.answers.tick()
+    expect(posted(f.post)).toEqual([['first-answer-arlo', 'On it: three issues.']])
+    expect(f.words).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab', agentId: 'arlo', chat: 'chat-arlo' }))
+    f.answers.stop()
+    const long = 'x'.repeat(3_000)
+    const g = setup({ words: [long] })
+    g.answers.start()
+    g.end(`You are Arlo.\n\n${long.slice(0, MAX_FIRST_PROMPT_CHARS - 'You are Arlo.\n\n'.length)}`, 'A long one.')
+    await g.answers.tick()
+    expect(posted(g.post)).toEqual([['first-answer-arlo', 'A long one.']])
+    g.answers.stop()
+  })
+
+  it('keeps a first turn heard before its agent joined its Swarm until it has, as a quick engine\'s is', async () => {
+    const f = setup({ working: true, lastTurn: null })
+    const rows = f.state.rows
+    f.state.rows = []
+    f.answers.start()
+    f.end('You are Arlo.', ARLO_ANSWER)
+    await f.answers.tick()
+    expect(f.post).not.toHaveBeenCalled()
+    f.state.rows = rows
+    await f.answers.tick()
+    expect(posted(f.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
+    f.answers.stop()
+  })
+
+  it('posts nothing for a first turn its person interrupted, saying so, and does not look at the agent again', async () => {
+    const f = setup()
+    f.answers.start()
+    f.end('You are Arlo.', 'Half', { aborted: true })
+    await f.answers.tick()
+    await f.answers.tick()
+    expect(f.post).not.toHaveBeenCalled()
+    expect(f.log).toHaveBeenCalledWith('[super-tab] no first answer posted for agent arlo: its first turn was interrupted.')
+    f.answers.stop()
+  })
+
+  it('reads its transcript for a first turn whose answer the core cannot give, or which it could not read', async () => {
+    const f = setup({ lastTurn: { userMessage: 'You are Arlo.', assistantText: 'From the transcript.' } })
+    f.answers.start()
+    f.end('You are Arlo.', null)
+    await f.answers.tick()
+    expect(posted(f.post)).toEqual([['first-answer-arlo', 'From the transcript.']])
+    f.answers.stop()
+    const g = setup({ lastTurn: { userMessage: 'You are Arlo.', assistantText: 'From the transcript.' } })
+    g.answerOf.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'The core did not answer.', 503))
+    g.answers.start()
+    g.end('You are Arlo.', ARLO_ANSWER)
+    await g.answers.tick()
+    expect(posted(g.post)).toEqual([['first-answer-arlo', 'From the transcript.']])
+    expect(g.log).toHaveBeenCalledWith('[super-tab] could not read the first answer of agent arlo: TIMEOUT; read from its transcript.')
+    g.answers.stop()
+  })
+
+  it('reads its transcript, as before, when the turns it heard of its terminal were not its launch line: attached as it ran', async () => {
+    const f = setup({ working: true, lastTurn: { userMessage: 'look around', assistantText: 'Looked.' } })
+    f.answers.start()
+    f.end('look around', 'Looked.')
+    f.end('and again', 'Again.')
+    await f.answers.tick()
+    expect(f.post).not.toHaveBeenCalled()
+    f.state.working = false
+    await f.answers.tick()
+    f.state.lastTurn = { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER }
+    await f.answers.tick()
+    expect(f.post).not.toHaveBeenCalled()
+    // Its person's words were read once.
+    expect(f.words).toHaveBeenCalledTimes(1)
+    f.answers.stop()
+  })
+
+  it('tries again when its person\'s words cannot be read now', async () => {
+    const f = setup()
+    f.words.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'The server did not answer.', 503))
+    f.answers.start()
+    f.end('You are Arlo.', ARLO_ANSWER)
+    await f.answers.tick()
+    expect(f.post).not.toHaveBeenCalled()
+    await f.answers.tick()
+    expect(posted(f.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
+    f.answers.stop()
+  })
+
+  it('keeps the first few ends of so many terminals, the least recently heard going first; stopped, it hears none', async () => {
+    const f = setup({ lastTurn: { userMessage: 'You are Arlo.', assistantText: 'From the transcript.' } })
+    const rows = f.state.rows
+    f.state.rows = []
+    f.answers.start()
+    f.end('You are Arlo.', ARLO_ANSWER)
+    for (let i = 0; i < 256; i++) f.end('hello', 'Hello.', { agentId: `h-other-${i}` })
+    await f.answers.tick()
+    f.state.rows = rows
+    await f.answers.tick()
+    // Arlo's end went first: its transcript answers.
+    expect(posted(f.post)).toEqual([['first-answer-arlo', 'From the transcript.']])
+    f.answers.stop()
+    expect(f.listeners.size).toBe(0)
+    f.answers.stop()
+  })
+
+  it('subscribes once however often it is started, and looks every interval', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = setup({ working: true, intervalMs: 5_000 })
+      f.answers.start()
+      f.answers.start()
+      expect(f.onEnd).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(0)
+      f.state.working = false
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(posted(f.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
+      f.answers.stop()
+      // The interval it is given, else the 5 s it has; the log it is given, else the daemon's.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const g = new FirstAnswers({ me: async () => { throw new SuperTabHostError('SIGNED_OUT', 'No.', 401) }, live: () => true,
+        roster: async () => [], read: async () => ({}), onEnd: () => () => {}, answerOf: async () => null, words: async () => [],
+        working: async () => false, lastTurn: async () => null, post: async () => ({}), file: join(root, 'unused.json') })
+      g.start()
+      await g.tick()
+      g.stop()
+      expect(warn).toHaveBeenCalledWith('[super-tab] first answers: SIGNED_OUT.')
+      warn.mockRestore()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('posts what an agent answered "You are Arlo." in its chat as the agent, once, and not again after a restart', async () => {
+    const f = setup()
+    await f.answers.tick()
+    expect(posted(f.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
     await f.answers.tick()
     await f.make().tick()
     expect(f.post).toHaveBeenCalledTimes(1)
@@ -49,7 +212,7 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
   it('posts the answer to its launch line with its person\'s request, as New Project starts a PM', async () => {
     const f = setup({ lastTurn: { userMessage: 'You are Arlo.\n\nA home for the docs.', assistantText: 'On it: three issues.' } })
     await f.answers.tick()
-    expect(f.post.mock.calls.map(([, , text]) => text)).toEqual(['On it: three issues.'])
+    expect(posted(f.post)).toEqual([['first-answer-arlo', 'On it: three issues.']])
   })
 
   it('waits while its first turn runs, or while nobody can say, and posts once it has ended', async () => {
@@ -61,51 +224,64 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
     f.state.working = false
     f.state.lastTurn = { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER }
     await f.answers.tick()
-    expect(f.post.mock.calls.map(([, , text]) => text)).toEqual([ARLO_ANSWER])
+    expect(posted(f.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
   })
 
-  it('waits for a turn to be written, and lets an agent go that shows none in an hour, saying so', async () => {
+  it('waits for a turn to be written, and lets an agent go that has none ready in an hour, saying so', async () => {
     const f = setup({ lastTurn: null })
     await f.answers.tick()
     f.clock.now += FIRST_ANSWER_GIVE_UP_MS
     await f.answers.tick()
-    expect(f.log).toHaveBeenCalledWith('[super-tab] no first answer posted for agent arlo: no turn of it ended in an hour.')
+    expect(f.log).toHaveBeenCalledWith('[super-tab] no first answer posted for agent arlo: none was ready within an hour.')
     f.state.lastTurn = { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER }
     await f.answers.tick()
     expect(f.post).not.toHaveBeenCalled()
   })
 
-  it('posts nothing when its newest turn is not its launch line: an agent attached as it ran, or its person spoke since', async () => {
+  it('posts nothing when its newest turn is not its launch line, or its launch turn said nothing', async () => {
     const f = setup({ lastTurn: { userMessage: 'hi', assistantText: 'Hi. I\'m Arlo.' } })
     await f.answers.tick()
     f.state.lastTurn = { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER }
     await f.answers.tick()
     expect(f.post).not.toHaveBeenCalled()
+    const g = setup({ lastTurn: { userMessage: 'You are Arlo.', assistantText: '  ' } })
+    await g.answers.tick()
+    g.state.lastTurn = { userMessage: 'You are Arlo.', assistantText: ARLO_ANSWER }
+    await g.answers.tick()
+    expect(g.post).not.toHaveBeenCalled()
   })
 
   it('tries a post that failed for a moment again at the next pass, and lets one the server refuses for good go, saying so', async () => {
-    const f = setup()
-    f.post.mockRejectedValueOnce(new SuperTabHostError('TIMEOUT', 'The server did not answer.', 503))
-    await f.answers.tick()
-    await f.answers.tick()
-    expect(f.post).toHaveBeenCalledTimes(2)
-    expect(new Set(f.post.mock.calls.map(([, id]) => id))).toEqual(new Set(['first-answer-arlo']))
-    const g = setup()
-    g.post.mockRejectedValueOnce(new SuperTabHostError('VALIDATION_ERROR', 'Too long.', 400))
-    await g.answers.tick()
-    await g.answers.tick()
-    expect(g.post).toHaveBeenCalledTimes(1)
-    expect(g.log).toHaveBeenCalledWith('[super-tab] first answer of agent arlo refused: VALIDATION_ERROR.')
+    for (const error of [new SuperTabHostError('TIMEOUT', 'The server did not answer.', 503), new Error('socket hang up'),
+      new SuperTabHostError('CONFLICT', 'Try again.', 409)]) {
+      const f = setup()
+      f.post.mockRejectedValueOnce(error)
+      await f.answers.tick()
+      await f.answers.tick()
+      expect(f.post, error.message).toHaveBeenCalledTimes(2)
+      expect(new Set(f.post.mock.calls.map(([, id]) => id))).toEqual(new Set(['first-answer-arlo']))
+    }
+    for (const [code, status] of [['VALIDATION_ERROR', 400], ['AGENT_UNAVAILABLE', 404]] as const) {
+      const g = setup()
+      g.post.mockRejectedValueOnce(new SuperTabHostError(code, 'No.', status))
+      await g.answers.tick()
+      await g.answers.tick()
+      expect(g.post).toHaveBeenCalledTimes(1)
+      expect(g.log).toHaveBeenCalledWith(`[super-tab] first answer of agent arlo refused: ${code}.`)
+    }
   })
 
   it('looks only at a regular agent of this computer\'s person, running here, closing nothing, in a Swarm that gives it a chat', async () => {
     for (const row of [
-      { agent: { id: 'arlo', harnessId: 'h-arlo', displayName: 'Arlo', regular: false, contributorId: 'dee', machineOwnerId: 'dee' } },
-      { agent: { id: 'arlo', harnessId: 'h-arlo', displayName: 'Arlo', regular: true, contributorId: 'kai', machineOwnerId: 'dee' } },
-      { agent: { id: 'arlo', harnessId: 'h-arlo', displayName: 'Arlo', regular: true, contributorId: 'dee', machineOwnerId: 'kai' } },
+      { agent: { ...ARLO, regular: false } },
+      { agent: { ...ARLO, contributorId: 'kai' } },
+      { agent: { ...ARLO, machineOwnerId: 'kai' } },
+      { agent: { ...ARLO, harnessId: 7 } },
+      { agent: { ...ARLO, id: '' } },
+      { tabId: '' },
       { closeSession: true },
       { stopRequested: true },
-      { agent: { id: 'arlo', harnessId: 'h-arlo', displayName: ' ', regular: true, contributorId: 'dee', machineOwnerId: 'dee' } },
+      { agent: { ...ARLO, displayName: ' ', name: undefined } },
     ]) {
       const f = setup({ row })
       await f.answers.tick()
@@ -114,18 +290,63 @@ describe('an agent\'s answer to its launch line, in its chat (firstAnswers.ts)',
     const off = setup()
     off.state.live = false
     await off.answers.tick()
-    const chatless = setup()
-    chatless.read.mockResolvedValueOnce({ conversations: [{ id: 'lead', agentIds: ['arlo'] }] })
-    await chatless.answers.tick()
     expect(off.post).not.toHaveBeenCalled()
-    expect(chatless.post).not.toHaveBeenCalled()
+    for (const read of [{ conversations: [{ id: 'lead', agentIds: ['arlo'] }] }, { conversations: [{ id: 'chat', kind: 'agent-chat' }] },
+      { conversations: [{ id: 'chat', kind: 'agent-chat', agentIds: ['pip'] }] }, { conversations: [{ id: '', kind: 'agent-chat', agentIds: ['arlo'] }] }, {}]) {
+      const chatless = setup()
+      chatless.read.mockResolvedValueOnce(read)
+      await chatless.answers.tick()
+      expect(chatless.post, JSON.stringify(read)).not.toHaveBeenCalled()
+    }
+    const unread = setup()
+    unread.read.mockRejectedValueOnce(new Error('offline'))
+    await unread.answers.tick()
+    expect(unread.post).not.toHaveBeenCalled()
+    // Signed out: nobody's agents.
+    const out = setup()
+    out.state.me = null
+    await out.answers.tick()
+    expect(out.read).not.toHaveBeenCalled()
+  })
+
+  it('keeps the newest thousand agents it looked at, what it may read of its file, and says when a pass or a save fails', async () => {
+    const dir = join(root, `kept-${files++}`)
+    mkdirSync(dir)
+    const file = join(dir, 'first-answers.json')
+    writeFileSync(file, JSON.stringify({ done: [...Array.from({ length: 1_000 }, (_, i) => `old-${i}`), 7], since: { pip: 5, kai: 'soon', '': 1 } }))
+    const f = setup({ file })
+    await f.answers.tick()
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { done: string[]; since: Record<string, number> }
+    expect(saved.done).toHaveLength(1_000)
+    expect(saved.done[0]).toBe('old-1')
+    expect(saved.done.at(-1)).toBe('arlo')
+    expect(saved.since).toEqual({ pip: 5 })
+    // A pass with nothing to change writes nothing.
+    writeFileSync(file, '{"done":"not a list"}')
+    f.state.rows = []
+    await f.answers.tick()
+    expect(readFileSync(file, 'utf8')).toBe('{"done":"not a list"}')
+    const g = setup({ file })
+    await g.answers.tick()
+    expect(posted(g.post)).toEqual([['first-answer-arlo', ARLO_ANSWER]])
+    // A pass that fails is said by its name; a save that fails, as it failed.
+    const h = setup({ file: join(file, 'under-a-file.json') })
+    await h.answers.tick()
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] could not save the first answers: Error: E[A-Z]+/))
+    h.read.mockImplementationOnce(() => { throw new SuperTabHostError('TIMEOUT', 'No.', 503) })
+    h.state.rows = [{ tabId: 'tab', agent: { ...ARLO, id: 'pip', harnessId: 'h-pip' } }]
+    await h.answers.tick()
+    expect(h.log).toHaveBeenCalledWith('[super-tab] first answers: TIMEOUT.')
   })
 
   it('reads a launch line as Desktop writes it, and nothing that only begins like one', () => {
     expect(launchLine('You are Pip.', ['Pip'])).toBe(true)
     expect(launchLine('You are Pip.\n\nTidy the docs.', ['Pip'])).toBe(true)
+    expect(launchLine('You are Pip.', ['Pipkin'])).toBe(false)
     expect(launchLine('You are Pipkin.', ['Pip'])).toBe(false)
     expect(launchLine('You are Pip. Now go.', ['Pip'])).toBe(false)
     expect(launchLine('hi', ['Pip'])).toBe(false)
+    expect(launchHashes(['Pip'], ['Tidy the docs.']).has(promptHash('You are Pip.\n\nTidy the docs.'))).toBe(true)
+    expect(launchHashes(['Pip'], ['Tidy the docs.']).has(promptHash('You are Pip.\n\nTidy'))).toBe(false)
   })
 })

@@ -192,6 +192,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state,
     working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
     lastTurn: async id => { const session = api.agents.byAgent(id)?.sessionId; return session ? api.transcripts.lastTurn(session) : null },
+    onEnd: listener => api.turns.onEnd(listener), answerOf: end => api.turns.answerOf(end),
+    // Its person's words in its chat, read as it reads them: the request they started it with is the first (backend agent.add).
+    words: async agent => {
+      const page = object(await backend(api, 'GET', `/api/super-tabs/${agent.tabId}/conversations/${encodeURIComponent(agent.chat)}/messages?asAgentId=${agent.agentId}`))
+      return (Array.isArray(page.messages) ? page.messages.map(object) : [])
+        .filter(m => object(m.author).kind === 'person' && typeof m.text === 'string').map(m => m.text as string)
+    },
     post: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
       command: { type: 'message.send', conversationId: agent.chat, text, replyTo: null, recipientIds: [] } }),
     file: join(api.dataDir, 'super-tab-first-answers.json'),
