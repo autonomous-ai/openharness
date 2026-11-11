@@ -157,16 +157,26 @@ export const shortLine = (names: readonly string[], n: Numbers, at: string, goal
   + ` Open the next tasks as issues, each with its part:, size: and p0-p2 labels${n.unsized ? ', or size the ones that wait' : ''}. `
   + 'If the work is done, tell your person.'
 
-/** What the PM's person is told once the PM was told [SHORT_TIMES] times, nothing moved since, and [names] still have nothing:
- *  as Harness, in the PM's chat, with what happens next. */
-export const toldLine = (names: readonly string[], n: Numbers, pm: string): string => `Harness: ${nothing(names)}, and ${noTask(n, names.length)}. `
-  + `${plainName(pm)} was told ${SHORT_TIMES} times, and is told no more until a task is opened or something lands.`
+// The two lines below are posted under the PM's own name, so they are said as a teammate says them: "Harness, Wed 11 Nov, the
+// last 24 hours:" and "Harness: ... Juno was told 3 times" read as no person writes (anh Dee, 2026-11-11: "we want agents to
+// talk like human"). The lines typed to the PM itself keep their "Harness, 14:05:": the PM has to know who is speaking.
 
-/** The day's numbers, for the project's people, with the [day] they are posted on and how far its [goal] is. */
-export const dayLine = (n: Numbers, day: string, goal: Goal): string => `Harness, ${day}, the last 24 hours: ${landedWords(n)}`
-  + `${n.landedBy.length ? ` (${n.landedBy.slice(0, NAMES_MAX).map(([name, count]) => `${name} ${count}`).join(', ')}${n.landedBy.length > NAMES_MAX ? ', others' : ''})` : ''}`
-  + ` and ${counted(n.closed, 'task')}${n.more ? ' or more' : ''} closed. Now: ${n.builders ? `${n.free.length} of ${counted(n.builders, 'builder')} with nothing to do` : 'no builder is running'}, `
-  + `${counted(Math.max(0, n.open), 'task')} open and ${n.held} in hand.${goal ? ` Goal: ${scored(goal)}.` : ''}`
+/** What the PM's person is asked, in the PM's chat with them, once the PM was told [SHORT_TIMES] times, nothing moved since,
+ *  and [names] still have nothing. */
+export const toldLine = (names: readonly string[], n: Numbers): string => `${nothing(names)}, and ${noTask(n, names.length)}. What should we do next?`
+
+/** A count as said: "no task", "1 task", "12 pull requests or more" when there may be [more]. */
+const some = (count: number, what: string, more: boolean): string => count || more ? `${counted(count, what)}${more ? ' or more' : ''}` : `no ${what}`
+const verb = (count: number): string => count > 1 ? 'are' : 'is'
+
+/** The day's numbers, for the project's people in its channel, with how far its [goal] is. */
+export const dayLine = (n: Numbers, goal: Goal): string => {
+  const open = Math.max(0, n.open), free = n.free.length
+  const by = n.landedBy.length ? ` (${n.landedBy.slice(0, NAMES_MAX).map(([name, count]) => `${name} ${count}`).join(', ')}${n.landedBy.length > NAMES_MAX ? ', others' : ''})` : ''
+  const crew = !n.builders ? 'No builder is running' : free ? `Now ${free} of ${counted(n.builders, 'builder')} ${free === 1 ? 'has' : 'have'} nothing to do` : 'Now every builder is busy'
+  return `In the last day, ${some(n.landed, 'pull request', n.more)} landed${by} and ${some(n.closed, 'task', n.more)} closed. `
+    + `${crew}, ${some(open, 'task', false)} ${verb(open)} open and ${n.held || 'none'} ${verb(n.held)} in hand.${goal ? ` Goal: ${scored(goal)}.` : ''}`
+}
 
 /** Where a project's numbers go, in the Swarm as its PM reads it ([state]): the PM's own chat with its person, or the project's
  *  channel. Null when the Swarm has none. */
@@ -202,7 +212,6 @@ export const numbersSender = (read: (project: LedProject) => Promise<Json>, post
 interface Kept { typedAt: number; told: number; said: boolean; activity: number; day: string }
 
 const dayOf = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export class PmNumbers {
   private memory: Record<string, Kept> | null = null
@@ -254,7 +263,7 @@ export class PmNumbers {
       const after = kept.typedAt ? `${kept.typedAt}` : `first ${Math.floor(now / SHORT_EVERY_MS)}`
       if (kept.told >= SHORT_TIMES) {
         // Refused for good, it is not said again either: the log has it.
-        if (await this.send('say', project, after, async () => toldLine(waiting, numbers, project.pm)) !== 'later') kept.said = true
+        if (await this.send('say', project, after, async () => toldLine(waiting, numbers)) !== 'later') kept.said = true
       } else {
         const sent = await this.send('tell', project, after, async () => shortLine(waiting, numbers, hhmm(now), await read()))
         // Taken, it counts; refused for good, the hour passes all the same, and nothing is counted that was not typed.
@@ -265,7 +274,7 @@ export class PmNumbers {
     if (at.getHours() >= DAY_HOUR && day > kept.day) {
       // A day in which nothing landed and no task closed has no numbers to post.
       if (!numbers.landed && !numbers.closed
-        || await this.send('post', project, day, async () => dayLine(numbers, `${DAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]}`, await read())) !== 'later') kept.day = day
+        || await this.send('post', project, day, async () => dayLine(numbers, await read())) !== 'later') kept.day = day
     }
     if (JSON.stringify(kept) === before) return
     // Kept in the order they were last written, so the ones dropped past MAX_KEPT are the ones longest untouched.

@@ -176,27 +176,40 @@ describe('what Harness says of the counts', () => {
       + 'If the work is done, tell your person.')
     expect(shortLine(['Ada'], numbers(), '14:00', null)).toContain('in the last 24 hours. The project states no goal: `harness super-tab goal` in your checkout writes agents/GOAL.md and the workflow that checks it. Open the next tasks')
     expect(shortLine(['Ada'], numbers(), '14:00', undefined)).toContain('in the last 24 hours. Open the next tasks')
-    expect(dayLine(numbers(), 'Wed 11 Nov', goal)).toMatch(/ and 3 in hand\. Goal: 41 of 60 checks pass on the main branch, 3 fail and 16 wait\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 2, passed: 2, failed: 0, waiting: 0 })).toMatch(/ Goal: 2 of 2 checks pass on the main branch\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 1, failed: 0, waiting: 0 })).toMatch(/ Goal: 1 of 1 check passes on the main branch\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 1, passed: 0, failed: 0, waiting: 1 })).toMatch(/ Goal: 0 of 1 check passes on the main branch, 0 fail and 1 waits\.$/)
-    expect(dayLine(numbers(), 'Wed 11 Nov', { total: 3, passed: 1, failed: 1, waiting: 1 })).toMatch(/ Goal: 1 of 3 checks pass on the main branch, 1 fails and 1 waits\.$/)
-    for (const none of [null, undefined]) expect(dayLine(numbers(), 'Wed 11 Nov', none)).toMatch(/ and 3 in hand\.$/)
+    expect(dayLine(numbers(), goal)).toMatch(/ and 3 are in hand\. Goal: 41 of 60 checks pass on the main branch, 3 fail and 16 wait\.$/)
+    expect(dayLine(numbers(), { total: 2, passed: 2, failed: 0, waiting: 0 })).toMatch(/ Goal: 2 of 2 checks pass on the main branch\.$/)
+    expect(dayLine(numbers(), { total: 1, passed: 1, failed: 0, waiting: 0 })).toMatch(/ Goal: 1 of 1 check passes on the main branch\.$/)
+    expect(dayLine(numbers(), { total: 1, passed: 0, failed: 0, waiting: 1 })).toMatch(/ Goal: 0 of 1 check passes on the main branch, 0 fail and 1 waits\.$/)
+    expect(dayLine(numbers(), { total: 3, passed: 1, failed: 1, waiting: 1 })).toMatch(/ Goal: 1 of 3 checks pass on the main branch, 1 fails and 1 waits\.$/)
+    for (const none of [null, undefined]) expect(dayLine(numbers(), none)).toMatch(/ and 3 are in hand\.$/)
   })
 
-  it('tells the PM\'s person who still has nothing once the PM was told three times', () => {
-    const next = 'Juno was told 3 times, and is told no more until a task is opened or something lands.'
-    expect(toldLine(['Ada', 'Kai'], numbers(), 'Juno')).toBe(`Harness: Ada and Kai have nothing to do, and no sized task is open. ${next}`)
-    expect(toldLine(['Ada', 'Bo', 'Kai'], numbers({ unsized: 2 }), 'Juno')).toBe(`Harness: Ada, Bo and Kai have nothing to do, and no sized task is open (2 open issues have no size). ${next}`)
-    expect(toldLine(['Ada'], numbers({ open: 3 }), '@Juno')).toBe(`Harness: Ada has nothing to do, and the 3 sized tasks open were not given to it. ${next}`)
+  // Posted as the PM, in its chat with its person: the PM's own words, as a teammate would ask (anh Dee, 2026-11-11: "we want
+  // agents to talk like human"). It had read "Harness: ... Juno was told 3 times" under Juno's own name.
+  it('asks the PM\'s person what next, in the PM\'s words, once the PM was told three times', () => {
+    expect(toldLine(['Ada', 'Kai'], numbers())).toBe('Ada and Kai have nothing to do, and no sized task is open. What should we do next?')
+    expect(toldLine(['Ada', 'Bo', 'Kai'], numbers({ unsized: 2 })))
+      .toBe('Ada, Bo and Kai have nothing to do, and no sized task is open (2 open issues have no size). What should we do next?')
+    expect(toldLine(['Ada'], numbers({ open: 3 }))).toBe('Ada has nothing to do, and the 3 sized tasks open were not given to it. What should we do next?')
   })
 
-  it('posts the day for the project\'s people', () => {
-    expect(dayLine(numbers(), 'Wed 11 Nov', undefined)).toBe('Harness, Wed 11 Nov, the last 24 hours: 12 pull requests landed (Pip 7, Kai 5) and 9 tasks closed. Now: 2 of 4 builders with nothing to do, 0 tasks open and 3 in hand.')
-    expect(dayLine(numbers({ builders: 0, free: [], landed: 94, landedBy: [['A', 50], ['B', 20], ['C', 10], ['D', 10], ['E', 3], ['F', 1]], closed: 1, open: 1, held: 0, more: true }), 'Wed 11 Nov', undefined))
-      .toBe('Harness, Wed 11 Nov, the last 24 hours: 94 pull requests or more landed (A 50, B 20, C 10, D 10, E 3, others) and 1 task or more closed. Now: no builder is running, 1 task open and 0 in hand.')
-    expect(dayLine(numbers({ builders: 1, free: [], landed: 0, landedBy: [], closed: 2, open: -1 }), 'Thu 12 Nov', undefined)).toBe('Harness, Thu 12 Nov, the last 24 hours: 0 pull requests landed and 2 tasks closed. '
-      + 'Now: 0 of 1 builder with nothing to do, 0 tasks open and 3 in hand.')
+  // Posted as the PM in the channel, on the day it is for: a post opening "Harness, Wed 11 Nov, the last 24 hours:" under the
+  // PM's name read as no teammate writes.
+  it('posts the day for the project\'s people, as a teammate would', () => {
+    expect(dayLine(numbers(), undefined)).toBe('In the last day, 12 pull requests landed (Pip 7, Kai 5) and 9 tasks closed. '
+      + 'Now 2 of 4 builders have nothing to do, no task is open and 3 are in hand.')
+    expect(dayLine(numbers({ builders: 0, free: [], landed: 94, landedBy: [['A', 50], ['B', 20], ['C', 10], ['D', 10], ['E', 3], ['F', 1]], closed: 1, open: 1, held: 0, more: true }), undefined))
+      .toBe('In the last day, 94 pull requests or more landed (A 50, B 20, C 10, D 10, E 3, others) and 1 task or more closed. '
+        + 'No builder is running, 1 task is open and none is in hand.')
+    expect(dayLine(numbers({ builders: 1, free: [], landed: 0, landedBy: [], closed: 2, open: -1, held: 1 }), undefined))
+      .toBe('In the last day, no pull request landed and 2 tasks closed. Now every builder is busy, no task is open and 1 is in hand.')
+    expect(dayLine(numbers({ free: free('Ada'), landed: 3, landedBy: [['Pip', 3]], closed: 0, open: 2, held: 0 }), undefined))
+      .toBe('In the last day, 3 pull requests landed (Pip 3) and no task closed. Now 1 of 4 builders has nothing to do, 2 tasks are open and none is in hand.')
+    expect(dayLine(numbers({ landed: 15, landedBy: [['A', 5], ['B', 4], ['C', 3], ['D', 2], ['E', 1]] }), undefined))
+      .toMatch(/^In the last day, 15 pull requests landed \(A 5, B 4, C 3, D 2, E 1\) and 9 tasks closed\. /)
+    // A day whose closed list was full may have landed more than it read: none read is not said as none.
+    expect(dayLine(numbers({ landed: 0, landedBy: [], closed: 100, more: true }), undefined))
+      .toMatch(/^In the last day, 0 pull requests or more landed and 100 tasks or more closed\. /)
   })
 })
 
@@ -301,7 +314,7 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 59, { ...quiet, free: free('Kai') })
     expect(hows(t)).toEqual(['tell', 'tell', 'tell'])
     await passes(t, 1, { ...quiet, free: free('Kai') })
-    expect(t.sent[3]).toEqual(['say', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), toldLine(['Kai'], quiet, 'Juno')])
+    expect(t.sent[3]).toEqual(['say', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), toldLine(['Kai'], quiet)])
     expect(kept(t)).toMatchObject({ told: 3, said: true })
     // Silent from then on: over a restart, with every builder at work for a while, and with others waiting.
     await passes(t, 3 * 60, quiet, t.make())
@@ -342,7 +355,7 @@ describe('the numbers, told as they are due', () => {
     u.goal.mockResolvedValue(goal)
     await passes(u, 3 * 60 + 20, { ...quiet, landed: 1 })
     expect(u.sent.map(([how]) => how)).toEqual(['post', 'tell', 'tell', 'tell', 'say'])
-    expect(u.sent[0]![2]).toBe(dayLine({ ...quiet, landed: 1 }, 'Wed 11 Nov', goal))
+    expect(u.sent[0]![2]).toBe(dayLine({ ...quiet, landed: 1 }, goal))
     expect(u.goal).toHaveBeenCalledTimes(4)
     // While a line waits to be tried again the goal is not read: every minute for hours, with its PM stopped (first review).
     const v = setup()
@@ -535,7 +548,7 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 2, landed)
     expect(t.sent).toEqual([])
     await passes(t, 3, landed)
-    expect(t.sent).toEqual([['post', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), dayLine(landed, 'Wed 11 Nov', undefined)]])
+    expect(t.sent).toEqual([['post', expect.stringMatching(/^numbers-[0-9a-f]{40}$/), dayLine(landed, undefined)]])
     // Not again that day, by the same Harness or the next, nor when the clock is set back a day.
     await passes(t, 60, landed)
     await passes(t, 60, landed, t.make())
@@ -553,7 +566,7 @@ describe('the numbers, told as they are due', () => {
     await passes(t, 1, landed)
     t.failing.clear()
     await passes(t, 2, { ...landed, closed: 10 })
-    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['post', dayLine(landed, 'Wed 11 Nov', undefined)], ['post', dayLine({ ...landed, closed: 10 }, 'Fri 13 Nov', undefined)]])
+    expect(t.sent.map(([how, , text]) => [how, text])).toEqual([['post', dayLine(landed, undefined)], ['post', dayLine({ ...landed, closed: 10 }, undefined)]])
     expect(t.sent[1]![1]).not.toBe(t.sent[0]![1])
     t.clock.now = new Date(2026, 10, 14, 9, 0).getTime()
     t.failing.set('post', new SuperTabHostError('OPERATION_REUSED', 'This operation was sent with other words.', 409))
@@ -594,7 +607,7 @@ describe('the numbers, told as they are due', () => {
       expect(warn).toHaveBeenCalledWith('[super-tab] numbers: NOT_SENT acme/app: Not yet.')
       vi.setSystemTime(NOW + MINUTE)
       await ofNow.pass(PROJECT, numbers({ free: [] }), t.goal)
-      expect(sent).toEqual(Array(2).fill(dayLine(numbers({ free: [] }), 'Wed 11 Nov', undefined)))
+      expect(sent).toEqual(Array(2).fill(dayLine(numbers({ free: [] }), undefined)))
     } finally { vi.useRealTimers(); warn.mockRestore() }
   })
 
