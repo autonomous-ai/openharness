@@ -66,20 +66,31 @@ String _adHocBundle(String dir, String name) {
 
 /// An APFS clone of the whole bundle in one clonefile(2), and changing it
 /// leaves the original alone. `cp -cR` clones the release's ~6,000 files one
-/// by one, which took 15-66 s on a loaded Mac and ran the test out of time.
+/// by one, which took 15-66 s on a loaded Mac and ran the test out of time;
+/// it stays for a fixture clonefile cannot clone, such as one on another
+/// volume (errno 18), and copies it.
 String _clone(String source, String dir, String name) {
   final target = p.join(dir, name);
   final from = source.toNativeUtf8(), to = target.toNativeUtf8();
   // Both looked up first: a lookup between the call and the read could
   // change errno.
   final (clonefile, errno) = (_clonefile, _errno);
+  final int result, error;
   try {
-    final result = clonefile(from, to, 0);
-    expect(result, 0, reason: 'clonefile $source: errno ${errno().value}');
+    result = clonefile(from, to, 0);
+    error = result == 0 ? 0 : errno().value;
   } finally {
     malloc
       ..free(from)
       ..free(to);
+  }
+  if (result != 0) {
+    final copy = Process.runSync('/bin/cp', ['-cR', source, target]);
+    expect(
+      copy.exitCode,
+      0,
+      reason: 'clonefile $source: errno $error; cp -cR: ${copy.stderr}',
+    );
   }
   return target;
 }
