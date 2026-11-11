@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Asker } from './api.js'
 import { BROWSER_PACING_BYTES_PER_SECOND, BrowserStreamManager } from './browserStreams.js'
 import { sealTerminalBinary } from '../lib/e2ee/terminalSeal.js'
-import { BROWSER_CHUNK_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { BROWSER_CHUNK_BYTES, encodeTerminalPlain, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
 
 // The exec the manager starts: a fake child per open, as the harness below makes them.
@@ -256,6 +256,8 @@ describe('the bytes of a browser stream', () => {
     // minutes of frames for real took 0.9 s of CPU alone and past 30 s on a loaded gate.
     const lengths = new Map<string, number>()
     const sealedLength = (frame: TerminalBinaryClear): number => {
+      // Every frame must still be one the sealer takes (its stream id, seq and flags); only the AEAD is skipped.
+      if (!encodeTerminalPlain(frame)) throw new Error(`frame ${frame.seq} cannot be sealed`)
       const shape = `${frame.kind}:${frame.bytes.length}:${frame.compressed ? 1 : 0}:${frame.tabId ?? ''}`
       let length = lengths.get(shape)
       if (length === undefined) lengths.set(shape, length = sealTerminalBinary(key, counter++, frame)!.length)
