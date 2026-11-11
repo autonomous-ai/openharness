@@ -264,6 +264,8 @@ describe('a subscription window\'s price (schedule.ts priceOf)', () => {
     expect(priceOf(window(100, 300), 20, 0)).toBe(0.5)
     expect(priceOf(window(60, 150), 20, 0)).toBe(0.5)
     expect(priceOf(window(60, 1_150), 20, 1_000)).toBe(0.5)
+    // A weekly window half way on its pace, by its own period.
+    expect(priceOf(window(60, 5_040, 10_080), 20, 0)).toBe(0.5)
     // 60 of room, 15 minutes: the even pace would spend 4 of it. 10 of room, 270 minutes: it would spend 72.
     expect(priceOf(spare.windows[0]!, 20, 0)).toBeCloseTo(4 / 64, 12)
     expect(priceOf(short.windows[0]!, 20, 0)).toBeCloseTo(72 / 82, 12)
@@ -283,10 +285,8 @@ describe('a subscription window\'s price (schedule.ts priceOf)', () => {
 
   it('counts a task\'s spend at it in the plan\'s cost: of two builders as fast, the one whose window would lapse gets the task', () => {
     const p = problem({ accounts: [short, spare], builders: [builder('a', { modes: sonnet('short') }), builder('b', { modes: sonnet('spare') })], tasks: [small] })
-    const { plan, first } = solve(p, sure)
+    const { plan } = solve(p, sure)
     expect(at(plan, 't')).toMatchObject({ builder: 'b', start: 0 })
-    // The first plan breaks its tie by it too.
-    expect(at(first, 't').builder).toBe('b')
     // 6 over 60 minutes: 1.5 before Spare's reset at its price, 4.5 after at a window just refilled.
     expect(plan.priced).toBeCloseTo(1.5 * 4 / 64 + 4.5 * 0.5, 12)
     const onShort = schedule(p, choice(['t'], { t: 'a' }))
@@ -301,13 +301,16 @@ describe('a subscription window\'s price (schedule.ts priceOf)', () => {
     expect(solve(later, sure).plan.priced).toBeCloseTo(plan.priced, 12)
   })
 
-  it('spends nothing of a window by pricing it: the first plan still starts a second task where the first was only priced', () => {
-    // Short has room for one task. The first is priced on both builders and goes to Spare's; the second starts on Short's now.
+  it('sums what every task of a plan spends: two tasks, one on each window', () => {
+    // Short has room for one task, so one goes to each builder, and each is priced at its own window.
     const full = task('u', { minutes: 60, spend: { '5-hour': 10 } })
     const p = problem({ accounts: [short, spare], builders: [builder('a', { modes: sonnet('short') }), builder('b', { modes: sonnet('spare') })],
       tasks: [{ ...full, id: 't', weight: 2 }, full] })
-    const { first } = solve(p, sure)
-    expect([at(first, 't'), at(first, 'u')].map(placed => [placed.builder, placed.start])).toEqual([['b', 0], ['a', 0]])
+    const { plan } = solve(p, sure)
+    expect([at(plan, 't'), at(plan, 'u')].map(placed => placed.start)).toEqual([0, 0])
+    expect(new Set([at(plan, 't').builder, at(plan, 'u').builder]).size).toBe(2)
+    // 10 on Spare: 2.5 before its reset at its price, 7.5 after at a window just refilled. 10 on Short at its price.
+    expect(plan.priced).toBeCloseTo(2.5 * 4 / 64 + 7.5 * 0.5 + 10 * 72 / 82, 12)
   })
 
   it('counts a window a subscription does not report as unknown: dearer than one that would lapse, cheaper than one running short', () => {

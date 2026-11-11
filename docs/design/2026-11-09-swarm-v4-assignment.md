@@ -47,8 +47,9 @@ This is a multi-mode resource-constrained project scheduling problem: NP-hard, a
   spend before its reset. So next to nothing where the room would lapse before the reset, a half for a window on its pace,
   and nearer 1 the further the room has run ahead of the reset. A window whose use is not known is priced as one on its
   pace, never as unused. A plan's cost counts each task's spend at it, a percent at price 1 as a minute of the cheapest
-  model: of builders as fast, the one whose window would lapse gets the task, and it never costs a minute of a task's
-  time. It reads the window alone, so a task starting or ending does not move it
+  model: of builders as fast, the one whose window would lapse gets the task. A task's whole spend is under 30 such units
+  against 1,000 for a minute of its time, so with up to twelve subscriptions it never costs a minute. It reads the window
+  alone, so a task starting or ending does not move it
   ([the allocator's package 15](2026-11-11-swarm-allocator/BUILD.md), `schedule.ts` `priceOf`).
 
 ## Evidence

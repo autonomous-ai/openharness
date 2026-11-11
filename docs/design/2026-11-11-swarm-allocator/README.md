@@ -247,14 +247,15 @@ Means of three seeds; ten for the light day on three subscriptions and eight for
 
 - **Windows cost time where they bind**: nothing on a light day with a subscription a machine, 2 to 7% on a heavy one,
   and a quarter to a third where four or six builders share one.
-- **The reserve is not kept.** The plan keeps every window above it, but a task starts when it is given, whatever
+- **The reserve is not kept, in the model.** The plan keeps every window above it, but a task starts when it is given, whatever
   minute the plan had for it, and nothing checks the window then. Where windows bind, 7 to 13 of the reserve's 20
   points are spent by the reset.
 - **What keeps it is not a price** (three seeds). On the heavy day, where 8.7 points are spent at 86 weighted minutes:
   the check package 16 gives a daemon as a task is taken (`GATE=1`) leaves 2.0, at 98 minutes; counting a task in hand
   for half its spend too (`HAND=1`) leaves 0.3, at 100. On the light day with three subscriptions, where 13.0 are
-  spent at 69 minutes, the check alone leaves 11.0: four builders start on one reading, and a window is not told after
-  its reset. With tasks in hand counted and every window told (`TOLD=1`) it is 1.7, at 97 minutes. Keeping a fifth of
+  spent at 69 minutes, the check alone leaves 11.0 (10.8 when its review ran it again): four builders start on one
+  reading, and a window is not told after its reset. With tasks in hand counted and every window told (`TOLD=1`) it is
+  1.7 (1.5 in the review's run), at 97 minutes. Keeping a fifth of
   every window costs that time.
 
 **The price** (`cli/src/superTabs/assign/schedule.ts` `priceOf`). For a window with `left` percent, `until` minutes to
@@ -267,7 +268,11 @@ its reset, a period of `every` minutes, and its person's `reserve`:
 The need is what the whole allowance, spent evenly over the period, would still spend before the reset. So the price
 is next to nothing where the room would lapse, a half on the even pace, and nearer 1 the further the room has run
 ahead of the reset. A plan's score adds each task's spend at it, a percent at price 1 as one minute of the cheapest
-model: far less than a minute of any task's time, so it decides only among plans that end as soon. Measured: the
+model. A task's whole spend is under 30 such units against 1,000 for a minute of its time, and two plans' priced spends
+differ by under 40 for each window (under 960 for twelve subscriptions of two windows): so it decides among plans that
+end as soon, and past twelve subscriptions a plan a minute later can win, giving up a minute of an unweighted task for
+over a thousand points of allowance that would lapse. On every plan of 100 small problems the most two plans differed
+by was 12.4 units. Measured: the
 window's percent and reset. Modelled: the need, as the even pace. Assumed: that the window ahead of its even pace is
 the one that will run short; that a percent of a weekly window counts as a percent of a 5-hour one; the scale.
 
@@ -281,15 +286,21 @@ the one that will run short; that a percent of a weekly window counts as a perce
 | Heavy, noise | 6 | 87 → 86 | 7.0 → 7.0 | 69 → 78 | 34% → 33% |
 | Heavy | 2, a large task 10% | 102 → 100 | 12.7 → 11.7 | 910 → 941 | 34% → 34% |
 
+These rows were measured with the first plan also breaking its ties by the price. Its review found that tie-break earned
+nothing it could measure and cost 1 to 4% of the first plan, so it was removed; the two light rows run again without it
+come out 53.0 → 53.0 and 72.2 → 68.9, with 4.5% of a plan moved from one pass to the next where the table says 6%. The
+heavy rows were not run again.
+
 - **A twentieth of the time where windows bind and builders are free to choose** (the light day on three
-  subscriptions: 72.2 to 68.6 over ten seeds, better in eight, worse in one), and less time held for a reset. Nothing
+  subscriptions: 72.2 to 68.6 over ten seeds, better in eight, worse in two at one decimal), and less time held for a
+  reset. Nothing
   measurable elsewhere: a difference of two points between two rows of three seeds is within their noise.
 - **It does not keep the reserve**, and was not meant to. Where the check, the tasks in hand and told windows keep it,
   the price gains more on the light day (97 to 83 over three seeds, better in each) and nothing on the heavy one (99 to
   101).
 - **A thousand times the scale changes nothing** (a percent at price 1 as a minute of a task's time, in a scratch copy
   of the solver: 87 and 66 weighted minutes on the heavy and the light day of three seeds, where this scale has 88 and
-  66), so the smallest stands: it never costs a minute.
+  66), so the smallest stands.
 
 **The critique's case** ([`window-price.mts`](window-price.mts)): two subscriptions spent at their even pace by K large
 tasks a window. The largest change of a window's price, from 0 to 1, between two passes a minute apart:

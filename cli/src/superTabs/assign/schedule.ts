@@ -147,32 +147,22 @@ export class Timeline {
     if (mode.limit !== undefined) push(this.modelUse, mode.model, span)
     for (const file of task.files) push(this.fileUse, file, { ...span, builder: builderId })
     const account = mode.account ? this.accounts.get(mode.account) : undefined
-    if (account) this.priced += this.spend(account, task, mode, span, true)
-  }
-
-  /** What [task] over [span] on [builderId] in [modeIndex] would add to the plan's priced spend: nothing for a model that
-   *  spends no subscription. */
-  priceFor(task: Task, builderId: string, modeIndex: number, span: Span): number {
-    const mode = this.builders.get(builderId)!.modes[modeIndex]!
-    const account = mode.account ? this.accounts.get(mode.account) : undefined
-    return account ? this.spend(account, task, mode, span, false) : 0
+    if (account) this.priced += this.spend(account, task, mode, span)
   }
 
   /**
-   * What [task] over [span] in [mode] spends of [account]'s windows, in percent, each percent at its window's price: the
-   * window's own until its reset, a refilled window's after it, and an unknown one's for a window the subscription does
-   * not report. With [hold], each window keeps its share as spent from then on.
+   * Spends [account]'s windows of what [task] takes of them over [span] in [mode], and answers that spend in percent, each
+   * percent at its window's price: the window's own until its reset, a refilled window's after it, and an unknown one's for
+   * a window the subscription does not report.
    */
-  private spend(account: Account, task: Task, mode: Mode, span: Span, hold: boolean): number {
+  private spend(account: Account, task: Task, mode: Mode, span: Span): number {
     let priced = 0
     for (const window of account.windows) {
       const key = `${account.id}\n${window.name}`
       for (const [index, share] of shares(window, task, mode, span)) {
-        if (hold) {
-          let used = this.spent.get(key)
-          if (!used) this.spent.set(key, used = new Map<number, number>())
-          used.set(index, (used.get(index) ?? 0) + share)
-        }
+        let used = this.spent.get(key)
+        if (!used) this.spent.set(key, used = new Map<number, number>())
+        used.set(index, (used.get(index) ?? 0) + share)
         priced += share * (index === 0 ? priceOf(window, account.reserve, this.problem.now) : EVEN_PRICE)
       }
     }
