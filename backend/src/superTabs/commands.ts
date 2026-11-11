@@ -29,7 +29,8 @@ import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './ti
 import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
-import { agentChatId } from './agentKind.js'
+import { giveAgentChat } from './agentChats.js'
+import { githubRepository } from '../github/repository.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -71,10 +72,8 @@ const repositoryUrl = z.string().max(4096).refine(value => {
   } catch { return false }
 }, 'Share a repository URL without credentials.')
 const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() }).strict()
-/** A GitHub repository as `owner/name`: GitHub's own rules for both (an owner of 1-39 letters, digits and inner dashes; a name of
- *  letters, digits, `.`, `_` and `-` that is not `.` or `..`). */
-const githubRepository = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/,
-  'Name the repository as owner/name.')
+/** A GitHub repository as `owner/name`, held to GitHub's own rules for both (github/repository.ts). */
+const githubName = z.string().max(141).refine(value => githubRepository(`https://github.com/${value}`)?.fullName === value, 'Name the repository as owner/name.')
 // How many agents a machine offers is its owner's choice: the CLI suggests at most its total RAM / 2 GB (192 GB offers 96).
 // The 16 this once was held the Mac Studio far below that (Ken, 2026-10-28); 1024 only refuses a number no machine could run.
 const maxAgents = z.number().int().min(1).max(1024)
@@ -137,7 +136,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
   // The project's GitHub repository, `owner/name`, set by the client that knows it (anh Dee 2026-11-11): a project whose folder
   // only one computer has still has its Tasks board on every computer.
-  z.object({ type: z.literal('project.github'), projectId: id, repository: githubRepository }).strict(),
+  z.object({ type: z.literal('project.github'), projectId: id, repository: githubName }).strict(),
   // What the project is, in one line, for the Cmd-N and join project list (task #4540): empty clears it.
   z.object({ type: z.literal('project.about'), projectId: id, about: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'One line.') }).strict(),
   // Whether its agents answer each person's message in that message's thread (projects.ts answersInThread, task #3747).
@@ -903,10 +902,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'project.github': {
-      // As its name is: its owner sets it, or its coordinator.
+      // As its name is: its owner sets it, or its coordinator. One that clones from GitHub already works in that repository.
       const project = readProject(state, actor, command.projectId)
       if (actor.kind === 'agent') coordinatorOf(project)
       else manageProject(state, actor, project.id)
+      const cloned = githubRepository(project.repository?.repositoryUrl)
+      if (cloned && cloned.fullName.toLowerCase() !== command.repository.toLowerCase()) {
+        fail('PROJECT_REPOSITORY_SET', `This project works in ${cloned.fullName}.`, 409)
+      }
       mutableProjects(state)
       projectOf(state, project.id).githubRepository = command.repository
       break
@@ -925,30 +928,44 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('AGENT_NOT_YOURS', `Choose one of your own agents as the ${COORDINATOR_NAME}.`, 403)
       }
       const current = home.leadId && home.agentIds.includes(home.leadId) ? agent(state, home.leadId) : undefined
-      // Its own chat with its person, where they talk to it (agentKind.ts).
-      result.chatId = agentChatId(state, target)
-      if (current?.id === target.id) break
-      if (target.workDecision === 'stop') fail('STOP_REQUESTED', `${name} is stopping.`, 409)
-      const led = ledProject(state, target.id)
-      if (led) fail('LEAD_ELSEWHERE', `${name} is already the ${COORDINATOR_NAME} of ${led.name}.`, 409)
-      // What it heard in a private project stays there (projects.ts privateProjectId).
-      if (target.privateProjectId && target.privateProjectId !== project.id) fail('AGENT_PRIVATE', `${name} works in a private project.`, 409)
-      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id && groupProject(state, c).id !== project.id)) {
-        fail('WORK_ACTIVE', `${name} has a task in another project. Choose it once that task ends.`, 409)
+      /** Its own 1:1 chat with its person, if it has one. */
+      const ownChat = (member: Agent) => state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(member.id))?.id
+      const waiting = () => waitingPmChat(state, project, person(state, actor.userId))?.id
+      if (current?.id !== target.id) {
+        if (target.workDecision === 'stop') fail('STOP_REQUESTED', `${name} is stopping.`, 409)
+        const led = ledProject(state, target.id)
+        if (led) fail('LEAD_ELSEWHERE', `${name} is already the ${COORDINATOR_NAME} of ${led.name}.`, 409)
+        // An agent of another project, by its task or its place, keeps what it heard there: it stays that project's.
+        const elsewhere = agentProjectId(state, target)
+        if ((elsewhere !== NO_PROJECT && elsewhere !== project.id) || (target.privateProjectId && target.privateProjectId !== project.id)) {
+          fail('AGENT_IN_PROJECT', `${name} works in another project.`, 409)
+        }
+        if (current?.switchRequest) fail('LEAD_SWITCHING', `The ${COORDINATOR_NAME} is being moved.`, 409)
+        // A PM a start or a Desktop's claim is bringing (lead.claim) would find the project led and be refused.
+        if (leadStarting(state, project.id) || (project.leadClaim && context.now - project.leadClaim.at < LEAD_CLAIM_MS)) {
+          fail('LEAD_STARTING', `This project's ${COORDINATOR_NAME} is already starting.`, 409)
+        }
+        if (current) {
+          home.agentIds = home.agentIds.filter(a => a !== current.id)
+          current.regular = true
+          delete current.projectId
+          // What it heard in a private project stays there (projects.ts privateProjectId, as project.sharing does).
+          if (project.visibility === 'private') current.privateProjectId = project.id
+          // A PM from before Swarm v4 talked to its person in the channel: it gets its own chat now.
+          if (!ownChat(current)) giveAgentChat(state, current, context.now)
+        }
+        delete target.regular
+        delete target.mainProjectId
+        target.projectId = project.id
+        if (!home.agentIds.includes(target.id)) home.agentIds.push(target.id)
+        home.leadId = target.id
+        // The Swarm's placement of a PM it started is not this one's.
+        delete project.lead
+        arrived(project, target.id)
+        // A chat waiting for its PM is this one's when it has none (pmChat.ts settlePmChats); else it gets one now.
+        if (!ownChat(target) && !waiting()) giveAgentChat(state, target, context.now)
       }
-      if (current?.switchRequest) fail('LEAD_SWITCHING', `The ${COORDINATOR_NAME} is being moved.`, 409)
-      if (leadStarting(state, project.id)) fail('LEAD_STARTING', `This project's ${COORDINATOR_NAME} is already starting.`, 409)
-      if (current) {
-        home.agentIds = home.agentIds.filter(a => a !== current.id)
-        current.regular = true
-        delete current.projectId
-      }
-      delete target.regular
-      delete target.mainProjectId
-      target.projectId = project.id
-      if (!home.agentIds.includes(target.id)) home.agentIds.push(target.id)
-      home.leadId = target.id
-      arrived(project, target.id)
+      result.chatId = ownChat(target) ?? waiting() ?? null
       break
     }
     case 'project.create': {

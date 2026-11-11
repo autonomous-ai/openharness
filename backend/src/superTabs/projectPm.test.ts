@@ -105,3 +105,38 @@ describe('project.github', () => {
       `${'o'.repeat(40)}/r`, `o/${'r'.repeat(101)}`, 'owner/re po'].map(valid)).toEqual(Array(13).fill(false))
   })
 })
+
+describe('project.pm, what each agent keeps', () => {
+  it('keeps the replaced PM of a private project to that project, and gives a chatless PM its own chat', () => {
+    const f = fixture(), juno = f.join('juno'), pip = f.join('pip')
+    f.run({ type: 'project.sharing', projectId: f.project.projectId, visibility: 'private', memberIds: [] })
+    f.choose(juno)
+    // A PM from before Swarm v4 talked to its person in the channel: it had no chat of its own.
+    const chat = f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(juno))!
+    chat.agentIds = []
+    f.choose(pip)
+    expect(f.agentOf(juno)).toMatchObject({ regular: true, privateProjectId: f.project.projectId })
+    expect(f.state.conversations.filter(c => c.kind === 'agent-chat' && c.agentIds.includes(juno))).toHaveLength(1)
+  })
+
+  it('refuses an agent of another project, and a PM a start or a claim is bringing', () => {
+    const f = fixture(), juno = f.join('juno')
+    const other = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result.projectId as string
+    f.agentOf(juno).regular = undefined
+    f.agentOf(juno).projectId = other
+    expect(() => f.choose(juno)).toThrow(expect.objectContaining({ code: 'AGENT_IN_PROJECT' }))
+    const pip = f.join('pip')
+    f.state.projects!.find(p => p.id === f.project.projectId)!.leadClaim = { id: 'claim', machineId: 'owner-mac', at: 1000 }
+    expect(() => f.choose(pip)).toThrow(expect.objectContaining({ code: 'LEAD_STARTING' }))
+  })
+})
+
+describe('project.github, beside a repository the project clones', () => {
+  it('must name the repository the project already clones from GitHub', () => {
+    const f = fixture()
+    f.state.projects!.find(p => p.id === f.project.projectId)!.repository = { machineId: 'm', cwd: '/r', repositoryUrl: 'https://github.com/autonomous-ai/openharness.git' }
+    expect(() => f.run({ type: 'project.github', projectId: f.project.projectId, repository: 'someone/else' })).toThrow(expect.objectContaining({ code: 'PROJECT_REPOSITORY_SET' }))
+    f.run({ type: 'project.github', projectId: f.project.projectId, repository: 'Autonomous-AI/OpenHarness' })
+    expect(f.state.projects!.find(p => p.id === f.project.projectId)!.githubRepository).toBe('Autonomous-AI/OpenHarness')
+  })
+})
