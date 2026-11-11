@@ -36,6 +36,7 @@ import 'package:harness/super_tabs/agent_info.dart';
 import 'package:harness/super_tabs/back_to_chat.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/instructions_link.dart';
+import 'package:harness/super_tabs/message_receipt.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
@@ -691,7 +692,7 @@ class _Gallery extends StatelessWidget {
             [
               SizedBox(
                 width: 760,
-                height: 250,
+                height: 360,
                 child: SwarmTaskBoard(
                   controller: swarm,
                   conversationId: 'lead',
@@ -760,6 +761,33 @@ class _Gallery extends StatelessWidget {
               ],
             ),
           ]),
+          section(
+            'message-states',
+            'Message states: Sent, Typed, and why one is not typed yet',
+            [
+              SizedBox(
+                width: 460,
+                child: Column(
+                  children: [
+                    _ownWithState(swarm, 'Fix the login bug.', 'sent', {
+                      'status': 'queued',
+                    }, sentAgo: const Duration(minutes: 1)),
+                    _ownWithState(swarm, 'Ship it once it is green.', 'typed', {
+                      'status': 'delivered',
+                    }),
+                    _ownWithState(swarm, 'hi', 'working', {
+                      'status': 'claimed',
+                      'holdReason': 'team_waiting_idle',
+                    }, sentAgo: const Duration(minutes: 3)),
+                    _ownWithState(swarm, 'Which branch?', 'asks', {
+                      'status': 'claimed',
+                      'holdReason': 'team_waiting_user',
+                    }, sentAgo: const Duration(minutes: 3)),
+                  ],
+                ),
+              ),
+            ],
+          ),
           section(
             'composer',
             'Chat composer: the pill empty and typed, a thread box',
@@ -1050,6 +1078,49 @@ Widget _message(
   onReturnToComposer: () {},
   readerId: 'p1',
 );
+
+/// When the gallery's message states are read.
+final _statesNow = DateTime.utc(2026, 11, 11, 9, 20);
+
+/// Your own message to `second` with the line the chat draws under its newest
+/// one (message_receipt.dart): its delivery [state], sent [sentAgo] before the
+/// gallery's clock.
+Widget _ownWithState(
+  SuperTabController swarm,
+  String text,
+  String id,
+  Map<String, dynamic> state, {
+  Duration sentAgo = Duration.zero,
+}) {
+  final message = SuperTabMessage.fromJson({
+    'id': 'm-$id',
+    'conversationId': 'lead',
+    'text': text,
+    'sequence': 1,
+    'createdAt': _statesNow.subtract(sentAgo).toIso8601String(),
+    'author': {'kind': 'person', 'id': _person.id, 'name': 'dee@example.com'},
+    'deliveries': [
+      {'id': 'd-$id', 'agentId': 'second', ...state},
+    ],
+  });
+  return SuperTabMessageRow(
+    message: message,
+    author: 'dee',
+    person: _person,
+    readerId: 'p1',
+    onReturnToComposer: () {},
+    receipts: [
+      SuperTabMessageReceipt(
+        message: message,
+        controller: swarm,
+        onResolve: (_, _) {},
+        onAddLead: () {},
+        machineName: (_) => 'Mac Studio',
+        now: () => _statesNow,
+      ),
+    ],
+  );
+}
 
 /// The chat's composer as it draws itself: the pill around the paperclip and
 /// the text, the mic beside it while empty, send once [typed].

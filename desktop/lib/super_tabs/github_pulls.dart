@@ -155,11 +155,17 @@ class SwarmPull {
     final commit = last is Map ? last['commit'] : null;
     final rollup = commit is Map ? commit['statusCheckRollup'] : null;
     final base = row['baseRefName'];
+    // Harness's train (cli/src/superTabs/githubTrain.ts): it carries pull requests that were read, so nobody reads it and
+    // no agent wrote it. Its checks run on the combined change, and it lands when they pass. By its branch and its title:
+    // anyone can push a branch under the prefix, and one not titled as a train is a builder's, still to read.
+    final train =
+        branch.startsWith(_trainBranch) && title.startsWith(_trainTitle);
+    final author = train ? null : authorOf(labels, branch);
     final standing = standingOf(
       draft: row['isDraft'] == true,
       head: head,
-      author: authorOf(labels, branch),
-      writers: writersOf(labels, branch),
+      author: author,
+      writers: train ? const {} : writersOf(labels, branch),
       body: row['body'] is String ? row['body'] as String : '',
       comments: [
         for (final comment in _nodes(row['comments']))
@@ -179,16 +185,22 @@ class SwarmPull {
       title: title,
       url: url,
       branch: branch,
-      author: authorOf(labels, branch),
+      author: author,
       updatedAt: DateTime.tryParse(row['updatedAt'] as String? ?? ''),
       closes: [
         for (final issue in _nodes(row['closingIssuesReferences']))
           if (issue is Map && issue['number'] is int) issue['number'] as int,
       ],
-      status: standing.status,
-      readOk: standing.read,
+      status: train && standing.status == SwarmPullStatus.review
+          ? SwarmPullStatus.merging
+          : standing.status,
+      readOk: train || standing.read,
     );
   }
+
+  /// The branches Harness's train builds on, and how it titles its pull request (cli/src/superTabs/githubTrain.ts
+  /// TRAIN_BRANCH, TITLE).
+  static const _trainBranch = 'harness-train/', _trainTitle = 'Train: ';
 
   /// Its author by name, as the merger finds it: its builder label, else its branch's first part (`pip/12`).
   static String? authorOf(List<String> labels, String branch) {

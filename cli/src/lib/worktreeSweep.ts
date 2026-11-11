@@ -3,6 +3,7 @@ import { constants, type Dirent } from 'node:fs'
 import { access, lstat, mkdir, readdir, readFile, rmdir, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { inRepositoryTurn } from './gitProject.js'
 import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 
 const exec = promisify(execFile)
@@ -143,15 +144,18 @@ export async function sweepOne(path: string, now: number, idleMs: number, unused
   if (!branch && await git(path, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']) !== '0') return false
   if (await unwritableFolder(path)) throw new WorktreeKept('WORKTREE_UNWRITABLE')
   if (!unused()) return false
-  await removeKeepingRecord(main, common, gitDir, path)
-  const name = branch?.slice('refs/heads/'.length)
-  // Only a branch Harness made: marked in the repository's config, or named `harness/…` by older builds.
-  const made = name !== undefined && (name.startsWith('harness/')
-    || await git(main, ['config', '--get', `branch.${name}.harness`]).then(Boolean, () => false))
-  if (branch && name && made) {
-    // `--exclude` before `--branches` matches names without `refs/heads/`.
-    const unique = await git(main, ['rev-list', '--count', branch, '--not', `--exclude=${name}`, '--branches', '--remotes']).catch(() => null)
-    if (unique === '0') await git(main, ['branch', '-D', name]).catch(() => {})
-  }
+  // In the repository's turn: a start's `git worktree add` read the worktrees folder this removes from (gitProject.ts).
+  await inRepositoryTurn(main, async () => {
+    await removeKeepingRecord(main, common, gitDir, path)
+    const name = branch?.slice('refs/heads/'.length)
+    // Only a branch Harness made: marked in the repository's config, or named `harness/…` by older builds.
+    const made = name !== undefined && (name.startsWith('harness/')
+      || await git(main, ['config', '--get', `branch.${name}.harness`]).then(Boolean, () => false))
+    if (branch && name && made) {
+      // `--exclude` before `--branches` matches names without `refs/heads/`.
+      const unique = await git(main, ['rev-list', '--count', branch, '--not', `--exclude=${name}`, '--branches', '--remotes']).catch(() => null)
+      if (unique === '0') await git(main, ['branch', '-D', name]).catch(() => {})
+    }
+  })
   return true
 }
