@@ -68,7 +68,8 @@ export interface RetargetDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   /** OpenCode's store, whose rows a resumed session takes its model from. */
   opencodeDb: string
-  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
+   *  Swarm is off. */
   adoptSwarmSkill?: AdoptSwarmSkill
 }
 
@@ -113,8 +114,8 @@ export function createAgentRetargeter({
     // validate, and respawning over a pane whose occupant we cannot identify is how you replace
     // something that was not ours.
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
-    // An older Swarm session switches with its role, or not at all while the role cannot be read: a switch relaunched an old
-    // Swarm session with no saved role as an ordinary session (security review 1 of #2255). Nothing has touched
+    // An agent its person attached switches with its Swarm role, or not at all while the role cannot be read: a switch
+    // relaunched a Swarm member with no saved role as an ordinary session (security review 1 of #2255). Nothing has touched
     // the pane yet, so a refusal leaves the running engine as it is.
     const looked = await adoptSwarmSkill?.lookup?.(session, current)
     if (looked !== undefined) {

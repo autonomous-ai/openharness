@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { ASKED, DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -39,17 +39,18 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
   { name: 'p1', color: 'd93f0b', description: 'Next' },
   { name: 'p2', color: 'fbca04', description: 'Later' },
 ]
+/** How long a task Harness gave may wait for its builder, untaken, while another builder of the team has nothing (Swarm plan,
+ *  step 1, item 6: "Nobody waits on it: a task not taken in 10 minutes is open to any agent with room"). */
+const WAIT_TAKE_MS = 10 * 60_000
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
- *  how many asks one reader gets for one head. */
-const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
+ *  how many asks one reader gets for one head. Thirty minutes (Swarm plan, step 1, item 1: "No verdict in 30 minutes: another is
+ *  asked"; lampOS's first verdict came at 6 minutes at the median and 37 at p90): two hours until 11-11, and v4's sandbox #27
+ *  waited four on two readers who never answered. A reader's turn that ends without its read is typed it too (nextThing.ts). */
+const READ_WAIT_MS = 30 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
-/** Harness's ask of a reader, as `ask` writes it: who was asked, and for which head. An ask from before the verdict was a
- *  command named the head after "READ-OK", and is on open pull requests still: that form can go after 2026-12-10. */
-const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?(?:super-tab read ok \S+|READ-OK) ([0-9a-f]{7,40})/
-
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
@@ -68,7 +69,7 @@ export class GitHubAssign {
   /** The tasks nobody could start whose PM was told why, by task and reason (sayBlocked), forgotten as the others are. */
   private readonly blocked = new Set<string>()
   /** What commits change, as the merger reads it (sameChange), so a verdict both count is one neither asks again. */
-  private readonly patches = new Map<string, string | null>()
+  private readonly patches = new Map<string, unknown>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
@@ -170,6 +171,7 @@ export class GitHubAssign {
     const short = outOfQuota(read)
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
+    await this.openWaiting(repo, issues, crew, read, short)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
@@ -202,25 +204,11 @@ export class GitHubAssign {
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
       // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
       // tried again next pass.
-      let refused = 0, off = false
-      const remove = (label: string) => this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
-      for (const label of [...back.taken ? ['status:taken'] : [], back.label]) {
-        const reply = await remove(label)
-        if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
-        off = label === back.label && reply.status === 200
-      }
-      if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
-      // And status:taken once more, after the builder's label: a claim made meanwhile (githubClaim.ts) marks the task taken,
-      // and takes its own mark off only when it lands after the label went. Only where this pass took the label off: one
-      // already gone was moved by hand, and its next builder's claim is not this pass's to undo. Refused, it is said: the
-      // task is taken back all the same, and is left taken only if a claim did land.
-      if (off) {
-        const cleared = await remove('status:taken')
-        if (cleared.status !== 200 && cleared.status !== 404) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${cleared.status}`)
-      }
+      const given = await giveBack(this.deps.send, repo, back.number, back.label, back.taken)
+      if ('refused' in given) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${given.refused}`); continue }
+      if (given.takenKept !== null) this.once(`[super-tab] Task assignment: TAKEN_NOT_CLEARED ${repo}#${back.number}: GitHub answered ${given.takenKept}`)
       this.backs.add(key)
-      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
-        { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
+      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`, { body: backLine(back.why, this.clock()) })
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
     }
   }
@@ -352,7 +340,7 @@ export class GitHubAssign {
         const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
-          // for a head and two hours apart. One stopped when it was asked never heard it: GitHub news reads what is said from
+          // for a head and thirty minutes apart. One stopped when it was asked never heard it: GitHub news reads what is said from
           // when its agent runs again (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped).
           const again = [...asked.keys()].filter(name => !own(name) && (onThisHead.get(name) ?? 0) < READ_ASKS
             && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
@@ -427,6 +415,33 @@ export class GitHubAssign {
         this.quiet.set(key, { since, askedAt: now })
         this.log(`[super-tab] asked ${task.name} about quiet ${repo}#${task.number}`)
       }
+    }
+  }
+
+  /**
+   * A task Harness gave that its builder has not taken in [WAIT_TAKE_MS], while a builder of the team has nothing given or taken
+   * and could take it, goes back with one line of why, and the next plan gives it to the builder who can start it soonest (Swarm
+   * plan, step 1, item 6: "Nobody waits on it"). Two deep, a builder's second task waited for its first however long that took,
+   * while others sat with nothing. One its PM or a person gave stands: Harness gave it when its own word "for **Name**" is on it.
+   * Once a task and builder in a daemon's life, so a plan or a person that gives it back to that builder is not undone.
+   */
+  private async openWaiting(repo: string, issues: Json[], crew: Crew, read: Read, short: AwayBuilder[]): Promise<void> {
+    const idle = crew.builders.filter(b => (read.open.get(b.id) ?? 0) === 0 && !short.some(away => away.label === b.label))
+    if (!idle.length) return
+    const now = this.now()
+    for (const issue of issues) {
+      const labels = labelNames(issue)
+      const builder = crew.builders.find(b => labels.includes(b.label))
+      if (issue.pull_request || !builder || labels.includes('status:taken') || this.backs.has(`${repo}#${issue.number}:back:${builder.label}`)) continue
+      const task = read.problem.tasks.find(t => t.id === `#${issue.number}`)
+      const taker = idle.find(b => b !== builder && !task?.notBuilders.includes(b.id))
+      if (!task || !taker) continue
+      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?per_page=${PAGE}`, 1)
+      const gave = Math.max(0, ...comments.filter(c => readerKey(ownAsk(c, /^Harness, \d\d:\d\d: for \*\*([^*]+)\*\*: /)?.[1] ?? '\n') === readerKey(builder.name))
+        .map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite))
+      if (!gave || now - gave < WAIT_TAKE_MS) continue
+      await this.takeBack(repo, [issue], [{ name: builder.name, label: builder.label, why: 'stopping' }],
+        `${builder.name} has not started it in ${Math.round((now - gave) / 60_000)} minutes, and ${taker.name} has nothing to do`)
     }
   }
 
@@ -544,5 +559,33 @@ function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
   return pattern.exec(String(comment.body ?? '').slice(0, 500))
 }
 
-const labelNames = (issue: Json): string[] =>
+/** What taking a task back answered: GitHub refused it (its status), or it is done, with the status GitHub answered when it kept
+ *  status:taken after the builder's label went (null when it did not). */
+export type GivenBack = { refused: number } | { takenKept: number | null }
+
+/**
+ * Takes task [number] of [repo] back from the builder [label] names (anh Dee's plan, 2026-11-09: "when a builder stops, stalls
+ * or runs out of quota, Harness takes the task back and gives it to the next best builder"), for the assigner and for an agent's
+ * own computer when it sat idle holding it (nextThing.ts). status:taken first, when it is [taken]: a task left taken with no builder
+ * is one nobody plans (readProblem), while one left queued for its builder is taken back again next pass. A label already gone
+ * is off; anything else GitHub refuses stops it. Then status:taken once more, after the builder's label: a claim made meanwhile
+ * (githubClaim.ts) marks the task taken, and takes its own mark off only when it lands after the label went. Only where this took
+ * the label off: one already gone was moved by hand, and its next builder's claim is not this one's to undo.
+ */
+export async function giveBack(send: GitHubSend, repo: string, number: number, label: string, taken: boolean): Promise<GivenBack> {
+  const remove = (name: string) => send('DELETE', `/repos/${repo}/issues/${number}/labels/${encodeURIComponent(name)}`)
+  let off = false
+  for (const name of [...taken ? ['status:taken'] : [], label]) {
+    const reply = await remove(name)
+    if (reply.status !== 200 && reply.status !== 404) return { refused: reply.status }
+    off = name === label && reply.status === 200
+  }
+  const cleared = off ? await remove('status:taken') : null
+  return { takenKept: cleared && cleared.status !== 200 && cleared.status !== 404 ? cleared.status : null }
+}
+
+/** The line a task taken back says on it, as Harness at [at] (HH:MM): [why], and where it goes. */
+export const backLine = (why: string, at: string): string => `${SELF}, ${at}: ${why}, so this task goes to the builder who can start it next.`
+
+export const labelNames = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels : []).map(label => String((label as Json)?.name ?? ''))

@@ -1,7 +1,6 @@
 /// The leaderboard read's answer, how the board writes its numbers, and the
-/// reader that keeps one project's board current (the desktop's
-/// `desktop/lib/super_tabs/leaderboard` model, format and reader); the page
-/// is `swarm_leaderboard.dart`.
+/// reader that keeps one project's board current; the page is
+/// `swarm_leaderboard.dart`.
 library;
 
 import 'dart:async';
@@ -23,9 +22,8 @@ Map<String, dynamic> _map(Object? value) =>
 
 /// One project's week as the leaderboard read answers it
 /// (`backend/src/superTabs/leaderboard/contract.ts`): what it shipped, and
-/// each person who reads the project with their points, most first. The
-/// desktop's `SuperTabLeaderboard` (`desktop/lib/super_tabs/leaderboard`),
-/// kept to what the phone shows.
+/// each person who reads the project with their points, most first, kept to
+/// what the phone shows.
 class SwarmLeaderboard {
   SwarmLeaderboard.fromJson(Map<String, dynamic> json)
     : week = _int(json['week']),

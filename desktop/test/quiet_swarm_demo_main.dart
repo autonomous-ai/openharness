@@ -18,7 +18,6 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/widgets/workspace_account_button.dart';
 
-import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 const _tabs = ['lampOS', 'strategies', 'autonomous.ai', 'hardware', 'growth'];
@@ -112,15 +111,6 @@ ConversationServer _swarm(String id, String name) {
       'name': said[i],
     };
   }
-  server.leaderboard = {
-    ...humansSwarm().leaderboard!,
-    'byModel': [
-      modelScore('claude', 'claude-opus-5-5', 'high', attempts: 62),
-      modelScore('claude', 'claude-sonnet-5-5', 'high', attempts: 21),
-      modelScore('codex', 'gpt-6.1-sol', 'high', attempts: 11),
-      modelScore('claude', 'deepseek-v4.1', 'high', attempts: 6),
-    ],
-  };
   return server;
 }
 

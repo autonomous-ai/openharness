@@ -1109,12 +1109,13 @@ export class SuperTabStore {
       }
       // A person's post where only agents post is refused (commands.ts postable) before the message reads below; access first, as an
       // upload asks it (poster), so a refusal tells nothing of a conversation the person cannot read.
+      // One clock for the command: the check below and the command judge the channel exemptions' end at the same moment.
+      const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'message.send' && actor.kind === 'person') {
         author(original, actor, true)
         readConversation(original, actor, command.conversationId)
-        postable(original, actor, command.conversationId)
+        postable(original, actor, command.conversationId, context.now)
       }
-      const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
@@ -1755,7 +1756,7 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     author(state, actor, true)
     readConversation(state, actor, conversationId)
-    postable(state, actor, conversationId)
+    postable(state, actor, conversationId, this.now())
     return { state, actor }
   }
 

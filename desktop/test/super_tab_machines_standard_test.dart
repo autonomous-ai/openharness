@@ -95,21 +95,21 @@ void main() {
     expect(
       find.descendant(
         of: _key('super-machines-group-yours'),
-        matching: find.text('YOUR MACHINE'),
+        matching: find.text('Yours'),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: _key('super-machines-group-online'),
-        matching: find.text('ONLINE · 1'),
+        matching: find.text('Online'),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: _key('super-machines-group-offline'),
-        matching: find.text('OFFLINE · 2'),
+        matching: find.text('Offline'),
       ),
       findsOneWidget,
     );
@@ -197,8 +197,11 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('ONLINE · 2'), findsOneWidget);
-    expect(find.text('OFFLINE · 1'), findsOneWidget);
+    expect(find.text('2 online · 1 offline'), findsOneWidget);
+    expect(
+      _top(tester, 'super-machine-row-b'),
+      lessThan(_top(tester, 'super-machines-group-offline')),
+    );
 
     // Bravo goes quiet: the rows still read Alpha, Bravo, Charlie.
     final machines = (server.state['machines'] as List)
@@ -214,8 +217,11 @@ void main() {
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 50));
     }
-    expect(find.text('ONLINE · 1'), findsOneWidget);
-    expect(find.text('OFFLINE · 2'), findsOneWidget);
+    expect(find.text('1 online · 2 offline'), findsOneWidget);
+    expect(
+      _top(tester, 'super-machine-row-b'),
+      greaterThan(_top(tester, 'super-machines-group-offline')),
+    );
     await _end(tester, c);
   });
 
