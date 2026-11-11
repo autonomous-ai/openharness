@@ -63,8 +63,11 @@ void main() {
                   builder: (context) => Column(
                     children: [
                       TextButton(
-                        onPressed: () =>
-                            showSuperTabSharing(context, controller),
+                        onPressed: () => showSuperTabSharing(
+                          context,
+                          controller,
+                          title: 'Manage people',
+                        ),
                         child: const Text('Share'),
                       ),
                       TextButton(

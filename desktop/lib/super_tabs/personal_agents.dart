@@ -74,12 +74,15 @@ class PersonalAgent {
 }
 
 /// The panes of the person's own that are agents of their Swarm [snapshot] but not in it yet, by name: a Claude Code or Codex
-/// session that runs ([kSwarmEngines]) on one of their own computers, each once whatever tabs hold it.
+/// session that runs ([kSwarmEngines]) on one of their own computers, each once whatever tabs hold it. One another Swarm
+/// holds, or a Swarm started, stays that Swarm's (anh Dee, 2026-11-11: "the agents started in other swarms leave them in
+/// other swarms, they are not part of this swarm").
 List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   final joined = {
     for (final agent in snapshot.agents)
       (machineIdKey(agent.machineId), agent.harnessId),
   };
+  final elsewhere = app.superTabs.agentsOutside(snapshot.id);
   final seen = <(String, String)>{};
   // Each computer's sessions by id, worked out once for the pass: a desk holds hundreds of panes.
   final sessions = <String, Map<String, Agent>>{};
@@ -87,13 +90,16 @@ List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   for (final entry in _ownPanes(app)) {
     final harnessId = entry.pane.agentId!;
     final key = (machineIdKey(entry.pane.machineId), harnessId);
-    if (joined.contains(key) || !seen.add(key)) continue;
+    if (joined.contains(key) || elsewhere.contains(key) || !seen.add(key)) {
+      continue;
+    }
     final agent = (sessions[entry.pane.machineId] ??= {
       for (final agent in entry.machine.agents) agent.id: agent,
     })[harnessId];
     if (agent == null ||
         !kSwarmEngines.contains(agent.engine) ||
         agent.isStopped ||
+        agent.startedBySwarm ||
         !agent.terminalAvailable) {
       continue;
     }
