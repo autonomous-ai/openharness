@@ -12,6 +12,10 @@ Swarm chat, and the agent drives it with `harness browser <command>`: no MCP, no
 - The registry row's `browser` flag now means "on". The service asks the core to set or clear it
   (`CoreApi.agents.setBrowser`), and the core tells the browser's port `attached` or `stopped` in the same turn, so
   the flag's order is the service queue's order.
+- A browser left on follows its agent, by the agent's id (decision 14): it stops when the agent stops and is
+  attached again on every path that runs that agent again. Create, resume and daemon start attach it as before; the
+  reconciler's look at each running agent (`core/agents/discovery.ts` `onObserved`) attaches any it finds left out,
+  so no path has to remember to (Task 23).
 - The daemon's `agentBrowser` service keeps one tool server per ready browser (`podman exec -i … browser-tools.mjs`),
   runs the agent's commands through it one at a time, sizes Chrome's window through it, and types two lines into
   the agent (`CoreApi.turns.deliver`): one when the person's Start is ready, one at the person's Stop. Both are quiet
@@ -40,6 +44,10 @@ them and does not repeat them.
   delivery, carried to its turn's end (Tasks 21, 22). The code on that path (`core/deliveries.ts`,
   `core/turns/recaps.ts`, `lib/commander.ts`, `services/recaps.ts`) names no feature. `turns.onEnd` still tells that
   end: the Swarm still types the agent its next thing.
+- **The browser follows its agent, by its id (Ken, 2026-11-11, decision 14).** Only the person's Stop clears the
+  flag. An agent that stops has its browser stopped; whenever a row with the flag has a running engine again, by any
+  path, its browser is attached, and nothing is typed (its `told` mark stays). The flag never moves to another
+  agent's id (Where the spec needed a call, 21).
 - **No asking (Ken, 2026-11-11).** `harness browser …` is in both engines' allow rules, as `harness send` is
   (Task 20). It has no MCP tool.
 - **No read of the backend or of the Swarm on a command's path.** `agent_browser_run` reads the registry row, the
@@ -91,6 +99,9 @@ Inputs the spec implies and a person will meet. Each has its test in the task th
    quiet when it is let go, and the next turn does not inherit the mark. Task 21.
 8. **A person who denied or asks for `harness browser` in their own Claude Code rules:** no allow is added, in either
    spelling. Task 20.
+9. **An agent the daemon took for exited while its engine ran on** (a restore that could not see it, two missed
+   scans): archived, its browser stopped, then back under its own id with nothing restarted. Its browser is attached
+   again, once, and every later scan tells the service nothing. Task 23.
 
 ## Contract
 
@@ -126,7 +137,8 @@ Every task uses these names. Requests are answered by `cli/src/services/agentBro
 | File | Holds | Task |
 |---|---|---|
 | `backend/src/types/productUsage.ts`, `cli/src/lib/productUsageContract.ts` | the counters, byte-identical | 1 |
-| `cli/src/lib/registry.ts`, `cli/src/core/agents/lifecycle.ts`, `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, `cli/src/core/main.ts` | the flag, set by the core | 2, 12, 15 (`api.ts` and `main.ts` also 22) |
+| `cli/src/lib/registry.ts`, `cli/src/core/agents/lifecycle.ts`, `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, `cli/src/core/main.ts` | the flag, set by the core | 2, 12, 15 (`api.ts` and `main.ts` also 22; `lifecycle.ts` and `main.ts` also 23) |
+| `cli/src/core/agents/discovery.ts` | a browser left on, attached on every look at its running agent | 23 |
 | `cli/src/lib/e2ee/applicationFrames.ts` | the three sealed requests | 2 |
 | `cli/src/core/agents/create.ts`, `cli/src/lib/launchOverrides.ts` | launches with no browser argument | 3 |
 | `cli/src/lib/callerPane.ts` (moved) | the pane a command runs in | 4 |
@@ -156,13 +168,20 @@ its code commit, run the wave's commands below.
 |---|---|
 | 0 (by hand, gate) | 0 |
 | 1 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 |
-| 2 | 12, 13, 14, 20, 21 |
+| 2 | 12, 13, 14, 20, 21, 23 |
 | 3 | 15, 16 |
 | 4 | 17, 18, 19, 22 |
 
 Tasks 20 to 22 were added after Task 0 (Ken, 2026-11-11). Why they sit where they do: 20 and 21 share no file with
 12, 13 or 14 and depend on none of them; 22 changes `core/api.ts` (Tasks 12 and 15) and `core/main.ts` (Task 15), so
 it follows both, and it needs Task 21's `ingest`. No fifth wave is needed.
+
+Task 23 was added while wave 2 ran (Ken, 2026-11-11, decision 14). It is in wave 2: it depends on Task 2 alone, and
+its files (`core/agents/lifecycle.ts`, `core/agents/discovery.ts`, `core/main.ts`, the first two's specs and
+`lib/registry.spec.ts`) are changed by none of 12, 13, 14, 20 and 21 (checked against their worktrees' diffs). It
+cannot sit in wave 3 or 4: `core/main.ts` is Task 15's there, then Task 22's. Started after the others finish, it
+is still wave 2: it is cherry-picked last, before wave 3 starts, and Tasks 15 and 22 edit `main.ts` as it leaves
+it.
 
 **Wave 1 verify** (in `cli/` unless said):
 
@@ -191,7 +210,8 @@ npx vitest run src/services/agentBrowser.spec.ts src/services/agentBrowserProces
   src/agentClient/help.spec.ts src/architecture.spec.ts src/engines/kit/hookSettings.spec.ts \
   src/engines/hookInstallers.golden.spec.ts src/engines/removeHooks.spec.ts src/agentClient/mcp.spec.ts \
   src/lib/commanderNotifications.spec.ts src/lib/commander.spec.ts src/lib/commanderReplay.spec.ts \
-  src/services/recaps.spec.ts --maxWorkers=4
+  src/services/recaps.spec.ts src/core/agents/lifecycle.spec.ts src/core/agents/discovery.spec.ts \
+  src/lib/registry.spec.ts src/core/agents/create.spec.ts src/lib/resumeAgentService.spec.ts --maxWorkers=4
 (cd ../desktop && flutter analyze lib test && flutter test --no-pub --concurrency=2 --timeout=60s \
   test/browser/browser_requests_test.dart test/e2ee/encrypted_down_types_test.dart test/ws_conn_test.dart)
 ```
@@ -961,6 +981,114 @@ Rules:
   src/lib/commanderReplay.spec.ts src/services/recaps.spec.ts` and `npm run typecheck`: PASS. Commit `feat: a turn
   said quiet ends with no recap and no notification`.
 
+### Task 23: A browser left on follows its agent on every run path
+
+**(Ken, 2026-11-11, decision 14.)** The bug, on the released build: an agent's browser is ended wherever the agent
+ends (`createAgentBrowserLifecycle` `ended`), and attached again only by the three paths that were handed
+`attachBrowser`. An agent that came back by any other path ran on with its flag set and no browser, and its button
+was gone for good. The cause is a list of paths that must each remember; the fix is one place every running agent
+passes, whatever started it: the reconciler's look at it (`discovery.ts` `onObserved`, where its DSH is attached
+again for the same reason, `:196-197`).
+
+**Files:**
+- Modify: `cli/src/core/agents/lifecycle.ts:140-185` (`createAgentBrowserLifecycle` gains `observed`; its comment),
+  `cli/src/core/agents/discovery.ts` (`DiscoveryDeps`, `:196-197`; the file's header),
+  `cli/src/core/main.ts:1989-2007` (`createDiscoveryHandlers` is handed `attachBrowser: agentBrowsers.observed`; the
+  comment at `:844-845`)
+- Test: `cli/src/core/agents/lifecycle.spec.ts`, `cli/src/core/agents/discovery.spec.ts`,
+  `cli/src/lib/registry.spec.ts:2065`
+- Not changed: `cli/src/core/agents/create.ts:464`, `cli/src/lib/resumeAgentService.ts:424` and
+  `cli/src/core/main.ts:2678` (they attach before the engine is seen, so the browser starts with the agent, not a
+  scan later); `cli/src/lib/retainExitedSession.ts`, `cli/src/core/agents/forget.ts` (how a browser ends);
+  `cli/src/core/api.ts`, `cli/src/core/agentBrowserLink.ts`, anything under `cli/src/services/`.
+
+**Depends on:** Task 2. Nothing in wave 2.
+
+**Interfaces, produces:**
+
+```ts
+// lifecycle.ts, beside `attached`, `ended` and `set`. Said on every look at a running agent: a browser that is on
+// and has not been attached since its agent last ended is attached; any other look is one Set lookup.
+observed(session: RegisteredSession): void
+
+// discovery.ts, DiscoveryDeps (required: the compiler holds main.ts to it)
+attachBrowser: (session: RegisteredSession) => void
+```
+
+**Every way an agent comes to run, and its browser today** (read from the code at wave 1's head). "Ends" is
+whether `ended` is reached on the way:
+
+| Path | Code | Id | Ends | Attached today |
+|---|---|---|---|---|
+| Create with `browser: true` (an older Desktop) | `create.ts:464` | new | no | yes (`create.spec.ts:752`) |
+| The person's Start | `lifecycle.ts` `set` | same | no | yes (Task 2) |
+| Resume of a stopped agent: Desktop, the Swarm (`superTabs/inCore/agents.ts:37`), with new launch words or mode | `resumeAgentService.ts:424` | same | yes, at its stop | yes (`resumeAgentService.spec.ts:411`) |
+| Daemon start, for the rows the registry kept; a machine restart, whose restore relaunches into those rows (`restoreAgents.ts`, `restoreLaunch.ts`); a held launch started later (`heldLaunches.ts`) | `main.ts:2678` | same | no | yes, no unit test |
+| **Back from the archive:** the daemon took a running engine for exited (a restore that could not see it, `restoreAgents.ts:496`, `main.ts:2555`; two missed scans, `discovery.ts:267`), archived it, and the next scan finds that same process | `discovery.ts:148` `reinstateArchived` | same | yes | **no** |
+| Restart in its pane (`agent_restart`, with or without new launch words), a move to a grid or back (`retarget.ts`), a move to the pty host and its fallback (`hostMove.ts`): all relaunch through `relaunchOverrides` and `restartAgent` with the route held | `restart.ts`, `swap.ts` | same | no | not needed: never ended. No test says so |
+| An engine that exits and comes back in its pane before two scans retire its row, its start hook (with its process) first: the row is re-registered in place and keeps the flag (`registry.ts:2144`) | `registry.ts` `register` | same | no | not needed (`registry.spec.ts:2065`) |
+| A start that went dormant and wakes; a launch that turns ready | `discovery.ts:208-240` | same | no | not needed |
+| The same, a scan first: a new agent is opened in the pane and the bound row is forgotten | `discovery.ts:94-131` `openProcessAgent` | **new** | yes | no: the new row has no flag |
+| The engine exits, two scans retire the row (`retainExitedSession`): its pane is left a shell under a new id, the flag taken off it (`registry.ts:2380`), and an engine is typed again there | `discovery.ts:163-165` `adoptEngine` | **new** | yes | no: no flag |
+| An engine that never came up, or that a restore could not relaunch: the row stays, a terminal under its id, flag kept; an engine typed there is that agent again | `newPane.ts:139`, `restoreAgents.ts:528,785` | same | no | not needed |
+| Fork, Change agent, an adopted outside conversation, a guest's agent, `--resume` in a second pane | `fork.ts`, `externalResume.ts`, `guestCreate.ts` | new | – | no flag: another agent |
+
+So one path lacks it today: back from the archive. The paths with no test of their own (daemon start, a restart
+in its pane) get one on the real daemon in Task 17's case, and every one that keeps its id is held by this task's
+look. The two that come back under a new id are not this task's: the flag is kept by id (Where the spec needed a
+call, 21).
+
+Rules:
+- **lifecycle.ts.** `observed(session)`: `session.browser` set and the agent not in `running`: `attached(session)`.
+  Else nothing. `attached`, `ended` and `set` do not change: a Start still attaches every time.
+- **discovery.ts.** In `onObserved`, beside the DSH's line and on the row the registry holds now: a row with
+  `browser` is handed to `attachBrowser`. One line serves every path: an agent back from the archive passes it
+  (`:157` calls `onObserved` again with the row that came back), and so does every running agent on every scan.
+  `onDiscovered` is not changed: a row it opens is new, and one it re-observes reaches `onObserved` a scan later.
+- **main.ts.** `attachBrowser: agentBrowsers.observed`. The loop at `:2678` stays: it takes up the browsers of rows
+  that are not seen running yet (a held launch, a restore under way).
+- **Nothing is typed.** A browser that comes back with its agent keeps its `told` mark (Tasks 8 and 12): this task
+  touches no service file.
+- **Standard 4.** A scan runs while the daemon is idle. Added per observed agent: one property read; per agent
+  whose Browser is on: one Set lookup more. No event, no timer, no read of the service. Step 5 measures it.
+
+- [ ] **Step 1: Red.**
+  - `lifecycle.spec.ts`, in "the agent browser, as its agent starts and ends":
+    - `an agent that ended and is seen running again gets its browser back, once: every later look tells the
+      browser nothing` (attached, `ended`, then `observed` three times: the port's `attached` is called twice in
+      all, and `ended` after it still stops one browser);
+    - `a look at an agent that is attached already tells nothing: one created with Browser, one its person
+      started, one there at daemon start`;
+    - `a look at an agent whose Browser is off, or that its person turned off, attaches nothing`.
+  - `discovery.spec.ts`, each through `handlers.onObserved` with the registry's row carrying `browser: true`:
+    - in "an archived harness whose own engine never stopped": `comes back with its browser: the flag its archive
+      kept is handed to the browser's attach, with the row that came back` (Review Focus 9);
+    - in "a row's own process": `tells the browser of a running agent whose Browser is on, on every scan, and of
+      no agent whose Browser is off`;
+    - `a start that went dormant and wakes, and a launch that turns ready, are told too` (the two cases at `:339`
+      and `:363`, with the flag);
+    - `a terminal that kept its id and its flag is told once an engine runs in it again`;
+    - by id, both pass as written and pin call 21: `an engine typed into the shell an exit left is that shell's
+      agent: it has no flag and nothing is attached`; `a process that takes a bound agent's pane opens a new agent
+      with no browser, and the agent it replaced is forgotten`.
+  - `registry.spec.ts:2065`, one line more, a pin that passes as written: an agent `reinstateArchived` brings back
+    keeps `browser` (the row is rebuilt from its archive; a rebuild from named fields would drop it).
+- [ ] **Step 2:** `npx vitest run src/core/agents/lifecycle.spec.ts src/core/agents/discovery.spec.ts
+  src/lib/registry.spec.ts`: FAIL (`observed` does not exist; discovery never calls `attachBrowser`). Commit
+  `test: a browser left on is attached on every look at its running agent`.
+- [ ] **Step 3: Green.** Implement the rules. Comments: `createAgentBrowserLifecycle`'s says how a browser comes back
+  (create, resume and daemon start at once; any other path at the next scan); discovery's header names the browser
+  beside the DSH.
+- [ ] **Step 4:** Same command with `--coverage --coverage.include=src/core/agents/lifecycle.ts
+  --coverage.include=src/core/agents/discovery.ts`: PASS at 100%. Then `npx vitest run
+  src/core/agents/create.spec.ts src/lib/resumeAgentService.spec.ts` (the two paths that attach at once, untouched)
+  and `npm run typecheck`: PASS.
+- [ ] **Step 5: Numbers (standard 4),** in the task's report, for the pull request. A throwaway script run with
+  `npx tsx`, not committed: 1,000,000 `onObserved` calls of one awake, bound agent whose Browser is on and
+  attached, through `createDiscoveryHandlers` with deps that do nothing; three runs on the task's base commit and
+  three on its head, the medians side by side. Not slower beyond the spread of the three runs.
+- [ ] **Step 6:** Commit `feat: a browser left on comes back with its agent, however the agent runs again`.
+
 ---
 
 ## Wave 3
@@ -977,7 +1105,7 @@ Rules:
   `cli/src/services/agentBrowser/settings.spec.ts`, `cli/src/core/api.spec.ts:270,283`,
   `cli/src/core/agentBrowserLink.spec.ts:123`
 
-**Depends on:** Tasks 5, 7, 12.
+**Depends on:** Tasks 5, 7, 12; Task 23 (`core/main.ts` as it leaves it).
 
 **Interfaces:**
 - Consumes: `ToolServers`, `runLimitMs` (Task 7); `browserTools()` for the tools' names (Task 5).
@@ -1113,7 +1241,7 @@ Decisions the spec leaves:
 **Files:**
 - Modify: `cli/e2e/agentBrowser.e2e.ts`
 
-**Depends on:** Tasks 13 and 15.
+**Depends on:** Tasks 13, 15 and 23.
 
 The fake `podman` gains an `exec -i … browser-tools.mjs` that answers each `tools/call` line (a snapshot's text; a
 screenshot's image of 1 MiB) and each `window` line. The command runs in the agent's pane through the fixture's
@@ -1127,7 +1255,11 @@ tmux (`send-keys`, its output and exit code written to a file in the fixture).
   `browser` and no `volume rm` was called; `harness browser snapshot` exits 4 with the off line; start again and
   see `ready`, with the backend unreachable and the agent in no Swarm; purge; the container, the volume, the
   network and the secret are removed. Add `an older Desktop's browser:true still gives a browser`. Keep the fault
-  case.
+  case. Add `a browser left on follows its agent` (decision 14; it passes on Task 23's code as written, and holds
+  on the real daemon the paths no unit test sees whole): with the browser `ready`, `agent_restart` answers ok and
+  the fake's log gains no `rm --force` of its container; `agent_delete` (Stop Harness) removes the container and
+  never the volume, and the agent is listed stopped; `agent_resume` brings its frame back to `ready` with no
+  `agent_browser_start`; after `d.restart()` (the daemon) its frame is `ready` again.
 - [ ] **Step 2:** `E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.ts` on Tasks 13
   and 15's code with the old fake: FAIL (the fake answers no `exec`). Commit `test: a browser started from the app
   and driven by harness browser, end to end`.
@@ -1309,7 +1441,11 @@ Rules:
    -- cli desktop` finds nothing but the dated compatibility comments; no caller of `turns.deliver` but
    `agentBrowser/notices.ts` passes `quiet`; and the quiet path names no feature: `git diff main --
    cli/src/core/deliveries.ts cli/src/core/turns/recaps.ts cli/src/lib/commander.ts cli/src/services/recaps.ts
-   cli/src/services/turnsLink.ts | grep -i '^+.*browser'` finds nothing.
+   cli/src/services/turnsLink.ts | grep -i '^+.*browser'` finds nothing. And for decision 14: `git grep -n
+   "attachBrowser" -- cli/src ':!*.spec.ts'` shows create, resume and discovery, each handed the lifecycle in
+   `core/main.ts` (`agentBrowsers.attached` twice, `agentBrowsers.observed` once), and Task 23's table still names
+   every caller of `registry.openPendingAgent`, `resumePendingAgent`, `openProcessAgent`, `reinstateArchived`,
+   `adoptEngine` and `releaseEngine`: a path added since gets its row and its test.
 2. **Local receipts** (`docs/validation-and-release.md`; PR CI does not run these). `python3 scripts/local-checks.py
    --list $(git diff --name-only main...HEAD)` prints what the pull request must carry. Expected, once each, on
    the final head, recorded in the PR body's `harness-local-checks` fence:
@@ -1318,7 +1454,7 @@ Rules:
    - `cli-resume`: `npm run test:resume` (`resumeAgentService.ts`, a comment);
    - `make desktop-test` on a Mac (`desktop-macos`): not required by path, run once because the panel's webview is
      macOS and Linux UI.
-   `test:harnessd` is not needed: nothing under `src/harnessd/` changes. Tasks 20 to 22 add no receipt: their
+   `test:harnessd` is not needed: nothing under `src/harnessd/` changes. Tasks 20 to 23 add no receipt: their
    files ask for `cli-core` alone (`local-checks.py --list`), already here; `cli/src/engines/` and
    `cli/src/lib/commander.ts` are covered by `cli-tests` on CI.
 3. **CI, once:** push, open the pull request ready with the `hold` label. `ci/required` runs `cli-typecheck`,
@@ -1331,7 +1467,14 @@ Rules:
    agent and a real Codex agent that ran before the update and are not restarted: Start and the typed line; a
    screenshot each engine reads; Stop mid-task and the login kept; Stop then a request that needs the browser; a
    new agent's first message arriving exactly as typed. Resize the panel and see `innerWidth` follow and
-   `screen.width` stay. And the two things Task 0 found, which no unit test can see whole:
+   `screen.width` stay. The browser follows its agent, and the two things Task 0 found, which no unit test can see
+   whole:
+   - **It follows its agent (Task 23, decision 14).** With the browser on and a site signed in, in Claude Code and
+     in Codex. An engine restart in its pane (Restart, ⌘⇧E): the button stays, running, and the page and the login
+     are there after. The engine ended in its pane (`/exit`) and its tile gone to a terminal, then the agent
+     resumed: the button stays and the browser comes back, signed in, with no ready line typed again. A daemon
+     restart (an update does one), then a restart of the Mac: the same, once the agent is back. And record what
+     call 21 leaves: the engine typed again into the shell its exit left is another agent, whose Browser is off.
    - **No asking (Task 20).** `harness browser snapshot` runs with no question in Claude Code's Ask mode and Auto
      mode and in Codex's default mode (sign Codex in first: Task 0 could not), on an agent started after the
      update. For the two agents that ran before it, record whether each engine took the new rule without a restart.
@@ -1344,7 +1487,7 @@ Rules:
    tool server is idle, on `main` and on the branch (at most 1% of one core, no higher than before); the wall time
    of `snapshot` on one page, p50 and p95 over 20 runs, through the relay on `main` and through the CLI on the
    branch; Task 0's start time beside them; Task 22's two medians, before and after (the recaps' `ingest` per
-   batch and `settled` per delivery event).
+   batch and `settled` per delivery event); Task 23's medians, before and after (a scan's `onObserved` per agent).
 7. **The pull request says:** platforms (above); the release order (backend, CLI, Desktop); migration (none) and
    rollback (the spec's paragraph); the two compatibility entries and their date; what an older Desktop and an
    older phone do at a quiet turn's end (Task 22, Compatibility); and that the hook fixture was recorded again for
@@ -1407,6 +1550,19 @@ Each is built as written here; Ken may change any.
     quiet on a guess.
 20. **Desktop has no task for the quiet lines.** Its alert is raised only by the daemon's notification, which a
     quiet turn does not send; a Desktop test for it would pass before any change (Task 21).
+21. **The same pane, another agent.** Decision 14 keeps the browser by the agent's id. Today an engine comes back
+    in its own pane under a new id in two ways, and the flag does not move with it (Task 23's table): the engine
+    exits, its pane is left a shell under a new id, and the engine is typed again there; or a new engine process is
+    seen in a bound agent's pane before its start hook arrives. Built: by id. The stopped agent keeps its flag and
+    its logins and gets its browser back at its Resume; the pane's new agent shows Browser (Task 16) with the
+    browser off, and a Start there is a new, empty profile. Moving the browser with the pane means moving a profile
+    volume named by the agent's id: new work. Say if it is wanted.
+22. **Two places a browser outlives its engine**, read from the code on the way, not run, and left as today (they
+    are about how a browser ends, not how it comes back): a row whose engine never came up, or that a restore could
+    not relaunch, stays a terminal under its id with its flag, so its browser runs beside a shell until the pane
+    closes; and an agent archived as the daemon starts (its engine exited while the daemon was down) was never
+    attached by that daemon, so `ended` tells the service nothing and a container that outlived the old daemon
+    runs until that agent is resumed or purged. Say if either should stop it.
 
 ## Handoff
 
@@ -1415,3 +1571,6 @@ phase 3**. Please review the plan: does it capture what you want? No code before
 
 Amended 2026-11-11, after Task 0 and with wave 1 under way: Tasks 20 (wave 2), 21 (wave 2) and 22 (wave 4), for the
 allow rules and the quiet lines (Ken: both in scope; quiet lines, option b).
+
+Amended 2026-11-11, with wave 2 under way: Task 23 (wave 2), for decision 14 (Ken: the browser follows its agent on
+every run path), with its case in Task 17's end to end run and its line in the by-hand list.
