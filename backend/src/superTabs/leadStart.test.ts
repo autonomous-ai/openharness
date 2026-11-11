@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { agentDisplayName } from './agentNames.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { storedTask } from './storedWork.test-support.js'
@@ -239,18 +240,21 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   })
 
   it('says when it runs another model or effort than it asked for, and nothing when it cannot tell', () => {
+    // Each line opens with its name, which its agent's id picks; written as NAME here.
     const joinedWith = (configuration: AgentConfiguration) => {
       const f = swarm()
       const startId = f.lead('owner-mac').result.startId as string
-      return messages(f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration }, owner, hosted(f, 'owner-mac')), f.app.conversationId)
+      const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration }, owner, hosted(f, 'owner-mac'))
+      const name = agentDisplayName(f.state.agents, joined.result.agentId as string)!
+      return messages(joined, f.app.conversationId).map(text => text.replace(`${name},`, 'NAME,'))
     }
     expect(joinedWith({ ...config, model: 'claude-sonnet-5-5', effort: 'high' })).toEqual(
-      ['Product Manager started on Owner Mac. It asked for opus at xhigh and runs claude-sonnet-5-5 at high there.'])
+      ['NAME, the Product Manager, started on Owner Mac. It asked for opus at xhigh and runs claude-sonnet-5-5 at high there.'])
     expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'high' })).toEqual(
-      ['Product Manager started on Owner Mac. It asked for opus at xhigh and runs claude-opus-5-5 at high there.'])
-    expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'xhigh' })).toEqual(['Product Manager started on Owner Mac.'])
-    expect(joinedWith({ ...config, model: 'claude-opus-5-5[1m]', effort: 'auto' })).toEqual(['Product Manager started on Owner Mac.'])
-    expect(joinedWith({ ...config, model: null, effort: null })).toEqual(['Product Manager started on Owner Mac.'])
+      ['NAME, the Product Manager, started on Owner Mac. It asked for opus at xhigh and runs claude-opus-5-5 at high there.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'xhigh' })).toEqual(['NAME, the Product Manager, started on Owner Mac.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5[1m]', effort: 'auto' })).toEqual(['NAME, the Product Manager, started on Owner Mac.'])
+    expect(joinedWith({ ...config, model: null, effort: null })).toEqual(['NAME, the Product Manager, started on Owner Mac.'])
   })
 
   it('running, becomes the project\'s Lead and says on which machine', () => {
@@ -261,7 +265,12 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     const home = f.state.conversations.find(c => c.id === f.app.conversationId)!
     expect(home).toMatchObject({ leadId: agentId, agentIds: [agentId] })
     expect(f.state.agents.find(a => a.id === agentId)).toMatchObject({ machineId: 'owner-mac', machineOwnerId: 'owner', projectId: f.app.projectId })
-    expect(messages(joined, f.app.conversationId)).toEqual(['Product Manager started on Owner Mac.'])
+    // By its own name, as its posts and tags have it, with its role beside it (anh Dee, 2026-11-11: "the tag Product Manager is
+    // also weird just tag the agent"): the first line its project's channel shows.
+    // The name it is stored under once the command settles, whatever names others already hold.
+    const name = f.state.agents.find(a => a.id === agentId)!.displayName!
+    expect(name).not.toBe('Product Manager')
+    expect(messages(joined, f.app.conversationId)).toEqual([`${name}, the Product Manager, started on Owner Mac.`])
     expect(f.project().lead).toMatchObject({ status: 'started', machineId: 'owner-mac', machineName: 'Owner Mac' })
     // Settling it does not call the Product Manager ready for an assignment.
     const settled = f.run({ type: 'agent.startSettled', startId, warning: null }, owner, hosted(f, 'owner-mac'))
