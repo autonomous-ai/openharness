@@ -60,7 +60,8 @@ export interface PartsPayload extends ReadMeta {
   groups: PartEnvelope[]
   machines: PartEnvelope[]
   starts: PartEnvelope[]
-  progress: PartEnvelope[]
+  /** Always empty since Swarm v4; the backend stops sending it 30 days after the CLI release that reads it as optional (S19). */
+  progress?: PartEnvelope[]
   derived: Derived
 }
 /** `GET /api/super-tabs/:tabId/parts` (design 4.3). */

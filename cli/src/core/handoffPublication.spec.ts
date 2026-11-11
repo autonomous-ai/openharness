@@ -48,8 +48,16 @@ async function setup(git = false) {
   return { prepared, permit, publish, deps, rows, exclusion, create: () => createHandoffPublisher(deps) }
 }
 
+/** A .gitignore an earlier publication left: one this publication did not write, so it flushes it (a file it wrote was
+ *  flushed as it was written, and is not flushed again). */
+function leftIgnore(): void {
+  fs.mkdirSync(join(cwd, '.harness', 'handoff'), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(join(cwd, '.harness', 'handoff', '.gitignore'), '*\n', { mode: 0o600 })
+}
+
 it.each(['directory', 'receipt', 'stage', 'guard'])('rechecks the original facts after a slow %s flush', async kind => {
   const ctx = await setup(), open = fs.openSync, flush = fs.fsyncSync
+  if (kind === 'guard') leftIgnore()
   const paths = new Map<number, string>()
   let clock = 0, fired = false
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
@@ -71,6 +79,7 @@ it.each(['directory', 'receipt', 'stage', 'guard'])('rechecks the original facts
 
 it.each(['directory', 'receipt', 'stage', 'guard'])('holds a replaced %s after a slow flush without further publication', async kind => {
   const ctx = await setup(), open = fs.openSync, flush = fs.fsyncSync, link = fs.linkSync, rename = fs.renameSync
+  if (kind === 'guard') leftIgnore()
   const paths = new Map<number, string>()
   let clock = 0, fired = false, laterEffects = 0
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
@@ -266,27 +275,31 @@ it.each(['request', 'source', 'receipt', 'project'].flatMap(fault => Array.from(
 })
 
 it.each(['ignore guard', 'exclusion guard', 'final confirmation'])('holds a request that expires during a synchronous %s', async fault => {
-  const ctx = await setup(true), open = fs.openSync, flush = fs.fsyncSync, link = fs.linkSync, rename = fs.renameSync
-  const yieldLoop = timers.setImmediate, paths = new Map<number, string>(), document = join(cwd, ctx.prepared.result.file!)
-  let clock = 0, fired = false, checkpoint = 0, ignoreSyncs = 0, excludeSyncs = 0, lateWrites = 0
+  const ctx = await setup(true), open = fs.openSync, link = fs.linkSync, rename = fs.renameSync
+  const yieldLoop = timers.setImmediate, document = join(cwd, ctx.prepared.result.file!)
+  let clock = 0, fired = false, checkpoint = 0, lateWrites = 0, guarded = 0
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
-  ctx.permit.current = () => clock < 5_000
+  ctx.permit.current = () => clock < 1_000
   vi.spyOn(timers, 'setImmediate').mockImplementation(async () => { await yieldLoop(); checkpoint++ })
-  vi.spyOn(fs, 'openSync').mockImplementation((...args) => { const fd = open(...args); paths.set(fd, String(args[0])); return fd })
+  const staged = (folder: string) => fs.readdirSync(folder).filter(name => name.endsWith('.stage')).length
+  const folder = dirname(document)
+  // A guard reads what it guards, then confirms it is durable: the request runs out as it opens the file to confirm (its
+  // second open), whether or not that file still needs a flush. Its 1 s permit runs out well inside the 3 s the native
+  // evidence it is reading has, as a request does: the hold is the request's. The ignore guard is the one in the
+  // exclusion step (its stage is there); the exclusion guard the one just before the first document goes in (its stage
+  // is there beside the ignore's); the final confirmation the last pass.
+  vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
+    const path = String(args[0])
+    if (!fired && (fault === 'ignore guard' && path.endsWith('/.gitignore') && staged(dirname(ctx.exclusion)) === 1
+      || fault === 'exclusion guard' && path === ctx.exclusion && fs.existsSync(folder) && staged(folder) === 2
+      || fault === 'final confirmation' && path === document && checkpoint === 7) && ++guarded === 2) {
+      fired = true; clock = 1_001
+    }
+    return open(...args)
+  })
   const visible = (path: fs.PathLike) => String(path) === ctx.exclusion || String(path).endsWith('.md') || String(path).endsWith('/.gitignore')
   vi.spyOn(fs, 'linkSync').mockImplementation((from, to) => { if (clock && visible(to)) lateWrites++; link(from, to) })
   vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => { if (clock && visible(to)) lateWrites++; rename(from, to) })
-  vi.spyOn(fs, 'fsyncSync').mockImplementation(fd => {
-    const path = paths.get(fd)
-    if (path?.endsWith('/.gitignore')) ignoreSyncs++
-    if (path === ctx.exclusion) excludeSyncs++
-    if (!fired && (fault === 'ignore guard' && path?.endsWith('/.gitignore') && ignoreSyncs === 2
-      || fault === 'exclusion guard' && path === ctx.exclusion && excludeSyncs === 2
-      || fault === 'final confirmation' && path === document && checkpoint === 7)) {
-      fired = true; clock = 5_001
-    }
-    flush(fd)
-  })
   await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
   expect(fired).toBe(true); expect(lateWrites).toBe(0)
   clock = 0

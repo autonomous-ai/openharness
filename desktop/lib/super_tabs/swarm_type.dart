@@ -129,10 +129,6 @@ abstract final class SwarmType {
   static double projectRowPadding({required bool compact}) =>
       compact ? 8 : (projectRowHeight(compact: false) - sidebarLine) / 2;
 
-  /// The room above and below a sidebar row's line.
-  static double sidebarRowPadding({required bool compact}) =>
-      compact ? 8 : (sidebarRow - 2 - sidebarLine) / 2;
-
   static TextStyle _body(double size, Color? color) => DesktopChrome.text(
     color: color,
     size: size,

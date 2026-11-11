@@ -21,7 +21,7 @@ import '../core/relative_time.dart';
 
 import 'account_devices.dart' show AccountDevice;
 import 'app_state.dart';
-import 'agent_switch_handoff.dart';
+import '../core/first_task.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
@@ -1458,7 +1458,8 @@ class SwarmSearchController extends ChangeNotifier {
       sessionFilter == SessionFilter.all &&
       query.trim().isEmpty;
   bool get showsTypeHints => _emptyFinder && selected == null;
-  String get hint => isAgentMode
+  // A picker that brings an agent into a Swarm (Attach) finds agents, a Swarm's word.
+  String get hint => isAgentMode || harnessContext != null
       ? 'Search agents'
       : isCommandMode
       ? 'Search commands'
@@ -2019,7 +2020,7 @@ class SwarmSearchController extends ChangeNotifier {
               ? 'Current agent'
               : engine.id == 'opencode'
               ? 'Muse Spark 1.3 · continue with recent context'
-              : supportsAgentHandoff(engine.id)
+              : takesHandoff(engine.id)
               ? 'Continue this project with recent context'
               : 'New conversation in the same project',
           swarmId: null,

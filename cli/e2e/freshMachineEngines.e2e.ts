@@ -159,9 +159,10 @@ it('says what a launch still held after a minute waits for, and cancels it so it
   })
   const held = await harness(d, ['new', 'codex', project(d, 'held'), '--name', 'later', '--', 'hello'])
   expect(held.code, held.out + held.err).toBe(1)
-  expect(held.err).toContain('Waiting to confirm the selected executable’s permission flags.')
-  expect(held.err.trim().split('\n').at(-1)).toBe('Harness did not start the harness within a minute: '
-    + 'Waiting to confirm the selected executable’s permission flags. The request is cancelled, so it will not start later.')
+  // Naming the file whose help never came.
+  const waits = `Waiting to confirm the selected executable’s permission flags (${join(d.root, 'bin', 'codex')}).`
+  expect(held.err).toContain(waits)
+  expect(held.err.trim().split('\n').at(-1)).toBe(`Harness did not start the harness within a minute: ${waits} The request is cancelled, so it will not start later.`)
   // Once Codex answers, the cancelled request still does not start.
   writeFileSync(fixed, '')
   await new Promise((done) => setTimeout(done, 8_000))

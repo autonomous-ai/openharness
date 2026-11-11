@@ -76,7 +76,7 @@ describe('lead.start opens its PM\'s 1:1 chat at once', () => {
   it('takes its person\'s message and file before the PM is there, and nobody else reads that chat', () => {
     const f = swarm()
     const { chatId } = f.lead()
-    expect(() => postable(f.state, owner, chatId)).not.toThrow()
+    expect(() => postable(f.state, owner, chatId, NOW)).not.toThrow()
     const file = { id: 'file-1', name: 'brief.pdf', mime: 'application/pdf', size: 10, url: 'https://files.example/brief.pdf' }
     const sent = f.send(chatId, 'Build the sign-in page.', [file])
     expect(sent.messages.at(-1)).toMatchObject({ conversationId: chatId, text: 'Build the sign-in page.', recipients: [], attachments: [file] })

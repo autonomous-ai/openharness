@@ -244,10 +244,10 @@ const END_RETRY_MAX_MS = 10 * 60_000
 /** A stop failure that says "not yet" rather than "no" (Diego, 11-01): every failure used to count toward the five tries,
  *  so a few minutes of a busy Swarm, a timeout or a sign-in being renewed ended a stop for good, and the stopped worker ran
  *  on, holding its slot and memory, until the daemon restarted. These back off as an ended session does (END_RETRY_MS
- *  doubling to END_RETRY_MAX_MS) and are never given up: a sign-in (401), a timeout (408), throttling (429), a busy or
- *  moving Swarm, a stop request read before it changed (the next read names the new one), work not yet finished. */
+ *  doubling to END_RETRY_MAX_MS) and are never given up: a sign-in (401), a timeout (408), throttling (429), a busy
+ *  Swarm, a stop request read before it changed (the next read names the new one), work not yet finished. */
 const RELEASE_RETRY_STATUSES = [401, 408, 429]
-const RELEASE_RETRY_CODES = ['SWARM_BUSY', 'SWARM_MIGRATING', 'STALE_RELEASE', 'WORK_ACTIVE']
+const RELEASE_RETRY_CODES = ['SWARM_BUSY', 'STALE_RELEASE', 'WORK_ACTIVE']
 /** The core's close refusals no retry for the same runtime changes; any other (unavailable, an expired lease, data not
  *  deleted yet) is tried again. NOT_SWARM_STARTED and AGENT_CHANGED are refused for good where they are answered. */
 const RELEASE_FINAL_CLOSES = ['UNSUPPORTED', 'LEAD_PROTECTED']
@@ -1243,11 +1243,12 @@ export class SuperTabHost {
     // A checked session waits for the next host (Infinity).
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
     // Every Swarm agent follows the team's basics of this release (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), which its
-    // launch carries. One its person attached (Desktop's Attach) was started outside the Swarm, without them; one the Swarm
-    // started before they last changed has the old ones, and keeps them as long as it runs (anh Dee's team moved to Swarm
-    // v4 on 2026-11-10 with agents started days before). Either is told the current basics once, as only it reads, in its own
-    // chat. The operation id names the text, so a restart or a second daemon never tells it twice. A plain shell is no
-    // agent.
+    // launch carries. One its person attached (Desktop's Attach) was started outside the Swarm, without them, until its first
+    // restart gives it its role (inCore/adoption.ts); one the Swarm started before they last changed has the old ones, and
+    // keeps them as long as it runs (anh Dee's team moved to Swarm v4 on 2026-11-10 with agents started days before).
+    // Either is told the current basics once, as only it reads, in its own chat. The operation id names the basics' version,
+    // so a restart or a second daemon never tells it twice: the Swarm keeps one request under it, and refuses another
+    // (OPERATION_REUSED, which tellSkill takes as told). A plain shell is no agent.
     if (!session || (session.engine !== 'claude' && session.engine !== 'codex') || this.now() < due) return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     const { text: basics, version } = swarmBasics(target.lead === true)

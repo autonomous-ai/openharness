@@ -353,6 +353,19 @@ describe('an agent signed out of its model (task #3301)', () => {
   })
 })
 
+// Alba on Mac 2, 2026-11-11: Claude Code asked whether to make auto mode the default, and the agent sat on the question.
+describe('answering Claude Code\'s question to make auto mode the default, for a Swarm agent', () => {
+  const ASKED = [' Make auto mode your default permission mode?', '', '   ❯ Yes, set auto mode as my default permission mode',
+    '     No, keep bypass permissions'].join('\n')
+  it('picks No, keeping its person\'s own default, through the core\'s if-screen door, and raises no alert', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: ASKED, hold: 'prompt_hidden' }) })
+    await t.host.tick([row()])
+    expect(vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls).toEqual([['h1', ['Down', 'Enter'], ASKED]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.alerts()).toEqual([])
+  })
+})
+
 describe('dismissing Codex\'s update screen for a Swarm agent', () => {
   const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
   const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })

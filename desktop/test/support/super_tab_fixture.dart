@@ -542,6 +542,28 @@ class ConversationServer {
   /// Refuses the next lead.start with this code and message, as the backend
   /// refuses a machine that cannot take the Product Manager (leadStart.ts).
   Map<String, String>? leadRefusal;
+
+  /// The 1:1 chat with [project]'s next PM, as backend pmChat.ts opens it on lead.start and lead.claim: the one already
+  /// waiting, else a new one for [reader], with no agent while the PM starts.
+  String _pmChat(Map<String, dynamic>? project, String? reader) {
+    if (project?['pmChat'] case final Map waiting) {
+      return waiting['id'] as String;
+    }
+    revision++;
+    final id = 'pm-chat-$revision';
+    (state['conversations'] as List).add({
+      ...conversationFixture(id, 'Product Manager'),
+      'kind': 'agent-chat',
+      'audience': {
+        'people': [
+          {'id': reader ?? 'owner', 'generation': 'g'},
+        ],
+      },
+    });
+    project?['pmChat'] = {'id': id};
+    return id;
+  }
+
   final receipts = <String, Map<String, dynamic>>{};
 
   /// As the backend (store.ts): a request id used again for another command is
@@ -550,9 +572,6 @@ class ConversationServer {
   bool refuseReusedOperations = false;
   final receiptCommands = <String, String>{};
   final messages = <Map<String, dynamic>>[];
-
-  /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
-  Map<String, dynamic>? leaderboard;
 
   /// The Swarm's leaderboard of agents shipping (`GET .../shipping`); null answers 404, as a server before it. Reads of it are
   /// listed in [shippingReads].
@@ -575,17 +594,6 @@ class ConversationServer {
   /// A read of a chat's messages the Swarm no longer has answers 404; off, the older tests' reads of chats they never
   /// listed keep their empty pages.
   bool chatsGoneAreNotFound = false;
-  final leaderboardReads = <String>[];
-
-  /// Answers by the read's path instead of [leaderboard], as a server does.
-  Map<String, dynamic> Function(String path)? leaderboardAnswer;
-
-  /// Holds the next reads' answers until it completes.
-  Future<void>? leaderboardGate;
-
-  /// How many leaderboard reads fail as a server that is down does, before
-  /// they answer again.
-  var failLeaderboardReads = 0;
 
   /// The followed-threads read's answer (backend read/followedThreads.ts):
   /// `{unread, read, more}`; null answers 404, as a server before it does,
@@ -1223,6 +1231,7 @@ class ConversationServer {
             .where((p) => p['id'] == command['projectId'])
             .firstOrNull;
         final held = project?['leadClaim'];
+        output['chatId'] = _pmChat(project, reader);
         if (held is Map && held['machineId'] != command['machineId']) {
           output['leadStart'] = 'waiting';
         } else {
@@ -1254,6 +1263,7 @@ class ConversationServer {
           'machineId': ?machineId,
           'requestedAt': revision,
         };
+        output['chatId'] = _pmChat(project, reader);
       } else if (command['type'] == 'agent.new' && command['local'] == true) {
         // As backend agent.new with `local` (task #4196): a Member's own chat,
         // and no start; its person's Desktop starts the agent itself.
@@ -1481,23 +1491,6 @@ class ConversationServer {
       }
       return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
     }
-    if (uri.pathSegments.last == 'leaderboard') {
-      leaderboardReads.add(path);
-      if (failLeaderboardReads > 0) {
-        failLeaderboardReads--;
-        throw const SuperTabFailure(
-          'OFFLINE',
-          'No connection.',
-          statusCode: 503,
-        );
-      }
-      if (leaderboardGate case final gate?) await gate;
-      final board = leaderboardAnswer?.call(path) ?? leaderboard;
-      if (board == null) {
-        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
-      }
-      return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
-    }
     if (uri.pathSegments.last == 'routing-policy') {
       final policy = routingPolicy;
       if (policy == null) {
@@ -1608,6 +1601,9 @@ class ConversationServer {
   /// read by its audience alone. A zone value, so that subclasses overriding
   /// [request] keep it.
   static final _reader = Object();
+
+  /// The account asking, inside [request]: the one whose [controller] made the call, or null.
+  String? get reader => Zone.current[_reader] as String?;
 
   SuperTabController controller({
     String tabId = 'tab',

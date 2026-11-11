@@ -1222,6 +1222,8 @@ describe('contributed machine executor', () => {
     local.request.mockImplementation((async (type: string) => type === 'grid_fleet_models_list'
       ? { models: [{ name: 'Qwen 3', contextWindow: 32768, servedOn: [{ grid: GRID, servedAs: ['qwen3'] }] }] } : { providers: [] }) as never)
     f.advance(); await f.machine.tick()
+    // Never a scan of other apps' models: a reading takes what the last one a person asked for found.
+    expect(local.request).toHaveBeenCalledWith('grid_fleet_models_list', { scan: false }, 20_000)
     expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).toMatchObject({ localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3', contextWindow: 32768, kind: 'local' }] })
     expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('refusedModels')
     // A model too small for Builders is reported apart, with why; an older backend that refuses the field gets it without.

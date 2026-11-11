@@ -1,7 +1,9 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { OPENCLAW_COLUMNS, OPENCLAW_KEY, OPENCLAW_LAUNCH, openclawAgentDb, readOpenclawScreen } from './contract.js'
+import {
+  OPENCLAW_COLUMNS, OPENCLAW_KEY, OPENCLAW_LAUNCH, OPENCLAW_STATES, openclawAgentDb, openclawDefaultStateDir, readOpenclawScreen,
+} from './contract.js'
 
 const FIXTURES = join(import.meta.dirname, '__fixtures__')
 const fixture = (name: string): string => readFileSync(join(FIXTURES, name), 'utf8')
@@ -163,5 +165,31 @@ describe('the OpenClaw contract', () => {
   it('launches a new session under Harness\'s name and resumes a key as the TUI\'s target', () => {
     expect([...OPENCLAW_LAUNCH.base, ...OPENCLAW_LAUNCH.newSession('abc')]).toEqual(['tui', '--session', 'harness-abc'])
     expect([...OPENCLAW_LAUNCH.base, ...OPENCLAW_LAUNCH.resume('agent:main:plain')]).toEqual(['tui', 'agent:main:plain'])
+  })
+
+  it('reads a run in progress off the status line: running and streaming, never connecting', () => {
+    const running = fixture('screen-abort-running.txt')
+    expect(readOpenclawScreen(running)).toMatchObject({ state: 'busy', running: true })
+    expect(readOpenclawScreen(running.replace('running •', 'streaming •'))).toMatchObject({ state: 'busy', running: true })
+    expect(readOpenclawScreen(running.replace('running •', 'connecting •'))).toMatchObject({ state: 'busy', running: false })
+    for (const idle of ['screen-plain.txt', 'screen-no-gateway.txt', 'screen-no-token.txt']) expect(readOpenclawScreen(fixture(idle)).running, idle).toBe(false)
+  })
+
+  it('the default state folder is the one OpenClaw resolves', () => {
+    const at = (vars: Record<string, string>) => openclawDefaultStateDir(vars, '/home/u')
+    expect(at({})).toBe('/home/u/.openclaw')
+    expect(at({ OPENCLAW_HOME: '/h' })).toBe('/h/.openclaw')
+    expect(at({ OPENCLAW_STATE_DIR: '~/x' })).toBe('/home/u/x')
+    expect(at({ OPENCLAW_STATE_DIR: '~/x', OPENCLAW_HOME: '/h' })).toBe('/h/x')
+    expect(at({ OPENCLAW_STATE_DIR: '  /s  ' })).toBe('/s')
+    expect(at({ OPENCLAW_STATE_DIR: '~' })).toBe('/home/u')
+    expect(at({ OPENCLAW_HOME: '~/claw' })).toBe('/home/u/claw/.openclaw')
+    expect(at({ OPENCLAW_STATE_DIR: '   ', OPENCLAW_HOME: ' ' })).toBe('/home/u/.openclaw')
+  })
+
+  it('the launch contract types the first prompt, names the daemon variables, and the store state reads as written', () => {
+    expect(OPENCLAW_LAUNCH.firstPrompt).toBe('typed')
+    expect(OPENCLAW_LAUNCH.environment).toEqual(['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'])
+    expect(OPENCLAW_STATES.noSessions).toBe("Harness cannot find this OpenClaw's sessions. Start Harness with the Gateway's OPENCLAW_STATE_DIR, then restart this agent.")
   })
 })

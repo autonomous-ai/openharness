@@ -130,6 +130,11 @@ function powershellEnv(modulePath: ModulePath, extra: NodeJS.ProcessEnv = {}): N
       const module = join(powershell7Modules, 'Microsoft.PowerShell.Utility')
       mkdirSync(module)
       writeFileSync(join(module, 'Microsoft.PowerShell.Utility.psd1'), "@{ ModuleVersion = '7.0.0.0'; CompatiblePSEditions = @('Core'); PowerShellVersion = '3.0'; NestedModules = @('Microsoft.PowerShell.Commands.Utility.dll'); CmdletsToExport = @('Add-Type', 'ConvertFrom-Json', 'Get-FileHash', 'Invoke-WebRequest', 'New-Object', 'Select-Object', 'Start-Sleep', 'Write-Host') }\r\n")
+      // And for Microsoft.PowerShell.Security: one that names Get-AuthenticodeSignature and cannot give it to 5.1, so
+      // autoload taking it is "not recognized" (install.ps1 Get-HarnessPtySignatureProblems imports 5.1's own).
+      const security = join(powershell7Modules, 'Microsoft.PowerShell.Security')
+      mkdirSync(security)
+      writeFileSync(join(security, 'Microsoft.PowerShell.Security.psd1'), "@{ ModuleVersion = '7.0.0.0'; CompatiblePSEditions = @('Core'); PowerShellVersion = '3.0'; CmdletsToExport = @('Get-AuthenticodeSignature') }\r\n")
     }
     const system = join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')
     env.PSModulePath = `${powershell7Modules};${join(process.env.ProgramFiles!, 'WindowsPowerShell', 'Modules')};${system}`
@@ -262,6 +267,27 @@ describe.runIf(windows)('install.ps1 building blocks, in Windows PowerShell 5.1'
     expect(thrown(`Get-HarnessManifests -Manifest '${partial}' -Platform 'win32-x64'`)).toContain("no 'win32-x64' entry")
     expect(thrown(`Get-HarnessManifests -Manifest '${join(dir, 'missing.json')}' -Platform 'win32-x64'`)).toContain('missing.json')
   })
+
+  // 2026-11-09: production named an unsigned terminal host, Smart App Control blocked harness-launch.exe, and Harness
+  // could neither start nor update itself on that computer.
+  it('names each terminal host file that is unsigned or signed by someone else, also under PowerShell 7\'s modules', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-sig-'))
+    scratch.push(dir)
+    const names = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe']
+    for (const name of names) writeFileSync(join(dir, name), name)
+    // Not programs at all: Windows reads no signature format there (UnknownError; an unsigned program is NotSigned).
+    const unsigned = ps(`Get-HarnessPtySignatureProblems '${dir}'`, {}, 'powershell7')
+    expect(unsigned.stdout.split(/\r?\n/), unsigned.stderr).toEqual(names.map((name) => `${name} is UnknownError`))
+    // Validly signed, by the wrong signer: node.exe carries the OpenJS Foundation's signature.
+    for (const name of names) writeFileSync(join(dir, name), readFileSync(process.execPath))
+    const signer = ps(`Get-HarnessPtySignatureProblems '${dir}'`, {}, 'powershell7').stdout.split(/\r?\n/)
+    expect(signer).toEqual(names.map((name) => `${name} is signed by 'OpenJS Foundation', not '${['conpty.dll', 'OpenConsole.exe'].includes(name) ? 'Microsoft Corporation' : 'AUTONOMOUS INC.'}'`))
+    // The install step refuses either, unless a developer's build is allowed on purpose.
+    expect(thrown(`Assert-HarnessPtySigned '${dir}'`)).toContain("not installed: harness-pty.exe is signed by 'OpenJS Foundation'")
+    const allowed = ps(`Assert-HarnessPtySigned '${dir}'; 'ok'`, { HARNESS_ALLOW_UNSIGNED: '1' })
+    expect(allowed.stdout).toContain('HARNESS_ALLOW_UNSIGNED=1')
+    expect(allowed.stdout.endsWith('ok')).toBe(true)
+  })
 })
 
 // A whole install starts powershell.exe, Node and cmd many times, and unpacks an 80 MB node.exe: about a minute a
@@ -334,9 +360,11 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     return home
   }
 
-  function install(home: string, manifest: string, subkey: string, extra: string[] = ['-NoService'], modulePath: ModulePath = 'default') {
+  /** These builds' payload files are not signed (`build`), so each install allows that, as only a test may; the case
+   *  that refuses one says `signed: true`. */
+  function install(home: string, manifest: string, subkey: string, extra: string[] = ['-NoService'], modulePath: ModulePath = 'default', signed = false) {
     return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', installer, '-Manifest', manifest, ...extra], {
-      encoding: 'utf8', env: powershellEnv(modulePath, { USERPROFILE: home, HARNESS_INSTALL_ENV_KEY: subkey }), timeout: 300_000,
+      encoding: 'utf8', env: powershellEnv(modulePath, { USERPROFILE: home, HARNESS_INSTALL_ENV_KEY: subkey, ...(signed ? {} : { HARNESS_ALLOW_UNSIGNED: '1' }) }), timeout: 300_000,
     })
   }
 

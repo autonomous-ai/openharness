@@ -47,7 +47,8 @@ it('looks past a search-path folder this account may not enter, and still never 
   try {
     vi.stubEnv('PATH', [locked, bin].join(':'))
     // Nothing it can run after it: held, never installed over what the locked folder may hold.
-    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held', detail: 'Waiting to confirm access to the selected engine executable.' })
+    // Naming the file it could not reach.
+    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'held', detail: `Waiting to confirm access to the selected engine executable (${join(locked, 'opencode')}).` })
     const file = join(bin, 'opencode'); writeFileSync(file, 'its own', { mode: 0o700 })
     expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: file } })
   } finally { chmodSync(locked, 0o700) }

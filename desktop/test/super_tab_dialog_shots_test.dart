@@ -10,12 +10,10 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/sharing.dart';
-import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
-import 'swarm_sharing_test.dart' show SwarmSharingServer;
+import 'support/swarm_sharing_server.dart';
 import 'support/capture.dart';
-import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the screenshots there.
@@ -249,48 +247,6 @@ void main() {
       await captureWindow(tester, shots, '1-machine-details-$theme');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
-    }, skip: shots == null);
-
-    testWidgets('person profile ($theme)', (tester) async {
-      final swarm = humansSwarm();
-      final dee = (swarm.leaderboard!['people'] as List).first as Map;
-      (dee['details'] as Map)['shipped'] = [
-        for (final title in [
-          'Bug: machine last-seen time has not been written since Oct 14',
-          'Stability 2.3: remove the expensive loops — terminal long-poll, 5 s socket re-checks, skip paging',
-          "Bug: viewing another person's agent terminal in a Swarm is unreliable",
-          'Main is red: 48 team-session tests fail after the GitHub approvals change',
-          'Stability 2.2 + 2.6: per-pod Swarm cache keyed by version',
-          'Hotfix: prod DB at 100% CPU, message deliveries read scans the whole Swarm',
-          'Stability 2.4: deliver work over the daemon socket, poll only as a 30 s fallback',
-          'Web app reconnect loop: one user reconnects ~3,250 times an hour',
-        ])
-          {
-            'title': title,
-            'prUrl': 'https://github.com/autonomous-ai/openharness/pull/1',
-          },
-      ];
-      final c = swarm.controller(
-        account: 'peer',
-        initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
-      );
-      addTearDown(c.dispose);
-      await c.refresh();
-      await _pump(
-        tester,
-        brightness,
-        SuperTabView(
-          controller: c,
-          onAddAgent: (_) {},
-          onOpenTerminal: (_) {},
-          machineName: (_) => 'Mac Studio',
-        ),
-        size: const Size(1300, 1000),
-      );
-      await tester.tap(find.byKey(const ValueKey('super-person-peer')));
-      await tester.pumpAndSettle();
-      await captureWindow(tester, shots, '2-person-profile-$theme');
-      await tester.pumpWidget(const SizedBox());
     }, skip: shots == null);
 
     testWidgets('project details ($theme)', (tester) async {

@@ -9,6 +9,7 @@ import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 import { storeAssignment, storeCreate, storeStatus } from './storedWork.test-support.js'
 import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
+import { exemptClock } from './channelExemptions.test-support.js'
 
 // Task #2924 (Dee and River, 2026-11-04): an agent with a task in the project talks in its project chat without joining it, and a
 // person's answer to its line there reaches it. Through the store, as hosts and apps call it. A fresh loopback replica set;
@@ -28,7 +29,8 @@ const post = (text: string, replyTo: string | null = null): Command => ({ type: 
 
 beforeAll(async () => {
   ({ replica, db } = await planDatabase('project_chat_workers'))
-  store = new SuperTabStore(db)
+  // A Personal Swarm's channel takes its person's post only until the exemptions end (commands.ts CHANNEL_EXEMPTIONS_END).
+  store = new SuperTabStore(db, exemptClock())
   for (const user of [owner, other, host]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: 'prod' } })
   await db.machine.create({ data: { machineId: 'test-host', userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   await db.machineShare.create({ data: { machineId: 'test-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email, other.email] } })

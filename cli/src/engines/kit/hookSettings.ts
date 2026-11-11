@@ -13,7 +13,7 @@ import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HookSettings } from '../
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -44,11 +44,14 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
   // A startup refresh and a launch share the entire installation. Releasing the
   // reservation between notify and Messages let each revoke the other's second
   // stage, so a healthy launch could be held by the daemon's own refresh.
+  // Before the notify.mjs check, as in nativeHookSettings.ts: an engine with no Windows runner skips its hooks there whether
+  // or not the file is (#3954 review).
+  if (platform === 'win32' && !settings.win32Runner) return hooksNotOnWindows(engine)
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that
-    // is a failed install with its reason, not a rejection (B4.1 review).
-    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)
-    if (!entry) return hooksNotOnWindows(engine)
+    // is a failed install with its reason, not a rejection (B4.1 review). So is a notify.mjs that is not there.
+    requireHookScript(engine)
+    const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)!
     return await runHookPreparation(files, async attempt => {
       await installNotifyHooks(settings, port, home, entry, attempt, platform)
       // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is

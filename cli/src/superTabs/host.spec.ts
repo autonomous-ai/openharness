@@ -2498,7 +2498,6 @@ it('confirms the removal of a closed worker once an outage of its acknowledgemen
 
 it.each([
   ['a busy Swarm', refusal(503, 'SWARM_BUSY')],
-  ['a Swarm moving to its new store', refusal(503, 'SWARM_MIGRATING')],
   ['a backend that is down', refusal(502, 'BACKEND_UNAVAILABLE')],
   ['a sign-in being renewed', refusal(401, 'UNAUTHORIZED')],
   ['throttling', refusal(429, 'RATE_LIMITED')],

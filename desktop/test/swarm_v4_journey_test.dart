@@ -164,6 +164,16 @@ void main() {
       await tester.tap(key('super-manage-tab-$tab'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: tab);
+      // Models is the person's own models, behind Your models…: v3's shares of models came from workgroups v4 has
+      // none of, so the v3 board is never read.
+      if (tab == 'models') {
+        expect(key('super-local-models'), findsOneWidget);
+        await tester.pump(const Duration(seconds: 1));
+        expect(
+          server.requested.where((path) => path.contains('/leaderboard')),
+          isEmpty,
+        );
+      }
     }
     expect(find.textContaining(crew), findsNothing);
 
@@ -290,6 +300,16 @@ void main() {
       List<String> asking() => [
         for (final (_, chat) in superTabAgentsAsking(c)) chat.id,
       ];
+      // Its name in Your Team: semibold while it asks, regular once read.
+      FontWeight? weight() => tester
+          .widget<Text>(
+            find.descendant(
+              of: key('super-agent-second'),
+              matching: find.text('second'),
+            ),
+          )
+          .style
+          ?.fontWeight;
       Future<void> tap(String k) async {
         await tester.tap(key(k));
         await tester.runAsync(
@@ -303,6 +323,7 @@ void main() {
       await tap('super-agent-second');
       await tap('super-group-lead');
       expect(asking(), isNot(contains('agent-chat-second')));
+      expect(weight(), FontWeight.w400);
       // The agent writes in its own chat: its row is bold, and the Swarm counts it.
       server.append(
         'Which build?',
@@ -317,11 +338,13 @@ void main() {
       await tester.runAsync(c.refresh);
       await tester.pumpAndSettle();
       expect(asking(), contains('agent-chat-second'));
+      expect(weight(), grid.AppFont.semibold);
       // Its chat opened and read (Esc, as its unread bar says): nothing asks any more.
       await tap('super-agent-second');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(asking(), isNot(contains('agent-chat-second')));
+      expect(weight(), FontWeight.w400);
       final v3 = RegExp(
         r'/api/super-tabs/[^/]+/'
         r'(mentions|decisions|reminders|activity|threads|inbox)(/read)?(\?.*)?$',
