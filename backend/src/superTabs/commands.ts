@@ -30,6 +30,7 @@ import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { forgetRemovedPanes, recordRemovedPane } from './removedPanes.js'
+import { paneChatId } from './paneChats.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -159,7 +160,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The Member's main project (task #4540): only on the Swarm's start of a Member; New project makes the Lead of its own.
     mainProjectId: id.optional(),
     // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
-    local: z.literal(true).optional() }).strict(),
+    local: z.literal(true).optional(),
+    // With local: the session already running that joins (Attach): its one chat, the same however often and from wherever it
+    // is asked (paneChats.ts).
+    harnessId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -795,8 +799,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
 
   /** A Regular agent's chat with its person, which nobody else reads (projects.ts readsAgentChat), for this command's agent. */
-  const openAgentChat = (me: { id: string; generation: string }, title: string): string => {
-    const chatId = stableId('agent-chat', me.id, me.generation, operationId)
+  const openAgentChat = (me: { id: string; generation: string }, title: string, chatId = stableId('agent-chat', me.id, me.generation, operationId)): string => {
     state.conversations.push({ id: chatId, kind: 'agent-chat', title, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
       assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] },
       // Its activity starts with the command that opens it, on the store's clock, as a message's would.
@@ -1360,16 +1363,22 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
         }
         if (command.lead) fail('AGENT_CHAT_LEAD', 'An agent\'s own chat has no lead.', 400)
+        const agentId = stableId(command.machineId, command.harnessId)
+        // The same session joining the chat it is in already: a retry, or its person's other computer (agent.new harnessId).
+        if (group.agentIds.length === 1 && group.agentIds[0] === agentId) {
+          result.agentId = agentId
+          break
+        }
         if (group.agentIds.length) fail('AGENT_CHAT_TAKEN', 'This chat already has its agent.', 409)
         if (isWaitingPmChat(state, group)) fail('AGENT_CHAT_TAKEN', `This chat waits for its project's ${COORDINATOR_NAME}.`, 409)
-        const agentId = stableId(command.machineId, command.harnessId)
         if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
         reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
         // Added back by hand: its apps may add it by themselves again (removedPanes.ts).
         forgetRemovedPanes(state, command.machineId, id => id === command.harnessId)
+        // Its chat is this one from the start: before, only the time checks' pass set it (agentChats.ts).
         state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId, regular: true,
           machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: addedName,
-          configuration: command.configuration, configurationVersion: operationId })
+          configuration: command.configuration, configurationVersion: operationId, chatId: group.id })
         group.agentIds.push(agentId)
         result.agentId = agentId
         if (command.initialMessage) message(group.id, command.initialMessage)
@@ -1522,7 +1531,29 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // computer nor a host that runs Regular starts is needed; agent.add then brings the running session into the chat.
       if (command.local) {
         if (command.kind !== 'regular') fail('LOCAL_MEMBER_ONLY', 'A Lead started on your computer starts its project with project.create.', 400)
-        result.conversationId = openAgentChat(me, newAgentName(state, actor, command.name, operationId))
+        if (!command.harnessId) {
+          result.conversationId = openAgentChat(me, newAgentName(state, actor, command.name, operationId))
+          break
+        }
+        // A session already running joins (Attach): its one chat, whoever asks again, from whichever computer (paneChats.ts).
+        const joined = state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)
+        if (joined && joined.contributorId !== me.id) fail('ALREADY_SHARED', 'This session is already in the Swarm.', 409)
+        const own = joined && state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(joined.id))
+        const chatId = own?.id ?? paneChatId(me, command.machineId, command.harnessId)
+        const kept = state.conversations.find(c => c.id === chatId)
+        if (kept) {
+          // Joined again after it was taken out, or archived while empty: the same chat opens again, with what was said there.
+          if (kept.archived) {
+            kept.archived = false
+            delete kept.dormant
+          }
+        } else openAgentChat(me, joined?.displayName ?? joined?.name ?? newAgentName(state, actor, command.name, operationId), chatId)
+        // One in the Swarm from before its own chat (Swarm v4) takes this one.
+        if (joined && !own) {
+          conversation(state, chatId).agentIds.push(joined.id)
+          joined.chatId = chatId
+        }
+        Object.assign(result, { conversationId: chatId, ...(joined ? { agentId: joined.id } : {}) })
         break
       }
       const pool = state.machines?.find(m => m.machineId === command.machineId && m.contributorId === me.id && !m.removal)
