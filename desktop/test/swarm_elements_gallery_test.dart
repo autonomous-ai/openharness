@@ -692,7 +692,7 @@ class _Gallery extends StatelessWidget {
             [
               SizedBox(
                 width: 760,
-                height: 250,
+                height: 360,
                 child: SwarmTaskBoard(
                   controller: swarm,
                   conversationId: 'lead',

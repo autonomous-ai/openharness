@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { sessionBranchNames } from './agentNames.js'
-import { HARNESS_BRANCH_KEY, insideGitCheckout } from './gitProject.js'
+import { HARNESS_BRANCH_KEY, inRepositoryTurn, insideGitCheckout } from './gitProject.js'
 
 const exec = promisify(execFile)
 
@@ -36,20 +36,23 @@ export async function nameBranchAfterSession(cwd: string, title: string | null):
   const mark = await git(cwd, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`]).catch(() => null)
   if (mark !== 'placeholder') return null
   if (await git(cwd, ['config', '--get', `branch.${branch}.remote`]).then(() => true, () => false)) return null
-  const base = names[0]!
-  // Taken here, or on a remote: a name somebody else pushed is not one to push over.
-  const known = new Set([...RESERVED_BRANCHES, ...(await git(cwd, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']).catch(() => ''))
-    .split('\n').flatMap(ref => ref.startsWith('refs/heads/') ? [ref.slice(11)]
-      : ref.startsWith('refs/remotes/') ? [ref.split('/').slice(3).join('/')] : [])
-    .map(name => name.toLowerCase())])
-  const candidates = [...names, ...Array.from({ length: 49 }, (_, i) => `${base}-${i + 2}`)]
-  for (const name of candidates) {
-    if (name === branch) return null
-    if (known.has(name.toLowerCase())) continue
-    try { await git(cwd, ['check-ref-format', '--branch', name]) } catch { return null }
-    await git(cwd, ['branch', '-m', branch, name])
-    await git(cwd, ['config', `branch.${name}.${HARNESS_BRANCH_KEY}`, 'created']).catch(() => '')
-    return name
-  }
-  return null
+  // In the repository's turn: a start choosing names and writing .git/config at the same time (gitProject.ts).
+  return inRepositoryTurn(cwd, async () => {
+    const base = names[0]!
+    // Taken here, or on a remote: a name somebody else pushed is not one to push over.
+    const known = new Set([...RESERVED_BRANCHES, ...(await git(cwd, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']).catch(() => ''))
+      .split('\n').flatMap(ref => ref.startsWith('refs/heads/') ? [ref.slice(11)]
+        : ref.startsWith('refs/remotes/') ? [ref.split('/').slice(3).join('/')] : [])
+      .map(name => name.toLowerCase())])
+    const candidates = [...names, ...Array.from({ length: 49 }, (_, i) => `${base}-${i + 2}`)]
+    for (const name of candidates) {
+      if (name === branch) return null
+      if (known.has(name.toLowerCase())) continue
+      try { await git(cwd, ['check-ref-format', '--branch', name]) } catch { return null }
+      await git(cwd, ['branch', '-m', branch, name])
+      await git(cwd, ['config', `branch.${name}.${HARNESS_BRANCH_KEY}`, 'created']).catch(() => '')
+      return name
+    }
+    return null
+  })
 }
