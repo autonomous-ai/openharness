@@ -134,6 +134,32 @@ describe('a file of a repository (GitHubReads.file)', () => {
     await reads.file('acme/app', 'agents/First builder.md')
     expect(asked.length).toBe(before + 1)
   })
+
+  // A pull request's task by its number (githubMerge.ts earlierPull): a number that is no issue's is GitHub's answer, a 404,
+  // or a 410 for an issue that was deleted. Read as a repository this login cannot read, it stopped every landing there.
+  it('reads an object that may not be there: nothing for a 404 or a 410, not asked for again for five minutes, and any other answer as ever', async () => {
+    let now = 0
+    const asked: string[] = []
+    const get: GitHubGet = async (path, etag) => {
+      asked.push(path)
+      const status = path.endsWith('/issues/7') ? 404 : path.endsWith('/issues/8') ? 410 : path.endsWith('/issues/9') ? 403 : etag === '"i"' ? 304 : 200
+      return { status, etag: status === 200 || status === 304 ? '"i"' : null, body: status === 200 ? { number: 3, body: 'after #2' } : null, resetAt: null }
+    }
+    const reads = new GitHubReads(get, () => now)
+    // There: its answer, and its last answer again on a 304.
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/3')).toEqual({ number: 3, body: 'after #2' })
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/3')).toEqual({ number: 3, body: 'after #2' })
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/7')).toBeNull()
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/8')).toBeNull()
+    const before = asked.length
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/7')).toBeNull()
+    expect(asked.length).toBe(before)
+    now += 5 * 60_000
+    expect(await reads.ifThere('acme/app', '/repos/acme/app/issues/7')).toBeNull()
+    expect(asked.length).toBe(before + 1)
+    // Refused is not missing: it stops the repository's pass, as any read.
+    await expect(reads.ifThere('acme/app', '/repos/acme/app/issues/9')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
+  })
 })
 
 // autonomous-harness, renamed openharness (2026-11-11): GitHub answers a repository's old name with what it is called now.

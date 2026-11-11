@@ -233,9 +233,10 @@ lands on checks from an older base.
   (this repository's own planner reads some documentation), and "no landing on older checks" is a gate below. Looked
   at again when a project's run is long enough for the rebuilds to cost.
 - Harness rebases. An author hears only of a real conflict.
-- A change built on another lands after it, as it is: one that carries another open pull request's commits, or whose
-  task says it comes after a task with a pull request still open, waits for that one. Its builder is told once and
-  asked for nothing ([the allocator's design](../design/2026-11-11-swarm-allocator/BUILD.md), package 3).
+- A change built on another lands after it: one that carries another open pull request's commits, or whose task says
+  it comes after a task with a pull request of the team's still open, waits for that one. Its builder is told once
+  which it waits for, and is asked for nothing ([the allocator's design](../design/2026-11-11-swarm-allocator/BUILD.md),
+  package 3).
 - A red train is cut in half to find its pull request. lampOS's bot blamed by crate and was wrong 8 times in 22.
 - Each Swarm has its own agent for the train (anh Dee, 10 Nov; no app account of ours), on the computer and the
   account of a person the project lets land. It runs the train, says why a change did not land, and mends the train

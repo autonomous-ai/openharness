@@ -223,9 +223,9 @@ describe('Harness says each thing once on GitHub, over an hour and a restart (gi
     expect((harness.get(11) ?? []).filter(body => /please read it again/.test(body)), '#11').toEqual([])
     expect(gh.sent.filter(s => s.method === 'PUT')).toHaveLength(1)
     expect(harness.get(16) ?? []).toEqual([])
-    // The one built on #17 is told once, in the hour and across the restart and the push, and asked for nothing; #17's reader
+    // The one built on #17 is told once, in the hour and across the restart and the push, what it waits for; #17's reader
     // is asked once to read its new head.
-    expect((harness.get(18) ?? []).filter(body => body.includes('not merged yet'))).toEqual([expect.stringMatching(/: it lands after #17, whose commits it carries \(its head \w+\)\. Nothing to do: /)])
+    expect((harness.get(18) ?? []).filter(body => body.includes('not merged yet'))).toEqual([expect.stringMatching(/: it lands after #17, whose commits it carries \(its head \w+\)\.$/)])
     one(17, /to \*\*Juno\*\*: the head is now \w+, after your HOLD on \w+: please read it again/)
     expect(gh.pulls.get(18)!.state).toBe('open')
   }, 60_000)

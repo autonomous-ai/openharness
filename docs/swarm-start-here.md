@@ -40,9 +40,8 @@ signed in while the team works.
    `harness super-tab read ok` or `read hold`.
 6. **It lands** when it is aimed at the default branch and is not a draft; another agent's READ-OK, made by command,
    is on its newest commit; it has no HOLD and no `hold` label; every check passed; it is not behind or in conflict; and
-   no other open pull request lands first: one whose commits it carries, or one for a task its own task comes after
-   ("after #N"). Harness lands several at once in a train, on one CI run. Nobody needs to merge by hand, and one that
-   waits for another needs no update: it lands as it is.
+   no other open pull request lands first: one whose commits it carries, or one of the team's for a task its own task
+   comes after ("after #N"). Harness lands several at once in a train, on one CI run. Nobody needs to merge by hand.
 7. **When builders have nothing to do**, the PM is told, with the numbers. From 09:00 on the PM's computer, on a day
    something landed or a task closed, the day's numbers are posted in the channel.
 
@@ -55,7 +54,7 @@ that runs it, and the PM is told how many pass.
 |---|---|
 | No task is given | The PM's person's computer: on, awake, signed in, `gh` signed in. The task's labels: it needs a size |
 | A task waits for another | Its "after #N": it is given once that task's pull request is up, to that one's builder, or once it lands |
-| A pull request does not land | Its comments: Harness says why to its builder (checks failed, a HOLD, behind or in conflict, another pull request lands first, its task cannot be read, the repository's rules) |
+| A pull request does not land | Its comments: Harness says why to its builder (checks failed, a HOLD, behind or in conflict, another pull request lands first, the repository's rules) |
 | GitHub says the merge is blocked | The repository's own rules (required reviews, branch protection): Harness tells the builder, on the pull request, to ask its person |
 | Anything else | `~/.harness/cli/data/harness.log`, the lines with `[super-tab]`: on the PM's person's computer for giving and landing, on an agent's own computer for what is typed to it |
 

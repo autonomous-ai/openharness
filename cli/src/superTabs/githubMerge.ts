@@ -15,11 +15,11 @@
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
  * - GitHub says it can merge;
- * - and no other open pull request is one it lands after: one whose head is among its commits, or one for a task its own task
- *   says it comes after.
+ * - and no other open pull request is one it lands after: one whose head is among its commits, or one of the team's for a task
+ *   its own task says it comes after.
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
- * each head, so the GitHub news brings it to its author (githubMentions.ts). One that lands after another is told that, and is
- * asked for nothing.
+ * each head, so the GitHub news brings it to its author (githubMentions.ts). One that lands after another is told which, and
+ * no more.
  *
  * The ready ones land on a train (githubTrain.ts): one branch, one run of the checks on the combined change. Only one that is
  * alone and holds the base's tip, or a fork's whose head GitHub does not take into a train, is merged on its own, squashed, as
@@ -95,7 +95,7 @@ const SELF = 'Harness'
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
 const NOTES = { unsigned: 'the READ-OK from ', held: 'the HOLD from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ',
-  blocked: 'GitHub\'s rules for ', stacked: 'it lands after ', unread: 'its task ', red: 'its train failed: ' } as const
+  blocked: 'GitHub\'s rules for ', stacked: 'it lands after ', red: 'its train failed: ' } as const
 type NoteKind = keyof typeof NOTES
 /** How the `stacked` note began until 2026-11-12, when it ended "then update it from main": one posted then is still its head's
  *  note, so a restart does not say it again in today's words. These can go after 2026-12-12. */
@@ -109,17 +109,9 @@ export function noteOf(comment: Json): NoteKind | null {
   const rest = TEAM.has(comment.author_association) ? /not merged yet at [0-9a-f]{7}: (.*)/s.exec(String(comment.body ?? '').slice(0, 500))?.[1] : undefined
   return rest === undefined ? null : (Object.keys(NOTES) as NoteKind[]).find(kind => startsOf(kind).some(words => rest.startsWith(words))) ?? null
 }
-/** How a note to a pull request that lands after [number] ends. It asks for nothing: the train merges each pull request onto
- *  the base's tip as it is, and one that then conflicts is told so by its own note. Until 2026-11-12 it said "then update it
- *  from main", and for one stack of three in the scratch repository a builder did, three times: three pushes and runs of the
- *  checks, a note more and a read again, where the pull request built on another that nobody touched landed by itself. */
-const landsAsItIs = (number: number): string => `Nothing to do: it lands as it is once #${number} has landed.`
 /** The most tasks of one pull request whose text is read for what they come after (earlierPull): a pull request is one task's
  *  work, and its text can name any number of them. */
 const TASKS_READ_MAX = 5
-/** How long a task GitHub did not give is not asked for again: a read that fails is no 304, and counts against this login's
- *  requests, every pass for as long as its pull request waits. */
-const TASK_AGAIN_MS = 10 * 60_000
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
  *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
@@ -604,9 +596,6 @@ export class GitHubMerge {
   private readonly looked = new Map<string, string>()
   /** What commits change (sameChange). */
   private readonly patches = new Map<string, unknown>()
-  /** The tasks GitHub did not give, as `<repo>#<task>`, and until when each is not asked for again (earlierPull): the last
-   *  [TOLD_MAX] of them. */
-  private readonly unread = new Map<string, number>()
   private projects: { at: number; list: LedProject[] } | null = null
   /** What GitHub names each project's repository now, as its last pass read it: a renamed one's reads are kept under both. */
   private readonly named = new Map<string, string>()
@@ -755,22 +744,20 @@ export class GitHubMerge {
       if (state === 'dirty') { await conflicts({ number, head, author, comments }); continue }
       if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) { waiting.add(`${number}@${head}`); continue }
+      // The note says what it waits for, and no more. Until 2026-11-12 it ended "then update it from main", and for one stack of
+      // three in the scratch repository a builder did, three times: three pushes and runs of the checks, a note more and a read
+      // again, where a pull request built on another that nobody touched landed by itself. It promises nothing either: where
+      // the base requires branches up to date, or the other lands squashed after a fix, its builder is told of that when it is so.
       const carried = await this.carriedPull(repo, number, head, listed)
       if (carried) {
-        await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}, whose commits it carries (its head ${carried.head.slice(0, 7)}). ${landsAsItIs(carried.number)}`, comments)
+        await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}, whose commits it carries (its head ${carried.head.slice(0, 7)}).`, comments)
         continue
       }
-      // Nor while a pull request is open for a task its own task comes after, whichever of its commits it holds. One note for
-      // both: told for this head that it lands after another, it is not told again when the reason becomes the other.
-      const earlier = await this.earlierPull(repo, number, pull, listed)
-      if (earlier && 'unread' in earlier) {
-        await this.tellOnce(repo, number, head, author, 'unread', `#${earlier.unread} could not be read on GitHub, so what it comes after is not known. `
-          + `Harness reads it again by itself; if #${earlier.unread} is not its task, take it out of the pull request's text.`, comments)
-        continue
-      }
+      // Nor while a pull request of the team's is open for a task its own task comes after, whichever of its commits it holds.
+      // One note for both: told for this head that it lands after another, it is not told again when the reason becomes the other.
+      const earlier = await this.earlierPull(repo, number, pull, listed, team)
       if (earlier) {
-        await this.tellOnce(repo, number, head, author, 'stacked', `#${earlier.pull}, which is open for #${earlier.after}: its own task #${earlier.task} comes after that one. `
-          + landsAsItIs(earlier.pull), comments)
+        await this.tellOnce(repo, number, head, author, 'stacked', `#${earlier.pull}, which is open for #${earlier.after}: its own task #${earlier.task} comes after that one.`, comments)
         continue
       }
       // A train carried it alone at this head and failed: it sits out until its head changes. Its note says so for good, where
@@ -850,39 +837,33 @@ export class GitHubMerge {
   }
 
   /**
-   * Another open pull request (a draft too) that is for a task one of [pull]'s own tasks says it comes after ("after #12" in the
-   * task's text: assign/crew.ts tasksOf, dependsOn), with the two tasks; or null. `carriedPull` holds a pull request only while it
-   * holds the other's head as it is now. Built on #A at one head, then #A held by a reader and fixed with a push, #B held #A's
-   * earlier commits alone: nothing was found, and the held code landed through #B before its fix. The assigner gives such a task
-   * to be built on that branch (the allocator's design, package 3), so the order is the tasks' own, whatever the commits.
+   * Another open pull request of the [team]'s (a draft too) that is for a task one of [pull]'s own tasks says it comes after
+   * ("after #12" in the task's text: assign/crew.ts tasksOf, dependsOn), with the two tasks; or null. `carriedPull` holds a pull
+   * request only while it holds the other's head as it is now. Built on #A at one head, then #A held by a reader and fixed with
+   * a push, #B held #A's earlier commits alone: nothing was found, and the held code landed through #B before its fix. The
+   * assigner gives such a task to be built on that branch (the allocator's design, package 3), so the order is the tasks' own,
+   * whatever the commits.
+   *
+   * Only a pull request of the team's is waited for, known as the one that may land is (authorOf, teamOf): on a public
+   * repository anyone opens a pull request that says it closes a task, and that is data, never a word on what lands.
    *
    * Read only when [pull] could merge now: one read for each task it names, [TASKS_READ_MAX] at most, a 304 while the task is
-   * unchanged. Any open pull request for the earlier task counts, as any whose head is carried does. A task that names itself
-   * comes after nothing: two pull requests for it would each wait for the other. Two tasks that name each other hold both: no
-   * order lands both, each is told which it waits for, and the lines are their PM's to change.
-   *
-   * `unread`, with the task, when GitHub does not give it (a number that is no issue's, or a read refused): what it comes after
-   * is not known, and nothing lands on a guess. Only this pull request waits, and the task is not asked for again for
-   * [TASK_AGAIN_MS]. A failure of GitHub or of this login stops the pass, as at every read.
+   * unchanged. A number that is no issue's (a branch named `pip/2026`), or a pull request's, is no task: nothing says what it
+   * comes after, as when the task's text is gone. A read GitHub refuses or fails stops the pass, as every read of it. A task
+   * that names itself comes after nothing: two pull requests for it would each wait for the other. Two tasks that name each
+   * other hold both: no order lands both, each is told which it waits for, and the lines are their PM's to change.
    */
-  private async earlierPull(repo: string, number: number, pull: Json, open: Json[]): Promise<{ pull: number; task: number; after: number } | { unread: number } | null> {
-    // The task each other open pull request is for, made only once a task says it comes after another.
+  private async earlierPull(repo: string, number: number, pull: Json, open: Json[], team: ReadonlySet<string>): Promise<{ pull: number; task: number; after: number } | null> {
+    // The task each other open pull request of the team's is for, made only once a task says it comes after another.
     let others: Map<number, number> | null = null
+    const ofTeam = (other: Json): boolean => { const author = authorOf(other); return author !== null && team.has(labelOf(author)) }
     for (const task of tasksOf(pull).slice(0, TASKS_READ_MAX)) {
-      const key = `${repo}#${task}`
-      if (this.now() < (this.unread.get(key) ?? 0)) return { unread: task }
-      let issue: Json
-      try { issue = await this.reads.one(repo, `/repos/${repo}/issues/${task}`) } catch (error) {
-        if (!(error instanceof GitHubStop) || error.everywhere) throw error
-        this.unread.set(key, this.now() + TASK_AGAIN_MS)
-        if (this.unread.size > TOLD_MAX) this.unread.delete(this.unread.keys().next().value!)
-        return { unread: task }
-      }
-      // GitHub answers for a pull request's number as for an issue's: its text is no task's.
-      if (issue.pull_request) continue
+      const issue = await this.reads.ifThere(repo, `/repos/${repo}/issues/${task}`)
+      if (!issue || issue.pull_request) continue
       for (const after of dependsOn(issue.body)) {
         if (after === task) continue
-        others ??= new Map(open.filter(other => Number(other.number) !== number).flatMap(other => tasksOf(other).map(theirs => [theirs, Number(other.number)] as const)))
+        others ??= new Map(open.filter(other => Number(other.number) !== number && ofTeam(other))
+          .flatMap(other => tasksOf(other).map(theirs => [theirs, Number(other.number)] as const)))
         const under = others.get(after)
         if (under !== undefined) return { pull: under, task, after }
       }
