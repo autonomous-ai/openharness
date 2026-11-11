@@ -184,9 +184,6 @@ export class GitHubReads {
     const rows: Json[] = []
     for (let page = 1; page <= maxPages; page++) {
       const body = await this.read(repo, page === 1 ? path : `${path}&page=${page}`, keep, false, once)
-      // Asked outright there is no 304: no body is an answer cut off on its way (a list of a hundred files with their patches
-      // is 600 KB against the 10 s deadline), and read as the end of the list it would count as nothing, with nothing said.
-      if (body === null && once) throw new GitHubStop('GH_FAILED', 'GitHub\'s answer did not arrive whole.', false, this.now())
       if (body === null) return rows
       if (!Array.isArray(body)) throw new GitHubStop('GH_FAILED', 'GitHub answered something unreadable.', false, this.now())
       rows.push(...body.map(object))
@@ -212,6 +209,10 @@ export class GitHubReads {
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     // GitHub failing on its own side stops every repository; any other answer is about this one (it still goes when it next can).
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, reply.status >= 500, this.now())
+    // A 200 with no body is an answer cut off on its way (a list of a hundred files with their patches is 600 KB against the
+    // 10 s deadline). Read as empty, it counted as nothing with nothing said; kept under its ETag, a list of two issues read
+    // as none for three passes, until the list next changed (reviews of scoreboard.ts).
+    if (reply.body === null) throw new GitHubStop('GH_FAILED', 'GitHub\'s answer did not arrive whole.', false, this.now())
     if (reply.etag && !once) {
       this.kept.delete(url)
       this.kept.set(url, { etag: reply.etag, body: keep ? reply.body : null })
