@@ -3,7 +3,7 @@
 // empty log — so the engine runs as the leader of its own session, logging to run/NAME.log, with its PID
 // in run/NAME.pid. Stop kills only a PID this file recorded.
 import { spawn } from 'node:child_process';
-import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -21,8 +21,12 @@ export async function recordedPid(workspace, name) {
   return Number.isInteger(pid) && pid > 1 ? pid : null;
 }
 
-/** The live PIDs of every engine `serve` started in this workspace: the model scan asks the ports they hold. */
+/**
+ * The live PIDs of every engine `serve` started in this Grid workspace: the model scan asks the ports they hold.
+ * Outside a workspace (no grid-fleet.json) there are none: run/ there is someone else's, such as Linux's /run.
+ */
 export async function servedPids(workspace) {
+  if (!(await stat(join(workspace, 'grid-fleet.json')).catch(() => null))) return [];
   const names = (await readdir(join(workspace, 'run')).catch(() => [])).filter(file => file.endsWith('.pid')).slice(0, 256);
   const pids = await Promise.all(names.map(file => recordedPid(workspace, file.slice(0, -'.pid'.length)).catch(() => null)));
   return pids.filter(pid => pid && alive(pid));

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { constants, copyFile, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { constants, copyFile, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -231,8 +231,11 @@ test('an engine is named by its program on every platform, or by the PID fleet s
   for (const command of ['node', 'Python', 'python3', 'flutter_tester', 'ControlCenter', 'Code Helper', null]) {
     assert.equal(isEngineListener({ port: 1, pid: 2, command }), false, String(command));
   }
-  assert.ok(isEngineListener({ port: 1, pid: 2, command: 'Python' }, new Set([2])), 'the PID serve recorded');
+  assert.ok(isEngineListener({ port: 1, pid: 2, group: 2, command: 'Python' }, new Set([2])), 'the group leader serve recorded');
   assert.ok(isEngineListener({ port: 1, pid: 3, group: 2, command: 'Python' }, new Set([2])), 'a process in its group');
+  assert.equal(isEngineListener({ port: 1, pid: 2, group: 9, command: 'flutter_tester' }, new Set([2])), false,
+    'a PID reused after the engine died leads no group of that number');
+  assert.ok(isEngineListener({ port: 1, pid: 2, command: 'python.exe' }, new Set([2])), 'Windows: the PID, as it has no groups');
 });
 
 test('one model in two formats is one model, and on a Mac with mlx-lm the GGUF row points at the MLX copy', () => {
@@ -322,23 +325,26 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port));`;
 
 /**
  * A loopback server in a process of its own, run by this Node or, given [name], by a copy of it under that name:
- * the scan reads which program holds a port, and a symlink would still read as node on macOS.
+ * the scan reads which program holds a port, and a symlink would still read as node on macOS. A copy, never a
+ * hard link: macOS then reports the link's path as every node's executable, and Homebrew's Node fails to load.
+ * Leading its own process group, as `fleet serve` starts an engine (Windows has no groups and would open a window).
  */
 async function server(routes, name) {
-  let file = process.execPath;
+  let file = process.execPath, dir = null;
   if (name) {
-    const node = await realpath(process.execPath), dir = await mkdtemp(join(tmpdir(), 'engine-'));
+    const node = await realpath(process.execPath);
+    dir = await mkdtemp(join(tmpdir(), 'engine-'));
     file = join(dir, 'bin', process.platform === 'win32' ? `${name}.exe` : name);
     await mkdir(dirname(file), { recursive: true });
     await copyFile(node, file, constants.COPYFILE_FICLONE);
     await symlink(join(dirname(node), '..', 'lib'), join(dir, 'lib')).catch(() => {}); // Homebrew's Node loads ../lib/libnode
   }
-  const child = spawn(file, ['-e', ENGINE_SCRIPT, JSON.stringify(routes)], { stdio: ['ignore', 'pipe', 'inherit'] });
-  const port = await new Promise((resolve, reject) => {
-    child.stdout.once('data', data => resolve(Number(String(data).trim())));
-    child.once('exit', code => reject(new Error(`${name ?? 'node'} exited with ${code}`)));
-  });
-  return { port, pid: child.pid, close: () => child.kill() };
+  const child = spawn(file, ['-e', ENGINE_SCRIPT, JSON.stringify(routes)], { stdio: ['ignore', 'pipe', 'inherit'], detached: process.platform !== 'win32' });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  const died = exited.then(code => { throw new Error(`${name ?? 'node'} exited with ${code}`); });
+  died.catch(() => {}); // its own close ends it too, after the race is won
+  const port = await Promise.race([new Promise(resolve => child.stdout.once('data', data => resolve(Number(String(data).trim())))), died]);
+  return { port, pid: child.pid, close: async () => { child.kill(); await exited; if (dir) await rm(dir, { recursive: true, force: true }); } };
 }
 
 const KNOWN = [11434, 1234, 8000, 8080, 8081, 30000];
@@ -363,6 +369,7 @@ test('the scan asks only engines: their known ports, a port given, and ports an 
       [[named.port, 'llama.cpp'], [served.port, 'llama.cpp']].sort());
   } finally {
     globalThis.fetch = realFetch;
-    stranger.close(); given.close(); named.close(); served.close();
+    stranger.close(); given.close();
+    await Promise.all([named.close(), served.close(), rm(home, { recursive: true, force: true })]);
   }
 });

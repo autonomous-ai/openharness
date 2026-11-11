@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recordedPid, runFiles, serve, servedPids, stop } from '../lib/serve.mjs';
@@ -13,6 +13,8 @@ test('an engine started with serve leads its own process group, logs, records it
   const started = await serve(workspace, 'probe', [process.execPath, '-e', 'console.log(process.env.PROBE); setTimeout(() => {}, 60000)'], { env: { PROBE: 'ready' } });
   try {
     assert.equal(await recordedPid(workspace, 'probe'), started.pid);
+    assert.deepEqual(await servedPids(workspace), [], 'outside a Grid workspace run/ is not ours (Linux has /run)');
+    await writeFile(join(workspace, 'grid-fleet.json'), '{}');
     assert.deepEqual(await servedPids(workspace), [started.pid], 'the model scan asks the ports it holds');
     assert.ok(alive(started.pid));
     const group = Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(started.pid)], { encoding: 'utf8' }).trim());
