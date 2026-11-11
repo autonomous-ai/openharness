@@ -141,10 +141,10 @@ void main() {
   });
 
   // Swarm v4: an agent reaches its person only in its own chat, so its words
-  // there are told as All new messages are, whatever the chat's setting,
-  // unless it is muted.
-  test('an agent\'s own chat tells its person of each new message, unless '
-      'muted', () async {
+  // there are told as All new messages are, whatever the chat's setting: a mute
+  // from before holds no more, since nothing in v4 could undo it.
+  test('an agent\'s own chat tells its person of each new message, muted or '
+      'not', () async {
     final server = swarm();
     addAskingAgent(server, 'kai');
     final c = server.controller();
@@ -171,7 +171,7 @@ void main() {
     fromKai('Still there?');
     await c.refresh();
     await pumpEventQueue();
-    expect(told, ['agent-chat-kai']);
+    expect(told, ['agent-chat-kai', 'agent-chat-kai']);
     await c.flush();
   });
 

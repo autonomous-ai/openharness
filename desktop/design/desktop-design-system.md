@@ -390,7 +390,9 @@ leaderboard) share four rules.
   you". In Swarm v4 an agent reaches its person only in its own chat: an
   agent with something new there asks you. Its Your Team row is bold, and the
   Swarm's tab, the Swarm list, the Dock and the menu bar count those agents
-  (`superTabAgentsAsking`, from read marks). No row carries an `@N`.
+  (`superTabAgentsAsking`, from read marks). No row carries an `@N`. A mute
+  set before v4 on an agent's chat or a project holds no more: nothing in v4
+  can undo it, so a muted agent could never ask its person.
 - **Status column.** Goal: compare status down the list at a glance. Status
   marks use the shared activity vocabulary (see the
   [icon design system](icon-design-system.md#deliberate-exceptions)) and sit
