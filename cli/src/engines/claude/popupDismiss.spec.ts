@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { feedbackDismissKeys } from './screen.js'
+import { popupDismissKeys } from './screen.js'
 
 // Nova's pane in the Swarm autonomous-harness, 2026-10-29 (Claude Code 2.1): the drafted bug report covered its prompt and
 // every message to it came back undelivered.
@@ -29,21 +29,46 @@ const SURVEY = [
   '❯ ',
 ].join('\n')
 
+// Alba's pane on Mac 2, 2026-11-11 (Claude Code 2.1.321): started in auto mode by Harness while the person's own default was bypass,
+// Claude Code asked after its first turn whether to make auto the default, and the agent sat on the question.
+const AUTO_DEFAULT = [
+  '* Churned for 23s · done 1:33 PM',
+  '',
+  '────────────────────────────────────────────────────────────────────────────────',
+  ' Make auto mode your default permission mode?',
+  '',
+  '   Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky',
+  '   actions and prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the',
+  '   rest.',
+  '',
+  '   ❯ Yes, set auto mode as my default permission mode',
+  '     No, keep bypass permissions',
+].join('\n')
+
 describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
   it('dismisses a drafted bug report with 0, which sends nothing', () => {
-    expect(feedbackDismissKeys(DRAFT)).toEqual(['0'])
+    expect(popupDismissKeys(DRAFT)).toEqual(['0'])
   })
 
   it('keeps the person\'s feedback setting with Esc, never 0 (which turns it off)', () => {
-    expect(feedbackDismissKeys(TURN_OFF)).toEqual(['Escape'])
+    expect(popupDismissKeys(TURN_OFF)).toEqual(['Escape'])
   })
 
   it('dismisses the session survey with 0, giving no rating', () => {
-    expect(feedbackDismissKeys(SURVEY)).toEqual(['0'])
+    expect(popupDismissKeys(SURVEY)).toEqual(['0'])
+  })
+
+  // Its person's own default stays as it was: the agent runs in auto mode either way, as Harness started it.
+  it('answers Claude Code\'s question to make auto mode the default with No, keeping the person\'s own', () => {
+    expect(popupDismissKeys(AUTO_DEFAULT)).toEqual(['Down', 'Enter'])
+    expect(popupDismissKeys(AUTO_DEFAULT.replace('   ❯ Yes', '     Yes').replace('     No, keep', '   ❯ No, keep'))).toEqual(['Enter'])
+    expect(popupDismissKeys(AUTO_DEFAULT.replace('keep bypass permissions', 'keep default permissions'))).toEqual(['Down', 'Enter'])
   })
 
   it.each([
     ['an idle prompt', '────\n❯ \n────'],
+    ['the auto mode question with no No under its Yes', AUTO_DEFAULT.replace('     No, keep bypass permissions', '')],
+    ['the auto mode question and a survey at once', `${AUTO_DEFAULT}\n${SURVEY}`],
     ['a draft whose footer reads otherwise', DRAFT.replace('0 to dismiss', '0 to send')],
     ['a draft without its footer', DRAFT.replace(/│ 1 to review.*\n/, '')],
     ['a turn-off question that reads otherwise', TURN_OFF.replace('Esc to keep', 'Esc to turn off')],
@@ -51,6 +76,6 @@ describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
     ['two popups at once', `${DRAFT}\n${SURVEY}`],
     ['the draft twice', `${DRAFT}\n${DRAFT}`],
   ])('sends nothing for %s', (_name, capture) => {
-    expect(feedbackDismissKeys(capture)).toBeNull()
+    expect(popupDismissKeys(capture)).toBeNull()
   })
 })
