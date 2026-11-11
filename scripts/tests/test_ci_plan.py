@@ -46,7 +46,7 @@ class SelectionTests(unittest.TestCase):
                      "mobile/integration_test/push_e2e/reply_push.apns"]:
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("backend", path))
-        for path in ["backend/src/superTabs/processNotes.ts", "backend/src/superTabs/machineRules.cases.json"]:
+        for path in ["backend/src/superTabs/processNotes.ts"]:
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("cli", path))
 

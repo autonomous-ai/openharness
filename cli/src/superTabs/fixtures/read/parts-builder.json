@@ -26,8 +26,7 @@
      "visibility": "public",
      "members": [],
      "updateMinutes": 5,
-     "skillMode": "default",
-     "skillSet": "default"
+     "skillMode": "default"
     }
    ],
    "rules": [],
@@ -333,14 +332,12 @@
    "a00000000000000000000001": {
     "downSince": null,
     "limitedUntil": null,
-    "workDecision": null,
-    "roleId": null
+    "workDecision": null
    },
    "a00000000000000000000002": {
     "downSince": "2026-10-26T10:19:51.474Z",
     "limitedUntil": null,
-    "workDecision": "awaiting",
-    "roleId": null
+    "workDecision": "awaiting"
    }
   },
   "machines": {

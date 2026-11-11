@@ -23,7 +23,6 @@ import 'new_repository.dart';
 import 'agent_names.dart';
 import 'launch_prompt.dart';
 import 'identity.dart' show superTabMachineName;
-import 'instructions_model.dart';
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
@@ -84,11 +83,7 @@ class SuperTabLaunch {
             'newProject': newProject,
             // It leads a project already there: its and the Swarm's names
             // and visibility stay as they are.
-            if (coordinator) ...{
-              'coordinator': true,
-              'title': unled.name,
-              'coordinatorName': snapshot.coordinatorNameOf(unled.id),
-            },
+            if (coordinator) ...{'coordinator': true, 'title': unled.name},
             'visibility': 'public',
             if (!newProject) 'projectId': 'lead',
           }
@@ -96,20 +91,6 @@ class SuperTabLaunch {
     final launch = SuperTabLaunch._(app, tab.id, account, key, saved);
     final recovering =
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
-    // An agent joining a project with instructions names its role; an older
-    // Swarm (no coordinator name on the project) has no such field.
-    List<String>? roleSuggestions;
-    if (saved['lead'] != true && tab.superTabId != null) {
-      final project =
-          (snapshot ?? await app.superTabs.readSnapshot(tab.superTabId!))
-              .projectFor(conversationId);
-      if (project != null && project.hasInstructions) {
-        roleSuggestions = await launch.readRoleSuggestions(
-          tab.superTabId!,
-          project,
-        );
-      }
-    }
     // A project's Product Manager starts on one of the Swarm's machines.
     // Read from the open Swarm when there is one; each submit reads afresh.
     List<LeadMachine>? leadMachines;
@@ -187,11 +168,6 @@ class SuperTabLaunch {
             creationId: saved['creationId'] as String? ?? superTabOperationId(),
             initialTask: saved['initialMessage'] as String?,
             swarmRole: saved['lead'] == true ? 'lead' : 'dev',
-            swarmSkillMode: saved['skillMode'] as String? ?? 'orchestration',
-            roleSuggestions: roleSuggestions,
-            roleName: roleSuggestions == null
-                ? null
-                : saved['roleName'] as String?,
             actionLabel: saved['newProject'] == true
                 ? 'New Project'
                 : saved['lead'] == true && saved['coordinator'] != true
@@ -215,20 +191,6 @@ class SuperTabLaunch {
                   engine: engine,
                 );
               }
-              if (integration.roleSuggestions != null) {
-                final name = integration.roleName?.trim() ?? '';
-                if (name.length > 40) {
-                  throw const SuperTabFailure(
-                    'ROLE_INVALID',
-                    'A role name is at most 40 characters.',
-                  );
-                }
-                if (name.isEmpty) {
-                  saved.remove('roleName');
-                } else {
-                  saved['roleName'] = name;
-                }
-              }
               if (saved['projectPrepared'] != true &&
                   saved['creationRequest'] == null) {
                 saved['visibility'] = integration.projectVisibility ?? 'public';
@@ -241,8 +203,6 @@ class SuperTabLaunch {
                   ..projectId = saved['newProject'] == true
                       ? saved['projectId'] as String?
                       : null;
-                integration.swarmSkillMode =
-                    saved['skillMode'] as String? ?? 'orchestration';
                 integration.swarmRole = saved['lead'] == true ? 'lead' : 'dev';
                 return prompt;
               } on SuperTabFailure catch (failure) {
@@ -346,11 +306,8 @@ class SuperTabLaunch {
   bool get started =>
       saved['phase'] == 'starting' || saved['phase'] == 'joining';
 
-  /// The coordinator as the project calls it: never "Lead" on screen (Naming
-  /// System; River, #2458).
-  String get who => saved['lead'] == true
-      ? saved['coordinatorName'] as String? ?? kDefaultCoordinatorName
-      : 'harness';
+  /// What the start is called on screen: the Product Manager, never "Lead" (Naming System; River, #2458).
+  String get who => saved['lead'] == true ? kDefaultCoordinatorName : 'harness';
   String get machineName {
     final machine = saved['machineId'] as String?;
     if (machine == null) return 'the machine';
@@ -379,16 +336,14 @@ class SuperTabLaunch {
 
   /// The Swarm's machines, one row per computer, then the person's others,
   /// best first. A new project's Product Manager starts on any of them (Ken,
-  /// 10-29): a teammate's Mac runs it in its Harness Team account when that
-  /// takes it now, else itself, as its owner (backend leadStart.ts).
+  /// 10-29; backend leadStart.ts).
   List<LeadMachine> leadMachinesOf(SuperTabSnapshot snapshot, {DateTime? now}) {
     final at = (now ?? DateTime.now()).millisecondsSinceEpoch;
     // A machine reports readiness and resources only once it has them.
     Map<String, dynamic> part(Object? value) =>
         value is Map ? superTabMap(value) : const {};
     LeadMachine row(String id, Map<String, dynamic> pool) {
-      final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
-      final observation = part(reading['observation']);
+      final observation = part(pool['observation']);
       // As Add machine names it ("Studio", not "Studio.local").
       final name = superTabMachineName(pool['name'] as String? ?? id);
       final own = pool['contributorId'] == accountId;
@@ -396,40 +351,12 @@ class SuperTabLaunch {
       // Its host says it can start a Product Manager (backend leadStart.ts).
       final capable =
           (observation['capabilities'] as List?)?.contains('leadStart') == true;
-      // Another person's Mac runs one in its Harness Team account when that
-      // takes it now, else itself; a Team account listed as its own machine
-      // only in itself.
-      final teamReading =
-          !own &&
-          (reading['hostMachineId'] != null ||
-              observation['sessionKind'] == 'team');
-      final teamRefusal = !teamReading
-          ? null
-          : switch (reading['teamWork']) {
-              {'allowed': false, 'reason': final String reason} => reason,
-              _ when !capable =>
-                'Update Harness on $name to run a Product Manager there.',
-              _ => null,
-            };
       bool fresh(Map<String, dynamic> observation) =>
           switch (observation['receivedAt']) {
             final num received =>
               at - received < kSuperTabMachineOfflineAfter.inMilliseconds,
             _ => false,
           };
-      final team =
-          teamReading &&
-          teamRefusal == null &&
-          fresh(observation) &&
-          reading['paused'] != true;
-      final mac = part(pool['observation']);
-      // A Mac added as its person joined takes teammates' work only in its
-      // Team account (backend machines.ts teamAccountOnly).
-      final macTakes =
-          pool['teamAccountOnly'] != true &&
-          pool['hostMachineId'] == null &&
-          mac['sessionKind'] != 'team' &&
-          (mac['capabilities'] as List?)?.contains('leadStart') == true;
       // On a teammate's machine the server decides, by engine, where it runs
       // (backend leadStart.ts leadChoices), as the start itself does: Desktop
       // shows that rather than working it out (security reviews 1 and 2 of
@@ -454,17 +381,13 @@ class SuperTabLaunch {
       final shownHost = [for (final engine in kLeadEngines) ?decided[engine]]
           .firstOrNull;
       // Where it would run: the server's machine for its first engine that
-      // runs; else the Mac itself when its Team account cannot.
-      final host = server
-          ? (shownHost == null
-                ? pool
-                : snapshot.machines
-                          .where((m) => m['machineId'] == shownHost)
-                          .firstOrNull ??
-                      pool)
-          : teamReading && !team
-          ? pool
-          : reading;
+      // runs; else the machine itself.
+      final host = server && shownHost != null
+          ? snapshot.machines
+                    .where((m) => m['machineId'] == shownHost)
+                    .firstOrNull ??
+                pool
+          : pool;
       final hostReading = part(host['observation']);
       final online = fresh(hostReading);
       final running = hostReading['runningHarnessIds'];
@@ -511,8 +434,8 @@ class SuperTabLaunch {
         id: id,
         name: name,
         online: online,
-        // The server's count: it also holds pending starts and the Team
-        // account sharing a Mac. A backend without it: slots minus running.
+        // The server's count: it also holds pending starts. A backend without
+        // it: slots minus running.
         freeAgents: switch (host['availableSlots']) {
           final num slots => math.max(0, slots.toInt()),
           _ => math.max(
@@ -558,7 +481,6 @@ class SuperTabLaunch {
                   .where((person) => person.id == pool['contributorId'])
                   .firstOrNull,
         native: own && connected,
-        team: server ? shownHost != null && shownHost != id : team,
         engineRefusals: engineRefusals,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused
@@ -573,21 +495,15 @@ class SuperTabLaunch {
             ? null
             : host['paused'] == true
             ? 'Paused in this Swarm'
-            : team || macTakes
+            : capable
             ? null
-            : teamRefusal ??
-                  switch (pool['teamWork']) {
-                    {'allowed': false, 'reason': final String reason} => reason,
-                    _ =>
-                      'Update Harness on $name to run a Product Manager there.',
-                  },
+            : 'Update Harness on $name to run a Product Manager there.',
       );
     }
 
     final listed = [
       for (final pool in snapshot.machines)
-        if (pool['machineId'] case final String id
-            when snapshot.placeOf(id) == id && pool['removal'] == null)
+        if (pool['machineId'] case final String id when pool['removal'] == null)
           row(id, pool),
     ];
     return rankLeadMachines([
@@ -618,29 +534,6 @@ class SuperTabLaunch {
             ),
           ),
     ], null);
-  }
-
-  /// The project document's role headings, less the coordinator's own. A read
-  /// that fails leaves none: the field still takes any text.
-  Future<List<String>> readRoleSuggestions(
-    String tabId,
-    SuperTabProject project,
-  ) async {
-    try {
-      final answer = await app.superTabs.map(
-        'GET',
-        superTabInstructionsPath(tabId, project.id),
-      );
-      final text = answer['text'];
-      if (text is! String) return const [];
-      final own = {'pm', (project.coordinatorName ?? '').toLowerCase()};
-      return [
-        for (final name in superTabInstructionRoleNames(text))
-          if (!own.contains(name.toLowerCase())) name,
-      ];
-    } catch (_) {
-      return const [];
-    }
   }
 
   /// The tab's routing-policy read as it answers ([LeadModelList.of] reads its
@@ -1092,20 +985,11 @@ class SuperTabLaunch {
         'This project is no longer available. Close this form and create a new project.',
       );
     }
-    saved['skillMode'] =
-        snapshot.projectFor(conversationId)?.skillMode ?? 'orchestration';
-    // A role goes only to a Swarm that still has instructions: an older
-    // backend's strict agent.add refuses the key.
-    if (snapshot.projectFor(conversationId)?.hasInstructions != true) {
-      saved.remove('roleName');
-    }
     // The name the person gave it in the form, else a free one of the Swarm's names (Faye, Atlas, ...); the same name joins the
     // Swarm (anh Dee, 2026-11-09).
-    saved['agentName'] ??=
-        saved['roleName'] ??
-        freshAgentName([
-          for (final agent in snapshot.agents) agent.displayName ?? agent.name,
-        ]);
+    saved['agentName'] ??= freshAgentName([
+      for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+    ]);
     final prompt = superTabLaunchPrompt(
       name: saved['agentName'] as String?,
       task: task,
@@ -1215,9 +1099,6 @@ class SuperTabLaunch {
           saved['agentName'] as String? ??
           (saved['lead'] == true ? 'Lead' : superTabAddName(native)),
       'lead': saved['lead'],
-      // A journal from an older Desktop keeps the id it chose.
-      if (saved['roleId'] case final String roleId) 'roleId': roleId,
-      if (saved['roleName'] case final String roleName) 'roleName': roleName,
       if (saved['lead'] == true && project != null)
         'project': {
           'cwd': project.root ?? project.cwd,

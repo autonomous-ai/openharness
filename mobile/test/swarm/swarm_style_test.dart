@@ -53,49 +53,6 @@ void main() {
     });
   });
 
-  group('a count badge', () {
-    testWidgets('is a pill 22 points tall', (tester) async {
-      await show(tester, const UnconstrainedBox(child: SwarmBadge(3)));
-
-      expect(tester.getSize(find.byType(SwarmBadge)).height, 22);
-      final decoration = tester
-          .widget<Container>(
-            find.descendant(
-              of: find.byType(SwarmBadge),
-              matching: find.byType(Container),
-            ),
-          )
-          .decoration;
-      expect(decoration, isA<ShapeDecoration>());
-      expect((decoration! as ShapeDecoration).shape, const StadiumBorder());
-    });
-
-    testWidgets('takes dark ink on the warning fill, white on the accent', (
-      tester,
-    ) async {
-      await show(tester, const SwarmBadge(3, warn: true));
-      expect(
-        tester.widget<Text>(find.text('3')).style?.color,
-        const Color(0xFF1A1200),
-      );
-
-      await show(tester, const SwarmBadge(3));
-      expect(
-        tester.widget<Text>(find.text('3')).style?.color,
-        const Color(0xFFFFFFFF),
-      );
-    });
-
-    testWidgets('keeps the room of its figure: 8 points each side', (
-      tester,
-    ) async {
-      await show(tester, const UnconstrainedBox(child: SwarmBadge(1234)));
-
-      final text = tester.getSize(find.text('1234')).width;
-      expect(tester.getSize(find.byType(SwarmBadge)).width, text + 16);
-    });
-  });
-
   group('a button', () {
     Future<double> room(WidgetTester tester, SwarmButtonStyle style) async {
       await show(

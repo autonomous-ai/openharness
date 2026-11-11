@@ -12,7 +12,6 @@ import 'dialog_scope.dart';
 import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
-import 'personal_machines.dart';
 import 'personal_projects.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
@@ -99,15 +98,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     _nativePanes.clear();
     _readyRequest = null;
     for (final pane in panes) {
-      if (pane.inputContext == null && pane.watchOnly) continue;
-      pane.inputContext = null;
+      if (pane.watchOnly) continue;
       pane.watchOnly = true;
       final session = pane.session;
-      session?.stageInputContext(null, watchOnly: true);
+      session?.stageWatchOnly(true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (pane.inputContext == null && pane.watchOnly) {
-          unawaited(session?.setInputContext(null, watchOnly: true));
-        }
+        if (pane.watchOnly) unawaited(session?.setWatchOnly(true));
       });
     }
   }
@@ -235,7 +231,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             pane.machineId,
             pane.agentId!,
             swarmId: swarmId,
-            inputContext: pane.inputContext,
             watchOnly: pane.watchOnly,
             autoTile: true,
             focus: false,
@@ -490,7 +485,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   unawaited(PersonalProjects.of(app).sync(controller));
-                  unawaited(PersonalMachines.of(app).sync(controller));
                 }
               });
             }
@@ -520,12 +514,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final terminal = SuperPane(
               machineId: lead?.machineId ?? '',
               harnessId: lead?.harnessId ?? '',
-              title: lead == null
-                  ? kDefaultCoordinatorName
-                  : controller.snapshot!.coordinatorNameOf(
-                      controller.snapshot!.leadProjectForAgent(lead.id)?.id ??
-                          '',
-                    ),
+              title: kDefaultCoordinatorName,
               titles: {
                 for (final p in local)
                   if (app

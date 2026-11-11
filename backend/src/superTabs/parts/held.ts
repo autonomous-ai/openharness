@@ -30,10 +30,10 @@ function columnsOf(row: Record<string, unknown>): string {
 }
 const byKey = (rows: PartRow[]) => rows.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 /** The kinds held whole by key besides groups, and their collections. */
-export type HeldKind = 'member' | 'agent' | 'machine' | 'progress'
-const COLLECTION = { member: 'SwarmMember', agent: 'SwarmAgent', machine: 'SwarmMachine', progress: 'SwarmProgress' } as const
+export type HeldKind = 'member' | 'agent' | 'machine'
+const COLLECTION = { member: 'SwarmMember', agent: 'SwarmAgent', machine: 'SwarmMachine' } as const
 /** Each kind's `swarm cache` entry. */
-const ENTRY = { member: 'held-members', agent: 'held-agents', machine: 'held-machines', progress: 'held-progress', group: 'held-groups' } as const
+const ENTRY = { member: 'held-members', agent: 'held-agents', machine: 'held-machines', group: 'held-groups' } as const
 /** Each kind's columns, every one in its held index (parts/indexed.ts), so a listing reads no document: only a machine has a
  *  readAt, and none of them is ever dormant. */
 const COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1 }
@@ -103,7 +103,7 @@ export class HeldParts {
 export const HELD = new HeldParts()
 /** Commands' (parts/load.ts loadActive), apart from the reports': each read lets go of what it did not select, and a report
  *  selects only running work and Lead conversations, where a command selects every awake conversation and every live agent,
- *  machine, member and progress part (task #4368). */
+ *  machine and member part (task #4368). */
 export const COMMAND_HELD = new HeldParts()
 
 export class HeldRead {

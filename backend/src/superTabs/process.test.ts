@@ -4,7 +4,7 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { projectsOf } from './projects.js'
 import { readerView } from './read/views.js'
 import { split } from './parts/index.js'
-import { storedAssignment, storedStatus } from './storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from './storedWork.test-support.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -35,7 +35,7 @@ function fixture() {
   const add = (projectId: string) => run({ type: 'agent.add', conversationId: project(projectId).leadConversationId,
     machineId: 'machine', harnessId: 'pm', name: 'PM', configuration, lead: true }, peer).result.agentId as string
   const task = (projectId: string) => {
-    const id = run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Finish the work', checks: [] }, peer).result.conversationId as string
+    const id = storedTask(state, { projectId, title: 'Work', brief: 'Finish the work', requesterId: 'peer' })
     const worker = run({ type: 'agent.add', conversationId: id, machineId: 'machine', harnessId: `worker-${sequence}`, name: `Worker${sequence}`,
       configuration, lead: false }, peer).result.agentId as string
     storedAssignment(state, id, worker, 1000)

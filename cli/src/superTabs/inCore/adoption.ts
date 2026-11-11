@@ -32,8 +32,8 @@ export function createSwarmSkillAdoption(deps: {
     // The host's last confirmed roster is only a cheap candidate filter for the person's own sessions; the live backend
     // remains authoritative. One that cannot be read cannot clear a session as personal, so the backend is asked. A session
     // the Swarm started is always asked: the roster lapses after a week nobody confirms it and leaves out a member of only
-    // archived chats, and its "not a member" opened an old Buddy without its role (security review 2 of #2255). Every
-    // Buddy is one (superTabs/start.ts); a harness another agent opened names that agent, and the person's own is not one.
+    // archived chats, and its "not a member" opened an old Swarm session without its role (security review 2 of #2255). A
+    // harness another agent opened names that agent, and the person's own is not one.
     if (swarmStarted(session)) return true
     try { return deps.candidate(session.agentId) } catch { return true }
   }
@@ -46,7 +46,6 @@ export function createSwarmSkillAdoption(deps: {
       noRole.add(session.agentId)
       return { row: session, commit: () => {} }
     }
-    // With its project's mode, so the relaunch writes that text and the host owes it no reload.
     const swarmSkill = { ...grant, key: session.agentId }
     return { row: { ...session, swarmSkill }, commit: () => { deps.save(session.agentId, swarmSkill) } }
   }
@@ -55,7 +54,7 @@ export function createSwarmSkillAdoption(deps: {
     if (!needed(session)) return session
     const owns = deps.authority(session.agentId)
     const saved = structuredClone(session)
-    // A Swarm session whose role cannot be read is held, never resumed without it: an old Buddy came back without its guard
+    // A Swarm session whose role cannot be read is held, never resumed without it: an old one came back without its role
     // (security reviews of #2248). It goes on as soon as a read answers, so failing closed never means staying down.
     let grant: SwarmSkillGrant | null | undefined
     for (let delay = HOLD_FIRST_MS; ; delay = Math.min(delay * 2, HOLD_MAX_MS)) {

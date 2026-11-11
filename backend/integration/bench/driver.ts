@@ -15,6 +15,8 @@ export interface SwarmDriver {
   readonly name: string
   /** A new Swarm owned by [owner]; returns its id. */
   createSwarm(owner: AuthUser, operationId: string, name: string): Promise<Reply<{ id: string }>>
+  /** A task as Swarms before v4 stored one: no command opens one in v4 (storedWork.test-support.ts storeCreate). */
+  storeTask(tabId: string, owner: AuthUser, task: { title: string; brief: string; checks: Array<{ description: string; independent: boolean }> }): Promise<string>
   /** A command as a person, or as an agent when [asAgentId] is set (the agent's execution host signs in). */
   execute(tabId: string, user: AuthUser, operationId: string, command: Command, asAgentId?: string): Promise<Reply<CommandResult>>
   /** What setup needs to read back: group checks, the Lead, assignments, machine generations, in today's state shape. */

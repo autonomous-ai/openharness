@@ -214,7 +214,7 @@ describe('an agent\'s open deliveries', () => {
 
 describe('what changed in a set of Swarms since a cursor', () => {
   const OLD = new Date(NOW - 3_600_000), SINCE = new Date(NOW - 1_800_000), LATER = new Date(NOW - 60_000)
-  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart', 'swarmProgress'] as const
+  const SWARM_PARTS = ['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart'] as const
   let ids: string[]
   beforeAll(async () => {
     const maker = await signedIn('changer')
@@ -238,8 +238,8 @@ describe('what changed in a set of Swarms since a cursor', () => {
     expect(keys(ids[1]!)).toEqual([])
     expect(keys(ids[2]!)).toEqual([])
     expect(changed.get(ids[0]!)!.find(p => p.key === 'machine:read')!.readAt).toBe(LATER.getTime())
-    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.ns))
-    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(8)
+    const swarmReads = entries.filter(e => /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/.test(e.ns))
+    expect(swarmReads.length, JSON.stringify(plan(swarmReads))).toBe(7)
     for (const read of swarmReads) {
       expect(read.docsExamined, `${read.ns} ${JSON.stringify(plan([read]))}`).toBeLessThanOrEqual(read.nreturned!)
       expect(read.command?.hint, `${read.ns} names its index: ${JSON.stringify(plan([read]))}`).toBeTruthy()

@@ -35,8 +35,7 @@ List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
     : throw const FormatException('Invalid Swarm list.');
 
-/// What a project calls its coordinator when the backend names none (one from before project instructions), and
-/// what every new project starts with.
+/// What a project's coordinator is called (the Naming System: never "Lead" on screen).
 const kDefaultCoordinatorName = 'Product Manager';
 
 /// A role's compact badge: the name when it is 12 characters or fewer, else its first 11 and "…".
@@ -162,9 +161,6 @@ class SuperTabAgent {
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
-      alerting = List.unmodifiable(
-        (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
-      ),
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
@@ -189,10 +185,6 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
-
-  /// What its machine is alerting about now (backend terminal.ts): `prompt`
-  /// while it waits at a prompt in its terminal, gone once that is answered.
-  final List<String> alerting;
 
   /// A Product Manager's engine switch that is asked for and not yet
   /// done (backend `switchRequest`); null otherwise.
@@ -224,7 +216,7 @@ class SuperTabAgent {
   final String? role;
   final String? roleId;
 
-  /// The role the project's document gives it; null from a backend before project instructions.
+  /// The role the backend names it by; null when it names none.
   final String? roleName;
 
   final Map<String, dynamic> configuration;
@@ -314,21 +306,12 @@ class SuperTabConversation {
   final int reactionSeq;
 }
 
-/// The zone a project's day is read in when its digest names none (backend
-/// superTabs/localTime.ts `DEFAULT_TIME_ZONE`).
-const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
-
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
-      skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
-      coordinatorName = row['coordinatorName'] as String?,
-      instructionsRevision =
-          (row['instructionsRevision'] as num?)?.toInt() ?? 0,
-      notesRevision = (row['notesRevision'] as num?)?.toInt() ?? 0,
       githubRevision = (row['githubRevision'] as num?)?.toInt() ?? 0,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
@@ -341,10 +324,6 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
-      timeZone = switch (row['digest']) {
-        {'timeZone': final String zone} when zone.isNotEmpty => zone,
-        _ => superTabDefaultTimeZone,
-      },
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -359,24 +338,10 @@ class SuperTabProject {
   /// commands.ts `project.closeTab`).
   final bool archived;
 
-  /// The zone its day is read in, as the server reads it for the crew
-  /// dispatch and the morning digest: its digest's, else
-  /// [superTabDefaultTimeZone] (backend dispatch.ts `openTasks`).
-  final String timeZone;
-
-  /// Sent to the daemon unchanged as `swarmSkillMode` when an agent starts (an older CLI refuses other values).
-  final String skillMode;
-
-  /// What this project calls its coordinator; null from a backend before project instructions.
-  final String? coordinatorName;
-  final int instructionsRevision, notesRevision;
-
   /// Moves when its repository's GitHub access may have changed (someone allowed it, or the app was installed): the
   /// app reads that access again at once rather than keeping it 5 minutes. 0 from a backend before it (task #2316).
   final int githubRevision;
 
-  /// Whether the backend keeps an instruction document for it.
-  bool get hasInstructions => coordinatorName != null;
   final bool isPrivate;
   final List<String> memberIds;
 
@@ -535,7 +500,6 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
-      teamAccounts = row['teamAccounts'] != false,
       removedMachines = [
         for (final id in row['removedMachines'] as List? ?? const [])
           if (id is String) id,
@@ -621,12 +585,6 @@ class SuperTabSnapshot {
   /// The Local models add-on, once the owner has turned it on; null before.
   final SuperTabLocalModels? localModels;
 
-  /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
-  /// before tags (spec 2026-10-24-lead-mentions.md).
-  /// Whether this Swarm's server uses Harness Team accounts: false only where
-  /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
-  final bool teamAccounts;
-
   /// The reader's own machines they took out of this Swarm: an automatic add
   /// leaves them out (backend model.ts removedMachines). Empty from an older
   /// backend.
@@ -697,13 +655,8 @@ class SuperTabSnapshot {
             lead.machineOwnerId == accountId);
   }
 
-  /// What [projectId] calls its coordinator: its `coordinatorName`, or [kDefaultCoordinatorName] from a backend
-  /// that names none.
-  String coordinatorNameOf(String projectId) =>
-      projectById(projectId)?.coordinatorName ?? kDefaultCoordinatorName;
-
-  /// The role [agentId] goes by, and its badge: the role the project's document gives it, or, from a backend before
-  /// project instructions, its kind's (Product Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent.
+  /// The role [agentId] goes by, and its badge: the role the backend names (`roleName`), else its kind's (Product
+  /// Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent.
   ({String name, String badge})? roleOf(String agentId) {
     final agent = this.agent(agentId);
     if (agent == null) return null;
@@ -717,7 +670,7 @@ class SuperTabSnapshot {
   String? leadProtectionReason(String agentId) {
     final project = leadProjectForAgent(agentId);
     if (project == null) return null;
-    return '${agentName(agentId)} is the ${coordinatorNameOf(project.id)} of project ${project.name}. Delete the project first.';
+    return '${agentName(agentId)} is the $kDefaultCoordinatorName of project ${project.name}. Delete the project first.';
   }
 
   /// The person [personId] by the name the Swarm shows: their username; null for someone not in it.
@@ -730,63 +683,6 @@ class SuperTabSnapshot {
   /// [machineId]'s contribution to this Swarm, if it has one.
   Map<String, dynamic>? pool(String machineId) =>
       machines.where((m) => m['machineId'] == machineId).firstOrNull;
-
-  /// The Mac a Harness Team account's pool is part of: the machine its pool names as `hostMachineId` (stamped by the
-  /// backend), while that Mac is in this Swarm too, from the same person (docs/plans/2026-10-24-swarm-team-account.md).
-  /// Null for every other pool, a machine used only for agents included.
-  String? _macOf(Map<String, dynamic>? team) {
-    final host = team?['hostMachineId'];
-    if (host is! String || host == team!['machineId']) return null;
-    final mac = pool(host);
-    return mac != null &&
-            mac['hostMachineId'] == null &&
-            mac['contributorId'] == team['contributorId']
-        ? host
-        : null;
-  }
-
-  /// Every Harness Team account's pool in [machineId]'s row: one, or more once the account was set up again and its old
-  /// pool is still listed (backend superTabs/machines.ts `teamPoolsOf`). The backend changes them with the Mac.
-  List<Map<String, dynamic>> teamPoolsOf(String machineId) => [
-    for (final m in machines)
-      if (_macOf(m) == machineId) m,
-  ];
-
-  /// The one of them that runs teammates' work on the Mac: not being removed, and the last to report (backend
-  /// superTabs/machines.ts `teamPoolOf`). Null when there is none.
-  Map<String, dynamic>? teamPoolOf(String machineId) {
-    num reported(Map<String, dynamic> m) => switch (m['observation']) {
-      {'receivedAt': final num at} => at,
-      _ => -1,
-    };
-    Map<String, dynamic>? best;
-    for (final m in teamPoolsOf(machineId)) {
-      if (m['removal'] != null) continue;
-      // Removed (`harness team remove` deletes its machine): the server reads a live account never so, and the Mac is a
-      // Mac without one again, which its owner can set up from its row (local Team account run, 2026-10-28).
-      if (m['teamWork'] case {'code': 'TEAM_ACCOUNT_REQUIRED'}) continue;
-      if (best == null || reported(m) >= reported(best)) best = m;
-    }
-    return best;
-  }
-
-  /// The pool whose reading [accountId] sees for the machine row [machineId]: the Mac's Harness Team account for
-  /// everyone but the Mac's own contributor, since it runs their agents, also while the owner is away from the Mac; the
-  /// machine's own pool otherwise. The Machines view reads a machine by this one rule.
-  Map<String, dynamic>? readingPoolOf(String machineId, String? accountId) {
-    final own = pool(machineId), team = teamPoolOf(machineId);
-    final contributor =
-        own?['contributorId'] as String? ??
-        agents
-            .where((a) => placeOf(a.machineId) == machineId)
-            .firstOrNull
-            ?.contributorId;
-    return team != null && contributor != accountId ? team : own;
-  }
-
-  /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
-  /// while that Mac is in the Swarm too; [machineId] itself otherwise.
-  String placeOf(String machineId) => _macOf(pool(machineId)) ?? machineId;
 
   // Resolve the person shown in chat from the same identity as the roster.
   // Recorded labels remain the fallback for agents no longer in the Swarm.
@@ -1209,7 +1105,6 @@ class SuperTabDelivery {
 class SuperTabThread {
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      ask = row['ask'] as String?,
       replies = (row['replies'] as num).toInt(),
       lastSequence = (row['lastSequence'] as num).toInt(),
       lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
@@ -1220,17 +1115,8 @@ class SuperTabThread {
         (row['people'] as List? ?? const []).whereType<String>(),
       );
   final String id;
-
-  /// Where the ask at its root stands (backend threads.ts).
-  final String? ask;
   final int replies, lastSequence;
   final DateTime? lastAt;
-
-  /// What its root's row says after the time: a proposal nobody has answered
-  /// yet; null for any other message. A task's state is no tag: its
-  /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
-  /// so an older server's On it and Shipped draw nothing.
-  String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.
@@ -1240,28 +1126,11 @@ class SuperTabThread {
   final List<String> people;
 }
 
-/// The source kinds of a task's root in the project chat.
-const _taskRootKinds = {'task-line', 'buddy-proposal'};
-
-/// What a task's root posted before #2867 reads ahead of its title. Stored rows
-/// keep it, so this stays for as long as rows from before 2026-11-04 are kept.
-const _oldTaskRootPrefix = "Let's build: ";
-
-String _messageText(Map<String, dynamic> row) {
-  final text = _text(row, 'text');
-  return _taskRootKinds.contains(
-            superTabMap(row['source'] ?? const {})['kind'],
-          ) &&
-          text.startsWith(_oldTaskRootPrefix)
-      ? text.substring(_oldTaskRootPrefix.length)
-      : text;
-}
-
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
-      text = _messageText(row),
+      text = _text(row, 'text'),
       replyTo = row['replyTo'] as String?,
       thread = row['thread'] as String?,
       alsoInChat = row['alsoInChat'] == true,
@@ -1341,38 +1210,13 @@ class SuperTabMessage {
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
 
-  /// A task's root the server posted in its person's name (plain chat, #2294):
-  /// theirs to read, not their own writing, so it reads nothing before it and
-  /// is unread for them as anyone else's message is.
-  bool get postedForAuthor => _taskRootKinds.contains(source['kind']);
-
-  /// The agent a "waiting at a prompt" note is about; null for any other row.
-  String? get promptAlertAgentId =>
-      source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
-      ? source['agentId'] as String?
-      : null;
-
-  /// The Product Manager a usage-limit note is about; null for any other row.
-  String? get leadLimitAgentId =>
-      source['kind'] == 'terminal-alert' &&
-          source['alert'] == 'limit' &&
-          source['lead'] == true
-      ? source['agentId'] as String?
-      : null;
-
-  /// A note the backend writes about a terminal: a Lead's typing, or an alert.
-  bool get terminalEvent =>
+  /// A note the backend writes when an agent types into another's terminal, or when a daemon sees an agent wait at a
+  /// prompt or hit a usage limit: v3's Lead terminal notes, no chat row and nothing unread in Swarm v4 (anh Dee,
+  /// 2026-11-10). A person hears "Waiting on you" from their own computer, and an agent's details say until when it is
+  /// limited.
+  bool get leadTerminalNote =>
       source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
 
-  /// A line the backend posted for an instructions save: no chat row and
-  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
-  /// #3165). The backend posts none since #3132; the History keeps every
-  /// revision.
-  bool get instructionsSave => source['kind'] == 'instructions';
-
-  /// A line the chat draws as its own row, with no sender's header (view.dart):
-  /// a message after it has no header to join (Diego, #2547).
-  bool get drawsOwnRow => terminalEvent;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

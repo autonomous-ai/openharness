@@ -311,11 +311,7 @@ class AgentBrowser {
   /// During `failed`: one of [errors].
   final String? error;
 
-  static const steps = {
-    'installing',
-    'starting_podman',
-    'building',
-  };
+  static const steps = {'installing', 'starting_podman', 'building'};
   static const errors = {
     'needs_setup',
     'podman_install_failed',
@@ -506,6 +502,16 @@ class Agent {
   /// [modelName] as the engine names it (`claude-opus-5-5`), for a launch.
   final String? modelId;
 
+  /// Where the engine's own tools work when that is not the pane's folder (OpenClaw's workspace),
+  /// so nobody reads the folder as the place its files change. Null from an engine that works in
+  /// the pane's folder and from an older daemon.
+  final String? workspace;
+
+  /// What stops this agent that only the person can fix, in the daemon's words (`namedState`:
+  /// `OpenClaw Gateway is not running. Start it with openclaw gateway.`). Null when nothing does,
+  /// and from an older daemon.
+  final String? namedState;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -536,8 +542,7 @@ class Agent {
   final String? startedBy;
 
   /// Started by the Swarm: by an agent, from no harness on this machine, as
-  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`). Every
-  /// Buddy is one.
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`).
   bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
@@ -643,7 +648,7 @@ class Agent {
   /// agent that runs on a computer (docs/design/2026-10-11-cloud-agents.md).
   final AgentCloud? cloud;
 
-  /// Extra launch flags saved on the machine for this agent (a Buddy's `--chrome`), as words.
+  /// Extra launch flags saved on the machine for this agent (`--chrome`, say), as words.
   /// Empty from an older daemon or an agent with none.
   final List<String> launchArgs;
 
@@ -663,6 +668,8 @@ class Agent {
     this.modelName,
     this.modelEffort,
     this.modelId,
+    this.workspace,
+    this.namedState,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
@@ -837,6 +844,8 @@ class Agent {
       modelName: model?.name,
       modelEffort: model?.effort,
       modelId: model?.id,
+      workspace: _safeDetail(j['workspace']),
+      namedState: _safeDetail(j['namedState']),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
@@ -929,6 +938,8 @@ class Agent {
     modelName: modelName,
     modelEffort: modelEffort,
     modelId: modelId,
+    workspace: workspace,
+    namedState: namedState,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,

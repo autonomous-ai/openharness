@@ -8,14 +8,13 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { planDatabase } from './plans.test-support.js'
@@ -45,7 +44,7 @@ afterAll(async () => {
 })
 
 /** The Swarm part collections' reads MongoDB served while `run` ran, by collection. */
-const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
+const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/, run)
 
 /** A Swarm in parts: requests of peer's shipped this week and two weeks ago (dormant since), a third shipped last week and
  *  still active, a worker waiting on the owner, and three tags of the owner's, one a reply in a thread. */
@@ -67,9 +66,7 @@ async function scene() {
     Object.assign(state.conversations.find(c => c.id === old)!, { dormant: true, lastActivityAt: new Date(WEEK - WEEK_MS - DAY).toISOString() })
   })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 50 })
-  const report = await migrateSwarm(db, tabId, { now: () => NOW - 60_000 })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 50 }, NOW - 60_000)
   return { tabId, lead, worker, fresh, old, lastWeek, waiting }
 }
 

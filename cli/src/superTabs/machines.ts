@@ -25,7 +25,6 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
 import { profileId } from '../lib/claudeProfiles.js'
-import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -166,24 +165,17 @@ const readingsMissing = (error: unknown) => error instanceof SuperTabHostError &
 /** One Swarm's reading of this pass, to send. */
 interface Reading { tab: string; observation: Record<string, unknown>; localModels: LocalModelReading[] | null; signature: string }
 
-/** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
- *  before them never launches one as a worker. */
-const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts), ...list(row.regularStarts)]
-/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
- *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
- *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
-// windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
-// Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
+/** A host's starts: its workers', and its Product Managers' and Regular agents', which the backend lists apart so that a host
+ *  from before them never launches one as a worker. */
+const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.leadStarts), ...list(row.regularStarts)]
+/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, which the
+ *  backend offers only on a host that says so. */
 // `regularAgent`: it launches a Regular agent's start, sent apart as `regularStarts` (backend agent.new, task #4116).
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent']
+const CAPABILITIES = ['leadStart', 'regularAgent']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
-/** What this host does for a Buddy's model switch (task #2354, superTabs/buddyModel.ts): the backend refuses a switch to a host
- *  that does not say so. */
-CAPABILITIES.push('buddyModel')
-// Buddy engine switches use the same owner-checked handoff and recovery as a PM's.
-CAPABILITIES.push('buddyEngine')
+
 /** This host sends its PM's turn with the PM's delivery list read (host.ts, task #3545): only then does the backend keep people's
  *  messages and crew needs to that PM for its inbox, which goes when its turn ends. */
 CAPABILITIES.push('turnInbox')
@@ -262,7 +254,6 @@ export class ContributedMachines {
   private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
-  private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
   private closedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
@@ -428,8 +419,8 @@ export class ContributedMachines {
     this.log(`Could not send this machine's reading to Swarm ${tabId}: ${reason}`)
   }
   /** An engine was just signed in here (claudeSignIn.ts): read the engines again at the next pass, and let it run now, not
-   *  [READINESS_MS] on. The Buddy that phone starts next is refused while the reading still says signed out (backend
-   *  engineHealth.ts engineUnusable; the Dell, 2026-11-05). */
+   *  [READINESS_MS] on. A start is refused while the reading still says signed out (backend engineHealth.ts engineUnusable;
+   *  the Dell, 2026-11-05). */
   engineSignedIn(): void {
     this.engineRead = null
     this.next = 0
@@ -520,18 +511,7 @@ export class ContributedMachines {
       // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
       const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
       const due: Reading[] = []
-      // One activity batch for this machine's Buddies, shared across its Swarms and only on a fresh report (#3824).
-      let buddyActivity: Promise<Record<string, 'working' | 'idle' | 'unknown'>> | undefined
-      const readBuddyActivity = async (): Promise<Record<string, 'working' | 'idle' | 'unknown'>> => {
-        const ids = [...new Set(pools.filter(row => row.buddySleepWanted === true).flatMap(row =>
-          Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : []))]
-          .filter(id => this.core.agents.byAgent(id)?.swarmSkill?.role === 'buddy').slice(0, 1000)
-        // byAgent is the live registry; each pool already checks stopped sessions before it builds its running list.
-        // The core accepts 64 activity IDs per request (core/experimentQueries.ts); more must not remain awake forever.
-        const states: Record<string, 'working' | 'idle' | 'unknown'> = {}
-        for (let offset = 0; offset < ids.length; offset += 64) Object.assign(states, await this.core.agents.activity(ids.slice(offset, offset + 64)))
-        return states
-      }
+
       // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
       const cleaned = began >= this.closedRefusedUntil ? cleanupClosed(this.core.dataDir, began) : new Set<string>()
       for (const row of pools) {
@@ -569,7 +549,6 @@ export class ContributedMachines {
         })])].slice(0, 20)
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), [...closed].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
-          row.buddySleepWanted === true,
           typeof row.localGrid === 'string' ? modelsStamp : null])
         const last = this.published.get(String(row.tabId))
         // A model still starting is read again every pass until the grid lists it, so the panel shows it live at once.
@@ -629,7 +608,6 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
-        const tokens = began >= this.tokensRefusedUntil ? await this.tokensOf(running) : {}
         const allowances = engines.map(engine => this.quotaFor(readings, engine))
         const quotaReasons = began >= this.quotaReasonsRefusedUntil
           ? Object.fromEntries(allowances.flatMap(q => 'reason' in q && q.reason ? [[q.engine, q.reason]] : [])) : {}
@@ -637,14 +615,10 @@ export class ContributedMachines {
         // every reading with it.
         // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
         const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? this.profiles(engines, allowances) : []
-        const idleBuddies: Record<string, string> | null = row.buddySleepWanted === true
-          ? await (buddyActivity ??= readBuddyActivity().catch(error => {
-            this.log(`Could not read Buddy activity: ${error instanceof Error ? error.name : typeof error}`)
-            return {}
-          })) : null
-        const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
+
+        const observation = { generation: pool.generation, tools: reportedTools,
           ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
-          ...(idleBuddies ? { idleBuddyHarnessIds: running.filter(id => idleBuddies[id] === 'idle').slice(0, 1000) } : {}),
+
           ...(profiles.length ? { profiles } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
@@ -727,11 +701,7 @@ export class ContributedMachines {
                   continue
                 }
               }
-              // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
-              // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
-              const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn },
-                scoped, where, this.deps.open)
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id }, scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
@@ -885,9 +855,9 @@ export class ContributedMachines {
     return lost
   }
 
-  /** What [beat] sends again for a Swarm: the reading the backend took, without folder or Buddy idle proof; an unchanged heartbeat cannot vouch for either. */
+  /** What [beat] sends again for a Swarm: the reading the backend took, without folder proof; an unchanged heartbeat cannot vouch for it. */
   private taken(tab: string, body: Record<string, unknown>) {
-    const { harnessUncommitted: _fresh, idleBuddyHarnessIds: _idle, ...kept } = body
+    const { harnessUncommitted: _fresh, ...kept } = body
     this.lastSent.set(tab, { path: `/api/super-tabs/${tab}/machines/${this.machineId}`, body: kept, at: this.deps.now() })
   }
 
@@ -899,13 +869,11 @@ export class ContributedMachines {
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
-    const { idleBuddyHarnessIds: _idle, ...withoutIdle } = observation
-    const { closedHarnessIds: _closed, ...unclosed } = withoutIdle
+    const { closedHarnessIds: _closed, ...unclosed } = observation
     const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
     const { profiles: _profiles, ...unprofiled } = unrefused
     const { quotaReasons: _reasons, ...unreasoned } = unprofiled
-    const { harnessTokens: _tokens, ...untokened } = unreasoned
-    const { preparingStartIds: _preparing, ...unprepared } = untokened
+    const { preparingStartIds: _preparing, ...unprepared } = unreasoned
     const { harnessUncommitted: _uncommitted, ...known } = unprepared
     const { readiness: _readiness, ...ready } = known
     const { harnessProgress: _progress, ...withoutProgress } = ready
@@ -913,7 +881,7 @@ export class ContributedMachines {
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
       ? [{ ...withoutProgress, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('idleBuddyHarnessIds' in observation ? [observation] : []), ...('closedHarnessIds' in withoutIdle ? [withoutIdle] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('preparingStartIds' in unreasoned ? [unreasoned] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
       ...listedOnly,
@@ -923,7 +891,6 @@ export class ContributedMachines {
       else if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('profiles' in attempt) this.profilesRefusedUntil = began + FIELD_REFUSED_MS
       else if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
-      else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
       else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
       else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
@@ -1050,20 +1017,6 @@ export class ContributedMachines {
     } finally { launch.checking = false }
   }
 
-  /** Each running session's token counts by model, from the daemon's last usage reading (never a transcript read): the
-   *  Swarm prices each attempt by them (backend superTabs/costs). Counts only; the reading's folders and pull requests stay
-   *  here. A session with none read yet is left out. */
-  private async tokensOf(running: readonly string[]): Promise<Record<string, Record<string, ModelTokens>>> {
-    const counted: Record<string, Record<string, ModelTokens>> = {}
-    for (const id of running) {
-      const session = this.core.agents.byAgent(id)
-      const target = session && usageTarget(session)
-      if (!target || !validUsageTarget(target)) continue
-      const models = (await this.core.usage?.(target).catch(() => null))?.models
-      if (models && Object.keys(models).length && validModelTokens(models)) counted[id] = models
-    }
-    return counted
-  }
   /** Whether each running session's folder has uncommitted changes (git status), as last read, for the sessions git could
    *  read: the backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts).
    *  The folders due are read beside the pass, never holding the reading up; what they say goes with a later one. A folder

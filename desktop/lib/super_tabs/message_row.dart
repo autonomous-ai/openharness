@@ -243,8 +243,7 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Whether [current] joins [previous]'s header: the same sender, within five
   /// minutes on the same day. In the chat, a thread reply shown there stands
   /// on its own with its Replied in thread line; [inThread], replies group. A
-  /// line that draws its own row has no header to share, on either side, and
-  /// a [tagged] row's header is where its tag shows.
+  /// [tagged] row's header is where its tag shows.
   static bool groupsWith(
     SuperTabMessage current,
     SuperTabMessage? previous, {
@@ -252,8 +251,6 @@ class SuperTabMessageRow extends StatefulWidget {
     bool Function(SuperTabMessage) tagged = _untagged,
   }) {
     if (previous == null ||
-        current.drawsOwnRow ||
-        previous.drawsOwnRow ||
         tagged(current) ||
         tagged(previous) ||
         // An older reply keeps its quote under its own header.
@@ -515,8 +512,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     return InkWell(onTap: widget.onOpenAgent, child: name);
   }
 
-  /// The reader's own message, a task line or proposal sent in their name
-  /// too: drawn as their bubble on the right.
+  /// The reader's own message: drawn as their bubble on the right.
   bool get _own {
     final message = widget.message;
     return widget.readerId.isNotEmpty &&
@@ -715,22 +711,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             padding: grid
                                                 .AppDesktop
                                                 .bubbleNamePadding,
-                                            child: Wrap(
-                                              spacing: 8,
-                                              crossAxisAlignment:
-                                                  WrapCrossAlignment.center,
-                                              children: [
-                                                _name(nameStyle, finger),
-                                                if (widget.thread?.askTag
-                                                    case final tag?)
-                                                  Text(
-                                                    tag,
-                                                    style: SwarmType.time(
-                                                      context,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
+                                            child: _name(nameStyle, finger),
                                           ),
                                         if (message.threadReply &&
                                             widget.onOpenThread != null)

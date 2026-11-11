@@ -389,7 +389,6 @@ void main() {
       expect(find.byType(SharedHarnessPanel), findsOneWidget);
       final pane = f.app.panes.single;
       expect(pane.sharedHarness?.id, 'share-river');
-      expect(pane.inputContext, isNull);
       // Read-only: no input grant was asked for on another account's computer.
       expect(
         f.connection.calls.where(

@@ -8,10 +8,3 @@ String? superTabLeadProtectionReason(
 ) {
   return app.superTabs.leadProtectionReasonForHarness(machineId, harnessId);
 }
-
-/// The coordinator's name for the agent [superTabLeadProtectionReason] protects.
-String? superTabLeadCoordinatorName(
-  AppNotifier app,
-  String machineId,
-  String harnessId,
-) => app.superTabs.leadCoordinatorForHarness(machineId, harnessId);

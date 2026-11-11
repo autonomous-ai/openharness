@@ -3461,16 +3461,15 @@ describe('agent_retarget clearGrid', () => {
     expect(seen).toHaveLength(0)
   })
 
-  // A fresh session is a grid's or an API's: the way home reopens the conversation a fresh move left.
-  it('refuses fresh with clearGrid', async () => {
-    const { seen, reply } = await retarget({ requestId: 'r', agentId: 'a1', clearGrid: true, fresh: true })
-    expect(reply?.payload?.error).toBe('INVALID_GRID')
-    expect(seen).toHaveLength(0)
+  // A fresh move served only the v3 Buddy's model switch (#3901): an older caller's `fresh` is taken and goes nowhere.
+  it('moves a request that still says fresh home as any other', async () => {
+    const { seen } = await retarget({ requestId: 'r', agentId: 'a1', clearGrid: true, fresh: true })
+    expect(seen).toEqual([{ agentId: 'a1', grid: null }])
   })
 
-  it('passes fresh through with a grid', async () => {
+  it('moves a request that still says fresh onto a grid as any other', async () => {
     const { seen } = await retarget({ requestId: 'r', agentId: 'a1', grid: WIRE_GRID, fresh: true })
-    expect(seen).toEqual([expect.objectContaining({ agentId: 'a1', grid: expect.objectContaining({ networkId: 'grid-abc' }), fresh: true })])
+    expect(seen).toEqual([{ agentId: 'a1', grid: expect.objectContaining({ networkId: 'grid-abc' }) }])
   })
 })
 
@@ -3726,12 +3725,12 @@ describe('a move onto a grid model asks models where it goes', () => {
     await d.done()
   })
 
-  it('a fresh move onto a grid model or an API model says so to the move', async () => {
+  it('moves onto a grid model or an API model with no fresh conversation, whatever the request says', async () => {
     const d = daemon(vi.fn(async () => ({ target: TARGET })), vi.fn(async () => ({ target: API, apiBase: API.baseUrl })))
     expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa', fresh: true })).toMatchObject({ retargeted: true })
-    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: TARGET, fresh: true })
+    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: TARGET })
     expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: 'vendor/model-a', fresh: true })).toMatchObject({ retargeted: true })
-    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: API, fresh: true })
+    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: API })
     await d.done()
   })
 
@@ -3825,6 +3824,16 @@ describe('the models lists pushed to the windows', () => {
     socket.models = () => ({ ...MODELS_OFF, annotation: () => ({ state: 'asleep' as const }) })
     expect((await socket.toProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
     expect((await socket.toStoppedProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    await socket.stop()
+  })
+
+  // `agents_list`, the launch replies and the updates build frames here; only pushed frames carried it (E2E 2026-11-10).
+  it('carries the engine\'s own workspace in every frame it builds', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-ws', sessionId: 'agent:main:plain', engine: 'openclaw', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).workspace).toBeUndefined()
+    socket.workspaceProvider = (s) => (s.sessionId === 'agent:main:plain' ? '/root/.openclaw/workspace' : null)
+    expect((await socket.toProject(agent)).workspace).toBe('/root/.openclaw/workspace')
     await socket.stop()
   })
 
@@ -4574,9 +4583,9 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     socket.registerLocalClient('local:app', { sendFrame: () => true, sendBinary: () => true })
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'local:app', 'local')
     // With what became of it, for its measurement.
-    expect(onMessage).toHaveBeenCalledWith('a1', 'hi', undefined, expect.any(Function))
+    expect(onMessage).toHaveBeenCalledWith('a1', 'hi', expect.any(Function))
     await dispatch({ type: 'message', payload: { content: 'task in A', agentId: 'a1', tabId: 'swarm-a' } }, 'local:app', 'local')
-    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A', undefined, expect.any(Function))
+    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A', expect.any(Function))
   })
 })
 

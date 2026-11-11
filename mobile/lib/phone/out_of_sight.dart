@@ -24,11 +24,10 @@ class OutOfSight extends InheritedWidget {
 
 /// [child] in sight, or kept built and out of sight while [hidden]: it is laid out and painted not at
 /// all ([Offstage]), its animations stop ([TickerMode]), it takes no focus, and what listens under
-/// it stops ([OutOfSight]). Swarm Home and Harness at the root (`SwarmHomeRoot`), and Swarm's tabs
-/// (`SwarmTabsPage`), each kept beside the other.
+/// it stops ([OutOfSight]). Swarm Home and Harness at the root (`SwarmHomeRoot`), each kept beside
+/// the other.
 ///
-/// Out of sight as well while what holds it is, though not [hidden] itself: the tab open, while
-/// Harness covers the tabs.
+/// Out of sight as well while what holds it is, though not [hidden] itself.
 class KeptOutOfSight extends StatelessWidget {
   const KeptOutOfSight({super.key, required this.hidden, required this.child});
 

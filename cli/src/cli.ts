@@ -77,6 +77,7 @@ import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
+import { nodeRow, readNodeStatus, type NodeStatus } from './lib/nodeStatus.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { ownProcessGroup } from './lib/windows/noWindow.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
@@ -1482,7 +1483,7 @@ async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
 async function runningDaemonStatus(): Promise<{
   version: string; sessions: number; machineId: string | null; connected: boolean
   backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean | null
-  dataDir: string | null; authDir: string | null
+  dataDir: string | null; authDir: string | null; node: NodeStatus | null
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
@@ -1504,6 +1505,7 @@ async function runningDaemonStatus(): Promise<{
       signedIn: typeof status?.signedIn === 'boolean' ? status.signedIn : null,
       dataDir: typeof status?.dataDir === 'string' ? status.dataDir : null,
       authDir: typeof status?.authDir === 'string' ? status.authDir : null,
+      node: readNodeStatus(body),
     }
   } catch {
     return null
@@ -1520,6 +1522,8 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  /** The daemon's Node, as it reports it; `status` shows it, and an older daemon sends none. */
+  node?: NodeStatus | null
   /** Who keeps the daemon running, when launchd or systemd does (`harness service install`). */
   supervisor?: string
   connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
@@ -1537,6 +1541,7 @@ function printInfoBlock(opts: {
   if (machineName) console.log(row('machine', machineName))
   if (opts.device) console.log(row('device', opts.device))
   console.log(row('version', `v${opts.version}`))
+  if (opts.node) console.log(row('node', nodeRow(opts.node)))
   console.log(row('backend', opts.connection.signedIn ? opts.connection.backendUrl ?? 'unknown · daemon not answering' : 'not signed in · harness login'))
   console.log(row('account', opts.connection.autonomousEnv ?? 'unknown · older daemon'))
   if (opts.connection.dataDir) console.log(row('state', tildify(opts.connection.dataDir)))
@@ -2686,6 +2691,7 @@ async function status(): Promise<void> {
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
     version: daemonStatus?.version ?? VERSION,
+    node: daemonStatus?.node,
     // Read from disk, not the daemon: it answers the same with the daemon stopped.
     // Signed out, devlog.json is the last account's copy: claiming membership from it would be wrong.
     // It is left on disk at logout on purpose: clearing it would drop the freeze and the rollback
@@ -2794,19 +2800,12 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
 /** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
 const swarmCommands = () => import('./superTabs/command.js')
 
-/** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
- *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
-function unlessBuddy(run: () => Promise<number>): Promise<number> {
-  return swarmCommands().then(({ buddyRefusal }) => buddyRefusal())
-    .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
-}
-
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
     break
   case 'send':
-    unlessBuddy(() => sendCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   // A pane's BROWSER script asking whether a phone takes the page (agentClient/openUrl.ts). Not for people.
   case 'open-url':
@@ -2856,7 +2855,7 @@ switch (cmd) {
     resumeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'tell':
-    unlessBuddy(() => tellCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
+    tellCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2865,7 +2864,7 @@ switch (cmd) {
     watchCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'close':
-    unlessBuddy(() => closeCommand(rest, { machines: usableMachines })).then(code => { process.exitCode = code }).catch(onError)
+    closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2874,10 +2873,6 @@ switch (cmd) {
   // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
   case 'super-tab':
     swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
-  case 'buddy-read':
-    // A Buddy's read-only recipes (lib/buddyRecipes.ts), which its guard lets it run once its person approved them.
-    import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
@@ -2989,7 +2984,7 @@ switch (cmd) {
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.
-    unlessBuddy(() => newCommand({
+    newCommand({
       argv: rest,
       cwd: process.cwd(),
       home: homedir(),
@@ -3001,7 +2996,7 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
-    })).then((code) => { process.exitCode = code }).catch(onError)
+    }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)

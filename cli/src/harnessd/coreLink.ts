@@ -4,31 +4,8 @@
  * Inert unless a harnessd master started this process: a core run on its own (`harness __run`, the
  * test harness) behaves exactly as before.
  */
-import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { HARNESSD_PROTOCOL, isMasterMessage, type CoreMessage } from './protocol.js'
 import type { SupervisorStatus } from './supervisor.js'
-
-/** How much the event loop was held since the last beat: the longest pause, in ms. */
-export interface LoopDelay {
-  /** The longest the loop was held since the last call, and start counting again. */
-  take(): number
-  stop(): void
-}
-
-/** The event-loop delay monitor this process runs while it beats. */
-export function processLoopDelay(): LoopDelay {
-  const histogram = monitorEventLoopDelay({ resolution: 20 })
-  histogram.enable()
-  return {
-    take: () => {
-      // Nanoseconds; 0 before the first sample.
-      const longest = Math.round(histogram.max / 1e6)
-      histogram.reset()
-      return longest
-    },
-    stop: () => histogram.disable(),
-  }
-}
 
 /** How often a core tells its master it is alive. The master's patience is several of these. */
 export const HEARTBEAT_INTERVAL_MS = 5_000
@@ -102,11 +79,9 @@ export function connectToMaster(
   channel: MasterChannel = processChannel,
   env: NodeJS.ProcessEnv = process.env,
   intervalMs = heartbeatInterval(env),
-  loopDelay: () => LoopDelay = processLoopDelay,
 ): CoreLink {
   const supervised = env.HARNESSD_SUPERVISED === '1' && typeof channel.send === 'function'
   let heartbeat: ReturnType<typeof setInterval> | null = null
-  let delay: LoopDelay | null = null
   let status: SupervisorStatus | null = null
   // A send on a channel the master closed throws; the master is gone and `onMasterGone` says so.
   const send = (message: CoreMessage): void => {
@@ -156,11 +131,9 @@ export function connectToMaster(
     want: (service) => send({ type: 'harnessd:want', service }),
     startHeartbeat: () => {
       if (!supervised || heartbeat) return
-      delay = loopDelay()
-      const monitor = delay
       const beat = (): void => {
         const usage = channel.memoryUsage()
-        send({ type: 'harnessd:heartbeat', rssBytes: usage.rss, heapUsedBytes: usage.heapUsed, loopDelayMs: monitor.take() })
+        send({ type: 'harnessd:heartbeat', rssBytes: usage.rss, heapUsedBytes: usage.heapUsed })
       }
       beat()
       heartbeat = setInterval(beat, intervalMs)
@@ -194,8 +167,6 @@ export function connectToMaster(
     close: () => {
       if (heartbeat) clearInterval(heartbeat)
       heartbeat = null
-      delay?.stop()
-      delay = null
     },
   }
 }

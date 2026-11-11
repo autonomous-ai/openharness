@@ -12,7 +12,7 @@ import { SWARM_BASICS } from '../src/lib/swarmSkills.js'
 import { object } from '../src/superTabs/wire.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { FAKE_ACCOUNT, FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import { overOldRoutes } from './harness/swarmReads.js'
 
 const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'e2e-agent-chat-computer', name: 'Fixture', token: 'e2e-agent-chat-token' }
@@ -31,6 +31,8 @@ const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify(
  *  `refuse` is turned away for good. */
 async function begin(engine: 'claude' | 'codex', attached = false) {
   const relay = await FakeBackend.start(); backend = relay; relay.addMachine(ME)
+  // Signed in as its person: their own messages in its chat are theirs (`GET /api/auth/me`).
+  relay.me = { id: FAKE_ACCOUNT, email: 'ken@example.test' }
   const d = await IsolatedDaemon.create({ submissionGate: true, env: {
     BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
     ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
@@ -87,6 +89,8 @@ async function begin(engine: 'claude' | 'codex', attached = false) {
       if (!value) throw new Error('Unknown delivery')
       if (value.claimId && value.claimId !== body.claimId) throw new Error('Claim changed')
       if (body.type === 'claim') { value.claimId = body.claimId; return { data: { message: value.message } } }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value.status = body.uncertain ? 'uncertain' : 'delivered'
       value.receipt = body.receipt
       return { data: {} }
@@ -105,7 +109,8 @@ async function begin(engine: 'claude' | 'codex', attached = false) {
   // The Swarm's service runs in a process of its own, started when the core is asked for it.
   expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
   const prompts = () => { try { return readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string) } catch { return [] } }
-  const person = { kind: 'person', id: 'ken', name: 'Ken' }
+  // Its person: the account this machine is signed in to.
+  const person = { kind: 'person', id: FAKE_ACCOUNT, name: 'Ken' }
   const ask = (id: string, text: string, fields: Record<string, unknown> = {}) => {
     const row = { id: `delivery-${id}`, agentId: memberId, conversationId: CHAT, status: 'queued', claimId: null,
       message: { id: `message-${id}`, conversationId: CHAT, author: person, text, ...fields } }
@@ -114,11 +119,11 @@ async function begin(engine: 'claude' | 'codex', attached = false) {
   }
   /** The turns of the agent that have ended, live. */
   const ended = () => client.frames.filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.agent.id && !frame.replay).length
-  return { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask, ended }
+  return { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask, ended, person, deliveries }
 }
 
 it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types %s what its person typed, and posts its answer into their chat once its turn ends (attached: %s)', async (engine, attached) => {
-  const { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask } = await begin(engine, attached)
+  const { d, client, agent, memberId, posts, told, reads, refuse, prompts, ask, person, deliveries } = await begin(engine, attached)
   const typed = 'Please say hello to the team, then wait.'
   const first = ask('one', typed)
   await until('the native input acknowledgement', () => first.status === 'delivered' || null, 60_000, 250)
@@ -189,6 +194,9 @@ it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types
   const long = `${'a'.repeat(31_998 - prefix.length)}😀${'tail'.repeat(10)}`
   ask('nine', long)
   await until('the cut answer', () => posts.length >= 10 || null, 120_000, 100)
+  // Ten quick turns by now: the short-turn guard holds the agent's automatic input, and never its person's own message.
+  expect(d.log()).toMatch(/\[turn-guard\] loop/)
+  expect(d.log()).not.toMatch(/withheld: team_waiting_control/)
   expect(posts[9]!.command.text).toBe(`${`${prefix}${long}`.slice(0, 31_998)}…`)
   expect(posts).toHaveLength(10)
 

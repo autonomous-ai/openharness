@@ -31,8 +31,6 @@ import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
-// Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
-vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -176,7 +174,7 @@ describe('creating an agent', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
-  // Swarm v4: no skill file and no launch line for any Swarm role; each starts plain.
+  // Swarm v4: no skill file and no skill mode; each Swarm role starts with the team's basics as its launch line.
   it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
     for (const role of ['coordinator', 'agent'] as const) {
       const cwd = folder()
@@ -184,8 +182,8 @@ describe('creating an agent', () => {
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone.
-      expect(place.swarmInstructions).toContain('Never watch GitHub yourself')
+      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone, byte for byte.
+      expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(role === 'coordinator'))
       expect(place.swarmInstructions?.includes('You are your project\'s PM')).toBe(role === 'coordinator')
     }
   })
@@ -219,14 +217,6 @@ describe('creating an agent', () => {
     for (const role of ['coordinator', 'agent'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
     expect(await extraArgsOf({ engine: 'codex' })).not.toContain('check_for_update_on_startup=false')
     expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
-  })
-
-  it.each(['default', 'orchestration'] as const)('keeps the project\'s %s mode on the saved row, with only the team\'s basics at launch', async mode => {
-    const cwd = folder()
-    await setup().create(request({ cwd, swarmRole: 'agent', swarmSkillMode: mode }))
-    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode })
-    expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
   })
 
   // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
@@ -263,15 +253,12 @@ describe('creating an agent', () => {
     expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
   })
 
-  // A Buddy launches like its owner's own session (Ken, 11-04, task #2832): on a shared model it keeps the grid's web tools,
-  // as every other Swarm session does.
-  it('builds a Buddy\'s grid launch with the grid\'s web MCP, as any session\'s', async () => {
+  // On a shared model a Swarm session keeps the grid's web tools.
+  it('builds a Swarm agent\'s grid launch with the grid\'s web MCP, as any session\'s', async () => {
     const grid = { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm', mcpUrl: 'https://grid.example/v1/grid/web-mcp' }
-    for (const role of ['buddy', 'agent'] as const) {
-      vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-      expect(await setup().create(request({ dsh: 'blender', swarmRole: role, grid }))).toMatchObject({ ok: true })
-      expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
-    }
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent', grid }))).toMatchObject({ ok: true })
+    expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {
@@ -313,12 +300,6 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
-  })
-
-  it('refuses a Buddy\'s unsafe Swarm runtime before opening a pane', async () => {
-    const cwd = folder(['.harness'])
-    expect(await setup().create(request({ cwd, swarmRole: 'buddy' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
   it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
@@ -978,20 +959,16 @@ describe('creating an agent', () => {
       expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
     })
 
-    it('gives a Buddy the machine MCP servers, as its owner\'s own session has them (task #2832)', async () => {
+    it('gives a Swarm agent the machine MCP servers, as its owner\'s own session has them', async () => {
       const { writeMachineMcp } = await import('../../lib/machineMcp.js')
       const { rmSync } = await import('node:fs')
       const { env } = await import('../../config/env.js')
       writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
       try {
         const { create } = setup()
-        const launched = async (role: 'buddy' | 'agent') => {
-          vi.mocked(buildEngineLaunchArgv).mockClear()
-          expect(await create(request({ cwd: folder(), swarmRole: role }))).toMatchObject({ ok: true })
-          return JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])
-        }
-        expect(await launched('agent')).toContain('lamp-mcp')
-        expect(await launched('buddy')).toContain('lamp-mcp')
+        vi.mocked(buildEngineLaunchArgv).mockClear()
+        expect(await create(request({ cwd: folder(), swarmRole: 'agent' }))).toMatchObject({ ok: true })
+        expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])).toContain('lamp-mcp')
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 

@@ -171,7 +171,7 @@ _hn_agent() {
     local _hn_engine="$1" _hn_route _hn_grid _hn_model _hn_arg
     shift
     case "$_hn_engine" in
-        codex|claude|cursor|opencode|pi|hermes|commandcode|devin|muse|amp|kilo|grok|agy|copilot) ;;
+        codex|claude|cursor|opencode|pi|hermes|commandcode|devin|muse|amp|kilo|grok|agy|copilot|openclaw) ;;
         cursor-agent) _hn_engine=cursor ;;
         cmd) _hn_engine=commandcode ;;
         *) printf '%s\n' 'Use hn run with a supported agent, such as codex, claude, or pi.' >&2; return 2 ;;
@@ -191,6 +191,19 @@ _hn_agent() {
         resume|fork|login|logout|auth|update|completion|mcp|mcp-server|doctor)
             _hn_native "$_hn_engine" "$@"; return $? ;;
     esac
+    # Every OpenClaw command but its TUI is maintenance: the Gateway, onboarding, logs, sessions
+    # (`openclaw --help`, 2026.11.2).
+    if [ "$_hn_engine" = openclaw ]; then
+        case "${1-}" in
+            acp|agent|agents|approvals|attach|audit|automations|backup|browser|capability|channels|chat|clawbot|config|\
+            configure|connect|cron|daemon|dashboard|database|devices|directory|dns|docs|exec-approvals|exec-policy|\
+            file-transfer|gateway|googlemeet|health|help|hooks|infer|logs|memory|message|migrate|models|node|nodes|\
+            onboard|pairing|plugins|promos|proxy|qr|reset|sandbox|secrets|security|sessions|setup|skills|status|\
+            storage|system|teamsmeetings|telemetry|terminal|transcripts|triage|uninstall|users|webhooks|worker|\
+            worktrees|zoommeetings)
+                _hn_native "$_hn_engine" "$@"; return $? ;;
+        esac
+    fi
     for _hn_arg in "$@"; do
         case "$_hn_arg" in
             --) break ;;
@@ -233,6 +246,7 @@ if [ -n "${ZSH_VERSION-}" ]; then
     (( $+aliases[grok] || $+functions[grok] )) || function grok { _hn_agent grok "$@"; }
     (( $+aliases[agy] || $+functions[agy] )) || function agy { _hn_agent agy "$@"; }
     (( $+aliases[copilot] || $+functions[copilot] )) || function copilot { _hn_agent copilot "$@"; }
+    (( $+aliases[openclaw] || $+functions[openclaw] )) || function openclaw { _hn_agent openclaw "$@"; }
 elif [ -n "${BASH_VERSION-}" ]; then
     alias codex >/dev/null 2>&1 || declare -F codex >/dev/null || function codex { _hn_agent codex "$@"; }
     alias claude >/dev/null 2>&1 || declare -F claude >/dev/null || function claude { _hn_agent claude "$@"; }
@@ -249,6 +263,7 @@ elif [ -n "${BASH_VERSION-}" ]; then
     alias grok >/dev/null 2>&1 || declare -F grok >/dev/null || function grok { _hn_agent grok "$@"; }
     alias agy >/dev/null 2>&1 || declare -F agy >/dev/null || function agy { _hn_agent agy "$@"; }
     alias copilot >/dev/null 2>&1 || declare -F copilot >/dev/null || function copilot { _hn_agent copilot "$@"; }
+    alias openclaw >/dev/null 2>&1 || declare -F openclaw >/dev/null || function openclaw { _hn_agent openclaw "$@"; }
 fi
 function hn {
     case "${1-}" in
@@ -382,7 +397,7 @@ _hn_auto_context() {
     [ "${HN_AUTOCOMPLETE-1}" != 0 ] || return 1
     case "$1" in *' @'|*' :'|*' %'|*' @'*':') ;; *) return 1;; esac
     local _hn_command=${1%% *} _hn_definition
-    case "$_hn_command" in codex|claude|cursor-agent|opencode|pi|hermes|cmd|devin|muse|amp|kilo|grok|agy|copilot) ;; *) return 1;; esac
+    case "$_hn_command" in codex|claude|cursor-agent|opencode|pi|hermes|cmd|devin|muse|amp|kilo|grok|agy|copilot|openclaw) ;; *) return 1;; esac
     # Customized commands retain their normal completion behavior.
     if [ -n "${ZSH_VERSION-}" ]; then
         (( $+aliases[$_hn_command] )) && return 1

@@ -19,7 +19,6 @@ import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAss
  * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import type { NativeTurnRead } from '../lib/nativeTurnObservations.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
@@ -282,9 +281,6 @@ export interface CoreApi {
     /** A session's last turn as its engine recorded it: what was asked and the final answer; null when
      *  there is none yet. Read from the end of its transcript, bounded (core/transcripts/lastTurn.ts). */
     lastTurn(sessionId: string): Promise<LastTurnText | null>
-    /** Bounded live prompt/answer observations, starting at a requested cursor.
-     * An omitted cursor establishes the current boundary, without past history. */
-    nativeTurns?: NativeTurnRead
   }
   /** The sign-in the core holds for every service: a service never holds a credential itself. */
   account: {
@@ -590,8 +586,9 @@ export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, mach
 
 /** How a delivery is told apart: `answersQuestion` marks a person's Swarm message, which closes the question it answers
  *  in a Claude pane (core/input.ts `beforeTeamWrite`);
- *  `writtenAt` is when it was written (ms), as only a question open since then is its to close. */
-export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number }
+ *  `writtenAt` is when it was written (ms), as only a question open since then is its to close;
+ *  `personsOwn` marks their own words in their agent's own 1:1 chat: their input, which the short-turn guard never holds. */
+export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number; personsOwn?: true }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
@@ -1294,13 +1291,14 @@ export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepL
 
 type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 /** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
- *  roles and skill modes a start may ask for, the role's skill written into the project folder (what the engine is told
- *  to read), and the Harness GitHub App's git and gh at the relaunch of a session started with it before the App's removal
- *  (null where it has none; lib/swarmGitHub.ts, until 2026-12-10). */
+ *  roles a start may ask for, the team's basics the engine starts with, and the Harness GitHub App's git and gh at the
+ *  relaunch of a session started with it before the App's removal (null where it has none; lib/swarmGitHub.ts, until
+ *  2026-12-10). */
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
-  mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
-  prepare(cwd: string, skill: SwarmSkill): { instructions: string }
+  /** The team's basics in the engine's own instructions at a launch and every relaunch, the PM's part for its project's
+   *  PM ([lead]) too (lib/swarmSkills.ts swarmBasics). */
+  basics(lead: boolean): string
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
@@ -2062,7 +2060,6 @@ export interface CoreApiDeps {
   /** The running cloud harnesses as list rows (`agents.cloud`). */
   cloudRows?: () => RegisteredSession[]
   lastTurn: CoreApi['transcripts']['lastTurn']
-  nativeTurns?: NativeTurnRead
   /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
   turnCard: CoreApi['clients']['turnCard']
   turnSummary: CoreApi['clients']['turnSummary']
@@ -2076,7 +2073,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, resumeAgent, swarmAgents,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, turnCard, turnSummary,
   count, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -2135,7 +2132,7 @@ export function createCoreApi({
     ...(count ? { count } : {}),
     turns,
     questions,
-    transcripts: { databaseHistory, lastTurn, ...(nativeTurns ? { nativeTurns } : {}) },
+    transcripts: { databaseHistory, lastTurn },
     account: { mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, privateGridName, machineName, backend,
       identity: accountIdentity(backend), onNotice, signedIn, environment, machines },
     clients: {

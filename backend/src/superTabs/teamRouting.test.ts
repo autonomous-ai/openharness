@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { availableSlots, machineSlots, type ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import type { RouteDecision } from './routeRecord.js'
 
 // Teammates' work on Swarm machines. Everything below runs with SWARM_TEAM_ACCOUNT_REQUIRED=1, except the block of a machine
 // added as its person joined.
@@ -45,8 +45,8 @@ function swarm() {
     pool('mate-mac', 'mate', 'MacBook Pro', reading()),
   ]
   const mine = String(run({ type: 'project.create', name: 'Mine', visibility: 'public', brief: '' }, mate).result.projectId)
-  const group = (projectId = 'lead', actor: Actor = owner) => String(run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Build it.',
-    checks: [{ description: 'Tests pass.', independent: false }] }, actor).result.conversationId)
+  const group = (projectId = 'lead', actor: Actor = owner) => storedTask(state, { projectId, title: 'Work', brief: 'Build it.',
+    checks: [{ description: 'Tests pass.' }], ...actor.kind === 'person' ? { requesterId: actor.userId } : { creatorId: actor.agentId } })
   /** An agent already in the Swarm on [machineId], run by [contributorId]'s grant there. */
   const member = (id: string, machineId: string, contributorId: string, projectId = 'lead', extra: Record<string, unknown> = {}) => {
     state.agents.push({ id, machineId, harnessId: `harness-${id}`, projectId, machineOwnerId: contributorId, contributorId,
@@ -104,81 +104,6 @@ describe('giving an existing agent a teammate\'s work', () => {
     const reviewer = f.member('reviewer', 'mate-mac', 'mate', 'lead', { role: 'reviewer' })
     f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: true, lead: false })
     expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(reviewer)
-  })
-})
-
-describe('routing a teammate\'s work', () => {
-  const candidate = (id: string, machineId: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'new', machineId, engine: 'codex',
-    model: 'default', effort: 'default', quality: 3, cost: 2, title: `${id} on ${machineId}`, label: `Label ${id}`, ...patch })
-  const record = (candidates: unknown[], pick = 'c0') => ({ assessment: { difficulty: 'medium', risk: 'low', why: 'A small change.' },
-    candidates, excluded: [{ title: 'Owner Mac · claude', reason: 'Subscription exhausted.' }], floor: 2, notes: false, pick, via: 'order', p: null,
-    belowFloor: false, why: 'Policy order.' })
-  function routed() {
-    const f = swarm()
-    const lead = String(f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: 'lead', name: 'Lead', configuration: config, lead: true },
-      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId)
-    const group = f.group()
-    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'owner' }
-    const personal = f.member('personal', 'mate-mac', 'mate')
-    return { ...f, get state() { return f.state }, group, leadActor, personal }
-  }
-
-  it('leaves out a new agent on another person\'s computer, keeps the teammate\'s own agent, and says why', () => {
-    const f = routed()
-    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c1', 'mate-mac'),
-      candidate('c2', 'mate-mac', { kind: 'member', agentId: f.personal, title: 'personal on mate-mac' }), candidate('c3', 'owner-mac')], 'c3') } as Command,
-    f.leadActor, {})
-    expect(effects.routeDecisions[0]).toMatchObject({ op: 'create', record: {
-      candidates: [{ id: 'c2' }, { id: 'c3' }],
-      excluded: [
-        { title: 'c1 on mate-mac', reason: 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.' },
-        { title: 'Owner Mac · claude', reason: 'Subscription exhausted.' },
-      ] } })
-    expect(effects.messages[0]!.source).toMatchObject({ pick: { id: 'c3' }, alternatives: [{ id: 'c2', title: 'personal on mate-mac' }] })
-  })
-
-  // Task #4194: a route whose pick could not take it was refused whole, and routing again picked it again, so no PM could route.
-  it('leaves out a pick that cannot take it and keeps the rest, with no pick, so the coordinator chooses among them', () => {
-    const f = routed()
-    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'mate-mac'), candidate('c1', 'owner-mac')]) } as Command,
-      f.leadActor, {})
-    const [created] = effects.routeDecisions as Array<{ record: Record<string, unknown> }>
-    expect(created!.record).toMatchObject({ candidates: [{ id: 'c1' }],
-      excluded: [{ title: 'c0 on mate-mac', reason: 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.' },
-        { title: 'Owner Mac · claude' }] })
-    expect(created!.record.pick).toBeUndefined()
-    // No row names a pick the record does not keep: the start or assignment posts the one it chose.
-    expect(effects.messages.filter(m => m.source?.kind === 'route')).toEqual([])
-  })
-
-  // Task #2901 (Ken, 2026-11-04): a route names no pick, so no single refusal decides it; it is refused once no candidate is left.
-  it('leaves out of a route that names no pick what cannot take it, and refuses it once nothing is left', () => {
-    const f = routed()
-    const pickless = (candidates: unknown[]) => {
-      const { pick: _pick, ...rest } = record(candidates)
-      return { ...rest, via: 'instructions', floor: 1, why: 'No ranking: the project\'s Routing instructions choose.' }
-    }
-    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: pickless([candidate('c0', 'mate-mac'), candidate('c1', 'owner-mac')]) } as Command,
-      f.leadActor, {})
-    expect(effects.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c1' }],
-      excluded: [{ title: 'c0 on mate-mac', reason: 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.' },
-        { title: 'Owner Mac · claude' }] } })
-    expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group, decision: pickless([candidate('c0', 'mate-mac')]) } as Command, f.leadActor, {})))
-      .toMatchObject({ code: 'NOT_YOUR_COMPUTER', message: 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s. Route again.' })
-  })
-
-  it('refuses a person\'s reroute to a new agent on another person\'s computer', () => {
-    const f = routed()
-    const decision = { id: 'd1', conversationId: f.group, record: record([candidate('c0', 'owner-mac'), candidate('c1', 'mate-mac')]),
-      final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision
-    expect(refusal(() => f.run({ type: 'route.override', decisionId: 'd1', candidateId: 'c1', reason: 'More quota there.' }, owner, { routeDecision: decision }))?.code)
-      .toBe('NOT_YOUR_COMPUTER')
-  })
-
-  it('keeps a person\'s own project routing as it was', () => {
-    const f = routed()
-    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'owner-mac')]) } as Command, f.leadActor, {})
-    expect(effects.routeDecisions[0]).toMatchObject({ record: { candidates: [{ id: 'c0' }], excluded: [{ title: 'Owner Mac · claude' }] } })
   })
 })
 

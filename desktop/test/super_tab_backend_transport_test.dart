@@ -142,7 +142,7 @@ void main() {
       'operationId': 'op-1',
       'command': {
         'type': 'message.send',
-        'conversationId': 'buddy',
+        'conversationId': 'agent-chat',
         'text': 'hi',
       },
     };
@@ -248,7 +248,6 @@ void main() {
       ('POST', '/api/super-tabs/tab1/native/ctx1'),
       ('POST', '/api/super-tabs/tab1/terminal/r1'),
       ('GET', '/api/super-tabs/tab1/costs'),
-      ('GET', '/api/super-tabs/workspaces'),
       ('GET', '/api/super-tabs/grids'),
       ('GET', '/api/super-tabs/routing-policy'),
       ('POST', '/api/super-tabs/routing-policy'),
@@ -304,8 +303,14 @@ void main() {
       ('GET', '/api/super-tabs/tab1/inbox'),
       ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/follow'),
       ('POST', '/api/super-tabs/tab1/conversations/c1/messages/m1/reminder'),
-      // A Lead's routing decision (v3).
+      // A Lead's routing decision, costs, attempts, project instructions and rules (v3; the backend answers 404).
       ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
+      ('GET', '/api/super-tabs/tab1/conversations/c1/attempts'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/rules'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/machine-rules'),
     ]) {
       final failure = await refusal(
         transport(method, path),
@@ -328,7 +333,6 @@ void main() {
       ('GET', '/api/super-tabs/tab1/sharing'),
       ('POST', '/api/super-tabs/tab1/sharing'),
       ('GET', '/api/super-tabs/tab1/routing-policy'),
-      ('POST', '/api/super-tabs/tab1/routing-policy'),
       ('GET', '/api/super-tabs/tab1/groups?dormant=1&projectId=p1'),
       ('GET', '/api/super-tabs/tab1/groups/g1'),
       ('GET', '/api/super-tabs/tab1/conversations/c1/messages?before=5'),
@@ -342,11 +346,6 @@ void main() {
       ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/read'),
       ('GET', '/api/super-tabs/tab1/projects/p1/github'),
       ('POST', '/api/super-tabs/tab1/projects/p1/github/approve'),
-      ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
-      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
-      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
-      // The project's rules record, read only in Project settings (#3393).
-      ('GET', '/api/super-tabs/tab1/projects/p1/rules'),
       ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
       ('POST', '/api/super-tabs/tab1/join'),
       ('GET', '/api/super-tabs/tab1/join/preview'),
@@ -612,7 +611,7 @@ void main() {
       expect(c.notifyOf('offline'), SuperTabNotify.muted);
       backend.requests.clear();
       expect(
-        await c.setNotify('someone-else-buddy', SuperTabNotify.all),
+        await c.setNotify('someone-elses-chat', SuperTabNotify.all),
         isFalse,
       );
       expect(backend.requests, isEmpty);

@@ -71,12 +71,12 @@ class Recipe(unittest.TestCase):
 
     def test_rpm_requirements_preserve_provides_but_reject_unreviewed_expressions(self):
         base = 'python3\nfoot\nlabwc\nNetworkManager\n'
-        result = image.requirements(base + 'rpmlib(CompressedFileNames) <= 3.0.4-1\nnodejs22 >= 22.0\n/usr/bin/sh\nlibc.so.6(GLIBC_2.17)(64bit)\n')
-        self.assertIn('nodejs22 >= 22.0', result)
+        result = image.requirements(base + 'rpmlib(CompressedFileNames) <= 3.0.4-1\nnodejs24 >= 24.0\n/usr/bin/sh\nlibc.so.6(GLIBC_2.17)(64bit)\n')
+        self.assertIn('nodejs24 >= 24.0', result)
         self.assertIn('/usr/bin/sh', result)
         self.assertIn('libc.so.6(GLIBC_2.17)(64bit)', result)
         self.assertFalse(any(item.startswith('rpmlib') for item in result))
-        for invalid in ['nodejs; false', '-y', 'nodejs $(id)', '(nodejs or nodejs22)']:
+        for invalid in ['nodejs; false', '-y', 'nodejs $(id)', '(nodejs or nodejs24)']:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 image.requirements(base + invalid)
         with self.assertRaisesRegex(ValueError, 'missing'):

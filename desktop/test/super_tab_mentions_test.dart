@@ -214,8 +214,8 @@ Future<void> showText(
 
 Finder notificationsEntry() => find.byKey(const ValueKey('super-mentions'));
 
-/// A Swarm whose reader is the peer, with the Lead and the peer's own Buddy
-/// chat in the first project, where the PM's private lines reach them.
+/// A Swarm whose reader is the peer, with the Lead and the peer's chat with
+/// their own agent in the first project.
 ConversationServer swarm() {
   final server = ConversationServer.chat();
   server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
@@ -226,7 +226,7 @@ ConversationServer swarm() {
   server.state['conversations'] = [
     conversationFixture('lead', 'Lead'),
     {
-      ...conversationFixture('buddy-peer-lead', "ken.tran's Buddy"),
+      ...conversationFixture('agent-chat-peer', 'Wren'),
       'projectId': 'lead',
       'kind': 'agent-chat',
     },
