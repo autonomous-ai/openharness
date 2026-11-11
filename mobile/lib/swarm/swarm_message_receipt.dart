@@ -243,9 +243,10 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
 
   /// Desktop's no-Lead line. Add a Lead only where the phone can start one: a
   /// project chat, through `lead.start` as a new project does. A task chat's
-  /// Lead comes from Desktop's New Harness box, which the phone has not.
+  /// Lead comes from Desktop's New Harness box, which the phone has not. A
+  /// writer starts one even where only agents post: a start is not a post.
   Widget _noLead(BuildContext context, SwarmConversation c, bool projectChat) {
-    final free = c.canPost && !_startingLead;
+    final free = c.writes && !_startingLead;
     return _line(
       icon: LucideIcons.triangleAlert,
       color: Theme.of(context).colorScheme.error,
@@ -366,7 +367,8 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
         agent.harnessId.isNotEmpty &&
         shell.canOpenMachine?.call(agent.machineId) == true;
     final resolving = c.resolving;
-    final free = c.canPost && resolving == null && delivery.id != null;
+    // An answer, not a post: it goes where only agents post too.
+    final free = c.writes && resolving == null && delivery.id != null;
     Widget action(String label, String resolution, VoidCallback onPressed) {
       final busy = resolving == (delivery.id, resolution);
       return _ReceiptLink(

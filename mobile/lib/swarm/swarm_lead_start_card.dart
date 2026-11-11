@@ -17,11 +17,13 @@ import 'swarm_request.dart';
 import 'swarm_row.dart';
 import 'swarm_style.dart';
 
-/// A Personal project chat with no Lead, empty: Desktop's Start card (#2815)
-/// on the phone (task #2941, Huy 11-04). The person picks one of their
-/// computers and an engine signed in there, and the computer starts the Lead
-/// in the project's folder ([SwarmLeadStarter]); the phone runs nothing. Laid
-/// out as Start your Buddy is on the phone (swarm_buddy_chat.dart).
+/// A Personal project's channel with no Product Manager: Desktop's Start PM
+/// card (#2815, its words since #3965) on the phone (task #2941, Huy 11-04).
+/// The person picks one of their computers and an engine signed in there,
+/// and the computer starts the PM in the project's folder
+/// ([SwarmLeadStarter]); the phone runs nothing. Only agents post in the
+/// channel, so the card asks for no message there. Laid out as Start your
+/// Buddy is on the phone (swarm_buddy_chat.dart).
 class SwarmLeadStartCard extends StatefulWidget {
   const SwarmLeadStartCard({
     super.key = const ValueKey('swarm-lead-start'),
@@ -105,7 +107,7 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'This project has no Lead yet',
+                'This project has no Product Manager.',
                 style: AppType.body(
                   color: AppPalette.textPrimary,
                   fontWeight: FontWeight.w600,
@@ -187,7 +189,7 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                 const SizedBox(height: AppSpace.m),
                 SwarmButton(
                   key: const ValueKey('swarm-lead-start-button'),
-                  label: 'Start Lead',
+                  label: 'Start PM',
                   style: SwarmButtonStyle.fill,
                   wide: true,
                   busy: starting,
@@ -215,7 +217,7 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
               ] else ...[
                 const SizedBox(height: AppSpace.xs),
                 Text(
-                  'Can’t start a Lead: $unavailable',
+                  'Can’t start a Product Manager: $unavailable',
                   key: const ValueKey('swarm-lead-start-unavailable'),
                   style: AppType.body(color: AppPalette.textPrimary),
                 ),
@@ -224,16 +226,11 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
               if (status?.reason case final reason? when !offline) ...[
                 const SizedBox(height: AppSpace.s),
                 Text(
-                  'Couldn’t start a Lead: $reason',
+                  'Couldn’t start the Product Manager: $reason',
                   key: const ValueKey('swarm-lead-start-error'),
                   style: AppType.body(color: AppPalette.textPrimary),
                 ),
               ],
-              const SizedBox(height: AppSpace.s),
-              SwarmRow.line(
-                'Or send a message below: the Lead reads it when it starts.',
-                lines: 2,
-              ),
             ],
           ),
         ),

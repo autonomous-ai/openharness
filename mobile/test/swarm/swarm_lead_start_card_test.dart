@@ -12,6 +12,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
+import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_lead_start.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
@@ -24,7 +25,7 @@ import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
 import 'swarm_lead_start_fixture.dart';
 
-/// The person's computers, as Swarm's screens and the Start Lead card read
+/// The person's computers, as Swarm's screens and the Start PM card read
 /// them.
 class _Computers extends FakeComputers implements SwarmLeadComputers {
   _Computers(this.lead) : super(const [(name: 'Studio', away: false)]);
@@ -44,10 +45,10 @@ class _Computers extends FakeComputers implements SwarmLeadComputers {
 /// Light and dark screenshots of the card, to the folder this names.
 final shots = Platform.environment['LEAD_CARD_SHOTS'];
 
-/// The phone's empty Personal project chat offers to start its Lead, as
-/// Desktop's does (#2815): the person's computers and the engines signed in
-/// on each, Start Lead, Starting…, and a failure's reason with Start Lead
-/// again (task #2941, Huy 11-04).
+/// The phone's empty Personal project chat offers to start its Product
+/// Manager, as Desktop's does (#2815, its words since #3965): the person's
+/// computers and the engines signed in on each, Start PM, Starting…, and a
+/// failure's reason with Start PM again (task #2941, Huy 11-04).
 void main() {
   late FakeSwarm swarm;
   late FakeLeadComputers lead;
@@ -188,7 +189,7 @@ void main() {
     await pump(tester);
 
     expect(key('swarm-lead-start'), findsOneWidget);
-    expect(find.text('This project has no Lead yet'), findsOneWidget);
+    expect(find.text('This project has no Product Manager.'), findsOneWidget);
     expect(find.text('No messages yet.'), findsNothing);
     expect(
       find.descendant(
@@ -200,11 +201,14 @@ void main() {
     expect(key('swarm-lead-start-engine-claude'), findsOneWidget);
     expect(key('swarm-lead-start-engine-codex'), findsOneWidget);
     expect(find.text('Folder: /Users/me/games'), findsOneWidget);
-    expect(find.text('Start Lead'), findsOneWidget);
-    expect(
-      find.text('Or send a message below: the Lead reads it when it starts.'),
-      findsOneWidget,
-    );
+    expect(find.text('Start PM'), findsOneWidget);
+    // Only agents post in the channel: the card asks for no message there.
+    expect(find.textContaining('send a message below'), findsNothing);
+    expect(key('swarm-field'), findsNothing);
+    expect(key('swarm-mic'), findsNothing);
+    expect(key('swarm-attach'), findsNothing);
+    expect(key('swarm-agents-only'), findsOneWidget);
+    expect(find.text(swarmAgentsOnlyLine), findsOneWidget);
 
     // The machine sheet lists both computers; the Air has Claude Code only.
     await tester.tap(key('swarm-lead-start-machine'));
@@ -253,7 +257,7 @@ void main() {
     expect(swarm.commands.last['lead'], isTrue);
   });
 
-  testWidgets('a failed start shows its reason and Start Lead tries again', (
+  testWidgets('a failed start shows its reason and Start PM tries again', (
     tester,
   ) async {
     await pump(tester);
@@ -264,10 +268,10 @@ void main() {
     await tester.tap(key('swarm-lead-start-button'));
     await tester.pumpAndSettle();
     expect(
-      find.text('Couldn’t start a Lead: Codex isn’t signed in'),
+      find.text('Couldn’t start the Product Manager: Codex isn’t signed in'),
       findsOneWidget,
     );
-    expect(find.text('Start Lead'), findsOneWidget);
+    expect(find.text('Start PM'), findsOneWidget);
 
     lead.failure = null;
     await tester.tap(key('swarm-lead-start-button'));
@@ -307,7 +311,7 @@ void main() {
     await tester.tap(key('swarm-lead-start-button'));
     await tester.pumpAndSettle();
     expect(
-      find.text('Couldn’t start a Lead: The Swarm did not answer'),
+      find.text('Couldn’t start the Product Manager: The Swarm did not answer'),
       findsOneWidget,
     );
     // Its agent runs on Studio: no other computer is offered until it joins.

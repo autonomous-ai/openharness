@@ -11,7 +11,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
-import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -19,8 +18,7 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of a project opened the way the app opens it: from
-/// Swarm Home's row, and from a chat (the PM's line in the person's Buddy
-/// chat, answered in #Mobile). Both land on Swarm Home C's project screen.
+/// Swarm Home's row, onto Swarm Home C's project screen.
 /// On a 390-point phone in both phone themes, from made-up data only, to
 /// the folder `SWARM_PROJECT_ENTRY_SHOTS` names.
 final shots = Platform.environment['SWARM_PROJECT_ENTRY_SHOTS'];
@@ -57,7 +55,6 @@ void main() {
     // An iPhone's status bar and home indicator.
     tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
     addTearDown(tester.view.resetPadding);
-    const buddyChat = 'buddy-me';
     for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
       final brightness = palette.brightness;
       AppTheme.palette.value = palette;
@@ -68,15 +65,13 @@ void main() {
         String id,
         int sequence,
         String text, {
-        String author = 'agent-lead',
-        String name = 'River',
         int minutesAgo = 10,
       }) => {
         'id': id,
         'conversationId': chat,
         'text': text,
         'sequence': sequence,
-        'author': {'kind': 'agent', 'id': author, 'name': name},
+        'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
         'attachments': <Object>[],
         'reactions': <Object>[],
         'createdAt': now
@@ -95,7 +90,6 @@ void main() {
           agents: [
             agent('agent-lead', name: 'Lead', displayName: 'River'),
             agent('agent-builder', displayName: 'Nova'),
-            buddyData('agent-wren', displayName: 'Wren'),
           ],
           groups: [
             groupData(
@@ -105,11 +99,6 @@ void main() {
               agentIds: ['agent-lead', 'agent-builder'],
               status: 'working',
               workerId: 'agent-builder',
-              lastMessageSequence: 2,
-            ),
-            buddyChatData(
-              buddyChat,
-              agentIds: ['agent-wren'],
               lastMessageSequence: 2,
             ),
           ],
@@ -148,28 +137,6 @@ void main() {
                 1,
                 'Morning all. TestFlight build goes out after #2297.',
                 minutesAgo: 30,
-              ),
-            ],
-            'next': null,
-          };
-      fake.routes['/api/super-tabs/$tab/conversations/$buddyChat/messages'] =
-          (_) => {
-            'messages': [
-              said(
-                buddyChat,
-                'b2',
-                2,
-                'Should the TestFlight build wait for #2297?',
-                minutesAgo: 6,
-              ),
-              said(
-                buddyChat,
-                'b1',
-                1,
-                'Your Home is up to date.',
-                author: 'agent-wren',
-                name: 'Wren',
-                minutesAgo: 20,
               ),
             ],
             'next': null,
@@ -219,22 +186,6 @@ void main() {
       await tester.pumpAndSettle();
       expectHomeCProject('Mobile');
       await capture('from-home');
-      await tester.tap(key('tty-back'));
-      await tester.pumpAndSettle();
-
-      // From a chat: the PM's line in the person's Buddy chat, answered in
-      // the project.
-      openSwarmConversation(
-        tester.element(find.byType(SwarmPage)),
-        tab,
-        buddyChat,
-      );
-      await tester.pumpAndSettle();
-      await capture('buddy-chat');
-      await tester.tap(find.text('Answer in #Mobile'));
-      await tester.pumpAndSettle();
-      expectHomeCProject('Mobile');
-      await capture('from-chat');
 
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));

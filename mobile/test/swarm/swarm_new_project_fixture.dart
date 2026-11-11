@@ -21,6 +21,9 @@ int _at(Duration ago) => newProjectNow.subtract(ago).millisecondsSinceEpoch;
 const harnessRepo = 'https://github.com/autonomous-ai/openharness';
 const lampRepo = 'https://github.com/autonomous-ai/lampos';
 
+/// The 1:1 chat `lead.start` answers for [projectId]'s Product Manager.
+String pmChatOf(String projectId) => 'pm-chat-$projectId';
+
 /// A machine of the Swarm as the backend reads it, with its derived values
 /// over it: [contributor]'s, reporting [ago], offering [engines], its Harness
 /// able to start a Product Manager unless not [capable], [slots] agents free,
@@ -339,8 +342,14 @@ class NewProjectSwarm {
           named['name'] = command['name'];
           return {'result': <String, dynamic>{}};
         case 'lead.start':
+          // The PM's own 1:1 chat opens with the start (backend pmChat.ts),
+          // the same one for a replay.
           return {
-            'result': {'startId': operation, 'machineId': command['machineId']},
+            'result': {
+              'startId': operation,
+              'machineId': command['machineId'],
+              'chatId': pmChatOf(command['projectId'] as String),
+            },
           };
         default:
           return {'result': <String, dynamic>{}};

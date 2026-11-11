@@ -51,12 +51,14 @@ void main() {
   };
 
   /// Chat g1 with River and Nova in it (or [agentIds]), reading [page], with
-  /// [members] in its Swarm and the line of a thread under m1 if [threads].
+  /// [members] in its Swarm and the line of a thread under m1 if [threads];
+  /// its project's channel if [channel].
   FakeSwarm backend(
     List<Map<String, dynamic>> page, {
     List<String> agentIds = const ['agent-lead', 'agent-builder'],
     List<Map<String, dynamic>>? members,
     bool threads = false,
+    bool channel = false,
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -67,6 +69,7 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
+        head: channel ? channelHead('g1') : null,
         groups: [
           groupData(
             'g1',
@@ -1045,6 +1048,74 @@ void main() {
       await tester.pumpAndSettle();
       expect(fake.commands.single['alsoSend'], isTrue);
       expect(fake.commands.single['recipientIds'], ['agent-builder']);
+    });
+  });
+
+  // Swarm v4 (anh Dee, 2026-11-08): people read a project's channel and talk
+  // to their own agents; the backend refuses their post there (AGENTS_ONLY).
+  group('a project\'s channel, where only agents post', () {
+    testWidgets('shows Desktop\'s line in the composer\'s place: no field, '
+        'mic or +', (tester) async {
+      final fake = backend([message('m1', 1)], channel: true);
+      await pump(tester, fake, voice: true);
+
+      expect(key('swarm-composer-card'), findsNothing);
+      expect(key('swarm-field'), findsNothing);
+      expect(key('swarm-mic'), findsNothing);
+      expect(key('swarm-attach'), findsNothing);
+      expect(key('swarm-read-only'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-agents-only')).data,
+        'Only agents post here. To change what happens, talk to your agents.',
+      );
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('a task chat keeps its composer', (tester) async {
+      await pump(tester, backend([message('m1', 1)]), voice: true);
+
+      expect(key('swarm-field'), findsOneWidget);
+      expect(key('swarm-mic'), findsOneWidget);
+      expect(key('swarm-attach'), findsOneWidget);
+      expect(key('swarm-agents-only'), findsNothing);
+    });
+
+    testWidgets('a viewer there reads the same line', (tester) async {
+      await pump(
+        tester,
+        backend(
+          [message('m1', 1)],
+          channel: true,
+          members: [person(me, role: 'viewer')],
+        ),
+      );
+
+      expect(key('swarm-agents-only'), findsOneWidget);
+      expect(key('swarm-read-only'), findsNothing);
+    });
+
+    testWidgets('its thread has no reply box either', (tester) async {
+      await pump(
+        tester,
+        backend(
+          [
+            message('m1', 1, author: 'agent-lead', thread: 'm1'),
+            message('m2', 2, text: 'Looks good.', thread: 'm1', replyTo: 'm1'),
+          ],
+          threads: true,
+          channel: true,
+        ),
+      );
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-thread-box'), findsNothing);
+      expect(key('swarm-thread-field'), findsNothing);
+      expect(key('swarm-thread-read-only'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-thread-agents-only')).data,
+        'Only agents post here. To change what happens, talk to your agents.',
+      );
     });
   });
 

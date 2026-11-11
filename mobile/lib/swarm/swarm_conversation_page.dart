@@ -152,7 +152,6 @@ class SwarmConversationPage extends StatefulWidget {
     this.messageId,
     this.threadId,
     this.threadFocus,
-    this.mention,
   });
 
   final String swarmId, conversationId;
@@ -165,10 +164,6 @@ class SwarmConversationPage extends StatefulWidget {
 
   /// Where [threadId]'s thread lands as it opens; its top when none.
   final SwarmThreadFocus? threadFocus;
-
-  /// An agent to @mention in the draft as the chat opens: the PM, as its
-  /// private line is answered in the project chat.
-  final String? mention;
 
   /// Its own header: back, its name and its project, and — the person's own
   /// Buddy chat — Remove Buddy at its end. None in a project's tab
@@ -392,7 +387,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _drafted();
     c.addListener(_chatMoved);
     c.addListener(_guardVoice);
-    if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
     reader.addListener(_guardVoice);
     session.inbox.addListener(_see);
@@ -1619,8 +1613,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         child: Text(
                           view.archived
                               ? 'This chat is archived.'
+                              : c.agentsOnly
+                              ? swarmAgentsOnlyLine
                               : 'You can read this chat, not post in it.',
-                          key: const ValueKey('swarm-read-only'),
+                          key: ValueKey(
+                            !view.archived && c.agentsOnly
+                                ? 'swarm-agents-only'
+                                : 'swarm-read-only',
+                          ),
                           style: swarmChatText(
                             13.5,
                             color: AppPalette.textSecondary,
@@ -1641,15 +1641,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// page.
   void _openBuddy(SwarmConversation c) => unawaited(
     openSwarmBuddy(context, c.reader, widget.swarmId, swarmBuddyKey),
-  );
-
-  /// Opens [projectId]'s chat with [pmId] mentioned in its draft: the PM's
-  /// private line answered where the PM reads, and everyone with it.
-  void _answerIn(String projectId, String pmId) => openSwarmProject(
-    context,
-    swarmId: widget.swarmId,
-    projectId: projectId,
-    mention: pmId,
   );
 
   /// [m]'s author as a quote names them: the person's own messages are
@@ -2021,9 +2012,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final role = m.fromAgent && !pm ? view.roles[m.authorId] : null;
           // The coordinator's face, whatever its role is called.
           final coordinator = m.fromAgent && view.leads.contains(m.authorId);
-          // The PM cannot read this chat: its line is answered in the
-          // project chat, where everyone reads it (Tony, mockup A, 10-29).
-          final answerIn = pm && view.canPost ? view.buddyProject : null;
           final quoted = reply == null ? null : _quoted(c, reply);
           final tagged = _taggedOf(c, m);
           final labels = _labelsOf(c, m);
@@ -2070,7 +2058,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               c.reader.accountId,
               [for (final e in tagged.entries) '${e.key}:${e.value}'].join(' '),
               [for (final e in labels.entries) '${e.key}:${e.value}'].join(' '),
-              answerIn,
               view.project,
               line,
               [
@@ -2156,13 +2143,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                       message: m,
                     )
                   : null,
-              below: answerIn == null
-                  ? null
-                  : _AnswerIn(
-                      key: ValueKey('swarm-answer-in-${m.id}'),
-                      project: view.project ?? 'the project chat',
-                      onTap: () => _answerIn(answerIn, m.authorId),
-                    ),
             ),
           );
         case _AskEntry(:final need, :final grouped):
@@ -3637,33 +3617,6 @@ Color _stateColor(Tty tty, SwarmAgentState state) => switch (state) {
   SwarmAgentState.down || SwarmAgentState.limited => tty.red,
   _ => AppPalette.textFaint,
 };
-
-/// Under the PM's private line in the person's Buddy chat: Answer in #project,
-/// and that everyone there reads the answer.
-class _AnswerIn extends StatelessWidget {
-  const _AnswerIn({super.key, required this.project, required this.onTap});
-
-  /// "#Mobile".
-  final String project;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Wrap(
-    crossAxisAlignment: WrapCrossAlignment.center,
-    spacing: AppSpace.s,
-    children: [
-      SwarmButton(
-        label: 'Answer in $project',
-        style: SwarmButtonStyle.link,
-        onPressed: onTap,
-      ),
-      Text(
-        'Everyone there reads it',
-        style: AppType.caption(color: AppPalette.textSecondary),
-      ),
-    ],
-  );
-}
 
 /// The composer's field inside [SwarmComposerCard]: text that grows with
 /// what is typed, 1 to 5 lines and then scrolls, in the app's own face, with

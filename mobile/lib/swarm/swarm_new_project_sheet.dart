@@ -105,7 +105,7 @@ const swarmNewProjectMaybeMade =
 /// `MACHINE_FRESH_MS`, as the start itself reads it).
 const _freshFor = Duration(seconds: 45);
 
-/// The longest brief kept: a project's brief, and its chat's first message
+/// The longest brief kept: a project's brief, and its PM chat's first message
 /// (Desktop's 4000; the server takes 8000 characters, a rune is at most two).
 const swarmNewProjectBriefRunes = 4000;
 
@@ -631,8 +631,9 @@ final _heldSteps = Expando<SwarmNewProjectSteps>('New project steps');
 const _uploadTimeout = Duration(minutes: 2);
 
 /// One New project's steps in one Swarm, as Desktop's `startInSwarm` runs
-/// them: the project, its brief and files in its chat, its Product Manager's
-/// start on the machine and engine picked, then its name. Each request is
+/// them: the project, its Product Manager's start on the machine and engine
+/// picked, its brief and files in the PM's own chat that start answers (only
+/// agents post in the project's channel), then its name. Each request is
 /// kept as first sent, under one operation id, until the steps finish:
 /// Create again repeats only what has not answered, and the Swarm answers a
 /// repeated operation with its receipt, so a lost answer never makes a second
@@ -654,7 +655,11 @@ class SwarmNewProjectSteps with ChangeNotifier {
   final SwarmReader reader;
 
   Map<String, dynamic>? _create, _brief, _start;
-  String? _projectId, _conversationId;
+  String? _projectId;
+
+  /// The Product Manager's own 1:1 chat its start answered: where its brief
+  /// and files go.
+  String? _chatId;
 
   /// New repository's request once sent (task #3373): what was asked, the
   /// time that names it and GitHub's sign-in, until its outcome comes back.
@@ -681,7 +686,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// asked for.
   List<SwarmOutgoingFile>? _files;
 
-  /// Those files on their way to the project's chat, and the ids of those
+  /// Those files on their way to the PM's chat, and the ids of those
   /// already up.
   SwarmUploads? _uploads;
 
@@ -716,7 +721,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// The files its brief goes with, once [sent].
   List<SwarmOutgoingFile> get sentFiles => _files ?? const [];
 
-  /// Whether [file] is on its way to the project's chat.
+  /// Whether [file] is on its way to the PM's chat.
   bool isUploading(SwarmOutgoingFile file) =>
       _uploads?.isUploading(file) ?? false;
 
@@ -736,8 +741,14 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// A start was sent and has not answered: a retry repeats it as it is.
   bool get starting => _start != null && !_started;
 
-  /// The Swarm took its Product Manager's start: only its name is left.
+  /// The Swarm took its Product Manager's start: its brief, then its name,
+  /// are left.
   bool get started => _started;
+
+  /// Its brief or files have not reached the PM's chat yet.
+  bool get briefLeft =>
+      !_briefPosted &&
+      ((sentBrief?.isNotEmpty ?? false) || sentFiles.isNotEmpty);
 
   /// A start was sent, answered or not: its machine and repository stay as
   /// sent, whatever the machine's room says now.
@@ -761,9 +772,10 @@ class SwarmNewProjectSteps with ChangeNotifier {
   }
 
   /// Runs what is left: creates the project with [brief] and [visibility],
-  /// posts [brief] in its chat with [files], starts its Product Manager on
-  /// [machineId] with [engine] (the machine's first when null) and the
-  /// repository [repositoryUrl], then names it after that repository.
+  /// starts its Product Manager on [machineId] with [engine] (the machine's
+  /// first when null) and the repository [repositoryUrl], posts [brief] with
+  /// [files] in the PM's chat that start answers, then names it after that
+  /// repository.
   /// Answers the project's id once all of it is done and read. Each answer is
   /// kept before [live] is asked: once it says no, nothing more is sent and
   /// [SwarmNewProjectGone] is thrown, and the next run starts after what was
@@ -860,53 +872,15 @@ class SwarmNewProjectSteps with ChangeNotifier {
         };
       }
       final result = await _send(() => _create, (v) => _create = v);
-      final (projectId, conversationId) = switch (result) {
-        {
-          'projectId': final String project,
-          'conversationId': final String conversation,
-        } =>
-          (project, conversation),
+      _projectId = switch (result) {
+        {'projectId': final String project} => project,
         _ => throw const FormatException('The Swarm did not name the project.'),
       };
-      _projectId = projectId;
-      _conversationId = conversationId;
       // In Home's list at once, while its Product Manager starts.
       unawaited(reader.refresh());
       check();
     }
     final projectId = _projectId!;
-    // The brief and files the project was made with, whatever the sheet
-    // holds now.
-    final posted = sentBrief ?? text;
-    final attached = sentFiles;
-    if (!_briefPosted && (posted.isNotEmpty || attached.isNotEmpty)) {
-      if (_brief == null) {
-        // Up once, to its chat, before the message they go with: written
-        // with their ids, it is repeated as it is.
-        final ids = await _upload(attached, live);
-        check();
-        _brief = {
-          'operationId': superTabOperationId(),
-          'command': {
-            'type': 'message.send',
-            'conversationId': _conversationId,
-            'text': posted,
-            'replyTo': null,
-            'recipientIds': const <String>[],
-            if (ids.isNotEmpty) 'attachmentIds': ids,
-          },
-        };
-      }
-      try {
-        await _send(() => _brief, (v) => _brief = v);
-      } on SuperTabFailure catch (failure) {
-        // Refused, its files go up afresh with the next one.
-        if (_refusedOutright(failure)) _uploads?.forget(attached);
-        rethrow;
-      }
-      _briefPosted = true;
-      check();
-    }
     // New repository: made on GitHub through the person's own sign-in before
     // its Product Manager can start in it (task #3373). A start already sent
     // keeps the repository it was sent with.
@@ -949,8 +923,49 @@ class SwarmNewProjectSteps with ChangeNotifier {
           },
         };
       }
-      await _send(() => _start, (v) => _start = v);
+      final answer = await _send(() => _start, (v) => _start = v);
+      // The PM's own 1:1 chat, open while it starts (backend pmChat.ts): only
+      // agents post in the project's channel, so its request goes there. A
+      // replayed start answers the same chat.
+      _chatId =
+          answer['chatId'] as String? ??
+          (throw const SuperTabFailure(
+            'UPDATE_REQUIRED',
+            'This Swarm’s server needs an update to start a PM.',
+          ));
       _started = true;
+      check();
+    }
+    // The brief and files the project was made with, whatever the sheet
+    // holds now.
+    final posted = sentBrief ?? text;
+    final attached = sentFiles;
+    if (!_briefPosted && (posted.isNotEmpty || attached.isNotEmpty)) {
+      if (_brief == null) {
+        // Up once, to the PM's chat, before the message they go with:
+        // written with their ids, it is repeated as it is.
+        final ids = await _upload(attached, live);
+        check();
+        _brief = {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'message.send',
+            'conversationId': _chatId,
+            'text': posted,
+            'replyTo': null,
+            'recipientIds': const <String>[],
+            if (ids.isNotEmpty) 'attachmentIds': ids,
+          },
+        };
+      }
+      try {
+        await _send(() => _brief, (v) => _brief = v);
+      } on SuperTabFailure catch (failure) {
+        // Refused, its files go up afresh with the next one.
+        if (_refusedOutright(failure)) _uploads?.forget(attached);
+        rethrow;
+      }
+      _briefPosted = true;
       check();
     }
     final name = swarmRepositoryName(startRepository ?? url!);
@@ -1180,7 +1195,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
     );
   }
 
-  /// Uploads each of [files] not up yet to the project's chat and answers
+  /// Uploads each of [files] not up yet to the PM's chat and answers
   /// their ids, those up kept for the next run. A failure says why in the
   /// chat's words ([swarmUploadError]). No file starts once [live] says no.
   Future<List<String>> _upload(
@@ -1190,7 +1205,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
     if (files.isEmpty) return const [];
     final uploads = _uploads ??= SwarmUploads(
       reader,
-      _conversationId!,
+      _chatId!,
       timeout: _uploadTimeout,
       onChanged: notifyListeners,
       onProgress: notifyListeners,
@@ -2682,6 +2697,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         // Create starts afresh.
         : !identical(SwarmNewProjectSteps.heldBy(reader), steps)
         ? why
+        : steps.started && steps.briefLeft
+        ? 'The project is made and its Product Manager is starting. '
+              'Sending your request didn’t finish: $why'
         : steps.started
         ? 'The project is made and its Product Manager is starting. '
               'Naming it didn’t finish: $why'
