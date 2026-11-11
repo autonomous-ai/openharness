@@ -28,16 +28,16 @@ two commands each spawning every CPU is not useful parallelism.
 ## PR CI
 
 PR CI is deliberately fast. Each changed component runs its own Linux suite, and a changed file another suite reads
-(`DEPENDS` in `scripts/ci-plan.py`, the same list reuse checks) runs that suite too: #4033 changed a CLI file Desktop's
+(`PR_READS` in `scripts/ci-plan.py`, each inside the broader `DEPENDS` that reuse checks) runs that suite too: #4033 changed a CLI file Desktop's
 tests read, ran the CLI's suite only, and turned main's Desktop CI red. The table lists each directory's own check; the
 broad reads on top: `companions` and `pty` import the CLI's code, so a `cli/` change runs them (about a minute each,
-beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop reads `store/`, and `os-checks` reads
+beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop reads `store/` and `docs/images/`, and `os-checks` reads
 `term/` and `tui/`:
 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
 | `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
-| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `DEPENDS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `PR_READS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
@@ -70,8 +70,8 @@ A component's result is reused only when all of these hold; otherwise it runs as
   to its exact run and attempt, and reads that run's receipt. A component the run
   itself reused points at the run where it last ran.
 - Nothing that differs between the tested commit and the new head is a component input:
-  its own directory (by the map above) or a file it reads elsewhere (`DEPENDS` in
-  `scripts/ci-plan.py`). `backend/integration/` and `cli/e2e/` (apart from
+  its own directory (by the map above) or a file it may read elsewhere (`DEPENDS` in
+  `scripts/ci-plan.py`: broader than the `PR_READS` that select it, as the scan misses a path joined from parts). `backend/integration/` and `cli/e2e/` (apart from
   `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each Swarm UI
   style allowlist (`scripts/ui-style-allowlist/mobile.json`, `desktop.json`) is an input
   of the component whose job checks it, and a PR that changes one runs that component.

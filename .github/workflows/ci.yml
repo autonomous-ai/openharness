@@ -681,7 +681,7 @@ jobs:
 
   # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
   # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
-  # pty/, term/, the vendored terminal and the CLI's code (scripts/ci-plan.py ALSO, DEPENDS), and by installer/, whose
+  # pty/, term/, the vendored terminal and the CLI's code (scripts/ci-plan.py ALSO, PR_READS), and by installer/, whose
   # model and steps (harness-install.exe) are plain Rust that tests here.
   pty-checks:
     concurrency:

@@ -83,8 +83,7 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", saver)
 
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
-        for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
-                     ".github/workflows/ci.yml", "Makefile", "surprise.py"]:
+        for path in ["docs/guide.md", "README.md", "scripts/ci-plan.py", ".github/workflows/ci.yml", "Makefile", "surprise.py"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], set())
 
@@ -184,21 +183,51 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
 
     def test_every_declared_input_selects_the_suite_that_reads_it(self):
-        # Selection and reuse read the same declaration: a PR that changes a suite's input runs that suite.
-        for suite, entries in planner.DEPENDS.items():
+        # A PR that changes a file a suite reads runs that suite; reuse after Update branch counts it as an input too.
+        for suite, entries in planner.PR_READS.items():
             for entry in entries:
                 path = entry + "x" if entry.endswith("/") else entry
                 with self.subTest(suite=suite, path=path):
-                    self.assertTrue(planner.reads(suite, path))
                     self.assertIn(suite, planner.select([path])[0])
+                    self.assertTrue(planner.reads(suite, path) or planner.shared_input(path))
+
+    def test_the_cli_spec_reruns_on_either_device_history_copy(self):
+        # deviceHistory.spec.ts compares the desktop's and the phone's copies with its own (SEC-1 on #4087): the path was
+        # built from a name, the scan did not see it, and a narrowed list let a changed copy reuse the CLI's result.
+        for app in ("desktop", "mobile"):
+            path = f"{app}/test/viewer/deviceHistory.vectors.json"
+            with self.subTest(path=path):
+                self.assertIn("cli", planner.select([path])[0])
+                self.assertTrue(planner.reads("cli", path))
+
+    def test_the_store_example_images_select_the_desktop_suite(self):
+        # store_discover_test.dart opens each Store example image from the repository; seven are in docs/images/ (SEC-1).
+        self.assertEqual(planner.select(["docs/images/poster.png"])[0], {"desktop"})
+
+    def test_reuse_keeps_the_broad_inputs_selection_narrows(self):
+        # The scan misses a path joined from parts (SEC-2 on #4087), so reuse counts everything a suite may read: Desktop
+        # every input of its sparse checkout. Only selection uses the narrow lists, where a miss runs one suite too few.
+        for entry in planner.ci.SOURCE_INPUTS["desktop"]:
+            path = entry + "x" if entry.endswith("/") else entry
+            with self.subTest(path=path):
+                self.assertTrue(planner.reads("desktop", path) or planner.shared_input(path))
+        self.assertTrue(planner.reads("desktop", "cli/src/lib/tmuxBackend.ts"))
+        self.assertNotIn("desktop", planner.select(["cli/src/lib/tmuxBackend.ts"])[0])
+        # The folders the other suites narrowed for selection stay whole for reuse.
+        for suite, path in (("cli", "desktop/test/a.json"), ("daemons", "cli/src/a.ts"), ("firmware", "cli/src/a.ts"),
+                            ("mobile", "desktop/lib/a.dart"), ("os", "cli/src/a.ts"), ("website", "backend/src/a.ts")):
+            with self.subTest(suite=suite, path=path):
+                self.assertTrue(planner.reads(suite, path))
+                self.assertNotIn(suite, planner.select([path])[0])
 
     def test_every_declared_input_exists(self):
         # A declaration of a removed file selects a suite for a look-alike someone adds later, and hides nothing it reads.
         root = Path(__file__).resolve().parents[2]
         if not (root / "cli/src").is_dir():
             self.skipTest("needs a full checkout (CI's process checks are sparse)")
-        for suite, entries in planner.DEPENDS.items():
-            for entry in entries:
+        for suite, entries in [*planner.DEPENDS.items(), *planner.PR_READS.items()]:
+            # A shared input (the sparse checkout's optional .gitmodules) reruns everything whether it exists or not.
+            for entry in (entry for entry in entries if not planner.shared_input(entry)):
                 with self.subTest(suite=suite, entry=entry):
                     self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
 
@@ -1062,6 +1091,7 @@ class CrossReadTests(unittest.TestCase):
         for suite in sorted(planner.SUITES):
             with self.subTest(suite=suite):
                 self.assertEqual(planner.undeclared_reads(repository, suite), [])
+                self.assertEqual(planner.undeclared_reads(repository, suite, inputs=planner.PR_READS), [])
 
 
 class ReusedGateTests(unittest.TestCase):

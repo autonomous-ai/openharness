@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Select fast CI suites from a complete Git diff and verify their final results.
 
-A PR runs the unit suite of each component it changes and of each suite that reads a changed file (DEPENDS). Merge
+A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS). Merge
 groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
@@ -65,12 +65,57 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
-# The files each suite reads outside its own directory. A PR that changes one runs that suite (#4033 changed a CLI file
-# Desktop's tests read and ran the CLI's suite only); after Update branch, main changing one reruns it, because main's
-# commits were never tested together with this PR. "dir/" is a prefix, else a file. Name files, not their folders: a
-# folder runs its reader on every PR that touches it. test_ci_plan.CrossReadTests scans the components' sources and
-# fails on an undeclared read; a path built from parts is declared by hand, or named in full where it is read.
+# Reuse after Update branch. Reusing an earlier result needs every file a suite may read outside its own directory,
+# because main's commits were never tested together with this PR: these sets are broad on purpose, as the scan misses a
+# path joined from parts, and a miss here would reuse a stale result. "dir/" is a prefix, else a file.
+# test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
+# The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
+    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
+    # reads the CLI's super-tab usage line.
+    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
+                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
+                "daemons/frames.json",
+                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "provider/reference-provider/", "tests/fixtures/"),
+    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
+    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
+    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+            "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/",
+            "tui/"),
+    "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
+                   "docs/research/2026-09-30-memory-extraction-cases.json"),
+    # Its generators write (and its checks may compare) these outputs.
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "cli/src/", "desktop/assets/daemon-art/",
+                "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
+                "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
+    "firmware": ("cli/scripts/", "cli/src/", "daemons/plates/tux.mjs", "daemons/review/traits.html",
+                 "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
+    # Its tools also import the web release scripts; its tests see only the sparse inputs.
+    "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
+    "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
+               "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
+               "docs/performance/"),
+    # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
+    # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
+    # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
+    "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "term/", "tui/"),
+    "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
+    "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
+            "tests/fixtures/shared-pane-layouts.json"),
+    "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
+                "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
+                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
+}
+
+# Selection. The files each suite reads outside its own directory, as narrow as the scan shows: a PR that changes one
+# runs that suite (#4033 changed a CLI file Desktop's tests read and ran the CLI's suite only). Each is inside the
+# suite's DEPENDS above. Name files, not their folders: a folder runs its reader on every PR that touches it.
+# test_ci_plan.CrossReadTests scans the components' sources against these too; a path built from parts is declared by
+# hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
+PR_READS = {
     # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
     # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
@@ -86,8 +131,10 @@ DEPENDS = {
     "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
             "cli/e2e/harness/", "desktop/assets/connector-icons/",
             "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
-            "desktop/test/viewer/deviceAck.vectors.json", "devices/harness-device/firmware/test/vectors/", "docs/contracts/",
-            "mobile/assets/connector-icons/", "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
+            "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
+            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/assets/connector-icons/",
+            "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
+            "mobile/test/viewer/deviceHistory.vectors.json",
             "pty/", "store/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
@@ -98,16 +145,16 @@ DEPENDS = {
     "firmware": ("daemons/plates/tux.mjs", "daemons/review/traits.html",
                  "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
     # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
-    # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, and store/ (its
-    # agents, branding and hands-on list; the scan skips a path outside every component); its tools also import the web
-    # release scripts.
+    # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
+    # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);
+    # the scan skips a path outside every component. Its tools also import the web release scripts.
     "desktop": ("backend/src/lib/communityContract.ts", "backend/src/lib/hubMetricsContract.ts", "cli/src/engines/",
                 "cli/src/lib/__fixtures__/github-repository-vectors.json", "cli/src/lib/e2ee/applicationFrames.ts",
                 "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineInstall.ts", "cli/src/lib/engineLaunch.ts",
                 "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts", "cli/src/lib/viewerFrames.ts",
                 # The Windows pipe's shared proof vectors; the goal file's rows (desktop/test/swarm_goal_test.dart).
                 "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json", "cli/src/messages/wire.ts",
-                "cli/src/sharing/protocol.ts", "cli/src/superTabs/__fixtures__/goal-rows.json", "daemons/frames.json",
+                "cli/src/sharing/protocol.ts", "cli/src/superTabs/__fixtures__/goal-rows.json", "daemons/frames.json", "docs/images/",
                 "daemons/plates.json",
                 "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
                 "daemons/tools/illustrated/generate.py", "mobile/lib/e2ee/relay_session_crypto.dart",
@@ -251,12 +298,12 @@ def owners(path):
 
 
 def select(paths):
-    """Each changed path runs its owners' suites and every suite that declares it an input (DEPENDS), as reuse reads it."""
+    """Each changed path runs its owners' suites and every suite that declares reading it (PR_READS)."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
-        scopes = owners(path) | {suite for suite, entries in DEPENDS.items() if any(covers(entry, path) for entry in entries)}
+        scopes = owners(path) | {suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
         selected |= scopes
         reasons[path] = sorted(scopes)
     return selected, reasons
@@ -285,9 +332,10 @@ def shared_input(path):
     return None
 
 
-def reads(suite, path):
+def reads(suite, path, inputs=None):
+    """Whether the suite reads this path: its own files, or its inputs (DEPENDS for reuse; PR_READS for selection)."""
     own = suite in owners(path) and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
-    return own or any(covers(entry, path) for entry in DEPENDS.get(suite, ()))
+    return own or any(covers(entry, path) for entry in (DEPENDS if inputs is None else inputs).get(suite, ()))
 
 
 def changed_paths(root, old, new):
@@ -490,8 +538,8 @@ QUOTED_PATH = re.compile(r"""(?<![\w/.-])['"](?!\.\.?/)([A-Za-z0-9_.-]+/[^'"`\s$
 COMMENT_LINE = ("//", "#", "*", "/*", "<!--")
 
 
-def undeclared_reads(root, suite, known_paths=()):
-    """Files of this suite that name another directory's path without a DEPENDS entry: [(source, target)].
+def undeclared_reads(root, suite, known_paths=(), inputs=None):
+    """Files of this suite that name another directory's path without an entry in inputs (DEPENDS): [(source, target)].
 
     Run on a full checkout (the merge helper's, before accepting reuse; or locally). A read the scan
     cannot see (a path built from parts) belongs in DEPENDS by hand. known_paths count as existing:
@@ -511,7 +559,7 @@ def undeclared_reads(root, suite, known_paths=()):
         except (OSError, UnicodeDecodeError):
             continue
         top = source.split("/", 1)[0]
-        if not reads(suite, source):
+        if not reads(suite, source, inputs):
             continue  # In a folder this suite skips; what it refers to is read only if a read file says so.
 
         def existing(target):
@@ -538,7 +586,7 @@ def undeclared_reads(root, suite, known_paths=()):
                       and (t in tracked or t in folders or str(PurePosixPath(t).parent) in folders)]
             if inside:
                 known = existing(inside[0])
-                if known and not reads(suite, known + "x" if known.endswith("/") else known):
+                if known and not reads(suite, known + "x" if known.endswith("/") else known, inputs):
                     found.append((source, known))
                 # Fail closed when the other reading names a real path too: a look-alike file inside the
                 # component (which the PR controls) must not hide a read of another directory.
@@ -546,7 +594,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     if target.split("/", 1)[0] != top and (target in tracked or target in folders):
                         known = target + "/" if target in folders else target
                         probe = known + "x" if known.endswith("/") else known
-                        if known not in data and not shared_input(probe) and not reads(suite, probe):
+                        if known not in data and not shared_input(probe) and not reads(suite, probe, inputs):
                             found.append((source, known))
                 continue
             for target in targets:
@@ -557,7 +605,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     continue  # Names nothing in this repository (a URL path, a generated file).
                 # A folder read (a path built at run time) needs the whole folder declared.
                 probe = known + "x" if known.endswith("/") else known
-                if not shared_input(probe) and not reads(suite, probe):
+                if not shared_input(probe) and not reads(suite, probe, inputs):
                     found.append((source, known))
                 break
 
@@ -576,7 +624,7 @@ def undeclared_reads(root, suite, known_paths=()):
             if known is None or any(covers(entry, known) for entry in data):
                 continue
             probe = known + "x" if known.endswith("/") else known
-            if not shared_input(probe) and not reads(suite, probe):
+            if not shared_input(probe) and not reads(suite, probe, inputs):
                 found.append((source, known))
     return sorted(set(found))
 
