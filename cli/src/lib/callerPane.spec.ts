@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
-import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
+import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { processProbe, runningPane, systemTmuxPaths, windowsRunningPane } from './callerPane.js'
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -154,7 +154,7 @@ describe('reading the real processes and panes', () => {
       writeFileSync(join(fakeBin, 'tmux'), '#!/bin/sh\necho "%7 $PPID"\n', { mode: 0o755 })
       const probeScript = (out: string, cases: string) => {
         const script = join(tmux.root, `${basename(out)}.mts`)
-        writeFileSync(script, `import { writeFileSync } from 'node:fs'\nimport { runningPane } from ${JSON.stringify(join(CLI_ROOT, 'src/superTabs/callerPane.ts'))}\n`
+        writeFileSync(script, `import { writeFileSync } from 'node:fs'\nimport { runningPane } from ${JSON.stringify(join(CLI_ROOT, 'src/lib/callerPane.ts'))}\n`
           + `const env = process.env\nwriteFileSync(${JSON.stringify(out)}, JSON.stringify(${cases}))\n`)
         return `${shellQuote(process.execPath)} ${shellQuote(TSX)} ${shellQuote(script)}`
       }
