@@ -21,9 +21,11 @@ void main() {
       isNotNull,
       reason: 'FIRST_PROMPT_ARGS moved or changed shape',
     );
+    // An entry takes a first task unless it is null: an argument list, or a task typed into the session once it opens
+    // (`'typed'`, as OpenClaw's contract declares since #4033), named or written in place.
     final entries = {
       for (final m in RegExp(
-        r'^\s*([a-z]+):\s*(null|\[)',
+        r'^\s*([a-z]+):\s*([^,\s]+)',
         multiLine: true,
       ).allMatches(table!.group(1)!))
         m.group(1)!: m.group(2) != 'null',
