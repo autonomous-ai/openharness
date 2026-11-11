@@ -126,6 +126,17 @@ bool fw_update_offer(const char *version, int size, const char *sha256_hex)
         return false;
     }
 
+    // The image this dial just rolled back from sits in that slot, marked invalid (fw_confirm_boot). The
+    // daemon offers the same version again on every hello; installing it again would only fail the same way,
+    // so decline it — silently, like every other decline, and without erasing anything. A newer one goes in.
+    esp_ota_img_states_t slot_state;
+    esp_app_desc_t slot_image;
+    if (esp_ota_get_state_partition(target, &slot_state) == ESP_OK && slot_state == ESP_OTA_IMG_INVALID &&
+        esp_ota_get_partition_description(target, &slot_image) == ESP_OK && !strcmp(slot_image.version, version)) {
+        ESP_LOGW(TAG, "offer %s declined: that image failed to start here", version);
+        return false;
+    }
+
     // esp_ota_begin ERASES the slot, which takes seconds — and is why a failed offer must not be retried
     // on a cadence: every attempt spends erase cycles on the user's hardware.
     ESP_LOGI(TAG, "accepting %s (%d B) into %s", version, size, target->label);
