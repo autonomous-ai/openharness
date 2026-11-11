@@ -35,6 +35,7 @@ import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, 
 import { defaultAccountOnly, SWITCH_CAPABILITY } from './pmAccount.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { COORDINATOR_NAME } from './roleNames.js'
+import { pmChatsEnded, pmChatWaits, takePmChat, waitingPmChat } from './pmChat.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** How long a Swarm invitation stays open; its sent time is its expiry minus this (store.ts invite.accept). */
@@ -730,6 +731,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const late = leadArrived(state, project, agentId, context.now)
     if (late.length) effects.lateDeliveries = [...effects.lateDeliveries ?? [], ...late]
   }
+  /** [project]'s PM [agentId], of [person], joined: it takes the 1:1 chat its start opened, with what waited there (pmChat.ts).
+   *  That chat's id, or undefined when none waited for this person's PM. */
+  const takeChat = (project: SwarmProject, agentId: string, person: { id: string; generation: string }): string | undefined => {
+    const taken = takePmChat(state, project, agentId, person)
+    if (taken?.late.length) effects.lateDeliveries = [...effects.lateDeliveries ?? [], ...taken.late]
+    return taken?.chatId
+  }
+  /** The 1:1 chat with [project]'s next PM for [me], who asks for it: the one already waiting for their PM, else a new one. */
+  const chatForPm = (project: SwarmProject, me: { id: string; generation: string }): string => {
+    const waiting = waitingPmChat(state, project, me)
+    if (waiting) return waiting.id
+    project.pmChat = { id: openAgentChat(me, COORDINATOR_NAME) }
+    return project.pmChat.id
+  }
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   /** [project] deleted with its own agents, its Lead included (their hosts close their sessions), its starts and machines' lists. */
   const deleteWholeProject = (project: SwarmProject) => {
@@ -896,8 +911,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its person named no model: the coordinator's built-in default for this engine (Claude Opus 5.5 at xhigh), since the
       // project's instructions cannot choose a model before any agent reads them (project instructions, design call).
       const asked = leadEffort(withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead))
-      const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
-      Object.assign(result, { startId: start.id, machineId: start.request.machineId })
+      const me = person(state, actor.userId)
+      const start = placeLead(state, project, me, machineId, asked, operationId, context)
+      // Its person's 1:1 chat with it opens now, so their request goes there rather than to the channel (pmChat.ts).
+      Object.assign(result, { startId: start.id, machineId: start.request.machineId, chatId: chatForPm(project, me) })
       break
     }
     case 'lead.claim': {
@@ -909,6 +926,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = manageProject(state, actor, command.projectId)
       const home = conversation(state, project.leadConversationId)
       if (home.leadId && home.agentIds.includes(home.leadId)) fail('LEAD_EXISTS', `This project already has its ${COORDINATOR_NAME}.`)
+      // The chat its person talks to the Lead in, whichever start brings it (pmChat.ts).
+      result.chatId = chatForPm(project, person(state, actor.userId))
       // One start at a time: another machine's recent claim, or a start the Swarm runs, is the one. The same machine claims
       // again only once its own start ended, which its Desktop knows.
       const held = project.leadClaim
@@ -1389,12 +1408,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (group.id === project.leadConversationId) {
           arrived(project, agentId)
           // Swarm v4 (anh Dee 2026-11-08): the project chat is its channel, where only agents post, so its person talks to the PM
-          // in a chat of its own, once (agentKind.ts agentChatId).
+          // in a chat of its own, once (agentKind.ts agentChatId): the one its start opened (lead.claim), when it is its person's.
           if (!state.conversations.some(c => isAgentChat(c) && c.agentIds.includes(agentId))) {
-            pmChat = openAgentChat(contributor, addedName)
-            open(state, pmChat).agentIds.push(agentId)
-            state.agents.find(a => a.id === agentId)!.chatId = pmChat
-          }
+            pmChat = takeChat(project, agentId, contributor)
+            if (!pmChat) {
+              pmChat = openAgentChat(contributor, addedName)
+              open(state, pmChat).agentIds.push(agentId)
+              state.agents.find(a => a.id === agentId)!.chatId = pmChat
+            }
+          } else delete project.pmChat
         }
       }
       result.agentId = agentId
@@ -1687,7 +1709,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
           const joined = leadJoined(state, start, group, agentId)
           message(group.id, joined.text, [], null, joined.source)
-          if (group.leadId === agentId) arrived(projectOf(state, start.request.leadFor.projectId), agentId)
+          if (group.leadId === agentId) {
+            const project = projectOf(state, start.request.leadFor.projectId)
+            arrived(project, agentId)
+            // It takes the 1:1 chat lead.start opened, so the time checks open none (agentChats.ts).
+            takeChat(project, agentId, { id: start.contributorId, generation: start.membershipGeneration })
+          }
         }
       }
       // Naming who started it, as any agent added to a chat is named with who added it (#2207).
@@ -2085,6 +2112,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.agentOnly && (actor.kind !== 'agent' || recipients.length !== 1 || recipients[0] !== actor.agentId || mentions.length)) {
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
+      // A PM's chat before its PM is there: what its person sends waits for it (pmChat.ts).
+      if (actor.kind === 'person' && isAgentChat(group) && !recipients.length) pmChatWaits(state, group, operationId)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
@@ -2149,6 +2178,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
+  // A PM chat this command left without its PM says so, to its person alone (pmChat.ts). A Swarm being deleted says nothing.
+  if (command.type !== 'swarm.delete') effects.messages.push(...pmChatsEnded(original, state, operationId))
   markConfidential(state)
   assignAgentDisplayNames(state.agents)
   keepUsernames(original, state)

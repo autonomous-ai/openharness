@@ -819,9 +819,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
     // loaded, by nobody.
-    visible.projects = visible.projects.map(({ status, ...p }) => {
+    visible.projects = visible.projects.map(({ status, pmChat, ...p }) => {
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
-      return chat && canReadGroup(state, actor, chat) && status ? { ...p, status } : p
+      // Its PM's chat and what waits there, read by those who read that chat: its person (pmChat.ts).
+      const own = pmChat && state.conversations.find(c => c.id === pmChat.id)
+      return { ...p, ...chat && canReadGroup(state, actor, chat) && status ? { status } : {}, ...own && canReadGroup(state, actor, own) ? { pmChat } : {} }
     })
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
