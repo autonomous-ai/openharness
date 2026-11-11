@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -251,15 +250,18 @@ const kPersonalSwarmRow = kPersonalSwarmOperation;
 
 /// The Swarms a person opens from outside a Swarm (the New Tab page, a Swarm draft, ⌘K): on the Desktop, Personal first,
 /// always, then those closed on this computer, so their Personal Swarm is in reach on each of their computers without
-/// another Swarm open (anh Dee, 2026-11-11). The web's list stays the Swarms closed there.
-List<({String id, String name})> swarmsToOpen(AppNotifier app) {
+/// another Swarm open (anh Dee, 2026-11-11). Without [personal] (the web's host), the Swarms closed there alone.
+List<({String id, String name})> swarmsToOpen(
+  AppNotifier app, {
+  required bool personal,
+}) {
   final closed = app.closedSuperTabs;
-  if (kIsWeb || app.currentUser == null) return closed;
-  final personal = PersonalSwarm.of(app).id;
+  if (!personal || app.currentUser == null) return closed;
+  final known = PersonalSwarm.of(app).id;
   return [
     (id: kPersonalSwarmRow, name: kPersonalSwarmName),
     for (final tab in closed)
-      if (tab.id != personal) tab,
+      if (tab.id != known) tab,
   ];
 }
 

@@ -605,7 +605,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app: app.activeSwarm.isSuperTab ? null : app,
     // The palette lists the same Swarms. A Swarm draft has no recents but
     // still offers these.
-    closedSuperTabs: swarmsToOpen(app),
+    closedSuperTabs: swarmsToOpen(app, personal: widget.chrome == null),
     onOpenSuperTab: _openClosedSuperTab,
     projects: _projects.projects,
     onOpen: (row) {
@@ -8268,7 +8268,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ),
     // Where New Swarm lives: the tabs closed here, back by name.
     if (_canExecuteCommand('super_tab.new'))
-      for (final tab in swarmsToOpen(app))
+      for (final tab in swarmsToOpen(app, personal: widget.chrome == null))
         SwarmDestination(
           id: 'command:$_closedSuperTabCommand${tab.id}',
           title: tab.name,
