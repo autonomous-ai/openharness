@@ -158,6 +158,33 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('stopped'))).toEqual([])
   })
 
+  // GitHub lists a changed binary with no patch and `changes: 0` (seen on git/git's git-gui.ico): two heads that differed
+  // only in a binary read as one change, so a READ-OK on the first counted for the second, which nobody had read.
+  const binary = (blob: string, extra: Json = {}) => ({ files: [changed(['+    days = int(n)', '-    days = 1']).files[0],
+    { filename: 'assets/logo.png', status: 'modified', changes: 0, additions: 0, deletions: 0, sha: blob, ...extra }] })
+  it('takes no READ-OK on an earlier head whose binary file differs from the head\'s', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    f.github.repo.compare.set('a1b2c3d', binary('1111111111111111111111111111111111111111'))
+    f.github.repo.compare.set(HEAD, binary('2222222222222222222222222222222222222222'))
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+  it('counts a READ-OK on an earlier head whose binary file is the head\'s own, and none when GitHub names no content for it', async () => {
+    const same = setup()
+    same.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    same.github.repo.compare.set('a1b2c3d', binary('1111111111111111111111111111111111111111'))
+    same.github.repo.compare.set(HEAD, binary('1111111111111111111111111111111111111111'))
+    await settle(same)
+    expect(same.merges()).toHaveLength(1)
+    const unnamed = setup()
+    unnamed.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    unnamed.github.repo.compare.set('a1b2c3d', binary('', { sha: undefined }))
+    unnamed.github.repo.compare.set(HEAD, binary('', { sha: undefined }))
+    await settle(unnamed)
+    expect(unnamed.merges()).toEqual([])
+  })
+
   it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
     const f = setup()
     f.crew.mockResolvedValue({ builders: [{ id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }], machines: [] })
