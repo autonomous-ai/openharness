@@ -9,6 +9,8 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/loopback_websocket.dart';
+
 void main() {
   test(
     'a real native link handshake survives the old five-second retry tick',
@@ -21,7 +23,8 @@ void main() {
       final timers = <Timer>[];
       var stopped = false;
       server.listen((request) async {
-        final ws = await WebSocketTransformer.upgrade(request);
+        final ws = await acceptWebSocket(request);
+        if (ws == null) return;
         clients.add(ws);
         var refusedSocket = false;
         ws.listen((data) {
@@ -65,6 +68,17 @@ void main() {
           }
         });
       });
+
+      // Any process on this computer may knock on a loopback port: in a
+      // parallel suite that is another file's plain HTTP request. The
+      // fixture refuses it and keeps serving.
+      final client = HttpClient();
+      final stray = await (await client.getUrl(
+        Uri.parse('http://127.0.0.1:${server.port}/'),
+      )).close();
+      await stray.drain<void>();
+      client.close();
+      expect(stray.statusCode, HttpStatus.badRequest);
 
       late AppNotifier app;
       WsConn? current;

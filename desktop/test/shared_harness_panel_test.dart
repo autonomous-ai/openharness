@@ -16,6 +16,7 @@ import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
 import 'support/real_fonts.dart';
+import 'support/loopback_websocket.dart';
 
 void main() {
   setUpAll(() async {
@@ -94,7 +95,8 @@ void main() {
         await tester.runAsync(() async {
           server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
           server.listen((request) async {
-            final ws = await WebSocketTransformer.upgrade(request);
+            final ws = await acceptWebSocket(request);
+            if (ws == null) return;
             sockets.add(ws);
             ws.listen((raw) {
               if (closingSockets.contains(ws) ||
@@ -334,10 +336,7 @@ void main() {
         );
         hasAccess = false;
         await draw();
-        expect(
-          find.text('Sharing ended'),
-          findsOneWidget,
-        );
+        expect(find.text('Sharing ended'), findsOneWidget);
         await tester.tap(find.byTooltip('Close shared harness'));
         expect(closePressed, isTrue);
         await tester.pumpWidget(const SizedBox());
@@ -401,7 +400,8 @@ void main() {
       await tester.runAsync(() async {
         server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         server.listen((request) async {
-          final ws = await WebSocketTransformer.upgrade(request);
+          final ws = await acceptWebSocket(request);
+          if (ws == null) return;
           sockets.add(ws);
           ws.listen((raw) {
             if (raw is! String || ws.readyState != WebSocket.open) return;
