@@ -65,7 +65,7 @@ void main() {
   });
 
   _ProbeProcess healthy(List<String> arguments) {
-    final value = arguments.contains('--version') ? 'v20.18.0' : 'ready';
+    final value = arguments.contains('--version') ? 'v24.22.2' : 'ready';
     final child = _ProbeProcess.finished(utf8.encode(value));
     children.add(child);
     return child;
@@ -174,7 +174,7 @@ void main() {
     'partial UTF-8 in tool output does not prevent a successful check',
     () async {
       final setup = provisioner((_, arguments, {environment}) async {
-        final text = arguments.contains('--version') ? 'v20.18.0\n' : 'ready\n';
+        final text = arguments.contains('--version') ? 'v24.22.2\n' : 'ready\n';
         final child = _ProbeProcess.finished([...utf8.encode(text), 0xff]);
         children.add(child);
         return child;

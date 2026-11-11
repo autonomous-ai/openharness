@@ -13,7 +13,6 @@ import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_settings.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -167,7 +166,6 @@ void main() {
         home: const SwarmProjectPage(
           swarmId: tab,
           projectId: project,
-          tabs: SwarmProjectTab.homeC,
         ),
       ),
     );
@@ -246,7 +244,7 @@ void main() {
   ];
 
   /// Opens the menu of its owner who may write on a phone of [size], with
-  /// [top] for its status bar: all eight rows, the most it ever has, each a
+  /// [top] for its status bar: all six rows, the most it ever has, each a
   /// finger tall, inside the panel and the panel on the screen, with nothing
   /// to scroll; with [across], each label whole inside the panel too.
   Future<void> menuFits(
@@ -267,10 +265,7 @@ void main() {
     final rows = [
       for (final row in [
         'terminal',
-        'status',
         'leaderboard',
-        'work',
-        'team',
         'sharing',
         'notifications',
         'settings',
@@ -330,9 +325,9 @@ void main() {
         findsOneWidget,
       );
       final notifications = key('swarm-project-menu-notifications');
-      final team = tester.getTopLeft(key('swarm-project-menu-team')).dy;
+      final board = tester.getTopLeft(key('swarm-project-menu-leaderboard')).dy;
       final sharing = tester.getTopLeft(sharingRow).dy;
-      expect(team, lessThan(sharing));
+      expect(board, lessThan(sharing));
       expect(sharing, lessThan(tester.getTopLeft(notifications).dy));
       expect(
         tester.getTopLeft(notifications).dy,
@@ -341,10 +336,10 @@ void main() {
       expect(find.textContaining('Delete'), findsNothing);
     });
 
-    // Tall enough for all eight, whatever the face: across is measured in
+    // Tall enough for all six, whatever the face: across is measured in
     // the phone's faces, in the last group.
     for (final (phone, size, top) in phones) {
-      testWidgets('on $phone all eight rows fit the menu and the screen, '
+      testWidgets('on $phone all six rows fit the menu and the screen, '
           'Project settings… included, with no scrolling', (tester) async {
         await menuFits(tester, size, top, across: false);
       });
@@ -1106,7 +1101,7 @@ void main() {
     setUpAll(loadRealFonts);
 
     for (final (phone, size, top) in phones) {
-      testWidgets('on $phone all eight rows fit across, every label whole', (
+      testWidgets('on $phone all six rows fit across, every label whole', (
         tester,
       ) async {
         await menuFits(tester, size, top, across: true);

@@ -686,7 +686,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       preview?.blockedReason ??
                       (preview?.blockedProjectName == null
                           ? null
-                          : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.');
+                          : 'This machine runs the $kDefaultCoordinatorName of project ${preview!.blockedProjectName}. Delete the project first.');
                   final enabled =
                       permitted &&
                       reason == null &&

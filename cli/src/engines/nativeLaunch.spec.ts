@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch } from './nativeLaunch.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
@@ -66,6 +67,16 @@ it('says why an OpenCode that ran and failed cannot run, and waits for one that 
   const changing = await inspectNativeLaunch('opencode')
   expect(changing).toMatchObject({ ok: false, unavailable: 'native' })
   expect(changing).not.toHaveProperty('refusal')
+})
+it('refuses an OpenClaw that has no Node it can run on, with the named state', async () => {
+  const recorded = (name: string) => readFileSync(new URL(`./openclaw/__fixtures__/${name}`, import.meta.url), 'utf8')
+  // Node 22: `--version` answers, with a warning. Below 22 it refuses.
+  fixture.version = recorded('version-old-node-darwin.txt')
+  expect(await inspectNativeLaunch('openclaw')).toMatchObject({ ok: false, refusal: 'ENGINE_CANNOT_RUN', detail: 'OpenClaw needs Node 24.' })
+  fixture.exit = 1; fixture.version = ''; fixture.stderr = recorded('version-node20-darwin.txt')
+  expect(await inspectNativeLaunch('openclaw')).toMatchObject({ ok: false, refusal: 'ENGINE_CANNOT_RUN', detail: 'OpenClaw needs Node 24.' })
+  fixture.exit = 0; fixture.stderr = ''; fixture.version = 'OpenClaw 2026.11.2 (b556fdf)\n'
+  expect(await inspectNativeLaunch('openclaw')).toMatchObject({ ok: true })
 })
 it('says Claude Code by its name when it cannot run', async () => {
   fixture.exit = 127; fixture.stderr = 'env: node: No such file or directory\n'

@@ -10,7 +10,6 @@ import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_details.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_terminal_row.dart';
@@ -169,7 +168,6 @@ void main() {
     const SwarmProjectPage(
       swarmId: tab,
       projectId: project,
-      tabs: SwarmProjectTab.homeC,
     ),
     account: account,
   );

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -35,9 +36,9 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-async function personal(operationId = PERSONAL_SWARM_OPERATION) {
+async function personal(operation = PERSONAL_SWARM_OPERATION) {
   const store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
-  const tab = (await store.create(owner, operationId, 'Personal', 'private')).id
+  const tab = (await store.create(owner, operation, operation === PERSONAL_SWARM_OPERATION ? 'Personal' : 'Team', 'private')).id
   const execute = (command: Command) => store.execute(owner, tab, { operationId: randomUUID(), command })
   const games = (await execute({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
   const send = async (text: string) => String((await execute({ type: 'message.send', conversationId: games.conversationId, text, replyTo: null, recipientIds: [] }))
@@ -61,11 +62,60 @@ describe('a Personal Swarm project chat with no Lead', () => {
     const third = await f.send('thanks')
     expect((await delivered(f.tab, lead)).sort()).toEqual([first, second, third].sort())
   })
+})
 
-  it('in a Team Swarm delivers nothing that was sent before its Lead joined', async () => {
+// New project's opening request in any Swarm (agentsOnly.test.ts): its creator's request is kept in the new project's channel
+// before lead.start, and the PM that joins reads it there; the channel is agents only after it.
+describe('New project\'s opening request in a Team Swarm', () => {
+  it('is kept for the PM that joins, which reads it; the next post is refused', async () => {
     const f = await personal(randomUUID())
-    await f.send('hello')
+    const request = await f.send('make the landing page dark')
+    await expect(f.send('and the buttons round')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
     const lead = await f.join()
-    expect(await delivered(f.tab, lead)).toEqual([])
+    const read = await f.store.messages(owner, f.tab, f.games.conversationId, {}, lead)
+    expect(read.messages.find(m => m.id === request)).toMatchObject({ text: 'make the landing page dark', author: { kind: 'person', id: owner.sub } })
+    await expect(f.send('thanks')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
+  })
+
+  // As Desktop sends it (launch.dart startInSwarm): each file uploaded to the channel first, then one post naming them all.
+  it('takes its files first and then the post that names them, and the PM reads both', async () => {
+    const f = await personal(randomUUID())
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000201a5d6f0f60000000049454e44ae426082', 'hex')
+    const ids: string[] = []
+    for (const name of ['sketch.png', 'notes.txt']) {
+      const body = name.endsWith('.png') ? png : Buffer.from('Dark, with round buttons.\n')
+      ids.push((await f.store.upload(owner, f.tab, f.games.conversationId, { name, mime: name.endsWith('.png') ? 'image/png' : 'text/plain', body: Readable.from([body]) })).attachment.id)
+    }
+    const request = String((await f.execute({ type: 'message.send', conversationId: f.games.conversationId, text: 'make the landing page dark', replyTo: null,
+      recipientIds: [], attachmentIds: ids })).result.messageId)
+    const lead = await f.join()
+    const read = (await f.store.messages(owner, f.tab, f.games.conversationId, {}, lead)).messages.find(m => m.id === request)
+    expect(read?.attachments?.map(a => a.name)).toEqual(['sketch.png', 'notes.txt'])
+  })
+})
+
+// The other two ways Desktop hands a person's request over, both through agent.add's initialMessage: neither is a post in the
+// channel, so agents only leaves both to the person (agentsOnly.test.ts).
+describe('a person\'s request handed over with the agent that takes it, in a Team Swarm', () => {
+  // launch.dart, New project with a PM this Desktop starts: the PM joins the new channel with the request, which lands in the
+  // person's own chat with the PM.
+  it('keeps a local New project\'s request in the person\'s own chat with its new PM', async () => {
+    const f = await personal(randomUUID())
+    const added = (await f.execute({ type: 'agent.add', conversationId: f.games.conversationId, machineId: 'huy-mac', harnessId: randomUUID(), name: 'Lead',
+      lead: true, project: { cwd: '/Users/huy/games', repositoryUrl: 'https://github.com/huy/games' }, configuration: config,
+      initialMessage: 'make the landing page dark' })).result
+    const chat = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(String(added.agentId)))!
+    const rows = (await f.store.messages(owner, f.tab, chat.id, {})).messages
+    expect(rows.find(m => m.id === added.messageId)).toMatchObject({ text: 'make the landing page dark', author: { kind: 'person', id: owner.sub } })
+  })
+
+  // new_agent.dart, New agent: its 1:1 chat first (agent.new), then the session joins it with the request.
+  it('keeps New agent\'s request in the agent\'s own chat', async () => {
+    const f = await personal(randomUUID())
+    const chat = String((await f.execute({ type: 'agent.new', kind: 'regular', machineId: 'huy-mac', engine: 'claude', name: 'Ada', local: true })).result.conversationId)
+    const added = (await f.execute({ type: 'agent.add', conversationId: chat, machineId: 'huy-mac', harnessId: randomUUID(), name: 'Ada', lead: false,
+      configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }, initialMessage: 'Fix the docs' })).result
+    const rows = (await f.store.messages(owner, f.tab, chat, {})).messages
+    expect(rows.find(m => m.id === added.messageId)).toMatchObject({ text: 'Fix the docs', author: { kind: 'person', id: owner.sub } })
   })
 })

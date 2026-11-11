@@ -101,7 +101,7 @@ describe('whether a Swarm lists a session on this machine', () => {
 
 describe('current Swarm role lookup', () => {
   // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator or
-  // an agent, and an older client's Reviewer keeps its swarm-review file.
+  // an agent, and an older client's Reviewer keeps its Reviewer kind.
   it('reads a session\'s role without its kind', async () => {
     const t = setup()
     let agent: Record<string, unknown> = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
@@ -109,13 +109,13 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator' })
     groups = [{ leadId: 'other', agentIds: ['agent'] }]
     agent = { ...agent, role: 'reviewer' }
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review' })
     for (const role of ['builder', 'Tester', undefined]) {
       agent = { ...agent, role }
-      expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
+      expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent' })
     }
   })
   it('derives a Reviewer from its stored role while it is in a current group', async () => {
@@ -125,7 +125,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review' })
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
   })
@@ -159,23 +159,8 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [group] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'coordinator' : 'agent', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'coordinator' : 'agent' })
     expect(await swarmRoleFor(sources, 'personal')).toBeNull()
-  })
-  it('gives the mode of the project whose group made the role, Lead first', async () => {
-    const t = setup()
-    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
-    const projects = [{ id: 'lead', skillMode: 'default' }, { id: 'p2', skillMode: 'orchestration' }, { id: 'p3', skillMode: 'default' }]
-    let conversations: unknown[] = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }, { projectId: 'p3', leadId: 'agent', agentIds: [] }]
-    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
-      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations, projects }) } }))
-    const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'default' })
-    conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
-    // A group from before projects is in the first project.
-    conversations = [{ leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
@@ -195,7 +180,7 @@ describe('current Swarm role lookup', () => {
       ? hostForm(present ? [{ tabId: 'tab', agent }] : [], { tabs: ['tab'] })
       : swarmReply(path, { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator' })
     present = false
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
@@ -824,11 +809,9 @@ describe('Super Tab native delivery handoff', () => {
     const named = setup({ author: { kind: 'person', id: 'p1', name: 'sam', displayName: 'Sam Lee' }, text: 'Ship it?' })
     await named.open().tick()
     expect(vi.mocked(named.core.turns.deliver).mock.calls[0]![1]).toContain('@Sam Lee, to you:\nShip it?')
-    const older = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Ship it?',
-      source: { kind: 'native', phase: 'input', operator: { kind: 'person', id: 'p2', name: 'kim@example.com' } } })
+    const older = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Ship it?' })
     await older.open().tick()
     const prompt = vi.mocked(older.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain('opened by kim.')
     expect(prompt).toContain('@sam, to you:\nShip it?')
     expect(prompt).not.toContain('@example.com')
   })
@@ -4022,12 +4005,14 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     expect(typed(alone)).toEqual(['Attached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
   })
 
-  it('still closes the question its person\'s message answers, as any person\'s Swarm message does', async () => {
+  // And is its person's own input, which the short-turn guard never holds (core/input.ts readTeamHold): a person's message anywhere
+  // else is not marked so (only the machine's own person's message may close its question, above).
+  it('still closes the question its person\'s message answers, as any person\'s Swarm message does, and is marked their own input', async () => {
     const t = inChat({ createdAt: '2026-11-09T08:00:00.000Z' })
     vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'ken', email: 'ken@example.test' })
     await t.open().tick()
     expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'ok, ship it', 'team:service:superTabs:delivery',
-      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z') })
+      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z'), personsOwn: true })
   })
 
   it('is typed again, as typed, when the pane held it, with nothing read for it and one reply owed', async () => {
@@ -4056,16 +4041,13 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
         + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' --agent \'agent\' post \'lead\' \'your message\' UNIQUE_OPERATION_ID --answers \'message\'')
       expect(reads(t).length).toBeGreaterThan(0)
     })
-    it('keeps an agent\'s message in its chat, a system row and a native or agent-only notice as they were', async () => {
+    it('keeps an agent\'s message in its chat, a system row and an agent-only notice as they were', async () => {
       const agent = await wrapped({ author: { kind: 'agent', id: 'other', name: 'Builder' } })
       expect(agent.text).toContain('@Builder, to you:\nok, ship it')
       expect(agent.text).toContain(' --to \'other\'')
       const system = await wrapped({ author: KEN, source: { kind: 'system' } })
       expect(system.text).toContain('@Ken, to you:\nok, ship it')
       expect(system.text).toContain('Answer: ')
-      const native = await wrapped({ author: KEN, source: { kind: 'native', phase: 'prompt' } })
-      expect(native.text).toContain('This is an observed native prompt in Ken')
-      expect(native.text).toContain('@Ken, to you:\nok, ship it')
       const notice = await wrapped({ author: KEN, source: { kind: 'agent-only' } })
       expect(notice.text).toBe('ok, ship it')
     })
@@ -4080,7 +4062,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     it('owes none of them a reply', async () => {
       const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }
       for (const [fields, from] of [[{}, 'lead'], [{ author: { kind: 'agent', id: 'other', name: 'Builder' } }, 'chat'], [{ source: { kind: 'system' } }, 'chat'],
-        [{ source: { kind: 'native', phase: 'prompt' } }, 'chat'], [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
+        [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
         const t = setup({ conversationId: from, author: KEN, text: 'ok, ship it', ...fields })
         t.row.agent.chatId = 'chat'
         t.from(from)

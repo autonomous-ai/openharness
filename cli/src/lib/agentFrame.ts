@@ -34,6 +34,7 @@ import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredS
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 /**
  * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
@@ -73,6 +74,9 @@ export type AgentFrame = {
   closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
   identityHold?: string
+  /** What stops the agent that only the person can fix, in words for them (the spec's named states, OpenClaw's);
+   *  absent when nothing does. The daemon's own waits stay in `identityHold` and are never shown. */
+  namedState?: string
   createdAt: string
   updatedAt: string
   /**
@@ -90,6 +94,8 @@ export type AgentFrame = {
   terminal: { available: boolean; primary: string; runtimes: RegisteredSession['runtimes'] }
   engine: RegisteredSession['engine']
   selectedModel: string | null
+  /** The folder the engine's own tools run in when it is not the pane's (OpenClaw's workspace); absent when none. */
+  workspace?: string
   grid: GridFrameBlock | null
   codexHome: string | null
   /** The Claude profile folder (CLAUDE_CONFIG_DIR) this agent launched against; absent or null for the default account. */
@@ -181,6 +187,8 @@ export interface AgentFrameContext {
   activity?: () => ActivityFrame | null
   /** The runtime profile's answer for this session, or null when there is none. */
   selectedModel: string | null
+  /** The engine's own workspace, from its runtime profile; absent or null when it has none. */
+  workspace?: string | null
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
   terminalAvailable: boolean
   tokenUsage?: AgentTokenUsage | null
@@ -230,10 +238,11 @@ function frameTitle(s: RegisteredSession): string | null {
  * of the two.
  */
 const gitContexts = new SessionGitContextReader()
+const NAMED_STATES = new Set<string>(Object.values(OPENCLAW_STATES))
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
+  { selectedModel, workspace, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // The git context is git's own display projection and keeps reading git directly; the frame's
   // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
@@ -259,6 +268,7 @@ export async function agentFrame(
     closeSupported: true,
     launch: s.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
+    ...(s.identityHold && NAMED_STATES.has(s.identityHold) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase
@@ -275,6 +285,9 @@ export async function agentFrame(
     terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
     engine: s.engine,
     selectedModel,
+    // A label for OpenClaw, whose tools run in its own workspace rather than the pane's folder. Absent means no
+    // label: no other engine has one, and clients show nothing without it.
+    ...(workspace ? { workspace } : {}),
     // Where this agent's inference actually goes, so a client can tell which agents a newly picked
     // grid has left behind. Read off the live process by discovery; carries no credential. Null is
     // a real answer ("on no grid") and must be sent as one — omitting the key would make every push

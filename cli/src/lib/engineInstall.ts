@@ -135,6 +135,12 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     source: 'https://docs.github.com/en/copilot/get-started/cli-quickstart',
     executable: { names: ['copilot'], npmGlobal: true, homeRelativePaths: ['.local/bin/copilot'] },
   },
+  openclaw: {
+    // The package's own `engines` asks for Node >=24.16.0 <25 || >=26.1.0: the Node Harness ships.
+    command: 'npm install -g openclaw',
+    source: 'https://openclaw.ai/',
+    executable: { names: ['openclaw'], npmGlobal: true },
+  },
 }
 
 /**
@@ -167,6 +173,7 @@ export const ENGINE_WINDOWS_INSTALL: Readonly<Record<ProcessEngine, WindowsInsta
   grok: { powershell: 'https://x.ai/cli/install.ps1', programs: ['~\\.grok\\bin\\grok'] },
   agy: { powershell: 'https://antigravity.google/cli/install.ps1', programs: ['agy\\bin\\agy'] },
   copilot: { npm: '@github/copilot' },
+  openclaw: { npm: 'openclaw' },
 }
 
 const WINDOWS_OF = new Map((Object.keys(ENGINE_INSTALL) as ProcessEngine[]).map((engine) => [ENGINE_INSTALL[engine], ENGINE_WINDOWS_INSTALL[engine]]))

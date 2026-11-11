@@ -65,18 +65,15 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
      *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
     permissionMode: string | null = session.permissionMode ?? null,
     current?: () => boolean,
-    /** The conversation the relaunch reopens when it is not the row's own: a retarget home reopening the one a
-     *  fresh move left (retarget.ts). The process stopped is still the row's. */
-    reopens?: string,
   ): RestartAgentDeps => {
     const target = { ...session, processIdentity: session.processIdentity && { ...session.processIdentity } }
-    // Found by its id when it is another conversation: the row's transcript is the one it is leaving.
-    const conversation = reopens && reopens !== session.sessionId ? { ...session, sessionId: reopens, transcriptPath: null } : session
     const identity = paneReadIdentity(target)
     const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
       && paneReadIdentity(byAgent(target.agentId)) === identity
     const relaunchOptions = (opts: RelaunchArgvOptions) => ({
       ...opts,
+      // A fresh start of an engine whose sessions Harness names reopens the agent's own (engineLaunch.ts `agentId`).
+      agentId: session.agentId,
       ...(launch.native ? { native: launch.native } : {}),
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
       // Plan or Accept edits would come back as Ask without it.
@@ -99,9 +96,9 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     })
     return {
       ...(current ? { isCurrent: current } : {}),
-      prepareResume: () => prepareSessionResume(conversation),
+      prepareResume: () => prepareSessionResume(session),
       // The conversation the swap meant to reopen: the one a fallback to a fresh start leaves behind.
-      keepAbandoned: () => keepAbandonedConversation(conversation),
+      keepAbandoned: () => keepAbandonedConversation(session),
       // Only a backend that can refuse is asked (tmux, too old for `-e`); the pty host takes any environment.
       ...(backend.respawnRefusal ? { respawnRefusal: () => backend.respawnRefusal!(launch.env ? { env: launch.env } : {}) } : {}),
       holdOpen: async () => {
@@ -179,7 +176,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
         // The exact environment the pane is about to get, the same way `respawn` above builds it: `launch.env`
         // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges `native.environment`
         // into it), and `engineLaunchEnv` adds Windows's own-process variables.
-        stopConflictingBackgroundJob({ bin: engineBin(session.engine), sessionId: conversation.sessionId,
+        stopConflictingBackgroundJob({ bin: engineBin(session.engine), sessionId: session.sessionId,
           env: { ...process.env, ...launch.env, ...engineLaunchEnv(session.engine, launch.native) } }) } : {}),
       log: (message) => console.log(message),
     }

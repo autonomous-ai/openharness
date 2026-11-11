@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 const NOW = 50_000_000
@@ -40,18 +41,18 @@ function swarm() {
     paused: false, observation: reading as never })
   state.machines = [pool('owner-mac', 'owner', 'Owner Mac'), pool('mate-mac', 'mate', 'MacBook Pro')]
   /** An agent already in the Swarm on [machineId], under [contributorId]'s grant there. */
-  const member = (id: string, machineId: string, contributorId: string, roleName = 'Engineer') => {
+  const member = (id: string, machineId: string, contributorId: string) => {
     state.agents.push({ id, machineId, harnessId: `harness-${id}`, projectId: 'lead', machineOwnerId: contributorId, contributorId,
-      membershipGeneration: generation(contributorId), hostGrant: null, name: id, configuration: config, roleName } as never)
+      membershipGeneration: generation(contributorId), hostGrant: null, name: id, configuration: config })
     return id
   }
-  const pm = member('pm', 'owner-mac', 'owner', 'PM')
+  const pm = member('pm', 'owner-mac', 'owner')
   const chat = state.conversations.find(c => c.id === 'lead')!
   chat.leadId = pm
   chat.agentIds = [...chat.agentIds, pm]
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: state.agents.find(a => a.id === agentId)!.machineOwnerId })
-  const task = String(run({ type: 'conversation.create', projectId: 'lead', title: 'Work', brief: 'Build it.', priority: 'P2', requesterId: 'owner',
-    checks: [{ description: 'Tests pass.', independent: false }] } as Command, as(pm)).result.conversationId)
+  const task = storedTask(state, { projectId: 'lead', title: 'Work', brief: 'Build it.', requesterId: 'owner', checks: [{ description: 'Tests pass.' }],
+    creatorId: pm })
   const machine = (machineId: string) => state.machines!.find(m => m.machineId === machineId)!
   const start = (machineId: string, actor: Actor) => run({ type: 'agent.start', request: { conversationId: task, machineId, engine: 'claude', name: 'Builder',
     cwd: '/swarm/lead', worktree: true, requirements } } as Command, actor, { contribution: { machineOwnerId: machine(machineId).contributorId,
@@ -71,19 +72,6 @@ describe('with Team accounts removed', () => {
     expect(refusal(() => f.start('mate-mac', f.as(f.pm)))).toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
     expect(refusal(() => f.start('mate-mac', owner))).toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
     expect(refusal(() => f.start('owner-mac', f.as(f.pm)))).toBeNull()
-  })
-
-  it('routes past another person\'s computer, and keeps a teammate\'s own agent', () => {
-    const f = swarm()
-    const own = f.member('mates-own', 'mate-mac', 'mate')
-    const candidate = (id: string, machineId: string, agentId?: string) => ({ id, kind: agentId ? 'member' : 'new', ...agentId ? { agentId } : {}, machineId,
-      engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 2, title: `${id} on ${machineId}`, label: id })
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Work.' }, excluded: [], floor: 2, notes: false, via: 'instructions', p: null,
-      belowFloor: false, why: 'Instructions.', candidates: [candidate('c2', 'mate-mac'), candidate('c3', 'mate-mac', own), candidate('c4', 'owner-mac')] }
-    const routed = f.run({ type: 'route.record', conversationId: f.task, decision } as Command, f.as(f.pm))
-    const record = (routed.routeDecisions[0] as { record: { candidates: Array<{ id: string }>; excluded: Array<{ title: string; reason: string }> } }).record
-    expect(record.candidates.map(c => c.id)).toEqual(['c3', 'c4'])
-    expect(record.excluded.map(e => e.title)).toEqual(['c2 on mate-mac'])
   })
 
   // Security review 2 of #3446: off the Machines list, or through a machine share, the grant's contributor is not the machine's

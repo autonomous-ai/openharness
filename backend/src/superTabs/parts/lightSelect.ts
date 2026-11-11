@@ -89,6 +89,6 @@ export function lightSelect(c: LightCandidates, opts: LightOptions): Omit<SwarmP
       if (ofUndecided || d.agentIds.some(id => legacy.has(id)) || pmChats.has(g.key)) selected.set(g.key, g)
     }
   }
-  return { tabId: c.tabId, head: c.head, members: c.members, agents: c.agents, groups: [...selected.values()], starts: c.starts, progress: [],
+  return { tabId: c.tabId, head: c.head, members: c.members, agents: c.agents, groups: [...selected.values()], starts: c.starts,
     sequenceBase: c.sequenceBase, visibilityEpoch: c.visibilityEpoch, groupCounter: c.groupCounter } as Omit<SwarmParts, 'machines'>
 }

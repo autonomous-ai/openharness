@@ -35,13 +35,19 @@ afterAll(async () => {
 const run = (tab: string, command: Command, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
 async function fixture() {
   const tab = (await store.create(owner, randomUUID(), 'Receipts')).id
+  // Its person, host, adds the Lead on their own computer: an agent reads its person's chat only there (projects.ts readsAgentChat).
+  const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+  await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   const lead = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead',
-    configuration: config, lead: true })).result.agentId)
+    configuration: config, lead: true }, host)).result.agentId)
   return { tab, lead }
 }
-/** A message to the Lead and its delivery, claimed by the Lead's host. */
+/** The Lead's own chat with its person, host, the Swarm's one chat, where host talks to it: only agents post in a project's channel
+ *  (agentsOnly.test.ts). */
+const chatOf = async (tab: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, kind: 'agent-chat' } })).key
+/** Host's message to the Lead, in its chat, and its delivery, claimed by the Lead's host. */
 async function sent(tab: string, lead: string, text: string) {
-  const messageId = String((await run(tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId)
+  const messageId = String((await run(tab, { type: 'message.send', conversationId: await chatOf(tab), text, replyTo: null, recipientIds: [] }, host)).result.messageId)
   const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
   await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: `claim-${text}` })
   return { messageId, deliveryId: delivery.id, claimId: `claim-${text}` }
@@ -50,7 +56,7 @@ async function sent(tab: string, lead: string, text: string) {
 async function answered(tab: string, lead: string, text: string) {
   const one = await sent(tab, lead, text)
   await store.delivery(host, tab, lead, one.deliveryId, { type: 'ack', claimId: one.claimId, receipt: `typed-${text}`, uncertain: false })
-  await run(tab, { type: 'message.send', conversationId: 'lead', text: `Re: ${text}`, replyTo: one.messageId, recipientIds: [] }, host, lead)
+  await run(tab, { type: 'message.send', conversationId: await chatOf(tab), text: `Re: ${text}`, replyTo: one.messageId, recipientIds: [] }, host, lead)
   return one
 }
 /** Moves these deliveries' last change `days` back, as if nothing touched them since. */
@@ -139,9 +145,10 @@ describe('compacting finished deliveries (spec 5 C)', () => {
     const done = [await answered(tab, lead, 'One'), await answered(tab, lead, 'Two')]
     await sent(tab, lead, 'Waiting')
     await age(done.map(d => d.deliveryId), 15)
-    const before = [await store.messages(owner, tab, 'lead', {}), await store.messages(host, tab, 'lead', {}, lead)]
+    const chat = await chatOf(tab)
+    const before = [await store.messages(host, tab, chat, {}), await store.messages(host, tab, chat, {}, lead)]
     expect((await compactDeliveries(db, Date.now())).compacted).toBe(2)
-    expect([await store.messages(owner, tab, 'lead', {}), await store.messages(host, tab, 'lead', {}, lead)]).toEqual(before)
+    expect([await store.messages(host, tab, chat, {}), await store.messages(host, tab, chat, {}, lead)]).toEqual(before)
   })
 
   it('stops after 20 batches and counts what is left as remaining', async () => {
@@ -216,7 +223,8 @@ describe('hosts read compacted deliveries (spec 5 C)', () => {
     expect(byDelivery, JSON.stringify(plan(byDelivery))).toHaveLength(1)
     expect(byDelivery[0]!.docsExamined, JSON.stringify(plan(byDelivery))).toBeLessThanOrEqual(1)
     expect(byDelivery[0]!.command?.hint, `names its index: ${JSON.stringify(plan(byDelivery))}`).toBeTruthy()
-    const page = await profiled(db, () => store.messages(owner, tab, 'lead', {}))
+    const chat = await chatOf(tab)
+    const page = await profiled(db, () => store.messages(host, tab, chat, {}))
     const byMessage = reads(page, 'SuperTabReceipt', ['_id'])
     expect(byMessage, JSON.stringify(plan(byMessage))).toHaveLength(1)
     expect(byMessage[0]!.docsExamined, JSON.stringify(plan(byMessage))).toBeLessThanOrEqual(3)
@@ -245,7 +253,7 @@ describe('hosts read compacted deliveries (spec 5 C)', () => {
     expect(shape(b, compacted)).toEqual(shape(a, live))
     expect(b.delivery).toMatchObject({ status: 'delivered', receipt: 'typed', holdReason: null })
     expect(await receiptOf(compacted.messageId)).toMatchObject({ receipts: {}, deliveryIds: [] })
-    const page = await store.messages(owner, tab, 'lead', {})
+    const page = await store.messages(host, tab, await chatOf(tab), {})
     expect(page.messages.find(m => m.id === compacted.messageId)!.deliveries).toEqual([expect.objectContaining({ id: compacted.deliveryId, status: 'delivered' })])
   })
 })

@@ -8,7 +8,6 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -18,7 +17,7 @@ import { weekStart } from '../src/superTabs/leaderboard/week.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, queryShape } from './bench/profile.js'
@@ -78,9 +77,7 @@ async function scene() {
   })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: 700, messages: [] })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700, messages: [] }, MIGRATED)
   const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId, key: done } }))!
   const bulk = (prefix: string, n: number, projectId: string, dormant: boolean) => Array.from({ length: n }, (_, i) => {
     const key = `${prefix}${String(i).padStart(3, '0')}`

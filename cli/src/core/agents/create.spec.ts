@@ -174,7 +174,7 @@ describe('creating an agent', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
-  // Swarm v4: no skill file and no launch line for any Swarm role; each starts plain.
+  // Swarm v4: no skill file and no skill mode; each Swarm role starts with the team's basics as its launch line.
   it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
     for (const role of ['coordinator', 'agent'] as const) {
       const cwd = folder()
@@ -182,8 +182,8 @@ describe('creating an agent', () => {
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone.
-      expect(place.swarmInstructions).toContain('Never watch GitHub yourself')
+      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone, byte for byte.
+      expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(role === 'coordinator'))
       expect(place.swarmInstructions?.includes('You are your project\'s PM')).toBe(role === 'coordinator')
     }
   })
@@ -217,14 +217,6 @@ describe('creating an agent', () => {
     for (const role of ['coordinator', 'agent'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
     expect(await extraArgsOf({ engine: 'codex' })).not.toContain('check_for_update_on_startup=false')
     expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
-  })
-
-  it.each(['default', 'orchestration'] as const)('keeps the project\'s %s mode on the saved row, with only the team\'s basics at launch', async mode => {
-    const cwd = folder()
-    await setup().create(request({ cwd, swarmRole: 'agent', swarmSkillMode: mode }))
-    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode })
-    expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
   })
 
   // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance

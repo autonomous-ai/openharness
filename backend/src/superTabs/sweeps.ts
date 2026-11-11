@@ -8,18 +8,17 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
 import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
-import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
 import { sweepChatSettings } from './chatSettings.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
-/** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
+/** Parts whose key is never used twice (conversations, starts) lose their tombstone at `purgeAt`.
  *  A person or machine can come back under the same key, so its tombstone is kept for good, compacted to its
  *  version (`compactTombstones`): versions never reset (spec ruling 6, review round 1). An agent's goes at `purgeAt` once
  *  nothing open names it (agentTombstones.ts). Run by the singleton worker at
  *  startup, like the terminal and mention expiry indexes. */
 export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
-  for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
+  for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart']) {
     await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
 }
@@ -166,7 +165,7 @@ export async function chatSettings(db: PrismaClient, now: number) {
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
+    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), threadMarks: await threadMarks(db, now),
     chatSettings: await chatSettings(db, now) }
 }
 

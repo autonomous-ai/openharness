@@ -1782,7 +1782,7 @@ class SuperTabController extends ChangeNotifier {
   bool messagesRead(String id) => _messages[id] != null;
 
   static bool _listed(SuperTabMessage m) =>
-      !m.terminalPrompt && !m.terminalGap && !m.instructionsSave;
+      !m.terminalPrompt && !m.terminalGap && !m.leadTerminalNote;
 
   bool hasOlder(String id) => _before[id] != null;
 
@@ -4150,12 +4150,6 @@ class SuperTabController extends ChangeNotifier {
             }
           }
         }
-      }
-      if (command['type'] == 'conversation.create' &&
-          result['conversationId'] is String) {
-        // A successful create selects its confirmed destination even when the
-        // following read is offline. Never leave the old group's composer active.
-        _moveView(to: result['conversationId'] as String);
       }
       _pending = null;
       _changed();

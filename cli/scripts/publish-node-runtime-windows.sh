@@ -8,7 +8,7 @@
 #
 # It publishes to STAGING by default (harness/staging/runtime/metadata.json). Production is
 # harness/runtime/metadata.json, which every installer and daemon reads, and publishing there is the owner's step:
-#   METADATA_PATH=harness/runtime/metadata.json bash cli/scripts/publish-node-runtime-windows.sh 22.23.2
+#   METADATA_PATH=harness/runtime/metadata.json bash cli/scripts/publish-node-runtime-windows.sh 24.22.2
 # The merge keeps every other key, the Mac's included.
 # DRY_RUN=1 DRY_RUN_OUT=<dir> downloads and verifies, writes the manifest into <dir>, and touches no bucket.
 set -euo pipefail
@@ -16,7 +16,7 @@ set +x
 
 VERSION="${1:-}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "usage: $0 <Node version, e.g. 22.23.2>" >&2
+  echo "usage: $0 <Node version, e.g. 24.22.2>" >&2
   exit 2
 fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # cli/

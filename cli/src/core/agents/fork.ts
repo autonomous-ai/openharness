@@ -8,6 +8,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
+import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
 import { installedDsh } from '../../dsh/installed.js'
@@ -145,7 +146,10 @@ export function createAgentForker({
     const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
+    // The fork's own id, chosen before its pane, as create chooses one (engineLaunch.ts `agentId`).
+    const forkId = randomUUID()
     const launchOptions = {
+      agentId: forkId,
       ...(built.overrides.native ? { native: built.overrides.native } : {}),
       clearEnv: harnessEnvToClear(dshEnv),
       bypassPermission: source.bypassPermission ?? false,
@@ -177,7 +181,7 @@ export function createAgentForker({
     return { ok: true, dispatch: async () => {
     if (!dispatchCurrent()) return changed
     const result = await createAndRegisterPane({
-      current: dispatchCurrent, ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
+      current: dispatchCurrent, agentId: forkId, ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,

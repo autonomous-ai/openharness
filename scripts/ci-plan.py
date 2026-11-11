@@ -67,7 +67,7 @@ ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-duratio
 # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
 ALSO.update({f"desktop/{path}": "mobile" for path in (
     "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
-    "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
+    "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart",
     "lib/super_tabs/live_card.dart", "lib/widgets/engine_identity.dart", "lib/super_tabs/tasks/personal_tasks.dart",
     "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
@@ -86,7 +86,7 @@ DEPENDS = {
                 "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
-            "backend/src/superTabs/machineRules.cases.json", "backend/src/superTabs/processNotes.ts", "desktop/",
+            "backend/src/superTabs/processNotes.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
@@ -129,10 +129,10 @@ NOT_READS = {
                                                                  "os/", "tests/", "website/"})
        for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
                       "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
-                      "backend/src/superTabs/dispatch.test.ts", "backend/src/superTabs/machineRules.commands.test.ts",
+                      "backend/src/superTabs/dispatch.test.ts",
                       "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
                       "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
-                      "backend/src/superTabs/policy.test.ts", "backend/src/superTabs/prHistory.test.ts",
+                      "backend/src/superTabs/prHistory.test.ts",
                       "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
                       "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
                       "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
@@ -140,11 +140,8 @@ NOT_READS = {
     **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
                                                                                "devices/", "docs/", "installer/", "mobile/",
                                                                                "pty/", "term/", "tui/", "website/"})
-       for source in ("backend/src/superTabs/policy.ts", "backend/src/superTabs/releases.ts",
+       for source in ("backend/src/superTabs/releases.ts",
                       "backend/src/superTabs/reviewTable.ts")},
-    "backend/src/superTabs/policy.securityExclusions.json": (
-        "file names policy.test.ts compares with git ls-files, not opened",
-        {"cli/", "companions/", "desktop/", "mobile/", "os/", "provider/", "term/", "tui/", "website/"}),
     **{source: ("test data: a task's owned paths", {"docs/"})
        for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.

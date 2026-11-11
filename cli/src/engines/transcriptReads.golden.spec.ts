@@ -364,7 +364,7 @@ async function activityCases(): Promise<Record<string, unknown>> {
   cases['a missing file'] = await attempt(() => m.activity.transcriptActivityAt(join(dir, 'missing.jsonl'), 'codex'))
   cases['a folder'] = await attempt(() => m.activity.transcriptActivityAt(dir, 'claude'))
   cases['no path'] = await attempt(() => m.activity.transcriptActivityAt(null, 'claude'))
-  for (const engine of ['pi', 'cursor', 'terminal', 'toString']) cases[`another engine · ${engine}`] = await attempt(() => m.activity.transcriptActivityAt(one, engine))
+  for (const engine of ['pi', 'cursor', 'openclaw', 'terminal', 'toString']) cases[`another engine · ${engine}`] = await attempt(() => m.activity.transcriptActivityAt(one, engine))
   // A file that grew is read again; one that did not is the same answer.
   appendFileSync(one, JSON.stringify({ type: 'assistant', timestamp: at(7) }) + '\n')
   cases['grown since'] = await attempt(() => m.activity.transcriptActivityAt(one, 'claude'))

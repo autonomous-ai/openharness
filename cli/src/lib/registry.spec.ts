@@ -89,6 +89,15 @@ describe('registry remote display names', () => {
     delete process.env.CURSOR_HOME
   })
 
+  // Every OpenClaw key starts `agent:main:`, so every OpenClaw agent found in a pane was `<folder> · agen` (E2E 2026-11-10).
+  it('names an OpenClaw agent found in a pane by its key, never by the prefix every key shares', async () => {
+    const { projectDisplayName } = await loadRegistryModule()
+    const found = (sessionId: string) => ({ agentId: 'a-oc', sessionId, engine: 'openclaw', cwd: '/root/e2e-proj', runtimes: [] }) as unknown as RegisteredSession
+    expect(projectDisplayName(found('agent:main:main'))).toBe('e2e-proj · main')
+    expect(projectDisplayName(found('agent:main:e2e-plain'))).toBe('e2e-proj · e2e-plain')
+    expect(projectDisplayName(found('agent:main:tui-22b7208d-0497-4da6-9439-d29689321c48'))).toBe('e2e-proj · tui-22b7208d')
+  })
+
   // tmux takes an APC string as a pane's title, and Claude Code's kitty graphics query named a guest's harness
   // "Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA" (2026-10-22). tmux.ts no longer reads one as a title; one a registry already
   // stored is not a name either.
@@ -2081,28 +2090,21 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.releaseEngine(pending.agentId, true)).not.toHaveProperty('browser')
   })
 
-  // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
-  it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
+  // A fresh move's remembered conversation went with the v3 Buddy's model switch (#3901): a row an older release saved with
+  // one loads without it, and its agent's moves reopen its own conversation (core/agents/retarget.ts).
+  it('loads a row saved with a remembered subscription session without it', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    const s1 = join(dataDir, 'S1.jsonl'), s2 = join(dataDir, 'S2.jsonl')
-    writeFileSync(s1, '{}\n'); writeFileSync(s2, '{}\n')
+    const s1 = join(dataDir, 'S1.jsonl')
+    writeFileSync(s1, '{}\n')
     registerProcess(registry, { launcherId: 'agent-1', sessionId: 'S1', transcriptPath: s1, tmuxPane: '%22', cwd: '/tmp/demo' })
-    expect(registry.setSubscriptionSession('agent-1', 'S1')).toBe(true)
-    expect(registry.setSubscriptionSession('nobody', 'S1')).toBe(false)
+    const file = join(dataDir, 'registry.json')
+    const rows = (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>).map(row => ({ ...row, subscriptionSessionId: 'S0' }))
+    writeFileSync(file, JSON.stringify(rows), { mode: 0o600 })
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
-    expect(reloaded.byAgent('agent-1')?.subscriptionSessionId).toBe('S1')
-    // The fresh conversation on the grid reports in: the same agent, the left one still remembered.
-    const fresh = reloaded.register({ sessionId: 'S2', transcriptPath: s2, tmuxPane: '%22', cwd: '/tmp/demo' })
-    expect(fresh?.entry).toMatchObject({ agentId: 'agent-1', sessionId: 'S2', subscriptionSessionId: 'S1' })
-    // Home, the reopened conversation reports in: the same agent bound to it, not a new one.
-    const back = reloaded.register({ sessionId: 'S1', transcriptPath: s1, tmuxPane: '%22', cwd: '/tmp/demo' })
-    expect(back).toMatchObject({ rebound: 'S2', orphaned: null, entry: { agentId: 'agent-1', sessionId: 'S1' } })
-    expect(reloaded.list()).toHaveLength(1)
-    expect(reloaded.resolve('S1')?.agentId).toBe('agent-1')
-    expect(reloaded.setSubscriptionSession('agent-1', null)).toBe(true)
-    expect(reloaded.byAgent('agent-1')?.subscriptionSessionId).toBeUndefined()
+    expect(reloaded.byAgent('agent-1')).toMatchObject({ agentId: 'agent-1', sessionId: 'S1' })
+    expect(reloaded.byAgent('agent-1')).not.toHaveProperty('subscriptionSessionId')
   })
 
   it('fills an old supported session role once and persists it through reload', async () => {
@@ -2133,7 +2135,8 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.releaseEngine(pending.agentId, true)?.swarmSkill).toBeUndefined()
   })
 
-  // Project instructions, phase 4 (decision 1): a row an older CLI saved names its Swarm role in the wire's values.
+  // Project instructions, phase 4 (decision 1): a row an older CLI saved names its Swarm role in the wire's values, and
+  // the skill mode it kept is read as nothing (the modes are gone, PM 2026-11-11).
   it('reads a Swarm role an older CLI saved as this release keeps it, on load and from a stopped harness\'s row', async () => {
     const { registry, strictPersistedRow } = await loadRegistryModule()
     registry.load()
@@ -2143,13 +2146,13 @@ describe('registry across a reboot and pane loss', () => {
     const row = (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>).find(r => r.agentId === pending.agentId)!
     expect(row.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
     const older = { ...row, swarmSkill: { role: 'review', key: 'reviewer', mode: 'default' } }
-    expect(strictPersistedRow(older)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer', mode: 'default' })
+    expect(strictPersistedRow(older)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
     expect(strictPersistedRow({ ...row, swarmSkill: { role: 'lead', key: 'pm' } })?.swarmSkill).toEqual({ role: 'coordinator', key: 'pm' })
     expect(strictPersistedRow({ ...row, swarmSkill: { role: 'pm', key: 'pm' } })).not.toHaveProperty('swarmSkill')
     writeFileSync(file, JSON.stringify([older]), { mode: 0o600 })
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
-    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer', mode: 'default' })
+    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
   })
 
   it('keeps strict conversation resume after the engine binds and the daemon reloads', async () => {

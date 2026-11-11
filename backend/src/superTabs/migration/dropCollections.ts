@@ -9,8 +9,8 @@
  *
  * Only whole collections that nothing reads or writes are listed. A row of a collection that v4 still uses (Swarms, chats,
  * agents, machines, the leaderboard's records) is never removed here: those go by a strict row filter in their own jobs.
- * Delete this list, its job and its test 30 days after the release that carries its newest entries: for the Decision, tag,
- * Activity and reminder collections, not before 2026-12-11.
+ * Delete this list, its job and its test 30 days after the release that carries its newest entries: with the reaction to
+ * project rules entries (slice S19), not before 2026-12-12.
  */
 import type { PrismaClient } from '@prisma/client'
 import { removeChunk } from '../../lib/chunkSweep.js'
@@ -24,6 +24,14 @@ export const REMOVED_COLLECTIONS = [
   'SuperTabScorecard', 'SuperTabNativeContext',
   // Decisions (removed in #3805), and tags, Activity and reminders (removed in #3827): an agent reaches its person in their 1:1 chat.
   'SuperTabDecision', 'SuperTabMention', 'SuperTabActivity', 'SuperTabReminder',
+  // Reactions (removed 2026-11-09) and the Buddy's open proposals (S17, #3888).
+  'SuperTabReaction', 'SuperTabOpenProposal',
+  // Routing, its policy, attempts and model evidence (S8, #3908).
+  'RoutingPolicy', 'SuperTabAttempt', 'SuperTabRouteDecision', 'SuperTabModelEvidence', 'SuperTabModelRecent',
+  // Custom role texts (S18, #3916), project instructions with their history and PM notes (S7, #3893), and project rules (S8, #3908).
+  'SuperTabRoleText', 'SuperTabInstructions', 'SuperTabInstructionsRevision', 'SuperTabPmNote', 'SuperTabProjectRules',
+  // Projects' report progress, which nothing wrote since Swarm v4 (S19).
+  'SwarmProgress',
 ] as const
 
 /** Rows removed by one write: a few megabytes at most. */

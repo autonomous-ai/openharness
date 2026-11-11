@@ -534,7 +534,6 @@ void main() {
       // The owner types into their agent's terminal with no recording
       // context: the backend answers none since 1.4.51.
       expect(f.app.activeSwarm.panes.single.watchOnly, isFalse);
-      expect(f.app.activeSwarm.panes.single.inputContext, isNull);
       c.select('offline');
       await tester.pumpAndSettle();
       expect(find.text('Terminal native-a'), findsNothing);
@@ -551,7 +550,6 @@ void main() {
       await c.refresh();
       await tester.pumpAndSettle();
       expect(f.app.activeSwarm.panes.single.watchOnly, isTrue);
-      expect(f.app.activeSwarm.panes.single.inputContext, isNull);
       (state['people'] as List)[0]['role'] = 'owner';
       await c.refresh();
       await tester.pumpAndSettle();

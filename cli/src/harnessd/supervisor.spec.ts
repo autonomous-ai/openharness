@@ -24,7 +24,7 @@ class FakeCore implements CoreHandle {
   ready(safeMode?: string): void { this.say(safeMode === undefined ? { type: 'harnessd:ready' } : { type: 'harnessd:ready', safeMode }) }
   /** Bound and ready: up, the way a healthy start-up ends. */
   up(): void { this.bind(); this.ready() }
-  beat(rssBytes = 100 * MIB, heapUsedBytes = rssBytes / 2): void { this.say({ type: 'harnessd:heartbeat', rssBytes, heapUsedBytes, loopDelayMs: 3 }) }
+  beat(rssBytes = 100 * MIB, heapUsedBytes = rssBytes / 2): void { this.say({ type: 'harnessd:heartbeat', rssBytes, heapUsedBytes }) }
   exit(code: number | null, signal: NodeJS.Signals | null = null): void { for (const listener of this.exitListeners) listener(code, signal) }
 }
 
