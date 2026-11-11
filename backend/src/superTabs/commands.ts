@@ -485,6 +485,13 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
   return state.conversations.some(c => c.assignment?.agentId === agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
+/** Whether [userId] is the person whose Personal Swarm [state] is, while they are its only person: its special cases are theirs
+ *  alone, and once they invite someone it is a Swarm like any other for everyone (anh Dee 2026-11-11), as their Desktop takes it
+ *  (desktop personal_projects.dart eligible: no Lead start once anyone else is in it, so nothing may wait for one). They go with
+ *  the channel exemptions and lead.claim. */
+const personalOwner = (state: SuperTabState, userId: string): boolean =>
+  userId === state.ownerId && state.people.length === 1 && isPersonalSwarm(state)
+
 /** When a person's last words go in a project's channel: a Desktop from before #3965's release (2026-11-11) posts New project's
  *  opening request and a Personal Swarm's first message there, and the Desktop of #3965 sends both to the PM's own 1:1 chat,
  *  which lead.start and lead.claim open (pmChat.ts). Those older Desktops keep working until this, 30 days after that release;
@@ -512,7 +519,8 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
   // hid the composer, so an older app, the phone and the web still posted there (2026-11-09). A post, an upload and a voice
   // message all ask this. Exempt until CHANNEL_EXEMPTIONS_END, for a Desktop before #3965: a Personal Swarm, whose Desktop
   // started a project's PM on the person's first message in its chat (leadWaiting, lead.claim), and New project's opening request.
-  const exempt = now < CHANNEL_EXEMPTIONS_END && (isPersonalSwarm(state) || actor.kind === 'person' && openingRequest(state, actor.userId, group))
+  // Only its owner's: a person invited to it posts as in any Swarm (anh Dee 2026-11-11: a Personal Swarm is a regular one).
+  const exempt = now < CHANNEL_EXEMPTIONS_END && actor.kind === 'person' && (personalOwner(state, actor.userId) || openingRequest(state, actor.userId, group))
   if (actor.kind === 'person' && !group.kind && !exempt) {
     fail('AGENTS_ONLY', 'Only agents post in a project\'s channel. Talk to your agents.', 403)
   }
@@ -1012,7 +1020,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Only a Personal Swarm: its person's Desktop starts the Lead on their own machine, where their project's folder is. A
       // Team Swarm's project gets its coordinator from a person who chooses it (task #2633).
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person starts a project\'s coordinator.', 403)
-      if (!isPersonalSwarm(state)) fail('PERSONAL_SWARM_ONLY', 'Only a Personal Swarm starts a project\'s coordinator on its first message.', 409)
+      if (!personalOwner(state, actor.userId)) fail('PERSONAL_SWARM_ONLY', 'Only your own Personal Swarm starts a PM this way.', 409)
       if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
       const project = manageProject(state, actor, command.projectId)
       const home = conversation(state, project.leadConversationId)
@@ -2259,9 +2267,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // the post is waiting. Not an agent-only notice (the sender's own) or one told to stop.
       const away = command.agentOnly ? [] : recipients.filter(id => agent(state, id).workDecision !== 'stop' && downSince(state, agent(state, id), context.now))
       if (away.length) effects.result.offline = offlineLine(away.map(id => agentDisplayName(state.agents, id) ?? agent(state, id).name))
-      // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
-      // A Team Swarm's says Not sent, as before.
-      const unled = actor.kind === 'person' && !recipients.length && isPersonalSwarm(state) ? groupProject(state, group) : undefined
+      // A Personal Swarm project chat with no Lead: its own person's message waits for the Lead their Desktop starts (task #2633).
+      // Anyone else's, and a Team Swarm's, says Not sent, as before: nothing starts a Lead for them.
+      const unled = actor.kind === 'person' && !recipients.length && personalOwner(state, actor.userId) ? groupProject(state, group) : undefined
       if (unled && unled.leadConversationId === group.id && state.projects?.includes(unled) && !(group.leadId && group.agentIds.includes(group.leadId))) {
         leadWaits(unled, operationId, context.now)
       }
