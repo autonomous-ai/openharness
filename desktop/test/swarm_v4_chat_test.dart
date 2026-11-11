@@ -116,16 +116,56 @@ void main() {
     await look(tester, 'burst');
   });
 
-  testWidgets('writing to an agent whose computer is off', (tester) async {
-    final server = swarmV4Channel();
-    await openSwarmV4(tester, server, saved: 'agent-chat-juno');
-    await say(tester, 'are you there?');
-    await tester.pumpAndSettle();
-    expect(find.text('are you there?'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await tester.pump(const Duration(milliseconds: 300));
-    await look(tester, 'offline');
-  });
+  testWidgets(
+    'writing to an agent whose computer is off says so under the message, until it is back and answers',
+    (tester) async {
+      final server = swarmV4Channel();
+      // Juno went down before what its person sends (the fixture's messages are of 18 October).
+      final juno = (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'juno',
+      );
+      juno['downSince'] = '2026-10-17T00:00:00Z';
+      final c = await openSwarmV4(tester, server, saved: 'agent-chat-juno');
+      await say(tester, 'are you there?');
+      await say(tester, 'the build is red');
+      await tester.pumpAndSettle();
+      expect(find.text('are you there?'), findsOneWidget);
+      // One quiet line, under the newest of what was sent while Juno is offline, as Your Team says it.
+      expect(find.text('Juno is offline'), findsOneWidget);
+      final note = tester.getRect(find.text('Juno is offline'));
+      expect(
+        note.top,
+        greaterThan(tester.getRect(find.text('the build is red')).bottom),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(milliseconds: 300));
+      await look(tester, 'offline');
+
+      // Juno's computer comes back and Juno answers: the line goes.
+      juno.remove('downSince');
+      swarmV4Post(
+        server,
+        'Juno',
+        'Back. Looking at the build.',
+        chat: 'agent-chat-juno',
+      );
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Back. Looking at the build.'), findsOneWidget);
+      expect(find.text('Juno is offline'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'an agent that is up has no offline line under what its person sent',
+    (tester) async {
+      final server = swarmV4Channel();
+      await openSwarmV4(tester, server, saved: 'agent-chat-pip');
+      await say(tester, 'take #12 please');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('is offline'), findsNothing);
+    },
+  );
 
   testWidgets('a reply the server sends twice shows once', (tester) async {
     final server = swarmV4Channel();

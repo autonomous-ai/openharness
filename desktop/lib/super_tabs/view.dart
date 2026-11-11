@@ -3639,6 +3639,12 @@ class _SuperTabViewState extends State<SuperTabView>
               key: ValueKey('super-message-offline-${message.id}'),
             ),
         if (showReceipt)
+          if (superTabChatOfflineLine(c.snapshot, message) case final line?)
+            SuperTabPostNote(
+              line,
+              key: ValueKey('super-message-offline-${message.id}'),
+            ),
+        if (showReceipt)
           SuperTabMessageReceipt(
             key: ValueKey('super-message-receipt-${message.id}'),
             message: message,
