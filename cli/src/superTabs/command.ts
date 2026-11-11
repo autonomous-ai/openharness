@@ -1,4 +1,5 @@
 import { claimAsked } from './githubClaim.js'
+import { splitAsked } from './githubSplit.js'
 import { verdictAsked } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -24,7 +25,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | inbox'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N | split OWNER/REPO#N s|m|l TITLE [TEXT|-] | inbox'
 const usageError = () => new Error(USAGE)
 
 /** A message on stdin, for post's TEXT `-`.
@@ -36,8 +37,12 @@ const HEREDOC = "<<'MSG' (the message on the next lines, then MSG alone on a lin
 const POST_STDIN = `post GROUP - OPERATION_ID ${HEREDOC}`
 /** A verdict's words on stdin, as a post's (githubVerdict.ts). */
 const READ_STDIN = `read ok|hold OWNER/REPO#N SHA - ${HEREDOC}`
-function postStdin(stdin: () => string, terminal: () => boolean, verb: 'post' | 'read' = 'post'): string {
-  const form = verb === 'post' ? POST_STDIN : READ_STDIN
+/** What a piece is, on stdin, as a post's (githubSplit.ts). */
+const SPLIT_STDIN = `split OWNER/REPO#N s|m|l TITLE - ${HEREDOC}`
+type StdinVerb = 'post' | 'read' | 'split'
+const STDIN_FORMS: Record<StdinVerb, string> = { post: POST_STDIN, read: READ_STDIN, split: SPLIT_STDIN }
+function postStdin(stdin: () => string, terminal: () => boolean, verb: StdinVerb = 'post'): string {
+  const form = STDIN_FORMS[verb]
   if (terminal()) throw new Error(`${verb} - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: ${form}, or pass it as TEXT.`)
   // A heredoc ends the message with one line break, which is not part of it.
   const text = stdin().replace(/\r?\n$/, '')
@@ -88,8 +93,8 @@ export function readStdin(stream: NodeJS.ReadableStream & { destroy(): void }, i
   })
 }
 /** Why `-` read nothing usable from a stdin left open, and how to end it. */
-const idleRefusal = (verb: 'post' | 'read') => `${verb} - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
-  + `Close stdin after the message, as a heredoc does: ${verb === 'post' ? POST_STDIN : READ_STDIN}, or pass it as TEXT.`
+const idleRefusal = (verb: StdinVerb) => `${verb} - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
+  + `Close stdin after the message, as a heredoc does: ${STDIN_FORMS[verb]}, or pass it as TEXT.`
 /** The command's action: the first word that is no flag of where to send it, nor a flag's value (parseSuperTabArgs). */
 const actionOf = (argv: readonly string[]): string | undefined => {
   for (let i = 0; i < argv.length; i++) {
@@ -207,6 +212,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     const asked = claimAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]) })
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
+  } else if (action === 'split' && positional.length >= 4 && positional.length <= 5) {
+    // A piece cut off a task its builder holds (githubSplit.ts): its size, its title, and what it is, which may come on stdin.
+    const text = positional[4] === '-' ? postStdin(stdin, terminal, 'split') : positional[4] ?? ''
+    const asked = splitAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]), size: second, title: third, text })
+    if (!asked) throw usageError()
+    Object.assign(payload, { ...asked })
   } else if ((action !== 'status' && action !== 'inbox') || positional.length !== 1) {
     throw usageError()
   }
@@ -220,7 +231,8 @@ async function parse(argv: readonly string[], local: Where, stdin: () => string 
   } catch (error) {
     if (!(error instanceof WantsStdin)) throw error
     const text = await Promise.resolve().then(stdin).catch(failure => {
-      throw failure instanceof StdinIdle ? new Error(idleRefusal(actionOf(argv) === 'read' ? 'read' : 'post')) : failure
+      const verb = actionOf(argv)
+      throw failure instanceof StdinIdle ? new Error(idleRefusal(verb === 'read' || verb === 'split' ? verb : 'post')) : failure
     })
     return parseSuperTabArgs(argv, local, () => text, terminal)
   }

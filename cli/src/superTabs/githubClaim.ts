@@ -14,7 +14,7 @@
  * what is missing, and posts and records only what is not there. The comment is recorded with the backend as the calling
  * agent's (backend superTabs/githubComments.ts).
  */
-import { labelOf } from './assign/crew.js'
+import { labelOf, openPieces } from './assign/crew.js'
 import type { GitHubReply } from './githubRest.js'
 import { hhmm, recordOwn, type VerdictDeps } from './githubVerdict.js'
 import { object, SuperTabHostError } from './wire.js'
@@ -37,15 +37,21 @@ export function claimAsked(payload: Record<string, unknown>): Claim | null {
   return { repository, number: Number(number) }
 }
 
+/** What a claim's answer says of cutting the task [at] (githubSplit.ts): its builder reads it as it starts, before any code,
+ *  which is when a task shows itself too big. Said here and not in every agent's basics, which stay under 200 words
+ *  (lib/swarmSkills.ts). */
+export const splitHint = (at: string): string => `Too big for one pull request? harness super-tab split ${at} s|m|l 'TITLE' 'WHAT IT IS' `
+  + 'cuts a piece off it, and Harness gives that piece to the builder who can ship it soonest.'
+
 /** An issue's labels as GitHub compares them: whatever their case. */
-const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
+export const labelsOf = (labels: unknown): string[] => (Array.isArray(labels) ? labels.map(object) : []).map(label => String(label.name ?? '').toLowerCase())
 /**
  * Takes [asked] for [builder]: marks it `status:taken`, says so in a comment under the builder's name, and records the
  * comment as the builder's. Refused, with nothing changed: a repository that is no project of the builder's, an issue that is
  * closed, a pull request or cannot be read, one not given to this builder, and a claim past CLAIM_LIMIT. `taken` is whether
- * this command changed anything: a task taken in full already is not taken again.
+ * this command changed anything: a task taken in full already is not taken again. `split` is how a task too big is cut.
  */
-export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ReadonlySet<string> }, asked: Claim): Promise<{ url: string; taken: boolean }> {
+export async function takeTask(deps: VerdictDeps, builder: { name: string; repositories: ReadonlySet<string> }, asked: Claim): Promise<{ url: string; taken: boolean; split: string }> {
   const repository = asked.repository.toLowerCase(), at = `${repository}#${asked.number}`, name = builder.name.trim()
   if (!name) throw new SuperTabHostError('AGENT_UNNAMED', 'This agent has no name to take a task under.', 409)
   if (!builder.repositories.has(repository)) {
@@ -89,8 +95,9 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     for (let page = 1; page <= HELD_PAGES; page++) {
       const holding = await github(() => deps.get(`${issues}?state=open&labels=${encodeURIComponent(mine.includes(',') ? TAKEN : `${mine},${TAKEN}`)}&per_page=${PAGE}&page=${page}`, null))
       if (holding.status !== 200 || !Array.isArray(holding.body)) throw refused(holding.status)
-      // GitHub lists pull requests among issues: a builder's open pull request is not a task it holds.
-      for (const one of holding.body.map(object)) if (!one.pull_request && labelsOf(one.labels).includes(mine)) held.push(Number(one.number))
+      // GitHub lists pull requests among issues: a builder's open pull request is not a task it holds. Nor is a task that
+      // waits on pieces cut off it (githubSplit.ts), which others build.
+      for (const one of holding.body.map(object)) if (!one.pull_request && labelsOf(one.labels).includes(mine) && !openPieces(one)) held.push(Number(one.number))
       if (holding.body.length < PAGE) break
     }
     if (held.length >= CLAIM_LIMIT) {
@@ -142,5 +149,5 @@ export async function takeTask(deps: VerdictDeps, builder: { name: string; repos
     comment = object(made.body)
     changed = true
   }
-  return { url: await recordOwn(deps.record, repository, comment, 'Taken'), taken: changed }
+  return { url: await recordOwn(deps.record, repository, comment, 'Taken'), taken: changed, split: splitHint(at) }
 }

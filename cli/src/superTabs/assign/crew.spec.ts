@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, learnedMinutes, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, learnedMinutes, openPieces, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -247,6 +247,41 @@ describe('the tasks builders took, and when each was last touched (takenTasks)',
       { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
       { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
     ])
+  })
+})
+
+describe('a task that waits on pieces cut off it (openPieces)', () => {
+  it('counts the sub-issues GitHub says are not done, and none where it says nothing readable', () => {
+    expect(openPieces({ sub_issues_summary: { total: 5, completed: 2, percent_completed: 40 } })).toBe(3)
+    expect(openPieces({ sub_issues_summary: { total: 5, completed: 5 } })).toBe(0)
+    for (const summary of [undefined, null, {}, { total: 'many', completed: 0 }, { total: 2 }, { total: 1, completed: 3 }, 'three']) expect(openPieces({ sub_issues_summary: summary })).toBe(0)
+  })
+  it('is not a task its builder took and left quiet, until its pieces are done', () => {
+    const at = new Date(NOW - 9 * 3_600_000).toISOString()
+    const waits = issue(1, ['builder:pip', 'status:taken'], { updated_at: at, sub_issues_summary: { total: 2, completed: 1 } })
+    expect(takenTasks([waits], [], crew().builders)).toEqual([])
+    expect(takenTasks([{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }], [], crew().builders)).toEqual([{ number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(at) }])
+  })
+  // Taken back from a builder that stopped, it was given out whole, to be built beside its own pieces (third review).
+  it('is given to nobody while it has no builder, and is a task again once its pieces are closed', () => {
+    const waits = issue(1, ['size:l'], { sub_issues_summary: { total: 2, completed: 1 } })
+    expect([...readProblem({ now: NOW, crew: crew(), closed: [], issues: [waits, issue(2, ['size:s'])] }).free]).toEqual(['#2'])
+    expect([...readProblem({ now: NOW, crew: crew(), closed: [], issues: [{ ...waits, sub_issues_summary: { total: 2, completed: 2 } }] }).free]).toEqual(['#1'])
+  })
+  // The second review of the split: a builder with two tasks waiting on pieces was given nothing more, and a team's one
+  // builder could never be given the pieces its own tasks waited on.
+  it('holds no place in its builder\'s list and none of its time while it waits, and both again once its pieces are done', () => {
+    const waiting = { sub_issues_summary: { total: 2, completed: 1 } }
+    const issues = [issue(1, ['size:l', 'builder:pip', 'status:taken'], waiting), issue(2, ['size:l', 'builder:pip', 'status:taken'], waiting), issue(3, ['size:s'])]
+    const read = readProblem({ now: NOW, crew: crew(), closed: [], issues })
+    expect(read.open.get('pip')).toBe(0)
+    expect(read.problem.builders.find(b => b.id === 'pip')!.busyUntil).toBe(0)
+    expect([...read.free]).toEqual(['#3'])
+    const done = readProblem({ now: NOW, crew: crew(), closed: [], issues: issues.map(each => ({ ...each, sub_issues_summary: { total: 2, completed: 2 } })) })
+    expect(done.open.get('pip')).toBe(2)
+    expect(done.problem.builders.find(b => b.id === 'pip')!.busyUntil).toBe(240)
+    // One only given to it, with a sub-issue of its PM's under it, is in its list as any other: only a taken task waits.
+    expect(readProblem({ now: NOW, crew: crew(), closed: [], issues: [issue(1, ['size:l', 'builder:pip'], waiting)] }).open.get('pip')).toBe(1)
   })
 })
 

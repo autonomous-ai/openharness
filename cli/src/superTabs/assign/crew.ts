@@ -180,6 +180,9 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const holder = held.map(label => byLabel.get(label)).find(Boolean)
     // Held by a label that names no builder of this team, or taken with none (a person on it): someone else's to plan.
     if ((held.length && !holder) || (!holder && labels.includes('status:taken'))) continue
+    // Nobody's, with pieces cut off it still open (its builder was stopped, or gave it back): others build those, and given
+    // out whole it would be built beside them. It is planned once they are closed (third review of the split).
+    if (!holder && openPieces(issue)) continue
     const sized = valueOf(labels, 'size:')
     const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
@@ -187,6 +190,10 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     // The time this project's finished tasks of the size took, once there are enough of them (learnedMinutes).
     const shape = { ...SIZES[size ?? 'm'], ...input.minutes?.[size ?? 'm'] ? { minutes: input.minutes[size ?? 'm']! } : {} }
     const id = `#${issue.number}`
+    // Taken and waiting on pieces cut off it: others build those, so it holds no place in its builder's list and none of its
+    // time. Counted, a builder with two such was given nothing more, and a team's one builder could never be given the pieces
+    // (second review of the split).
+    if (holder && labels.includes('status:taken') && openPieces(issue)) continue
     if (holder) open.set(holder.id, (open.get(holder.id) ?? 0) + 1)
     if (holder && labels.includes('status:taken')) {
       busy.set(holder.id, (busy.get(holder.id) ?? 0) + Math.ceil(shape.minutes / 2))
@@ -337,8 +344,16 @@ export function tasksOf(pull: Json): number[] {
   return [...new Set([...closes, ...branch ? [Number(branch)] : []])]
 }
 
+/** How many pieces cut off a task are still open (githubSplit.ts), as GitHub counts its sub-issues. A task with some waits
+ *  on them: it holds no place in its builder's list, and its builder is neither idle on it nor quiet. One nobody builds is
+ *  the PM's to see: unsized, it is in the PM's numbers; sized and unplaced, its PM is told why. */
+export const openPieces = (issue: Json): number => {
+  const summary = object(issue.sub_issues_summary), total = Number(summary.total), completed = Number(summary.completed)
+  return Number.isSafeInteger(total) && Number.isSafeInteger(completed) ? Math.max(0, total - completed) : 0
+}
+
 /** The tasks builders of the team took, each with its last touch: a comment or label on the issue, or a change to a pull
- *  request for it (tasksOf). */
+ *  request for it (tasksOf). Not one that waits on its pieces (openPieces). */
 export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[]): Taken[] {
   const byLabel = new Map(builders.map(b => [b.label, b]))
   const touched = new Map<number, number>()
@@ -352,7 +367,7 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
     if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
     const labels = labelsOf(issue)
     const builder = labels.map(label => byLabel.get(label)).find(Boolean)
-    if (!builder || !labels.includes('status:taken')) continue
+    if (!builder || !labels.includes('status:taken') || openPieces(issue)) continue
     const own = Date.parse(String(issue.updated_at ?? ''))
     const number = Number(issue.number)
     out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0) })
