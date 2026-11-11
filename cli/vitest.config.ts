@@ -12,5 +12,10 @@ export default defineConfig({
     // deadlines. One worker per CPU starves those children on busy hosts, so
     // take half the machine: the other half is theirs.
     maxWorkers: Math.max(1, Math.floor(availableParallelism() / 2)),
+    // Many cases do real I/O: git, child processes, and disk flushes, each a full drive flush on macOS (F_FULLFSYNC).
+    // On a loaded developer Mac they run about 10 times as long as alone: a full run at load 8-10 sent cases of
+    // 0.5-2 s alone past vitest's 5 s, a different handful each run (2026-11-11). The same 30 s as
+    // vitest.portability.config.ts and testing/handoffLimits.ts. A passing case takes no longer for it.
+    testTimeout: 30_000,
   },
 })

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { publishHandoff } from './handoffPublication.js'
 import { HandoffError as PublicationError } from './handoffAuthority.js'
 import { redactSecretsInText } from './logBundle.js'
+import { LOADED_HANDOFF_MS, LOADED_HANDOFF_TEST_MS } from '../testing/handoffLimits.js'
 import type { LiveEvent } from './normalize.js'
 import type { RegisteredSession } from './registry.js'
 import type { IndexedTurn } from './sessionSearch/turns.js'
@@ -46,6 +47,8 @@ vi.mock('node:fs', async (original) => {
 // These fixtures exercise normalization, rendering, git and publication with small synthetic
 // reader records. Native identity is composed without this seam in core/handoffPublication.native,
 // nativeHandoff.golden and the real service/lifecycle fixtures.
+// Up to four real preparations a case, each with its git, reads and publication's fsyncs (depsFor).
+vi.setConfig({ testTimeout: LOADED_HANDOFF_TEST_MS })
 vi.mock('./nativeHandoffRead.js', async () => {
   const { readSessionTurns } = await import('./sessionSearch/sessionTurns.js')
   const { NativeFiles } = await import('../engines/kit/nativeFiles.js')
@@ -130,9 +133,12 @@ function depsFor(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {})
   return {
     // The 2 s limit on one git command is not what any case here is about, and a loaded run spends it on
     // starting git: under a full run at load 36 a `rev-parse` went over it, the repository read as unclear,
-    // and "finds the exclude file" and "goes by one clock" answered `gitRepo: false`. The preparation's own
-    // deadline (`deadlineMs`, or the injected clock) still bounds every case.
-    gitTimeoutMs: 30_000,
+    // and "finds the exclude file" and "goes by one clock" answered `gitRepo: false`.
+    // Nor is the shipped 5 s deadline: publication alone makes 73 fsyncs, each a full flush on a Mac (F_FULLFSYNC),
+    // 2.5 s of a 3.3 s preparation on an Intel Mac at load 8 (2026-11-11), and a loaded one went past 5 s. The cases
+    // about the deadline set their own, or move an injected clock past it.
+    gitTimeoutMs: LOADED_HANDOFF_MS,
+    deadlineMs: LOADED_HANDOFF_MS,
     publish: (prepared, permit) => publishHandoff(join(root, 'daemon-data', 'handoff-receipts'), prepared, facts => {
       if (!permit.current(facts.request)) throw new PublicationError('TIMEOUT')
     }, () => {
@@ -354,33 +360,34 @@ describe('redactHandoffSecrets', () => {
 
 describe('repoState', () => {
   it('tells a repository, a plain folder and an unclear one apart', async () => {
-    expect(await repoState(ws)).toBe('none')
+    // A git that runs out of its limit is `unknown` too: the loaded limit keeps that from passing for "unclear".
+    expect(await repoState(ws, 'git', LOADED_HANDOFF_MS)).toBe('none')
     makeRepo()
-    expect(await repoState(ws)).toBe('repo')
-    expect(await repoState(ws, join(root, 'no-such-git'))).toBe('unknown')
+    expect(await repoState(ws, 'git', LOADED_HANDOFF_MS)).toBe('repo')
+    expect(await repoState(ws, join(root, 'no-such-git'), LOADED_HANDOFF_MS)).toBe('unknown')
     const parent = join(root, 'p')
     mkdirSync(join(parent, '.git'), { recursive: true })
     mkdirSync(join(parent, 'child'))
-    expect(await repoState(join(parent, 'child'))).toBe('unknown')
+    expect(await repoState(join(parent, 'child'), 'git', LOADED_HANDOFF_MS)).toBe('unknown')
   })
 })
 
 describe('excludePathOf', () => {
   it('finds the repository exclude, and is null outside one or with no git', async () => {
     makeRepo()
-    expect(await excludePathOf(ws, 'git')).toBe(join(ws, '.git', 'info', 'exclude'))
-    expect(await excludePathOf(root, 'git')).toBeNull()
-    expect(await excludePathOf(ws, join(root, 'no-such-git'))).toBeNull()
+    expect(await excludePathOf(ws, 'git', LOADED_HANDOFF_MS)).toBe(join(ws, '.git', 'info', 'exclude'))
+    expect(await excludePathOf(root, 'git', LOADED_HANDOFF_MS)).toBeNull()
+    expect(await excludePathOf(ws, join(root, 'no-such-git'), LOADED_HANDOFF_MS)).toBeNull()
   })
 
   it('resolves from a subfolder and from a linked worktree to the one shared file', async () => {
     makeRepo()
     git('add', '-A')
     git('commit', '-q', '-m', 'all')
-    expect(await excludePathOf(join(ws, 'src'), 'git')).toBe(join(ws, '.git', 'info', 'exclude'))
+    expect(await excludePathOf(join(ws, 'src'), 'git', LOADED_HANDOFF_MS)).toBe(join(ws, '.git', 'info', 'exclude'))
     const wt = join(root, 'wt')
     git('worktree', 'add', '-q', wt)
-    expect(await excludePathOf(wt, 'git')).toBe(join(ws, '.git', 'info', 'exclude'))
+    expect(await excludePathOf(wt, 'git', LOADED_HANDOFF_MS)).toBe(join(ws, '.git', 'info', 'exclude'))
   })
 })
 
@@ -694,7 +701,7 @@ describe('prepareAgentHandoff: a repository', () => {
       { type: 'turn_started', payload: { userMessage: 'add a login page' } },
       { type: 'text_delta', payload: { content: 'Added login.tsx' } },
     ]
-    // Only the injected clock moves: the 5 s timer of the race never fires, so stopping is up to `now`.
+    // Only the injected clock moves: the 30 s timer of the race never fires, so stopping is up to `now`.
     let clock = 1_700_000_000_000
     const midRead = depsFor([s], { git: gitPath, now: () => clock, readHistory: () => async () => { clock += 60_000; return events } })
     await expect(prepareAgentHandoff(midRead, request(cid(1)))).rejects.toMatchObject({ code: 'TIMEOUT' })
@@ -742,12 +749,15 @@ describe('prepareAgentHandoff: a repository', () => {
     let worst = 0
     let last = performance.now()
     const timer = setInterval(() => { const at = performance.now(); worst = Math.max(worst, at - last); last = at }, 5)
-    const started = performance.now()
+    // This process's CPU time, not the wall clock: a pass that is quadratic in a run's length spends seconds of it, while
+    // git's children, the publication's disk flushes and a busy machine's run queue spend none (2,031 ms of wall at load 10).
+    const started = process.cpuUsage()
     let result: HandoffResult | undefined
     try {
       result = await prepareAgentHandoff(depsFor([session()], { lastFullText: () => run, deadlineMs: 20_000 }), request())
     } finally { clearInterval(timer) }
-    expect(performance.now() - started).toBeLessThan(2_000)
+    const spent = process.cpuUsage(started)
+    expect((spent.user + spent.system) / 1_000).toBeLessThan(2_000)
     expect(worst).toBeLessThan(1_000)
     expect(result?.file).toBe(`${HANDOFF_DIR}/agent-1-${C}.md`)
     const md = readFileSync(mdOf(), 'utf8')
@@ -895,7 +905,7 @@ describe('prepareAgentHandoff: refusals and limits', () => {
       mkdirSync(cwd)
       return session({ agentId, sessionId: `s-${agentId}`, engine: 'opencode', transcriptPath: null, cwd })
     })
-    const d = depsFor(sessions, { deadlineMs: 10_000, readHistory: () => async () => { await gate; return events } })
+    const d = depsFor(sessions, { readHistory: () => async () => { await gate; return events } })
     const first = prepareAgentHandoff(d, request(cid(1), 'a1'))
     const second = prepareAgentHandoff(d, request(cid(2), 'a2'))
     await expect(prepareAgentHandoff(d, request(cid(3), 'a1'))).rejects.toMatchObject({ name: 'HandoffError', code: 'BUSY' })
@@ -919,7 +929,7 @@ describe('prepareAgentHandoff: refusals and limits', () => {
     const d = depsFor([s], { deadlineMs: 30, readHistory: () => () => (hang ? new Promise<readonly LiveEvent[]>(() => {}) : Promise.resolve(events)) })
     await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
     hang = false
-    await expect(prepareAgentHandoff({ ...d, deadlineMs: 5_000 }, request())).resolves.toMatchObject({ file: `${HANDOFF_DIR}/agent-1-${C}.md` })
+    await expect(prepareAgentHandoff({ ...d, deadlineMs: LOADED_HANDOFF_MS }, request())).resolves.toMatchObject({ file: `${HANDOFF_DIR}/agent-1-${C}.md` })
   })
 
   it('gives up with TIMEOUT and writes nothing when the read never finishes', async () => {
