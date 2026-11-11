@@ -135,7 +135,8 @@ in an agent that already runs, in every engine, with nothing added to its launch
 12. **(main)** An older Desktop that still sends `browser: true` at create: the browser starts once the agent runs.
 13. **(main)** An agent launched with the MCP argument keeps working until it restarts. What really happens is under
     "What goes, and what stays for a while".
-14. **(main)** A browser that was on when its agent stopped comes back when the agent runs again.
+14. **(Ken)** The browser stops only when its person stops it or its agent stops. When the agent runs again, by any
+    path, its browser starts again with it. It is kept by the agent's id: the flag on its registry row.
 15. **(main)** The ready and stopped lines go to the agent only. They are not shown in the person's chat.
 16. **(Ken)** Which agents: today's `mayOpenBrowser` rule, applied to the agent. An agent on this machine that is not
     a guest's may use its browser. The check uses what the daemon already has, never a read of the backend or of the
@@ -153,10 +154,14 @@ in an agent that already runs, in every engine, with nothing added to its launch
 - **(spec) One record.** The registry row's `browser` flag now means "this agent's Browser is on". It is set by a
   start (the person's, or the create flag of an older Desktop) and cleared only by the person's Stop. The
   field keeps its name and shape, so nothing is migrated.
-- **(main) On survives the agent's stop.** A browser that is on when its agent stops is stopped with it, as today,
-  and starts again when that agent runs again (a resume, an engine restart, a machine restart). A daemon restart
-  leaves it running and takes it up again. That is today's code path (`createAgentBrowserLifecycle`), unchanged. Only
-  the person's Stop turns it off.
+- **(Ken) It follows the agent, by its id.** A browser that is on when its agent stops is stopped with it, and starts
+  again whenever that agent runs again, by any path: a resume, a relaunch, an engine that restarts in its pane, a
+  daemon or machine restart. A daemon restart leaves a running browser running and takes it up again. Only the
+  person's Stop turns it off.
+  - The bug this fixes (seen on a teammate's Mac with the released build, 2026-11-11): today an engine that exits or
+    restarts ends the browser (`createAgentBrowserLifecycle` `ended`), but only create, resume and daemon start attach
+    it again, so the button disappeared for good while the agent ran on. Every path that registers a running agent
+    must attach its browser when the flag is on; a test covers each path.
   - The other choice, turning it off whenever the agent stops, was not taken: an engine restart the person never
     asked for (a crash, an account switch) would silently take away a browser they started.
 - **How it is set.** The service asks the core to set or clear the flag (a new `CoreApi.agents` call, with its query
