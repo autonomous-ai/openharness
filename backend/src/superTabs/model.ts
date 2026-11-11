@@ -551,8 +551,10 @@ export const AGENT_ONLY = { kind: 'agent-only' }
 export const NOTICE_READERS = {
   // Only its agent: a skill update (cli host.ts).
   'agent-only': 'agent',
-  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
-  github: 'people',
+  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): its agent's alone. The person read
+  // it in their chat until anh Dee saw that chat a feed of cards (2026-11-11: "so terrible. it should be like a human
+  // conversation"); the agent's work shows on the Tasks board and in the channel.
+  github: 'recipients',
   // A worker's lost task, to its Lead (liveness.ts).
   'work-lost': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
